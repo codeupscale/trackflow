@@ -12,13 +12,11 @@ import {
   ChevronRight,
 } from 'lucide-react';
 
+import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import {
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -212,11 +210,12 @@ export default function ScreenshotsPage() {
               >
                 <div className="aspect-video bg-slate-800 relative flex items-center justify-center overflow-hidden">
                   {screenshot.thumbnail_url ? (
-                    <img
+                    <Image
                       src={screenshot.thumbnail_url}
                       alt={`Screenshot by ${screenshot.user_name}`}
                       className="w-full h-full object-cover"
-                      loading="lazy"
+                      fill
+                      sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
                     />
                   ) : (
                     <div className="flex flex-col items-center gap-2 text-slate-600">
@@ -319,12 +318,14 @@ export default function ScreenshotsPage() {
               </span>
             </DialogDescription>
           </DialogHeader>
-          <div className="aspect-video bg-slate-800 rounded-lg flex items-center justify-center overflow-hidden">
+          <div className="aspect-video bg-slate-800 rounded-lg relative flex items-center justify-center overflow-hidden">
             {selectedScreenshot?.url ? (
-              <img
+              <Image
                 src={selectedScreenshot.url}
                 alt={`Screenshot by ${selectedScreenshot.user_name}`}
                 className="w-full h-full object-contain"
+                fill
+                sizes="(max-width: 768px) 100vw, 768px"
               />
             ) : (
               <div className="flex flex-col items-center gap-3 text-slate-600">

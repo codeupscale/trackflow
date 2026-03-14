@@ -56,7 +56,34 @@ export default function DashboardPage() {
     queryKey: ['dashboard'],
     queryFn: async () => {
       const res = await api.get('/dashboard');
-      return res.data;
+      const raw = res.data;
+
+      // Transform API response { online_users, team_summary } into our expected shape
+      const onlineUserIds = new Set((raw.online_users || []).map((u: { id: string }) => u.id));
+      const teamSummary = raw.team_summary || [];
+
+      const team: TeamMember[] = teamSummary.map((entry: { user: { id: string; name: string; email: string; avatar_url: string | null }; today_seconds: number; activity_score: number }) => ({
+        id: entry.user.id,
+        name: entry.user.name,
+        email: entry.user.email,
+        avatar_url: entry.user.avatar_url,
+        is_online: onlineUserIds.has(entry.user.id),
+        today_seconds: entry.today_seconds || 0,
+        current_project: null,
+        activity_score: entry.activity_score || 0,
+      }));
+
+      const totalSeconds = team.reduce((sum: number, m: TeamMember) => sum + m.today_seconds, 0);
+
+      return {
+        stats: {
+          total_online: onlineUserIds.size,
+          today_hours: totalSeconds / 3600,
+          active_projects: 0, // Not in API response
+          total_members: team.length,
+        },
+        team,
+      };
     },
     refetchInterval: 30000,
   });

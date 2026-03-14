@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
 
-export function middleware(_request: NextRequest) {
+export function middleware() {
   // Client-side auth check will handle redirects via useAuthGuard hook
   // This middleware is used for route organization
   return NextResponse.next();

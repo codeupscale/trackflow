@@ -23,8 +23,6 @@ return Application::configure(basePath: dirname(__DIR__))
             'check.seats' => CheckSeatLimit::class,
         ]);
 
-        $middleware->statefulApi();
-
         // Rate limiting for API
         $middleware->throttleApi('60,1');
     })

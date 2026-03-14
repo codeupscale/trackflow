@@ -40,7 +40,8 @@ export function TimerWidget() {
     queryKey: ['projects-list'],
     queryFn: async () => {
       const res = await api.get('/projects', { params: { per_page: 100 } });
-      return res.data.data || res.data;
+      // API returns { projects: [...] } or { data: [...] } or array directly
+      return res.data.projects || res.data.data || (Array.isArray(res.data) ? res.data : []);
     },
   });
 
