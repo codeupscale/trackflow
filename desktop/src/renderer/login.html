@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TrackFlow — Login</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-card {
+      width: 340px; padding: 32px;
+      background: #1e293b; border-radius: 12px;
+      border: 1px solid #334155;
+    }
+    .logo {
+      text-align: center; font-size: 24px; font-weight: 700;
+      color: #3b82f6; margin-bottom: 8px;
+    }
+    .subtitle {
+      text-align: center; font-size: 13px; color: #64748b;
+      margin-bottom: 24px;
+    }
+    .form-group { margin-bottom: 16px; }
+    label {
+      display: block; font-size: 13px; font-weight: 500;
+      color: #94a3b8; margin-bottom: 4px;
+    }
+    input {
+      width: 100%; padding: 10px 12px;
+      background: #0f172a; border: 1px solid #334155;
+      border-radius: 6px; color: #e2e8f0; font-size: 14px;
+      outline: none; transition: border-color 0.15s;
+    }
+    input:focus { border-color: #3b82f6; }
+    .btn {
+      width: 100%; padding: 10px; border: none; border-radius: 6px;
+      background: #3b82f6; color: white;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn:hover { background: #2563eb; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .error {
+      color: #ef4444; font-size: 13px; text-align: center;
+      margin-top: 12px; display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <div class="logo">TrackFlow</div>
+    <div class="subtitle">Sign in to start tracking</div>
+
+    <form id="loginForm">
+      <div class="form-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" placeholder="you@company.com" required>
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" placeholder="Your password" required>
+      </div>
+      <button type="submit" class="btn" id="submitBtn">Sign In</button>
+    </form>
+
+    <div class="error" id="errorMsg"></div>
+  </div>
+
+  <script>
+    const form = document.getElementById('loginForm');
+    const errorMsg = document.getElementById('errorMsg');
+    const submitBtn = document.getElementById('submitBtn');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorMsg.style.display = 'none';
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Signing in...';
+
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+
+      const result = await window.trackflow.login(email, password);
+
+      if (result.error) {
+        errorMsg.textContent = result.error;
+        errorMsg.style.display = 'block';
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Sign In';
+      }
+    });
+  </script>
+</body>
+</html>

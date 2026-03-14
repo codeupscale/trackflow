@@ -35,4 +35,22 @@ return [
         ],
     ],
 
+    'stripe' => [
+        'key' => env('STRIPE_KEY'),
+        'secret' => env('STRIPE_SECRET'),
+        'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
+        'prices' => [
+            'starter_monthly' => env('STRIPE_PRICE_STARTER_MONTHLY'),
+            'starter_annual' => env('STRIPE_PRICE_STARTER_ANNUAL'),
+            'pro_monthly' => env('STRIPE_PRICE_PRO_MONTHLY'),
+            'pro_annual' => env('STRIPE_PRICE_PRO_ANNUAL'),
+        ],
+    ],
+
+    'google' => [
+        'client_id' => env('GOOGLE_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_CLIENT_SECRET'),
+        'redirect' => env('GOOGLE_REDIRECT_URL'),
+    ],
+
 ];

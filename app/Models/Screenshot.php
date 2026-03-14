@@ -21,6 +21,7 @@ class Screenshot extends Model
         'captured_at',
         'activity_score_at_capture',
         'is_blurred',
+        'processed_at',
         'width',
         'height',
     ];
@@ -30,6 +31,7 @@ class Screenshot extends Model
         return [
             'captured_at' => 'datetime',
             'is_blurred' => 'boolean',
+            'processed_at' => 'datetime',
             'width' => 'integer',
             'height' => 'integer',
         ];
