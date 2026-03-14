@@ -93,7 +93,7 @@ export default function TeamPage() {
     queryKey: ['team-members'],
     queryFn: async () => {
       const res = await api.get('/users');
-      return res.data.data || res.data;
+      return res.data.users || res.data.data || (Array.isArray(res.data) ? res.data : []);
     },
   });
 
@@ -170,11 +170,9 @@ export default function TeamPage() {
           </p>
         </div>
         <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
-          <DialogTrigger>
-            <Button className="bg-blue-600 hover:bg-blue-700 text-white">
-              <UserPlus className="mr-2 h-4 w-4" />
-              Invite Member
-            </Button>
+          <DialogTrigger className="inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium h-9 px-4 bg-blue-600 hover:bg-blue-700 text-white cursor-pointer">
+            <UserPlus className="mr-2 h-4 w-4" />
+            Invite Member
           </DialogTrigger>
           <DialogContent className="bg-slate-900 border-slate-800">
             <form onSubmit={handleInvite}>

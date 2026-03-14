@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Settings,
@@ -40,15 +40,15 @@ interface OrgSettings {
     slug: string;
     plan: string;
     trial_ends_at: string | null;
-  };
-  settings: {
-    screenshot_interval: number;
-    screenshot_blur: boolean;
-    idle_timeout: number;
-    require_project: boolean;
-    allow_manual_time: boolean;
-    weekly_limit_hours: number;
-    timezone: string;
+    settings: {
+      screenshot_interval: number;
+      blur_screenshots: boolean;
+      idle_timeout: number;
+      require_project?: boolean;
+      can_add_manual_time: boolean;
+      weekly_limit_hours?: number;
+      timezone: string;
+    };
   };
 }
 
@@ -85,23 +85,34 @@ export default function SettingsPage() {
     },
   });
 
+  const settings = data?.organization?.settings;
+  const defaults = useMemo(() => ({
+    orgName: data?.organization?.name ?? '',
+    timezone: settings?.timezone ?? 'UTC',
+    screenshotInterval: settings ? String(settings.screenshot_interval) : '5',
+    screenshotBlur: settings?.blur_screenshots ?? false,
+    idleTimeout: settings ? String(settings.idle_timeout) : '5',
+    allowManualTime: settings?.can_add_manual_time ?? true,
+  }), [data, settings]);
+
   const [orgName, setOrgName] = useState('');
   const [timezone, setTimezone] = useState('UTC');
   const [screenshotInterval, setScreenshotInterval] = useState('5');
   const [screenshotBlur, setScreenshotBlur] = useState(false);
   const [idleTimeout, setIdleTimeout] = useState('5');
   const [allowManualTime, setAllowManualTime] = useState(true);
+  const [initialized, setInitialized] = useState(false);
 
-  useEffect(() => {
-    if (data) {
-      setOrgName(data.organization.name);
-      setTimezone(data.settings.timezone);
-      setScreenshotInterval(String(data.settings.screenshot_interval));
-      setScreenshotBlur(data.settings.screenshot_blur);
-      setIdleTimeout(String(data.settings.idle_timeout));
-      setAllowManualTime(data.settings.allow_manual_time);
-    }
-  }, [data]);
+  // Sync form state from fetched data without using setState in useEffect
+  if (data && !initialized) {
+    setOrgName(defaults.orgName);
+    setTimezone(defaults.timezone);
+    setScreenshotInterval(defaults.screenshotInterval);
+    setScreenshotBlur(defaults.screenshotBlur);
+    setIdleTimeout(defaults.idleTimeout);
+    setAllowManualTime(defaults.allowManualTime);
+    setInitialized(true);
+  }
 
   const updateMutation = useMutation({
     mutationFn: async (settings: Record<string, unknown>) => {
@@ -119,9 +130,9 @@ export default function SettingsPage() {
       name: orgName,
       timezone,
       screenshot_interval: parseInt(screenshotInterval),
-      screenshot_blur: screenshotBlur,
+      blur_screenshots: screenshotBlur,
       idle_timeout: parseInt(idleTimeout),
-      allow_manual_time: allowManualTime,
+      can_add_manual_time: allowManualTime,
     });
   };
 
