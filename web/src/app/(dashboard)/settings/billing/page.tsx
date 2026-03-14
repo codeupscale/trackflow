@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   CreditCard,
@@ -7,8 +8,10 @@ import {
   ArrowLeft,
   Users,
   Zap,
+  AlertTriangle,
 } from 'lucide-react';
 import Link from 'next/link';
+import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -19,7 +22,6 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import {
   Table,
@@ -29,6 +31,15 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 
@@ -37,6 +48,7 @@ interface BillingUsage {
   seats_limit: number;
   plan: string;
   trial_ends_at: string | null;
+  subscription_renews_at: string | null;
 }
 
 interface Invoice {
@@ -70,6 +82,7 @@ const plans = [
 
 export default function BillingPage() {
   const { user } = useAuthStore();
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
 
   const { data: usage, isLoading: usageLoading } = useQuery<BillingUsage>({
     queryKey: ['billing-usage'],
@@ -89,57 +102,96 @@ export default function BillingPage() {
 
   const seatPercentage = usage ? Math.round((usage.seats_used / usage.seats_limit) * 100) : 0;
   const currentPlan = usage?.plan || user?.organization?.plan || 'trial';
+  const isTrial = currentPlan === 'trial';
+
+  const handleCancelSubscription = async () => {
+    try {
+      await api.post('/billing/cancel');
+      toast.success('Subscription cancelled');
+      setCancelDialogOpen(false);
+    } catch {
+      toast.error('Failed to cancel subscription');
+    }
+  };
 
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
         <Link href="/settings">
-          <Button variant="ghost" size="sm">
+          <Button variant="ghost" size="sm" className="text-slate-400 hover:text-white">
             <ArrowLeft className="mr-2 h-4 w-4" />
             Settings
           </Button>
         </Link>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Billing</h1>
-          <p className="text-muted-foreground">Manage your subscription and invoices</p>
+          <h1 className="text-2xl font-bold text-white">Billing</h1>
+          <p className="text-slate-400 text-sm mt-1">Manage your subscription and invoices</p>
         </div>
       </div>
 
       {/* Current Plan */}
-      <Card>
+      <Card className="border-slate-800 bg-slate-900/50">
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <CardTitle className="flex items-center gap-2">
-                <Zap className="h-5 w-5" />
+              <CardTitle className="flex items-center gap-2 text-white">
+                <Zap className="h-5 w-5 text-amber-400" />
                 Current Plan
               </CardTitle>
-              <CardDescription>Your active subscription</CardDescription>
+              <CardDescription className="text-slate-400">Your active subscription</CardDescription>
             </div>
-            <Badge variant="default" className="text-sm capitalize">
-              {currentPlan}
+            <Badge
+              className={
+                isTrial
+                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                  : 'bg-green-500/10 text-green-400 border-green-500/20'
+              }
+            >
+              {isTrial ? 'Trial' : 'Active'}
             </Badge>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
           {usageLoading ? (
             <div className="space-y-3">
-              <div className="h-6 w-48 bg-muted animate-pulse rounded" />
-              <div className="h-4 w-full bg-muted animate-pulse rounded" />
+              <div className="h-6 w-48 bg-slate-800/50 animate-pulse rounded" />
+              <div className="h-3 w-full bg-slate-800/50 animate-pulse rounded" />
             </div>
           ) : (
             <>
-              <div className="flex items-center justify-between text-sm">
-                <span className="flex items-center gap-2">
-                  <Users className="h-4 w-4 text-muted-foreground" />
-                  Seats: {usage?.seats_used} / {usage?.seats_limit}
-                </span>
-                <span className="text-muted-foreground">{seatPercentage}% used</span>
+              <div className="text-xl font-bold text-white capitalize">{currentPlan}</div>
+
+              {/* Seat usage meter */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="flex items-center gap-2 text-slate-400">
+                    <Users className="h-4 w-4" />
+                    Seats: <span className="text-white font-medium">{usage?.seats_used}</span> / {usage?.seats_limit}
+                  </span>
+                  <span className="text-slate-500">{seatPercentage}% used</span>
+                </div>
+                <div className="h-2 bg-slate-800 rounded-full">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      seatPercentage >= 90
+                        ? 'bg-red-500'
+                        : seatPercentage >= 70
+                        ? 'bg-amber-500'
+                        : 'bg-blue-500'
+                    }`}
+                    style={{ width: `${Math.min(seatPercentage, 100)}%` }}
+                  />
+                </div>
               </div>
-              <Progress value={seatPercentage} className="h-2" />
+
               {usage?.trial_ends_at && (
-                <p className="text-sm text-amber-500">
+                <p className="text-sm text-amber-400">
                   Trial ends: {new Date(usage.trial_ends_at).toLocaleDateString()}
+                </p>
+              )}
+              {usage?.subscription_renews_at && !isTrial && (
+                <p className="text-sm text-slate-400">
+                  Renews: {new Date(usage.subscription_renews_at).toLocaleDateString()}
                 </p>
               )}
             </>
@@ -149,35 +201,47 @@ export default function BillingPage() {
 
       {/* Plans */}
       <div>
-        <h2 className="text-lg font-semibold mb-4">Available Plans</h2>
+        <h2 className="text-lg font-semibold text-white mb-4">Available Plans</h2>
         <div className="grid gap-4 md:grid-cols-3">
           {plans.map((plan) => {
             const isCurrent = plan.name.toLowerCase() === currentPlan;
             return (
-              <Card key={plan.name} className={isCurrent ? 'border-blue-500' : ''}>
+              <Card
+                key={plan.name}
+                className={`border-slate-800 bg-slate-900/50 transition-all ${
+                  isCurrent ? 'border-blue-500/50 ring-1 ring-blue-500/20' : ''
+                }`}
+              >
                 <CardHeader>
-                  <CardTitle className="text-lg">{plan.name}</CardTitle>
-                  <CardDescription className="text-2xl font-bold text-foreground">
+                  <CardTitle className="text-lg text-white">{plan.name}</CardTitle>
+                  <CardDescription className="text-2xl font-bold text-white">
                     {plan.price}
                   </CardDescription>
-                  <p className="text-xs text-muted-foreground">{plan.seats}</p>
+                  <p className="text-xs text-slate-500">{plan.seats}</p>
                 </CardHeader>
                 <CardContent>
                   <ul className="space-y-2">
                     {plan.features.map((feature) => (
-                      <li key={feature} className="flex items-center gap-2 text-sm">
+                      <li key={feature} className="flex items-center gap-2 text-sm text-slate-300">
                         <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
                         {feature}
                       </li>
                     ))}
                   </ul>
-                  <Separator className="my-4" />
+                  <Separator className="my-4 bg-slate-800" />
                   {isCurrent ? (
-                    <Button variant="outline" className="w-full" disabled>
+                    <Button variant="outline" className="w-full border-slate-700 text-slate-400" disabled>
                       Current Plan
                     </Button>
                   ) : (
-                    <Button variant={plan.name === 'Pro' ? 'default' : 'outline'} className="w-full">
+                    <Button
+                      className={`w-full ${
+                        plan.name === 'Pro'
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                          : 'border-slate-700 text-slate-300'
+                      }`}
+                      variant={plan.name === 'Pro' ? 'default' : 'outline'}
+                    >
                       {plan.name === 'Trial' ? 'Downgrade' : 'Upgrade'}
                     </Button>
                   )}
@@ -189,43 +253,46 @@ export default function BillingPage() {
       </div>
 
       {/* Invoices */}
-      <Card>
+      <Card className="border-slate-800 bg-slate-900/50">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+          <CardTitle className="flex items-center gap-2 text-white">
             <CreditCard className="h-5 w-5" />
-            Invoices
+            Invoice History
           </CardTitle>
-          <CardDescription>Your billing history</CardDescription>
+          <CardDescription className="text-slate-400">Your billing history</CardDescription>
         </CardHeader>
         <CardContent>
           {!invoices || invoices.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <CreditCard className="h-10 w-10 mx-auto mb-3 opacity-50" />
-              <p>No invoices yet</p>
+            <div className="text-center py-8">
+              <CreditCard className="h-10 w-10 text-slate-600 mx-auto mb-3" />
+              <p className="text-slate-400">No invoices yet</p>
             </div>
           ) : (
             <Table>
               <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">PDF</TableHead>
+                <TableRow className="border-slate-800 hover:bg-transparent">
+                  <TableHead className="text-slate-400">Date</TableHead>
+                  <TableHead className="text-slate-400">Amount</TableHead>
+                  <TableHead className="text-slate-400">Status</TableHead>
+                  <TableHead className="text-slate-400 text-right">Download</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {invoices.map((inv) => (
-                  <TableRow key={inv.id}>
-                    <TableCell className="text-sm">
+                  <TableRow key={inv.id} className="border-slate-800">
+                    <TableCell className="text-sm text-slate-300">
                       {new Date(inv.date).toLocaleDateString()}
                     </TableCell>
-                    <TableCell className="text-sm font-medium">
+                    <TableCell className="text-sm font-medium text-white">
                       ${(inv.amount / 100).toFixed(2)}
                     </TableCell>
                     <TableCell>
                       <Badge
-                        variant={inv.status === 'paid' ? 'default' : 'secondary'}
-                        className="text-xs capitalize"
+                        className={
+                          inv.status === 'paid'
+                            ? 'bg-green-500/10 text-green-400 border-green-500/20'
+                            : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                        }
                       >
                         {inv.status}
                       </Badge>
@@ -236,7 +303,7 @@ export default function BillingPage() {
                           href={inv.pdf_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-sm text-blue-500 hover:underline"
+                          className="text-sm text-blue-400 hover:underline"
                         >
                           Download
                         </a>
@@ -249,6 +316,54 @@ export default function BillingPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Cancel Subscription */}
+      {!isTrial && (
+        <Card className="border-red-500/20 bg-slate-900/50">
+          <CardHeader>
+            <CardTitle className="text-red-400 flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5" />
+              Danger Zone
+            </CardTitle>
+            <CardDescription className="text-slate-400">
+              Cancel your subscription. This will take effect at the end of your current billing period.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Dialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
+              <DialogTrigger>
+                <Button variant="destructive">
+                  Cancel Subscription
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="bg-slate-900 border-slate-800">
+                <DialogHeader>
+                  <DialogTitle className="text-white">Cancel Subscription</DialogTitle>
+                  <DialogDescription className="text-slate-400">
+                    Are you sure you want to cancel your subscription? Your team will lose access
+                    to premium features at the end of the current billing period.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    onClick={() => setCancelDialogOpen(false)}
+                    className="border-slate-700 text-slate-300"
+                  >
+                    Keep Subscription
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={handleCancelSubscription}
+                  >
+                    Yes, Cancel
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
