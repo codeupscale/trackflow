@@ -1,0 +1,168 @@
+<?php
+
+namespace App\Services;
+
+use App\Events\TimerStarted;
+use App\Events\TimerStopped;
+use App\Models\TimeEntry;
+use App\Models\ActivityLog;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
+
+class TimerService
+{
+    // Redis key pattern: timer:{user_id}
+    // Value: JSON {entry_id, started_at, project_id, task_id}
+    // TTL: 30 days (2592000 seconds)
+
+    public function start(array $data): TimeEntry
+    {
+        $user = Auth::user();
+        $redisKey = "timer:{$user->id}";
+
+        // Check if timer already running
+        if (Redis::exists($redisKey)) {
+            throw new \RuntimeException('Timer is already running.');
+        }
+
+        $entry = DB::transaction(function () use ($user, $data, $redisKey) {
+            $entry = TimeEntry::create([
+                'organization_id' => $user->organization_id,
+                'user_id' => $user->id,
+                'project_id' => $data['project_id'] ?? null,
+                'task_id' => $data['task_id'] ?? null,
+                'notes' => $data['notes'] ?? null,
+                'started_at' => now(),
+                'type' => 'tracked',
+            ]);
+
+            Redis::setex($redisKey, 2592000, json_encode([
+                'entry_id' => $entry->id,
+                'started_at' => $entry->started_at->toISOString(),
+                'project_id' => $entry->project_id,
+                'task_id' => $entry->task_id,
+            ]));
+
+            return $entry;
+        });
+
+        TimerStarted::dispatch($entry);
+
+        return $entry;
+    }
+
+    public function stop(): TimeEntry
+    {
+        $user = Auth::user();
+        $redisKey = "timer:{$user->id}";
+
+        $timerData = Redis::get($redisKey);
+        if (!$timerData) {
+            throw new \RuntimeException('No timer is currently running.');
+        }
+
+        $timerData = json_decode($timerData, true);
+
+        $entry = DB::transaction(function () use ($user, $timerData, $redisKey) {
+            $entry = TimeEntry::withoutGlobalScopes()
+                ->where('id', $timerData['entry_id'])
+                ->where('user_id', $user->id)
+                ->firstOrFail();
+
+            $now = now();
+            $entry->update([
+                'ended_at' => $now,
+                'duration_seconds' => (int) abs($now->diffInSeconds($entry->started_at)),
+            ]);
+
+            Redis::del($redisKey);
+            return $entry->fresh();
+        });
+
+        TimerStopped::dispatch($entry);
+
+        return $entry;
+    }
+
+    public function pause(): TimeEntry
+    {
+        $stoppedEntry = $this->stop();
+
+        // Create idle entry
+        $user = Auth::user();
+        TimeEntry::create([
+            'organization_id' => $user->organization_id,
+            'user_id' => $user->id,
+            'project_id' => $stoppedEntry->project_id,
+            'task_id' => $stoppedEntry->task_id,
+            'started_at' => now(),
+            'type' => 'idle',
+        ]);
+
+        return $stoppedEntry;
+    }
+
+    public function status(): ?array
+    {
+        $user = Auth::user();
+        $redisKey = "timer:{$user->id}";
+
+        $timerData = Redis::get($redisKey);
+        if (!$timerData) {
+            return ['running' => false, 'entry' => null, 'elapsed_seconds' => 0];
+        }
+
+        $data = json_decode($timerData, true);
+        $entry = TimeEntry::find($data['entry_id']);
+
+        return [
+            'running' => true,
+            'entry' => $entry,
+            'elapsed_seconds' => (int) abs(now()->diffInSeconds($entry->started_at)),
+        ];
+    }
+
+    public function processHeartbeat(array $data): ActivityLog
+    {
+        $user = Auth::user();
+        $redisKey = "timer:{$user->id}";
+
+        $timerData = Redis::get($redisKey);
+        if (!$timerData) {
+            throw new \RuntimeException('No timer is currently running.');
+        }
+
+        $timerInfo = json_decode($timerData, true);
+
+        $log = ActivityLog::create([
+            'organization_id' => $user->organization_id,
+            'user_id' => $user->id,
+            'time_entry_id' => $timerInfo['entry_id'],
+            'logged_at' => now(),
+            'keyboard_events' => $data['keyboard_events'] ?? 0,
+            'mouse_events' => $data['mouse_events'] ?? 0,
+            'active_app' => $data['active_app'] ?? null,
+            'active_window_title' => $data['active_window_title'] ?? null,
+            'active_url' => $data['active_url'] ?? null,
+        ]);
+
+        // Update activity score on entry
+        $entry = TimeEntry::find($timerInfo['entry_id']);
+        if ($entry) {
+            $maxExpected = 300; // expected max events per 30s interval
+            $total = ($data['keyboard_events'] ?? 0) + ($data['mouse_events'] ?? 0);
+            $score = min(100, (int) ($total / $maxExpected * 100));
+
+            // Average with existing score
+            if ($entry->activity_score !== null) {
+                $score = (int) (($entry->activity_score + $score) / 2);
+            }
+            $entry->update(['activity_score' => $score]);
+        }
+
+        $user->update(['last_active_at' => now()]);
+
+        return $log;
+    }
+}

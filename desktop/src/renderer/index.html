@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TrackFlow</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      height: 100vh;
+      overflow: hidden;
+      user-select: none;
+      -webkit-app-region: drag;
+    }
+    .container { padding: 16px; height: 100%; display: flex; flex-direction: column; }
+    .header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding-bottom: 12px; border-bottom: 1px solid #1e293b;
+    }
+    .logo { font-size: 16px; font-weight: 700; color: #3b82f6; }
+    .btn {
+      -webkit-app-region: no-drag;
+      padding: 6px 14px; border: none; border-radius: 6px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-primary { background: #3b82f6; color: white; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-danger { background: #ef4444; color: white; }
+    .btn-danger:hover { background: #dc2626; }
+    .btn-ghost { background: transparent; color: #94a3b8; }
+    .btn-ghost:hover { color: #e2e8f0; }
+
+    .timer-display {
+      text-align: center; padding: 24px 0;
+      flex: 1; display: flex; flex-direction: column; justify-content: center;
+    }
+    .time {
+      font-size: 42px; font-weight: 700; font-variant-numeric: tabular-nums;
+      letter-spacing: 2px;
+    }
+    .time.running { color: #22c55e; }
+    .time.stopped { color: #64748b; }
+    .status { font-size: 13px; color: #64748b; margin-top: 4px; }
+    .status .dot {
+      display: inline-block; width: 8px; height: 8px;
+      border-radius: 50%; margin-right: 4px; vertical-align: middle;
+    }
+    .dot.green { background: #22c55e; animation: pulse 2s infinite; }
+    .dot.gray { background: #64748b; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .project-select {
+      -webkit-app-region: no-drag;
+      width: 100%; padding: 8px 12px; margin: 12px 0;
+      background: #1e293b; border: 1px solid #334155;
+      border-radius: 6px; color: #e2e8f0; font-size: 13px;
+      outline: none;
+    }
+    .project-select:focus { border-color: #3b82f6; }
+
+    .actions {
+      display: flex; gap: 8px; justify-content: center; padding: 12px 0;
+    }
+    .actions .btn { flex: 1; padding: 10px; font-size: 14px; }
+
+    .footer {
+      text-align: center; padding-top: 12px;
+      border-top: 1px solid #1e293b; font-size: 11px; color: #475569;
+    }
+    .footer a {
+      -webkit-app-region: no-drag;
+      color: #64748b; cursor: pointer; text-decoration: none;
+    }
+    .footer a:hover { color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <span class="logo">TrackFlow</span>
+      <button class="btn btn-ghost" id="logoutBtn">Logout</button>
+    </div>
+
+    <div class="timer-display">
+      <div class="time stopped" id="timerDisplay">00:00:00</div>
+      <div class="status">
+        <span class="dot gray" id="statusDot"></span>
+        <span id="statusText">Stopped</span>
+      </div>
+    </div>
+
+    <select class="project-select" id="projectSelect">
+      <option value="">No Project</option>
+    </select>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="startBtn">Start</button>
+      <button class="btn btn-danger" id="stopBtn" style="display:none">Stop</button>
+    </div>
+
+    <div class="footer">
+      <a id="logoutLink">Sign out</a>
+    </div>
+  </div>
+
+  <script>
+    let timerInterval = null;
+    let elapsedSeconds = 0;
+
+    const timerDisplay = document.getElementById('timerDisplay');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const projectSelect = document.getElementById('projectSelect');
+    const logoutBtn = document.getElementById('logoutBtn');
+
+    function formatTime(seconds) {
+      const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+      const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+      const s = (seconds % 60).toString().padStart(2, '0');
+      return `${h}:${m}:${s}`;
+    }
+
+    function updateDisplay(running) {
+      timerDisplay.textContent = formatTime(elapsedSeconds);
+      timerDisplay.className = `time ${running ? 'running' : 'stopped'}`;
+      statusDot.className = `dot ${running ? 'green' : 'gray'}`;
+      statusText.textContent = running ? 'Tracking' : 'Stopped';
+      startBtn.style.display = running ? 'none' : 'block';
+      stopBtn.style.display = running ? 'block' : 'none';
+    }
+
+    function startTicking() {
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        elapsedSeconds++;
+        timerDisplay.textContent = formatTime(elapsedSeconds);
+      }, 1000);
+    }
+
+    function stopTicking() {
+      if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+      }
+    }
+
+    // Load initial state
+    async function init() {
+      const state = await window.trackflow.getTimerState();
+      if (state.isRunning) {
+        elapsedSeconds = state.elapsed;
+        updateDisplay(true);
+        startTicking();
+      }
+
+      // Load projects
+      const projects = await window.trackflow.getProjects();
+      projects.forEach(p => {
+        const option = document.createElement('option');
+        option.value = p.id;
+        option.textContent = p.name;
+        projectSelect.appendChild(option);
+      });
+    }
+
+    startBtn.addEventListener('click', async () => {
+      const projectId = projectSelect.value || null;
+      const result = await window.trackflow.startTimer(projectId);
+      if (result.success) {
+        elapsedSeconds = 0;
+        updateDisplay(true);
+        startTicking();
+      }
+    });
+
+    stopBtn.addEventListener('click', async () => {
+      const result = await window.trackflow.stopTimer();
+      if (result.success) {
+        stopTicking();
+        elapsedSeconds = 0;
+        updateDisplay(false);
+      }
+    });
+
+    logoutBtn.addEventListener('click', async () => {
+      await window.trackflow.logout();
+    });
+
+    window.trackflow.onTimerStarted((entry) => {
+      elapsedSeconds = 0;
+      updateDisplay(true);
+      startTicking();
+    });
+
+    window.trackflow.onTimerStopped(() => {
+      stopTicking();
+      elapsedSeconds = 0;
+      updateDisplay(false);
+    });
+
+    init();
+  </script>
+</body>
+</html>
