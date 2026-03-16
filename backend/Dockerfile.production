@@ -5,9 +5,9 @@
 # Stage 1: Composer dependencies
 FROM composer:2 AS composer
 WORKDIR /app
-COPY composer.json composer.lock ./
+COPY backend/composer.json backend/composer.lock ./
 RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist
-COPY . .
+COPY backend/ .
 RUN composer dump-autoload --optimize --classmap-authoritative
 
 # Stage 2: Frontend build
@@ -46,16 +46,16 @@ RUN apk add --no-cache \
 
 # PHP production configuration
 RUN mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
-COPY docker/production/php.ini /usr/local/etc/php/conf.d/99-production.ini
-COPY docker/production/opcache.ini /usr/local/etc/php/conf.d/opcache.ini
-COPY docker/production/www.conf /usr/local/etc/php-fpm.d/www.conf
+COPY backend/docker/production/php.ini /usr/local/etc/php/conf.d/99-production.ini
+COPY backend/docker/production/opcache.ini /usr/local/etc/php/conf.d/opcache.ini
+COPY backend/docker/production/www.conf /usr/local/etc/php-fpm.d/www.conf
 
 # Nginx configuration
-COPY docker/production/nginx.conf /etc/nginx/nginx.conf
-COPY docker/production/default.conf /etc/nginx/http.d/default.conf
+COPY backend/docker/production/nginx.conf /etc/nginx/nginx.conf
+COPY backend/docker/production/default.conf /etc/nginx/http.d/default.conf
 
 # Supervisor configuration
-COPY docker/production/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY backend/docker/production/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Application code
 WORKDIR /var/www/html
