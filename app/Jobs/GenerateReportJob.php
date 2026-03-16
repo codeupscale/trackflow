@@ -131,4 +131,20 @@ class GenerateReportJob implements ShouldQueue
         // Fallback: simple HTML to text
         return json_encode($data, JSON_PRETTY_PRINT);
     }
+
+    public function backoff(): array
+    {
+        return [60, 300];
+    }
+
+    public function failed(\Throwable $exception): void
+    {
+        \Illuminate\Support\Facades\Cache::put("job:{$this->jobId}:status", 'failed', 3600);
+        \Illuminate\Support\Facades\Cache::put("job:{$this->jobId}:error", $exception->getMessage(), 3600);
+        \Illuminate\Support\Facades\Log::critical("GenerateReportJob failed", [
+            'job_id' => $this->jobId,
+            'org_id' => $this->orgId,
+            'error' => $exception->getMessage(),
+        ]);
+    }
 }

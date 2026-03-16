@@ -67,4 +67,16 @@ class SendTimesheetReminderJob implements ShouldQueue, ShouldBeUnique
             );
         }
     }
+
+    public function backoff(): array
+    {
+        return [60, 300, 900];
+    }
+
+    public function failed(\Throwable $exception): void
+    {
+        \Illuminate\Support\Facades\Log::critical("SendTimesheetReminderJob failed for org {$this->organizationId}", [
+            'error' => $exception->getMessage(),
+        ]);
+    }
 }

@@ -23,6 +23,7 @@ return new class extends Migration
             $table->softDeletes();
 
             $table->index(['organization_id', 'user_id', 'captured_at']);
+            $table->index('time_entry_id');
         });
     }
 

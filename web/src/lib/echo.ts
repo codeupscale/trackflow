@@ -10,6 +10,21 @@ declare global {
 
 let echo: Echo<'reverb'> | null = null;
 
+/**
+ * Singleton Echo instance for real-time broadcasting.
+ *
+ * Usage: Import getEcho() in components that need real-time updates:
+ *
+ * const echo = getEcho();
+ * echo.channel(`user.${userId}`).listen('TimerStarted', (data) => {
+ *   // handle real-time timer updates
+ * });
+ *
+ * TODO: Integrate this into:
+ * - Timer dashboard for live timer status updates
+ * - Activity dashboard for real-time activity logs
+ * - Timesheet review components for live submission notifications
+ */
 export function getEcho(): Echo<'reverb'> {
   if (echo) return echo;
 

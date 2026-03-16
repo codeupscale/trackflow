@@ -11,19 +11,25 @@ use Illuminate\Support\Facades\Redis;
 
 class DashboardController extends Controller
 {
-    // DASH-01: Dashboard data
+    // Seconds per hour constant for time conversions
+    private const SECONDS_PER_HOUR = 3600;
+
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
         $orgId = $user->organization_id;
 
-        // Get users in the org
+        // Employees only see their own data
+        if ($user->isEmployee()) {
+            return $this->employeeDashboard($user);
+        }
+
+        // Managers/admins/owners see the full team dashboard
         $users = User::withoutGlobalScopes()
             ->where('organization_id', $orgId)
             ->where('is_active', true)
             ->get(['id', 'name', 'email', 'role', 'last_active_at', 'avatar_url']);
 
-        // Check who is online (has active timer in Redis)
         $onlineUsers = [];
         foreach ($users as $u) {
             $timerData = Redis::get("timer:{$u->id}");
@@ -37,7 +43,6 @@ class DashboardController extends Controller
             }
         }
 
-        // Today's hours per user
         $todayEntries = TimeEntry::withoutGlobalScopes()
             ->where('organization_id', $orgId)
             ->whereDate('started_at', today())
@@ -60,6 +65,37 @@ class DashboardController extends Controller
             'online_users' => $onlineUsers,
             'team_summary' => $teamSummary,
             'total_online' => count($onlineUsers),
+        ]);
+    }
+
+    private function employeeDashboard(User $user): JsonResponse
+    {
+        $timerData = Redis::get("timer:{$user->id}");
+        $timer = null;
+        if ($timerData) {
+            $data = json_decode($timerData, true);
+            $timer = [
+                'timer' => $data,
+                'elapsed_seconds' => (int) abs(now()->diffInSeconds(\Carbon\Carbon::parse($data['started_at']))),
+            ];
+        }
+
+        $todaySeconds = TimeEntry::withoutGlobalScopes()
+            ->where('user_id', $user->id)
+            ->whereDate('started_at', today())
+            ->whereNotNull('ended_at')
+            ->sum('duration_seconds');
+
+        $weekSeconds = TimeEntry::withoutGlobalScopes()
+            ->where('user_id', $user->id)
+            ->where('started_at', '>=', now()->startOfWeek())
+            ->whereNotNull('ended_at')
+            ->sum('duration_seconds');
+
+        return response()->json([
+            'timer' => $timer,
+            'today_seconds' => (int) $todaySeconds,
+            'week_seconds' => (int) $weekSeconds,
         ]);
     }
 }

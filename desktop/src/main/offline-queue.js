@@ -51,7 +51,7 @@ class OfflineQueue {
     this.flushing = true;
 
     try {
-      const items = this.db.prepare('SELECT * FROM queue ORDER BY id LIMIT 50').all();
+      const items = this.db.prepare('SELECT * FROM queue ORDER BY id LIMIT 500').all();
 
       if (items.length === 0) {
         this.flushing = false;

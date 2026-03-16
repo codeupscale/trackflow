@@ -19,12 +19,18 @@ class Organization extends Model
         'stripe_subscription_id',
         'trial_ends_at',
         'settings',
+        'sso_config',
+        'enforce_sso',
+        'data_retention_config',
     ];
 
     protected function casts(): array
     {
         return [
             'settings' => 'array',
+            'sso_config' => 'array',
+            'data_retention_config' => 'array',
+            'enforce_sso' => 'boolean',
             'trial_ends_at' => 'datetime',
         ];
     }
@@ -37,6 +43,11 @@ class Organization extends Model
     public function projects(): HasMany
     {
         return $this->hasMany(Project::class);
+    }
+
+    public function tasks(): HasMany
+    {
+        return $this->hasMany(Task::class);
     }
 
     public function teams(): HasMany
@@ -57,6 +68,26 @@ class Organization extends Model
     public function screenshots(): HasMany
     {
         return $this->hasMany(Screenshot::class);
+    }
+
+    public function shifts(): HasMany
+    {
+        return $this->hasMany(Shift::class);
+    }
+
+    public function timesheets(): HasMany
+    {
+        return $this->hasMany(Timesheet::class);
+    }
+
+    public function activityLogs(): HasMany
+    {
+        return $this->hasMany(ActivityLog::class);
+    }
+
+    public function apiKeys(): HasMany
+    {
+        return $this->hasMany(ApiKey::class);
     }
 
     public function getDefaultSettings(): array

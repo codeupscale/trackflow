@@ -11,7 +11,7 @@ class TaskController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $query = Task::query();
+        $query = Task::query()->where('organization_id', $request->user()->organization_id);
         if ($request->has('project_id')) {
             $query->where('project_id', $request->project_id);
         }
@@ -21,11 +21,16 @@ class TaskController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        $this->authorize('create', Task::class);
+
         $request->validate([
             'project_id' => 'required|uuid',
             'name' => 'required|string|max:255',
             'description' => 'nullable|string',
         ]);
+
+        // Verify project belongs to user's organization
+        $project = $request->user()->organization->projects()->findOrFail($request->project_id);
 
         $task = Task::create([
             'organization_id' => $request->user()->organization_id,
@@ -40,7 +45,9 @@ class TaskController extends Controller
 
     public function update(Request $request, string $id): JsonResponse
     {
-        $task = Task::findOrFail($id);
+        $task = Task::where('organization_id', $request->user()->organization_id)->findOrFail($id);
+
+        $this->authorize('update', $task);
 
         $request->validate([
             'name' => 'sometimes|string|max:255',
@@ -53,9 +60,12 @@ class TaskController extends Controller
         return response()->json(['task' => $task->fresh()]);
     }
 
-    public function destroy(string $id): JsonResponse
+    public function destroy(Request $request, string $id): JsonResponse
     {
-        $task = Task::findOrFail($id);
+        $task = Task::where('organization_id', $request->user()->organization_id)->findOrFail($id);
+
+        $this->authorize('delete', $task);
+
         $task->delete();
         return response()->json(['message' => 'Task deleted.']);
     }

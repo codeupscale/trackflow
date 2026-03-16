@@ -46,7 +46,7 @@ class TimesheetController extends Controller
             'notes' => 'nullable|string|max:1000',
         ]);
 
-        $timesheet = Timesheet::findOrFail($id);
+        $timesheet = $request->user()->organization->timesheets()->findOrFail($id);
         $this->authorize('review', $timesheet);
 
         $timesheet->update([

@@ -74,4 +74,16 @@ class SendTimerIdleAlertJob implements ShouldQueue
             }
         }
     }
+
+    public function backoff(): array
+    {
+        return [60, 300, 900];
+    }
+
+    public function failed(\Throwable $exception): void
+    {
+        \Illuminate\Support\Facades\Log::critical("SendTimerIdleAlertJob failed for org {$this->organizationId}", [
+            'error' => $exception->getMessage(),
+        ]);
+    }
 }

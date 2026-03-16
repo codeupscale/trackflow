@@ -52,4 +52,16 @@ class PruneOldActivityLogsJob implements ShouldQueue
             \Illuminate\Support\Facades\Log::info("Pruned {$deleted} activity logs for organization {$this->organizationId}");
         }
     }
+
+    public function backoff(): array
+    {
+        return [60, 300, 900];
+    }
+
+    public function failed(\Throwable $exception): void
+    {
+        \Illuminate\Support\Facades\Log::critical("PruneOldActivityLogsJob failed for org {$this->organizationId}", [
+            'error' => $exception->getMessage(),
+        ]);
+    }
 }

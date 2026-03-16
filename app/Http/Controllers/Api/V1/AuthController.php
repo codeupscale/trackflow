@@ -12,6 +12,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
+use App\Services\AuditService;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -48,6 +49,8 @@ class AuthController extends Controller
         $token = $user->createToken('access_token', ['*'], now()->addHours(24));
         $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
 
+        AuditService::log('auth.register', $user, [], $user);
+
         return response()->json([
             'user' => $this->userResponse($user),
             'access_token' => $token->plainTextToken,
@@ -62,14 +65,26 @@ class AuthController extends Controller
         $user = User::where('email', $request->email)->first();
 
         if (!$user || !Hash::check($request->password, $user->password)) {
+            // Log failed login attempt
+            if ($user) {
+                AuditService::log('auth.login_failed', $user, ['reason' => 'invalid_password'], $user);
+            }
             throw ValidationException::withMessages([
                 'email' => ['The provided credentials are incorrect.'],
             ]);
         }
 
         if (!$user->is_active) {
+            AuditService::log('auth.login_failed', $user, ['reason' => 'account_deactivated'], $user);
             throw ValidationException::withMessages([
                 'email' => ['Your account has been deactivated.'],
+            ]);
+        }
+
+        // Check SSO enforcement
+        if ($user->organization->enforce_sso && $user->organization->sso_config) {
+            throw ValidationException::withMessages([
+                'email' => ['Your organization requires SSO login.'],
             ]);
         }
 
@@ -80,6 +95,7 @@ class AuthController extends Controller
         $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
 
         $user->update(['last_active_at' => now()]);
+        AuditService::log('auth.login', $user, [], $user);
 
         return response()->json([
             'user' => $this->userResponse($user),
@@ -115,6 +131,8 @@ class AuthController extends Controller
     /** AUTH-04: Logout */
     public function logout(Request $request): JsonResponse
     {
+        AuditService::log('auth.logout', $request->user());
+
         if ($token = $request->user()->currentAccessToken()) {
             $token->delete();
         }

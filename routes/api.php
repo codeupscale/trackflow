@@ -1,7 +1,10 @@
 <?php
 
+use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\DataPrivacyController;
 use App\Http\Controllers\Api\V1\InvitationController;
+use App\Http\Controllers\Api\V1\SsoController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -12,12 +15,22 @@ use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function () {
 
-    // Public auth routes
-    Route::prefix('auth')->group(function () {
+    // Health checks (public)
+    Route::get('health', \App\Http\Controllers\Api\V1\HealthController::class);
+    Route::get('health/live', fn () => response()->json(['status' => 'ok']));
+
+    // Public auth routes (with stricter rate limiting)
+    Route::prefix('auth')->middleware('throttle:auth')->group(function () {
         Route::post('register', [AuthController::class, 'register']);
         Route::post('login', [AuthController::class, 'login']);
         Route::post('forgot-password', [AuthController::class, 'forgotPassword']);
         Route::post('reset-password', [AuthController::class, 'resetPassword']);
+    });
+
+    // SAML2 SSO endpoints (public — IdP-initiated)
+    Route::prefix('auth/saml')->group(function () {
+        Route::post('acs', [SsoController::class, 'samlAcs']);
+        Route::get('metadata', [SsoController::class, 'metadata']);
     });
 
     // Public invitation acceptance
@@ -40,7 +53,7 @@ Route::prefix('v1')->group(function () {
         Route::post('timer/stop', [\App\Http\Controllers\Api\V1\TimerController::class, 'stop']);
         Route::post('timer/pause', [\App\Http\Controllers\Api\V1\TimerController::class, 'pause']);
         Route::get('timer/status', [\App\Http\Controllers\Api\V1\TimerController::class, 'status']);
-        Route::post('timer/heartbeat', [\App\Http\Controllers\Api\V1\TimerController::class, 'heartbeat']);
+        Route::post('timer/heartbeat', [\App\Http\Controllers\Api\V1\TimerController::class, 'heartbeat'])->middleware('throttle:60,1');
 
         // Time entries
         Route::apiResource('time-entries', \App\Http\Controllers\Api\V1\TimeEntryController::class);
@@ -65,8 +78,9 @@ Route::prefix('v1')->group(function () {
         Route::post('agent/logs', [\App\Http\Controllers\Api\V1\AgentController::class, 'bulkLogs']);
 
         // Screenshots
-        Route::apiResource('screenshots', \App\Http\Controllers\Api\V1\ScreenshotController::class)->only(['index', 'store', 'destroy']);
         Route::get('screenshots/signed-cookies', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'signedCookies']);
+        Route::post('screenshots', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'store'])->middleware('throttle:30,1');
+        Route::apiResource('screenshots', \App\Http\Controllers\Api\V1\ScreenshotController::class)->only(['index', 'destroy']);
 
         // Reports
         Route::prefix('reports')->group(function () {
@@ -75,7 +89,8 @@ Route::prefix('v1')->group(function () {
             Route::get('projects', [\App\Http\Controllers\Api\V1\ReportController::class, 'projects']);
             Route::get('apps', [\App\Http\Controllers\Api\V1\ReportController::class, 'apps']);
             Route::get('timeline', [\App\Http\Controllers\Api\V1\ReportController::class, 'timeline']);
-            Route::post('export', [\App\Http\Controllers\Api\V1\ReportController::class, 'export']);
+            Route::post('export', [\App\Http\Controllers\Api\V1\ReportController::class, 'export'])
+                ->middleware('throttle:10,60'); // 10 exports per hour
             Route::get('payroll', [\App\Http\Controllers\Api\V1\ReportController::class, 'payroll']);
             Route::get('attendance', [\App\Http\Controllers\Api\V1\ReportController::class, 'attendance']);
         });
@@ -102,6 +117,70 @@ Route::prefix('v1')->group(function () {
             Route::post('cancel', [\App\Http\Controllers\Api\V1\BillingController::class, 'cancel']);
             Route::get('invoices', [\App\Http\Controllers\Api\V1\BillingController::class, 'invoices']);
             Route::get('usage', [\App\Http\Controllers\Api\V1\BillingController::class, 'usage']);
+        });
+
+        // --- Enterprise Features ---
+
+        // Audit Logs (owner/admin only)
+        Route::prefix('audit-logs')->middleware('role:owner,admin')->group(function () {
+            Route::get('/', [AuditLogController::class, 'index']);
+            Route::get('actions', [AuditLogController::class, 'actions']);
+        });
+
+        // SSO Configuration (owner/admin only)
+        Route::prefix('sso')->middleware('role:owner,admin')->group(function () {
+            Route::get('/', [SsoController::class, 'show']);
+            Route::put('configure', [SsoController::class, 'configure']);
+            Route::delete('/', [SsoController::class, 'destroy']);
+        });
+
+        // Data Privacy / GDPR
+        Route::prefix('privacy')->group(function () {
+            Route::get('export', [DataPrivacyController::class, 'exportData']);
+            Route::delete('account', [DataPrivacyController::class, 'deleteAccount']);
+            Route::get('data-processing', [DataPrivacyController::class, 'dataProcessingInfo']);
+            Route::post('consent', [DataPrivacyController::class, 'recordConsent']);
+        });
+
+        // Permissions (owner/admin only)
+        Route::prefix('permissions')->middleware('role:owner,admin')->group(function () {
+            Route::get('/', function () {
+                return response()->json([
+                    'permissions' => \App\Models\Permission::all()->groupBy('group'),
+                ]);
+            });
+            Route::get('roles/{role}', function (string $role) {
+                return response()->json([
+                    'permissions' => \App\Services\PermissionService::getRolePermissions($role),
+                ]);
+            });
+            Route::get('users/{id}/overrides', function (\Illuminate\Http\Request $request, string $id) {
+                $user = $request->user()->organization->users()->findOrFail($id);
+                return response()->json([
+                    'overrides' => \App\Services\PermissionService::getUserOverrides($user),
+                ]);
+            });
+            Route::put('users/{id}/overrides', function (\Illuminate\Http\Request $request, string $id) {
+                $request->validate([
+                    'permission' => 'required|string|exists:permissions,name',
+                    'granted' => 'required|boolean',
+                ]);
+                $user = $request->user()->organization->users()->findOrFail($id);
+                $permission = \App\Models\Permission::where('name', $request->permission)->firstOrFail();
+
+                \Illuminate\Support\Facades\DB::table('user_permission_overrides')->updateOrInsert(
+                    ['user_id' => $user->id, 'permission_id' => $permission->id],
+                    ['granted' => $request->granted, 'id' => (string) \Illuminate\Support\Str::uuid()],
+                );
+
+                \App\Services\PermissionService::clearCache($user);
+                \App\Services\AuditService::log('user.permission_override', $user, [
+                    'permission' => $request->permission,
+                    'granted' => $request->granted,
+                ]);
+
+                return response()->json(['message' => 'Permission override saved.']);
+            });
         });
     });
 

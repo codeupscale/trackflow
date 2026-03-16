@@ -18,7 +18,7 @@ class TaskFactory extends Factory
     public function definition(): array
     {
         return [
-            'organization_id' => Organization::factory(),
+            'organization_id' => fn (array $attributes) => Project::find($attributes['project_id'])?->organization_id ?? Organization::factory(),
             'project_id' => Project::factory(),
             'name' => fake()->sentence(4),
             'description' => fake()->optional(0.7)->paragraph(),

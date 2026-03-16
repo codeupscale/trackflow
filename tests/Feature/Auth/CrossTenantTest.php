@@ -33,6 +33,35 @@ class CrossTenantTest extends TestCase
         ]);
     }
 
+    public function test_user_cannot_access_other_org_screenshots(): void
+    {
+        $screenshot = \App\Models\Screenshot::factory()->create([
+            'organization_id' => $this->orgB->id,
+            'user_id' => $this->userB->id,
+        ]);
+
+        $this->actingAs($this->userA, 'sanctum');
+
+        $response = $this->deleteJson("/api/v1/screenshots/{$screenshot->id}");
+        $response->assertStatus(403);
+    }
+
+    public function test_user_cannot_access_other_org_timesheets(): void
+    {
+        $timesheet = \App\Models\Timesheet::factory()->create([
+            'organization_id' => $this->orgB->id,
+            'user_id' => $this->userB->id,
+        ]);
+
+        $this->actingAs($this->userA, 'sanctum');
+
+        $response = $this->postJson("/api/v1/timesheets/{$timesheet->id}/review", [
+            'action' => 'approve',
+        ]);
+
+        $response->assertStatus(403);
+    }
+
     public function test_user_cannot_see_other_org_projects(): void
     {
         $projectB = Project::factory()->create([

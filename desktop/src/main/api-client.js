@@ -1,6 +1,6 @@
 const axios = require('axios');
 
-const API_BASE = process.env.TRACKFLOW_API_URL || 'http://localhost/api/v1';
+const API_BASE = process.env.TRACKFLOW_API_URL || 'http://localhost:8000/api/v1';
 
 class ApiClient {
   constructor(token) {
