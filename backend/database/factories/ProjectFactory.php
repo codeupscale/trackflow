@@ -17,7 +17,7 @@ class ProjectFactory extends Factory
     public function definition(): array
     {
         return [
-            'organization_id' => fn (array $attributes) => User::find($attributes['created_by'])?->organization_id ?? Organization::factory(),
+            'organization_id' => Organization::factory(),
             'created_by' => User::factory(),
             'name' => fake()->catchPhrase(),
             'color' => fake()->hexColor(),

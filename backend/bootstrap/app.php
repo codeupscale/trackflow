@@ -7,6 +7,7 @@ use App\Http\Middleware\RequestId;
 use App\Http\Middleware\RoleMiddleware;
 use App\Http\Middleware\SanitizeInput;
 use App\Http\Middleware\SecurityHeaders;
+use Illuminate\Auth\AuthenticationException;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -58,7 +59,13 @@ return Application::configure(basePath: dirname(__DIR__))
                 'message' => 'An unexpected error occurred.',
             ];
 
-            if ($e instanceof ValidationException) {
+            if ($e instanceof AuthenticationException) {
+                $status = 401;
+                $error = [
+                    'code' => 'unauthenticated',
+                    'message' => 'Unauthenticated.',
+                ];
+            } elseif ($e instanceof ValidationException) {
                 $status = 422;
                 $error = [
                     'code' => 'validation_error',
