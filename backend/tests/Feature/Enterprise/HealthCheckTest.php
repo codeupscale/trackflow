@@ -41,7 +41,7 @@ class HealthCheckTest extends TestCase
         $data = $response->json();
 
         $this->assertIsString($data['status']);
-        $this->assertIn($data['status'], ['ok', 'degraded']);
+        $this->assertContains($data['status'], ['ok', 'degraded']);
         $this->assertIsString($data['timestamp']);
         $this->assertIsNumeric($data['memory']['usage_mb']);
     }

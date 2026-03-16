@@ -13,8 +13,8 @@ class RegisterTest extends TestCase
         $response = $this->postJson('/api/v1/auth/register', [
             'name' => 'John Doe',
             'email' => 'john@example.com',
-            'password' => 'password123',
-            'password_confirmation' => 'password123',
+            'password' => 'Password123',
+            'password_confirmation' => 'Password123',
             'company_name' => 'Acme Corp',
             'timezone' => 'America/New_York',
         ]);
@@ -61,8 +61,8 @@ class RegisterTest extends TestCase
         $this->postJson('/api/v1/auth/register', [
             'name' => 'Jane',
             'email' => 'jane@example.com',
-            'password' => 'password123',
-            'password_confirmation' => 'password123',
+            'password' => 'Password123',
+            'password_confirmation' => 'Password123',
             'company_name' => 'Test Co',
         ]);
 
