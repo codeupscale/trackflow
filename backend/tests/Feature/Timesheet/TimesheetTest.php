@@ -218,8 +218,8 @@ class TimesheetTest extends TestCase
 
     public function test_timesheet_calculates_total_seconds_correctly(): void
     {
-        $periodStart = now()->startOfDay();
-        $periodEnd = now()->endOfDay();
+        $periodStart = now()->subDays(7)->startOfDay();
+        $periodEnd = now()->subDays(1)->endOfDay();
 
         // Create time entries totaling 16 hours
         TimeEntry::factory()->create([

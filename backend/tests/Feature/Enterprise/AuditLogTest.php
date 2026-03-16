@@ -7,7 +7,6 @@ use App\Models\Organization;
 use App\Models\User;
 use App\Services\AuditService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Hash;
 use Tests\TestCase;
 
 class AuditLogTest extends TestCase
@@ -19,7 +18,7 @@ class AuditLogTest extends TestCase
         $org = Organization::factory()->create();
         $user = User::factory()->create([
             'organization_id' => $org->id,
-            'password' => Hash::make('password123'),
+            'password' => 'password123',
         ]);
 
         $this->postJson('/api/v1/auth/login', [

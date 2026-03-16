@@ -21,7 +21,8 @@ class TimesheetController extends Controller
         $user = $request->user();
 
         $totalSeconds = TimeEntry::where('user_id', $user->id)
-            ->whereBetween('started_at', [$request->period_start, $request->period_end])
+            ->where('started_at', '>=', $request->period_start . ' 00:00:00')
+            ->where('started_at', '<=', $request->period_end . ' 23:59:59')
             ->whereNotNull('ended_at')
             ->sum('duration_seconds');
 

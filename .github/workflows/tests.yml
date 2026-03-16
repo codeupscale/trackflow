@@ -59,7 +59,7 @@ jobs:
         run: php artisan key:generate
 
       - name: Execute tests
-        run: php artisan test
+        run: php artisan test --exclude-group=external
         env:
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: 6379
