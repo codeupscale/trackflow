@@ -4,7 +4,6 @@ namespace Tests\Feature\Auth;
 
 use App\Models\Organization;
 use App\Models\User;
-use Illuminate\Support\Facades\Hash;
 use Tests\TestCase;
 
 class LoginTest extends TestCase
@@ -15,13 +14,13 @@ class LoginTest extends TestCase
         $user = User::factory()->create([
             'organization_id' => $org->id,
             'email' => 'john@example.com',
-            'password' => Hash::make('password123'),
+            'password' => 'password123',
             'role' => 'owner',
         ]);
 
         $response = $this->postJson('/api/v1/auth/login', [
             'email' => 'john@example.com',
-            'password' => Hash::make('password123'),
+            'password' => 'password123',
         ]);
 
         $response->assertOk()
@@ -41,7 +40,7 @@ class LoginTest extends TestCase
         User::factory()->create([
             'organization_id' => $org->id,
             'email' => 'john@example.com',
-            'password' => Hash::make('password123'),
+            'password' => 'password123',
         ]);
 
         $response = $this->postJson('/api/v1/auth/login', [
@@ -57,7 +56,7 @@ class LoginTest extends TestCase
     {
         $response = $this->postJson('/api/v1/auth/login', [
             'email' => 'nonexistent@example.com',
-            'password' => Hash::make('password123'),
+            'password' => 'password123',
         ]);
 
         $response->assertStatus(422);
@@ -69,13 +68,13 @@ class LoginTest extends TestCase
         User::factory()->create([
             'organization_id' => $org->id,
             'email' => 'disabled@example.com',
-            'password' => Hash::make('password123'),
+            'password' => 'password123',
             'is_active' => false,
         ]);
 
         $response = $this->postJson('/api/v1/auth/login', [
             'email' => 'disabled@example.com',
-            'password' => Hash::make('password123'),
+            'password' => 'password123',
         ]);
 
         $response->assertStatus(422)
@@ -88,13 +87,13 @@ class LoginTest extends TestCase
         $user = User::factory()->create([
             'organization_id' => $org->id,
             'email' => 'john@example.com',
-            'password' => Hash::make('password123'),
+            'password' => 'password123',
             'last_active_at' => null,
         ]);
 
         $this->postJson('/api/v1/auth/login', [
             'email' => 'john@example.com',
-            'password' => Hash::make('password123'),
+            'password' => 'password123',
         ]);
 
         $user->refresh();

@@ -7,6 +7,9 @@ use App\Models\User;
 use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
 
+/**
+ * @group external
+ */
 class WebhookTest extends TestCase
 {
     public function test_stripe_webhook_with_valid_signature(): void
