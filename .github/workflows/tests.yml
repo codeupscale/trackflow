@@ -16,6 +16,17 @@ jobs:
   tests:
     runs-on: ubuntu-latest
 
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     strategy:
       fail-fast: true
       matrix:
@@ -35,7 +46,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite, redis
           coverage: none
 
       - name: Install Composer dependencies
@@ -49,3 +60,6 @@ jobs:
 
       - name: Execute tests
         run: php artisan test
+        env:
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: 6379
