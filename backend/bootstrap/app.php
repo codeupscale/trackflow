@@ -43,10 +43,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
 
         // Rate limiting for API
-        $middleware->throttleApi('1000,1');
-
-        // Stricter rate limiting for auth routes
-        $middleware->throttle('auth:10,1');
+        $middleware->throttleApi('api');
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Consistent JSON error responses for API
