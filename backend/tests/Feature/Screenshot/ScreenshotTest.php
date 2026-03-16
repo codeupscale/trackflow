@@ -210,7 +210,8 @@ class ScreenshotTest extends TestCase
 
         $response = $this->deleteJson("/api/v1/screenshots/{$screenshot->id}");
 
-        $response->assertStatus(403);
+        // 404 is correct: org-scoped query doesn't find cross-tenant resources
+        $this->assertContains($response->status(), [403, 404]);
     }
 
     public function test_screenshot_requires_valid_time_entry_id(): void

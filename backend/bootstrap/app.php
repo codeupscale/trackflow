@@ -69,9 +69,15 @@ return Application::configure(basePath: dirname(__DIR__))
                 $status = 422;
                 $error = [
                     'code' => 'validation_error',
-                    'message' => 'The given data was invalid.',
+                    'message' => $e->getMessage(),
                     'details' => $e->errors(),
                 ];
+                // Include standard 'errors' key for Laravel test compatibility
+                return response()->json([
+                    'error' => $error,
+                    'message' => $e->getMessage(),
+                    'errors' => $e->errors(),
+                ], $status);
             } elseif ($e instanceof ModelNotFoundException) {
                 $status = 404;
                 $error = [
