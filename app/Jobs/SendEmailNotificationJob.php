@@ -31,4 +31,18 @@ class SendEmailNotificationJob implements ShouldQueue
             $message->to($this->to)->subject($this->subject);
         });
     }
+
+    public function backoff(): array
+    {
+        return [30, 60, 300, 600, 900];
+    }
+
+    public function failed(\Throwable $exception): void
+    {
+        \Illuminate\Support\Facades\Log::critical("SendEmailNotificationJob failed", [
+            'to' => $this->to,
+            'subject' => $this->subject,
+            'error' => $exception->getMessage(),
+        ]);
+    }
 }

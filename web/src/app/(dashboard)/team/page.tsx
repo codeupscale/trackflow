@@ -46,7 +46,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog';
 import {
   DropdownMenu,
@@ -169,11 +168,14 @@ export default function TeamPage() {
             Manage your team members and roles
           </p>
         </div>
+        <Button
+          onClick={() => setInviteOpen(true)}
+          className="bg-blue-600 hover:bg-blue-700 text-white"
+        >
+          <UserPlus className="mr-2 h-4 w-4" />
+          Invite Member
+        </Button>
         <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
-          <DialogTrigger className="inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium h-9 px-4 bg-blue-600 hover:bg-blue-700 text-white cursor-pointer">
-            <UserPlus className="mr-2 h-4 w-4" />
-            Invite Member
-          </DialogTrigger>
           <DialogContent className="bg-slate-900 border-slate-800">
             <form onSubmit={handleInvite}>
               <DialogHeader>

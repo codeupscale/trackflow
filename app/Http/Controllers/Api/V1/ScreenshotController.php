@@ -22,6 +22,10 @@ class ScreenshotController extends Controller
         ]);
 
         $user = $request->user();
+
+        // Validate that time_entry_id belongs to the authenticated user
+        $user->timeEntries()->where('id', $request->time_entry_id)->firstOrFail();
+
         $org = $user->organization;
         $date = now()->format('Y-m-d');
         $filename = time() . '_' . Str::random(8) . '.jpg';
@@ -51,12 +55,15 @@ class ScreenshotController extends Controller
     // SS-02: List screenshots with filters
     public function index(Request $request): JsonResponse
     {
-        $query = Screenshot::query()->with('user');
+        $query = Screenshot::query()
+            ->where('organization_id', $request->user()->organization_id)
+            ->with('user');
 
         // Employees see only own screenshots
         if ($request->user()->isEmployee()) {
             $query->where('user_id', $request->user()->id);
         } elseif ($request->has('user_id')) {
+            $request->user()->organization->users()->findOrFail($request->user_id);
             $query->where('user_id', $request->user_id);
         }
 
@@ -70,7 +77,9 @@ class ScreenshotController extends Controller
             $query->where('time_entry_id', $request->time_entry_id);
         }
 
-        $screenshots = $query->orderBy('captured_at', 'desc')->paginate(50);
+        $screenshots = $query->orderBy('captured_at', 'desc')->paginate(
+            min((int) $request->input('per_page', 50), 100)
+        );
 
         // Add signed URLs
         $screenshots->getCollection()->transform(function ($screenshot) {
@@ -82,9 +91,10 @@ class ScreenshotController extends Controller
     }
 
     // SS-03: Delete screenshot
-    public function destroy(string $id): JsonResponse
+    public function destroy(Request $request, string $id): JsonResponse
     {
-        $screenshot = Screenshot::findOrFail($id);
+        $screenshot = Screenshot::where('organization_id', $request->user()->organization_id)
+            ->findOrFail($id);
         $this->authorize('delete', $screenshot);
 
         // Delete from S3

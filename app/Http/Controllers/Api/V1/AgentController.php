@@ -34,6 +34,15 @@ class AgentController extends Controller
         ]);
 
         $user = $request->user();
+
+        // Validate all time_entry_ids belong to the authenticated user
+        $validEntryIds = $user->timeEntries()->pluck('id')->toArray();
+        foreach ($request->logs as $log) {
+            if (!in_array($log['time_entry_id'], $validEntryIds)) {
+                return response()->json(['message' => 'Invalid time entry ID.'], 403);
+            }
+        }
+
         $inserted = 0;
         foreach ($request->logs as $log) {
             \App\Models\ActivityLog::create([

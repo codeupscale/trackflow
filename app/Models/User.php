@@ -30,6 +30,10 @@ class User extends Authenticatable
         'last_active_at',
         'settings',
         'email_verified_at',
+        'sso_provider',
+        'sso_provider_id',
+        'consent_given_at',
+        'privacy_policy_version',
     ];
 
     protected $hidden = [
@@ -42,6 +46,7 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'last_active_at' => 'datetime',
+            'consent_given_at' => 'datetime',
             'password' => 'hashed',
             'is_active' => 'boolean',
             'settings' => 'array',
@@ -78,6 +83,32 @@ class User extends Authenticatable
         return $this->hasMany(Timesheet::class);
     }
 
+    public function activityLogs(): HasMany
+    {
+        return $this->hasMany(ActivityLog::class);
+    }
+
+    public function apiKeys(): HasMany
+    {
+        return $this->hasMany(ApiKey::class);
+    }
+
+    public function approvedTimeEntries(): HasMany
+    {
+        return $this->hasMany(TimeEntry::class, 'approved_by');
+    }
+
+    public function reviewedTimesheets(): HasMany
+    {
+        return $this->hasMany(Timesheet::class, 'reviewed_by');
+    }
+
+    public function shifts(): BelongsToMany
+    {
+        return $this->belongsToMany(Shift::class, 'user_shifts')
+            ->withPivot(['effective_from', 'effective_to']);
+    }
+
     public function isOwner(): bool
     {
         return $this->role === 'owner';
@@ -101,5 +132,19 @@ class User extends Authenticatable
     public function hasRole(string ...$roles): bool
     {
         return in_array($this->role, $roles);
+    }
+
+    public function hasPermission(string $permission): bool
+    {
+        if ($this->isOwner()) {
+            return true;
+        }
+
+        return \App\Services\PermissionService::userCan($this, $permission);
+    }
+
+    public function auditLogs(): HasMany
+    {
+        return $this->hasMany(AuditLog::class);
     }
 }

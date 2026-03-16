@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Play, Square } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -33,27 +33,24 @@ export function TimerWidget() {
     fetchStatus,
   } = useTimerStore();
 
-  const [selectedProject, setSelectedProject] = useState<string>('');
+  const selectedRef = useRef<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ['projects-list'],
     queryFn: async () => {
       const res = await api.get('/projects', { params: { per_page: 100 } });
-      // API returns { projects: [...] } or { data: [...] } or array directly
       return res.data.projects || res.data.data || (Array.isArray(res.data) ? res.data : []);
     },
   });
 
   useEffect(() => {
-    fetchStatus().catch(() => {
-      // Timer status fetch failed
-    });
+    fetchStatus().catch(() => {});
   }, [fetchStatus]);
 
   useEffect(() => {
     if (projectId) {
-      setSelectedProject(projectId);
+      selectedRef.current = projectId;
     }
   }, [projectId]);
 
@@ -64,7 +61,7 @@ export function TimerWidget() {
         await stopTimer();
         toast.success('Timer stopped');
       } else {
-        await startTimer(selectedProject || undefined);
+        await startTimer(selectedRef.current ?? undefined);
         toast.success('Timer started');
       }
     } catch {
@@ -78,8 +75,7 @@ export function TimerWidget() {
     <div className="flex items-center gap-3">
       {/* Project selector */}
       <Select
-        value={selectedProject || undefined}
-        onValueChange={(val) => setSelectedProject(val ?? '')}
+        onValueChange={(val) => { selectedRef.current = val as string | null; }}
         disabled={isRunning}
       >
         <SelectTrigger className="w-[160px] h-8 bg-slate-800/50 border-slate-700 text-sm">

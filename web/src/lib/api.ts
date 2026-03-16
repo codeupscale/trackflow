@@ -19,6 +19,26 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
+    // Extract structured error message from response
+    const errorMessage = error.response?.data?.message || error.message || 'An error occurred';
+
+    // Handle payment required (402) - redirect to billing
+    if (error.response?.status === 402) {
+      if (typeof window !== 'undefined') {
+        window.location.href = '/settings/billing';
+      }
+      return Promise.reject({ ...error, message: errorMessage });
+    }
+
+    // Handle forbidden (403) - insufficient permissions
+    if (error.response?.status === 403) {
+      if (typeof window !== 'undefined') {
+        window.location.href = '/';
+      }
+      return Promise.reject({ ...error, message: errorMessage });
+    }
+
+    // Handle unauthorized (401) - refresh token or redirect to login
     if (error.response?.status === 401) {
       const refreshToken = localStorage.getItem('refresh_token');
       if (refreshToken && !error.config._retry) {
@@ -36,15 +56,19 @@ api.interceptors.response.use(
         } catch {
           localStorage.removeItem('access_token');
           localStorage.removeItem('refresh_token');
-          window.location.href = '/login';
+          if (typeof window !== 'undefined') {
+            window.location.href = '/login';
+          }
         }
       } else {
         localStorage.removeItem('access_token');
         localStorage.removeItem('refresh_token');
-        window.location.href = '/login';
+        if (typeof window !== 'undefined') {
+          window.location.href = '/login';
+        }
       }
     }
-    return Promise.reject(error);
+    return Promise.reject({ ...error, message: errorMessage });
   }
 );
 

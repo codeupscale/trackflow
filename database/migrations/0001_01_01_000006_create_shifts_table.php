@@ -20,6 +20,7 @@ return new class extends Migration
 
         Schema::create('user_shifts', function (Blueprint $table) {
             $table->uuid('id')->primary();
+            $table->foreignUuid('organization_id')->constrained()->cascadeOnDelete();
             $table->foreignUuid('user_id')->constrained('users')->cascadeOnDelete();
             $table->foreignUuid('shift_id')->constrained('shifts')->cascadeOnDelete();
             $table->date('effective_from');

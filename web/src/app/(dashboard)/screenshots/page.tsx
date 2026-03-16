@@ -50,6 +50,10 @@ interface Screenshot {
 
 interface ScreenshotResponse {
   data: Screenshot[];
+  current_page?: number;
+  last_page?: number;
+  total?: number;
+  per_page?: number;
   meta?: {
     current_page: number;
     last_page: number;
@@ -78,7 +82,7 @@ export default function ScreenshotsPage() {
     queryKey: ['team-users'],
     queryFn: async () => {
       const res = await api.get('/users', { params: { per_page: 100 } });
-      return res.data.data || res.data;
+      return res.data.users || res.data.data || (Array.isArray(res.data) ? res.data : []);
     },
     enabled: isManager,
   });
@@ -101,7 +105,12 @@ export default function ScreenshotsPage() {
   });
 
   const screenshots = screenshotsData?.data || [];
-  const meta = screenshotsData?.meta;
+  const meta = screenshotsData?.meta || (screenshotsData?.current_page != null ? {
+    current_page: screenshotsData.current_page!,
+    last_page: screenshotsData.last_page!,
+    total: screenshotsData.total!,
+    per_page: screenshotsData.per_page!,
+  } : undefined);
 
   const getActivityBadgeClass = (score: number) => {
     if (score >= 70) return 'bg-green-500/10 text-green-400 border-green-500/20';

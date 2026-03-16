@@ -20,15 +20,17 @@ class UserController extends Controller
         return response()->json(['users' => $users]);
     }
 
-    public function show(string $id): JsonResponse
+    public function show(Request $request, string $id): JsonResponse
     {
-        $user = User::with('teams')->findOrFail($id);
+        $user = $request->user()->organization->users()
+            ->with('teams')
+            ->findOrFail($id);
         return response()->json(['user' => $user]);
     }
 
     public function update(Request $request, string $id): JsonResponse
     {
-        $user = User::findOrFail($id);
+        $user = $request->user()->organization->users()->findOrFail($id);
 
         $request->validate([
             'name' => 'sometimes|string|max:255',
@@ -45,9 +47,10 @@ class UserController extends Controller
         return response()->json(['user' => $user->fresh()]);
     }
 
-    public function destroy(string $id): JsonResponse
+    public function destroy(Request $request, string $id): JsonResponse
     {
-        $user = User::findOrFail($id);
+        $user = $request->user()->organization->users()
+            ->findOrFail($id);
         $this->authorize('delete', $user);
         $user->delete();
         return response()->json(['message' => 'User deactivated.']);

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\SendEmailNotificationJob;
 use App\Models\Invitation;
 use App\Models\Organization;
 use App\Models\User;
@@ -56,7 +57,18 @@ class InvitationController extends Controller
             'created_by' => $user->id,
         ]);
 
-        // TODO: Dispatch SendInvitationEmail job
+        SendEmailNotificationJob::dispatch(
+            $request->email,
+            "You've been invited to join {$user->organization->name} on TrackFlow",
+            'emails.invitation',
+            [
+                'invitation_url' => config('app.frontend_url', config('app.url')) . '/invitations/accept?token=' . $invitation->token,
+                'organization_name' => $user->organization->name,
+                'role' => $invitation->role,
+                'invited_by' => $user->name,
+                'expires_at' => $invitation->expires_at->format('F j, Y'),
+            ]
+        );
 
         return response()->json([
             'invitation' => $invitation,

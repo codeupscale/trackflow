@@ -20,36 +20,43 @@ class TimerService
     {
         $user = Auth::user();
         $redisKey = "timer:{$user->id}";
+        $lockKey = "timer:lock:{$user->id}";
 
-        // Check if timer already running
-        if (Redis::exists($redisKey)) {
-            throw new \RuntimeException('Timer is already running.');
+        // Atomically acquire lock to prevent race condition
+        if (!Redis::set($lockKey, 1, 'EX', 5, 'NX')) {
+            throw new \RuntimeException('Timer operation in progress');
         }
 
-        $entry = DB::transaction(function () use ($user, $data, $redisKey) {
-            $entry = TimeEntry::create([
-                'organization_id' => $user->organization_id,
-                'user_id' => $user->id,
-                'project_id' => $data['project_id'] ?? null,
-                'task_id' => $data['task_id'] ?? null,
-                'notes' => $data['notes'] ?? null,
-                'started_at' => now(),
-                'type' => 'tracked',
-            ]);
+        try {
+            // Use DB transaction and set Redis BEFORE committing
+            $entry = DB::transaction(function () use ($user, $data, $redisKey) {
+                $entry = TimeEntry::create([
+                    'organization_id' => $user->organization_id,
+                    'user_id' => $user->id,
+                    'project_id' => $data['project_id'] ?? null,
+                    'task_id' => $data['task_id'] ?? null,
+                    'notes' => $data['notes'] ?? null,
+                    'started_at' => now(),
+                    'type' => 'tracked',
+                ]);
 
-            Redis::setex($redisKey, 2592000, json_encode([
-                'entry_id' => $entry->id,
-                'started_at' => $entry->started_at->toISOString(),
-                'project_id' => $entry->project_id,
-                'task_id' => $entry->task_id,
-            ]));
+                // Set Redis before committing to maintain consistency
+                Redis::setex($redisKey, 2592000, json_encode([
+                    'entry_id' => $entry->id,
+                    'started_at' => $entry->started_at->toISOString(),
+                    'project_id' => $entry->project_id,
+                    'task_id' => $entry->task_id,
+                ]));
+
+                return $entry;
+            });
+
+            TimerStarted::dispatch($entry);
 
             return $entry;
-        });
-
-        TimerStarted::dispatch($entry);
-
-        return $entry;
+        } finally {
+            Redis::del($lockKey);
+        }
     }
 
     public function stop(): TimeEntry
@@ -103,7 +110,7 @@ class TimerService
         return $stoppedEntry;
     }
 
-    public function status(): ?array
+    public function status(): array
     {
         $user = Auth::user();
         $redisKey = "timer:{$user->id}";

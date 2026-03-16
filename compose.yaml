@@ -1,11 +1,11 @@
 services:
     laravel.test:
         build:
-            context: './docker/8.5'
+            context: ./docker/8.5
             dockerfile: Dockerfile
             args:
                 WWWGROUP: '${WWWGROUP}'
-        image: 'sail-8.5/app'
+        image: sail-8.5/app
         extra_hosts:
             - 'host.docker.internal:host-gateway'
         ports:
@@ -96,11 +96,11 @@ services:
             timeout: 5s
     horizon:
         build:
-            context: './docker/8.5'
+            context: ./docker/8.5
             dockerfile: Dockerfile
             args:
                 WWWGROUP: '${WWWGROUP}'
-        image: 'sail-8.5/app'
+        image: sail-8.5/app
         extra_hosts:
             - 'host.docker.internal:host-gateway'
         environment:
@@ -114,14 +114,14 @@ services:
         depends_on:
             - pgsql
             - redis
-        command: php artisan horizon
+        command: 'php artisan horizon'
     reverb:
         build:
-            context: './docker/8.5'
+            context: ./docker/8.5
             dockerfile: Dockerfile
             args:
                 WWWGROUP: '${WWWGROUP}'
-        image: 'sail-8.5/app'
+        image: sail-8.5/app
         extra_hosts:
             - 'host.docker.internal:host-gateway'
         ports:
@@ -140,11 +140,11 @@ services:
         command: 'php artisan reverb:start --host=0.0.0.0 --port=8080'
     scheduler:
         build:
-            context: './docker/8.5'
+            context: ./docker/8.5
             dockerfile: Dockerfile
             args:
                 WWWGROUP: '${WWWGROUP}'
-        image: 'sail-8.5/app'
+        image: sail-8.5/app
         extra_hosts:
             - 'host.docker.internal:host-gateway'
         environment:

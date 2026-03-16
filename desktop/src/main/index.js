@@ -24,16 +24,11 @@ if (!gotTheLock) {
 }
 
 app.on('ready', async () => {
-  // Hide dock icon on macOS
-  if (process.platform === 'darwin') {
-    app.dock.hide();
-  }
-
   await initializeApp();
 });
 
-app.on('window-all-closed', (e) => {
-  e.preventDefault(); // Keep running in tray
+app.on('window-all-closed', () => {
+  // Don't quit — keep running in system tray
 });
 
 async function initializeApp() {
@@ -67,6 +62,11 @@ async function initializeApp() {
   activityMonitor = new ActivityMonitor(apiClient, offlineQueue);
   screenshotService = new ScreenshotService(apiClient, config, offlineQueue);
 
+  // Hide dock icon on macOS once authenticated (tray-only mode)
+  if (process.platform === 'darwin') {
+    app.dock.hide();
+  }
+
   createTray();
   setupIPC();
   checkForUpdates();
@@ -88,14 +88,22 @@ async function initializeApp() {
 
 function createTray() {
   const iconPath = path.join(__dirname, '..', '..', 'assets', 'tray-icon.png');
-  let icon;
-  try {
-    icon = nativeImage.createFromPath(iconPath);
-  } catch {
-    icon = nativeImage.createEmpty();
+  let icon = nativeImage.createFromPath(iconPath);
+
+  // Fallback: create a tiny 16x16 blue square if tray-icon.png missing
+  if (icon.isEmpty()) {
+    const size = 16;
+    const buf = Buffer.alloc(size * size * 4);
+    for (let i = 0; i < size * size; i++) {
+      buf[i * 4] = 59;    // R (blue: #3b82f6)
+      buf[i * 4 + 1] = 130; // G
+      buf[i * 4 + 2] = 246; // B
+      buf[i * 4 + 3] = 255; // A
+    }
+    icon = nativeImage.createFromBuffer(buf, { width: size, height: size });
   }
 
-  tray = new Tray(icon.isEmpty() ? nativeImage.createFromBuffer(Buffer.alloc(1)) : icon);
+  tray = new Tray(icon);
   tray.setToolTip('TrackFlow');
 
   const contextMenu = Menu.buildFromTemplate([
@@ -250,7 +258,7 @@ function createLoginWindow() {
 
   loginWindow.loadFile(path.join(__dirname, '..', 'renderer', 'login.html'));
 
-  ipcMain.handleOnce('login', async (_, email, password) => {
+  ipcMain.handle('login', async (_, email, password) => {
     try {
       const tempClient = new ApiClient(null);
       const result = await tempClient.login(email, password);
@@ -266,6 +274,9 @@ function createLoginWindow() {
 }
 
 function checkForUpdates() {
+  if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
+    return; // Skip auto-updates in development
+  }
   autoUpdater.checkForUpdatesAndNotify().catch(() => {});
 }
 

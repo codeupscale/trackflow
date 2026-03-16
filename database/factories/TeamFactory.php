@@ -17,7 +17,9 @@ class TeamFactory extends Factory
     public function definition(): array
     {
         return [
-            'organization_id' => Organization::factory(),
+            'organization_id' => fn (array $attributes) => $attributes['manager_id']
+                ? User::find($attributes['manager_id'])?->organization_id
+                : Organization::factory(),
             'name' => fake()->randomElement([
                 'Engineering', 'Design', 'Marketing', 'Sales',
                 'Support', 'Operations', 'Finance', 'Product',

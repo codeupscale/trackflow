@@ -25,7 +25,7 @@ class TimeEntryFactory extends Factory
         );
 
         return [
-            'organization_id' => Organization::factory(),
+            'organization_id' => fn (array $attributes) => User::find($attributes['user_id'])?->organization_id ?? Organization::factory(),
             'user_id' => User::factory(),
             'project_id' => fake()->optional(0.8)->passthrough(Project::factory()),
             'task_id' => fake()->optional(0.5)->passthrough(Task::factory()),

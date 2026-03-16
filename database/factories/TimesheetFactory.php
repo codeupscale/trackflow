@@ -21,7 +21,7 @@ class TimesheetFactory extends Factory
         $status = fake()->randomElement(['draft', 'submitted', 'approved', 'rejected']);
 
         return [
-            'organization_id' => Organization::factory(),
+            'organization_id' => fn (array $attributes) => User::find($attributes['user_id'])?->organization_id ?? Organization::factory(),
             'user_id' => User::factory(),
             'period_start' => $periodStart->format('Y-m-d'),
             'period_end' => $periodEnd->format('Y-m-d'),

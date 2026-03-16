@@ -9,9 +9,12 @@ use Illuminate\Http\Request;
 
 class ProjectController extends Controller
 {
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
-        $projects = Project::with('tasks')->where('is_archived', false)->get();
+        $projects = $request->user()->organization->projects()
+            ->with('tasks')
+            ->where('is_archived', false)
+            ->get();
         return response()->json(['projects' => $projects]);
     }
 

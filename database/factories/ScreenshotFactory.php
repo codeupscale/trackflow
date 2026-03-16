@@ -29,7 +29,7 @@ class ScreenshotFactory extends Factory
         $resolution = fake()->randomElement($resolutions);
 
         return [
-            'organization_id' => Organization::factory(),
+            'organization_id' => fn (array $attributes) => User::find($attributes['user_id'])?->organization_id ?? Organization::factory(),
             'user_id' => User::factory(),
             'time_entry_id' => TimeEntry::factory(),
             's3_key' => 'screenshots/' . now()->format('Y/m/d') . '/' . Str::uuid() . '.png',
