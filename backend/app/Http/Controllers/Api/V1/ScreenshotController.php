@@ -38,6 +38,11 @@ class ScreenshotController extends Controller
             's3'
         );
 
+        // Get image dimensions
+        $imageSize = getimagesize($request->file('file')->getPathname());
+        $width = $imageSize[0] ?? 1920;
+        $height = $imageSize[1] ?? 1080;
+
         $screenshot = Screenshot::create([
             'organization_id' => $org->id,
             'user_id' => $user->id,
@@ -45,6 +50,8 @@ class ScreenshotController extends Controller
             's3_key' => $s3Key,
             'captured_at' => $request->captured_at,
             'is_blurred' => $org->getSetting('blur_screenshots', false),
+            'width' => $width,
+            'height' => $height,
         ]);
 
         ProcessScreenshotJob::dispatch($screenshot);

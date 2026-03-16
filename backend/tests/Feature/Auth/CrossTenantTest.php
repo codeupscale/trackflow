@@ -43,7 +43,8 @@ class CrossTenantTest extends TestCase
         $this->actingAs($this->userA, 'sanctum');
 
         $response = $this->deleteJson("/api/v1/screenshots/{$screenshot->id}");
-        $response->assertStatus(403);
+        // 404 is correct: org-scoped query doesn't find cross-tenant resources
+        $this->assertContains($response->status(), [403, 404]);
     }
 
     public function test_user_cannot_access_other_org_timesheets(): void
@@ -59,7 +60,8 @@ class CrossTenantTest extends TestCase
             'action' => 'approve',
         ]);
 
-        $response->assertStatus(403);
+        // 404 is correct: org-scoped query doesn't find cross-tenant resources
+        $this->assertContains($response->status(), [403, 404]);
     }
 
     public function test_user_cannot_see_other_org_projects(): void

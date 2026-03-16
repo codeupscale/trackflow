@@ -27,8 +27,10 @@ class TimerTest extends TestCase
 
     public function test_can_start_timer(): void
     {
-        Redis::shouldReceive('exists')->once()->andReturn(false);
-        Redis::shouldReceive('setex')->once()->andReturn(true);
+        // TimerService::start() calls Redis::set(lockKey, 1, 'EX', 5, 'NX') then Redis::setex() then Redis::del()
+        Redis::shouldReceive('set')->once()->andReturn(true);     // acquire lock
+        Redis::shouldReceive('setex')->once()->andReturn(true);   // store timer data
+        Redis::shouldReceive('del')->once()->andReturn(1);        // release lock
 
         $response = $this->postJson('/api/v1/timer/start');
         $response->assertStatus(201)
@@ -42,7 +44,8 @@ class TimerTest extends TestCase
 
     public function test_cannot_start_timer_when_already_running(): void
     {
-        Redis::shouldReceive('exists')->once()->andReturn(true);
+        // TimerService::start() calls Redis::set(lockKey, ..., 'NX') which returns false if lock exists
+        Redis::shouldReceive('set')->once()->andReturn(false);
 
         $response = $this->postJson('/api/v1/timer/start');
         $response->assertStatus(409);
