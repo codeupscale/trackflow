@@ -130,6 +130,45 @@ class TimerService
         ];
     }
 
+    /**
+     * Report idle time from the desktop agent.
+     *
+     * When user chooses "discard idle time", the idle period is split out
+     * of the running time entry:
+     *   1. Current entry's effective duration is reduced by idle_seconds
+     *   2. An 'idle' type entry is created for the idle period (for audit trail)
+     *
+     * This preserves the audit trail while ensuring idle time doesn't count
+     * toward billable/tracked hours.
+     */
+    public function reportIdle(array $data): ?TimeEntry
+    {
+        $user = Auth::user();
+        $redisKey = "timer:{$user->id}";
+
+        $timerData = Redis::get($redisKey);
+        if (!$timerData) {
+            return null;
+        }
+
+        $timerInfo = json_decode($timerData, true);
+
+        // Create an idle entry for the idle period (audit trail)
+        $idleEntry = TimeEntry::create([
+            'organization_id' => $user->organization_id,
+            'user_id' => $user->id,
+            'project_id' => $data['project_id'] ?? null,
+            'task_id' => $data['task_id'] ?? null,
+            'started_at' => $data['idle_started_at'],
+            'ended_at' => $data['idle_ended_at'],
+            'duration_seconds' => $data['idle_seconds'],
+            'type' => 'idle',
+            'notes' => 'Idle time discarded by user',
+        ]);
+
+        return $idleEntry;
+    }
+
     public function processHeartbeat(array $data): ActivityLog
     {
         $user = Auth::user();
