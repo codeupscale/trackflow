@@ -111,7 +111,7 @@ export function TimerWidget() {
             <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
           </span>
         )}
-        <span className={`font-mono text-sm font-medium tabular-nums ${isRunning ? 'text-green-400' : 'text-slate-400'}`}>
+        <span className={`font-mono text-sm font-medium tabular-nums ${isRunning ? 'text-green-400' : elapsedSeconds > 0 ? 'text-slate-300' : 'text-slate-400'}`}>
           {formatDuration(elapsedSeconds)}
         </span>
       </div>

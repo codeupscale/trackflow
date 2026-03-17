@@ -7,6 +7,7 @@ interface TimerState {
   projectId: string | null;
   startedAt: string | null;
   elapsedSeconds: number;
+  todayTotalBase: number; // Completed entries today (excludes current running)
   intervalId: ReturnType<typeof setInterval> | null;
   pollId: ReturnType<typeof setInterval> | null;
 
@@ -27,18 +28,20 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   projectId: null,
   startedAt: null,
   elapsedSeconds: 0,
+  todayTotalBase: 0,
   intervalId: null,
   pollId: null,
 
   startTimer: async (projectId?: string, taskId?: string) => {
     try {
       const res = await api.post('/timer/start', { project_id: projectId, task_id: taskId });
+      const base = get().todayTotalBase;
       set({
         isRunning: true,
         entryId: res.data.entry.id,
         projectId: res.data.entry.project_id,
         startedAt: res.data.entry.started_at,
-        elapsedSeconds: 0,
+        elapsedSeconds: base, // Start from today's accumulated total
       });
       get().startTicking();
     } catch (err: unknown) {
@@ -56,20 +59,40 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
     try {
       const res = await api.post('/timer/stop');
       get().stopTicking();
-      get().resetState();
+      const todayTotal = res.data.today_total || get().elapsedSeconds;
+      set({
+        isRunning: false,
+        entryId: null,
+        projectId: null,
+        startedAt: null,
+        elapsedSeconds: todayTotal,
+        todayTotalBase: todayTotal,
+      });
       return res.data.entry;
     } catch (err: unknown) {
       const status = (err as { response?: { status?: number } })?.response?.status;
-      // 404 = timer already stopped on server (e.g. stopped from desktop app)
-      // Always reset local state — the timer IS stopped on the server
+      const currentElapsed = get().elapsedSeconds;
       if (status === 404) {
         get().stopTicking();
-        get().resetState();
+        set({
+          isRunning: false,
+          entryId: null,
+          projectId: null,
+          startedAt: null,
+          elapsedSeconds: currentElapsed,
+          todayTotalBase: currentElapsed,
+        });
         return null;
       }
-      // For any other error, still reset local state to avoid stuck UI
       get().stopTicking();
-      get().resetState();
+      set({
+        isRunning: false,
+        entryId: null,
+        projectId: null,
+        startedAt: null,
+        elapsedSeconds: currentElapsed,
+        todayTotalBase: currentElapsed,
+      });
       throw err;
     }
   },
@@ -78,14 +101,19 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
     try {
       const res = await api.get('/timer/status');
       const wasRunning = get().isRunning;
+      const todayTotal = res.data.today_total || 0;
 
       if (res.data.running) {
+        const currentElapsed = res.data.elapsed_seconds || 0;
+        // todayTotal includes current elapsed; base = completed only
+        const base = Math.max(0, todayTotal - currentElapsed);
         set({
           isRunning: true,
           entryId: res.data.entry?.id,
           projectId: res.data.entry?.project_id,
           startedAt: res.data.entry?.started_at,
-          elapsedSeconds: res.data.elapsed_seconds,
+          elapsedSeconds: todayTotal, // Show full today's total
+          todayTotalBase: base,
         });
         // Only start ticking if we weren't already running
         if (!wasRunning || !get().intervalId) {
@@ -95,7 +123,14 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
         if (wasRunning) {
           get().stopTicking();
         }
-        set({ isRunning: false, entryId: null, projectId: null, startedAt: null, elapsedSeconds: 0 });
+        set({
+          isRunning: false,
+          entryId: null,
+          projectId: null,
+          startedAt: null,
+          elapsedSeconds: todayTotal, // Show today's total when stopped
+          todayTotalBase: todayTotal,
+        });
       }
     } catch {
       // Silently fail — don't break the UI on network errors
@@ -115,7 +150,15 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
     set({ pollId: null });
   },
 
-  tick: () => set((state) => ({ elapsedSeconds: state.elapsedSeconds + 1 })),
+  tick: () => {
+    const { startedAt, todayTotalBase } = get();
+    if (startedAt) {
+      const currentElapsed = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
+      set({ elapsedSeconds: todayTotalBase + currentElapsed });
+    } else {
+      set((state) => ({ elapsedSeconds: state.elapsedSeconds + 1 }));
+    }
+  },
 
   startTicking: () => {
     const existing = get().intervalId;
@@ -131,12 +174,13 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   },
 
   resetState: () => {
+    const base = get().todayTotalBase;
     set({
       isRunning: false,
       entryId: null,
       projectId: null,
       startedAt: null,
-      elapsedSeconds: 0,
+      elapsedSeconds: base, // Keep today's total visible
     });
   },
 }));

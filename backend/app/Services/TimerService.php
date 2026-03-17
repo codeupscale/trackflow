@@ -115,18 +115,28 @@ class TimerService
         $user = Auth::user();
         $redisKey = "timer:{$user->id}";
 
+        // Calculate today's total tracked time (completed entries)
+        $todayTotal = (int) TimeEntry::withoutGlobalScopes()
+            ->where('user_id', $user->id)
+            ->whereDate('started_at', now()->toDateString())
+            ->whereNotNull('ended_at')
+            ->where('type', 'tracked')
+            ->sum('duration_seconds');
+
         $timerData = Redis::get($redisKey);
         if (!$timerData) {
-            return ['running' => false, 'entry' => null, 'elapsed_seconds' => 0];
+            return ['running' => false, 'entry' => null, 'elapsed_seconds' => 0, 'today_total' => $todayTotal];
         }
 
         $data = json_decode($timerData, true);
         $entry = TimeEntry::find($data['entry_id']);
+        $currentElapsed = (int) abs(now()->diffInSeconds($entry->started_at));
 
         return [
             'running' => true,
             'entry' => $entry,
-            'elapsed_seconds' => (int) abs(now()->diffInSeconds($entry->started_at)),
+            'elapsed_seconds' => $currentElapsed,
+            'today_total' => $todayTotal + $currentElapsed,
         ];
     }
 

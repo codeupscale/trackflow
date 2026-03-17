@@ -120,6 +120,7 @@
   <script>
     let timerInterval = null;
     let elapsedSeconds = 0;
+    let todayTotalBase = 0; // Completed entries today (excludes current running)
     let isRunning = false;
     let currentStartedAt = null;
     let projectsLoaded = false;
@@ -160,7 +161,7 @@
       timerDisplay.textContent = formatTime(elapsedSeconds);
       timerDisplay.className = `time ${running ? 'running' : 'stopped'}`;
       statusDot.className = `dot ${running ? 'green' : 'gray'}`;
-      statusText.textContent = running ? 'Tracking' : 'Stopped';
+      statusText.textContent = running ? 'Tracking' : (todayTotalBase > 0 ? 'Today\'s Total' : 'Stopped');
       startBtn.style.display = running ? 'none' : 'block';
       stopBtn.style.display = running ? 'block' : 'none';
       projectSelect.disabled = running;
@@ -169,8 +170,8 @@
     function startTicking() {
       if (timerInterval) clearInterval(timerInterval);
       timerInterval = setInterval(() => {
-        // Always recalculate from started_at so time stays accurate even after hide/show
-        elapsedSeconds = calcElapsedFromStartedAt();
+        // Show today's total (completed + current running)
+        elapsedSeconds = todayTotalBase + calcElapsedFromStartedAt();
         timerDisplay.textContent = formatTime(elapsedSeconds);
       }, 1000);
     }
@@ -186,15 +187,22 @@
     async function syncTimerState() {
       try {
         const state = await window.trackflow.getTimerState();
+        todayTotalBase = state.todayTotal || 0;
+
         if (state.isRunning) {
           currentStartedAt = state.entry?.started_at || null;
-          elapsedSeconds = state.elapsed || calcElapsedFromStartedAt();
+          const currentElapsed = state.elapsed || calcElapsedFromStartedAt();
+          // When running, todayTotal from server includes current elapsed
+          // Base = todayTotal - currentElapsed (completed entries only)
+          todayTotalBase = Math.max(0, todayTotalBase - currentElapsed);
+          elapsedSeconds = todayTotalBase + currentElapsed;
           updateDisplay(true);
           startTicking();
         } else {
           currentStartedAt = null;
           stopTicking();
-          elapsedSeconds = 0;
+          // Show today's total when stopped (not 00:00:00)
+          elapsedSeconds = todayTotalBase;
           updateDisplay(false);
         }
 
@@ -243,7 +251,8 @@
         const result = await window.trackflow.startTimer(projectId);
         if (result.success) {
           currentStartedAt = result.entry?.started_at || new Date().toISOString();
-          elapsedSeconds = 0;
+          // todayTotalBase stays as-is (completed entries), timer adds on top
+          elapsedSeconds = todayTotalBase;
           updateDisplay(true);
           startTicking();
         } else if (result.error) {
@@ -263,7 +272,9 @@
         const result = await window.trackflow.stopTimer();
         stopTicking();
         currentStartedAt = null;
-        elapsedSeconds = 0;
+        // Show today's total from server (includes the entry we just stopped)
+        todayTotalBase = result.todayTotal || elapsedSeconds;
+        elapsedSeconds = todayTotalBase;
         updateDisplay(false);
         if (result.error) {
           showNotification(result.error);
@@ -271,7 +282,8 @@
       } catch (e) {
         stopTicking();
         currentStartedAt = null;
-        elapsedSeconds = 0;
+        // Keep current elapsed as today's total on error
+        todayTotalBase = elapsedSeconds;
         updateDisplay(false);
         showNotification('Failed to stop timer');
       }
@@ -296,15 +308,19 @@
     // Events from main process (timer sync, background state changes)
     window.trackflow.onTimerStarted((entry) => {
       currentStartedAt = entry?.started_at || new Date().toISOString();
-      elapsedSeconds = calcElapsedFromStartedAt();
+      elapsedSeconds = todayTotalBase + calcElapsedFromStartedAt();
       updateDisplay(true);
       startTicking();
     });
 
-    window.trackflow.onTimerStopped(() => {
+    window.trackflow.onTimerStopped((data) => {
       stopTicking();
       currentStartedAt = null;
-      elapsedSeconds = 0;
+      // Show today's total when stopped from background sync
+      if (data && data.todayTotal !== undefined) {
+        todayTotalBase = data.todayTotal;
+      }
+      elapsedSeconds = todayTotalBase;
       updateDisplay(false);
     });
 
