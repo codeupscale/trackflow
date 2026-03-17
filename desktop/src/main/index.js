@@ -1,9 +1,10 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification } = require('electron');
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
 const ApiClient = require('./api-client');
 const ActivityMonitor = require('./activity-monitor');
 const ScreenshotService = require('./screenshot-service');
+const IdleDetector = require('./idle-detector');
 const OfflineQueue = require('./offline-queue');
 const { getToken, setToken, getRefreshToken, setRefreshToken, deleteToken } = require('./keychain');
 
@@ -11,9 +12,11 @@ const WEB_DASHBOARD_URL = process.env.TRACKFLOW_WEB_URL || 'https://trackflow.co
 
 let tray = null;
 let popupWindow = null;
+let idleAlertWindow = null;
 let apiClient = null;
 let activityMonitor = null;
 let screenshotService = null;
+let idleDetector = null;
 let offlineQueue = null;
 let isTimerRunning = false;
 let currentEntry = null;
@@ -99,6 +102,30 @@ async function initializeApp() {
   offlineQueue = new OfflineQueue();
   activityMonitor = new ActivityMonitor(apiClient, offlineQueue);
   screenshotService = new ScreenshotService(apiClient, config, offlineQueue);
+  idleDetector = new IdleDetector(config);
+
+  // Wire idle detection events
+  idleDetector.onIdleDetected((idleSeconds, idleStartedAt) => {
+    showIdleAlert(idleSeconds, idleStartedAt);
+  });
+
+  idleDetector.onAutoStop((totalIdleSeconds) => {
+    // Auto-stop after extended idle (user never responded to alert)
+    handleIdleAction('stop', totalIdleSeconds);
+    dismissIdleAlert();
+
+    // Show notification so user knows timer was auto-stopped
+    try {
+      if (Notification.isSupported()) {
+        const n = new Notification({
+          title: 'TrackFlow — Timer Stopped',
+          body: `Timer was automatically stopped after ${Math.floor(totalIdleSeconds / 60)} minutes of inactivity.`,
+          silent: false,
+        });
+        n.show();
+      }
+    } catch {}
+  });
 
   // Hide dock icon on macOS once authenticated (tray-only mode)
   if (process.platform === 'darwin') {
@@ -123,6 +150,7 @@ async function initializeApp() {
       currentEntry = status.entry;
       activityMonitor.start();
       screenshotService.start(currentEntry.id);
+      idleDetector.start();
       updateTrayIcon(true);
     }
   } catch {}
@@ -382,6 +410,8 @@ function setupIPC() {
     isAuthenticated = false;
     activityMonitor?.stop();
     screenshotService?.stop();
+    idleDetector?.stop();
+    dismissIdleAlert();
 
     // Clear timer sync interval
     if (timerSyncInterval) {
@@ -409,6 +439,14 @@ function setupIPC() {
   ipcMain.handle('open-dashboard', async () => {
     await openDashboardInBrowser();
   });
+
+  // Idle alert actions
+  ipcMain.removeHandler('resolve-idle');
+  ipcMain.handle('resolve-idle', async (_, action) => {
+    await handleIdleAction(action);
+    dismissIdleAlert();
+    return { success: true };
+  });
 }
 
 async function startTimer(projectId = null) {
@@ -421,6 +459,7 @@ async function startTimer(projectId = null) {
 
     activityMonitor.start();
     screenshotService.start(currentEntry.id);
+    idleDetector?.start();
 
     updateTrayIcon(true);
     updateTrayMenu();
@@ -443,6 +482,7 @@ async function startTimer(projectId = null) {
         isTimerRunning = true;
         activityMonitor.start();
         screenshotService.start(currentEntry.id);
+        idleDetector?.start();
         updateTrayIcon(true);
         updateTrayMenu();
         notifyPopup('timer-started', currentEntry);
@@ -458,8 +498,10 @@ async function startTimer(projectId = null) {
 
 async function stopTimer() {
   // Always attempt to stop, even if local state says not running
-  // This handles cases where server has a running timer but local state is out of sync
   const wasRunning = isTimerRunning;
+
+  // Dismiss idle alert if open
+  dismissIdleAlert();
 
   try {
     const result = await apiClient.stopTimer();
@@ -468,6 +510,7 @@ async function stopTimer() {
 
     activityMonitor?.stop();
     screenshotService?.stop();
+    idleDetector?.stop();
 
     updateTrayIcon(false);
     updateTrayMenu();
@@ -482,6 +525,7 @@ async function stopTimer() {
       currentEntry = null;
       activityMonitor?.stop();
       screenshotService?.stop();
+      idleDetector?.stop();
       updateTrayIcon(false);
       updateTrayMenu();
       notifyPopup('timer-stopped', null);
@@ -493,6 +537,7 @@ async function stopTimer() {
     currentEntry = null;
     activityMonitor?.stop();
     screenshotService?.stop();
+    idleDetector?.stop();
     updateTrayIcon(false);
     updateTrayMenu();
     notifyPopup('timer-stopped', null);
@@ -517,6 +562,7 @@ function startTimerSync() {
         currentEntry = status.entry;
         activityMonitor?.start();
         screenshotService?.start(currentEntry.id);
+        idleDetector?.start();
         updateTrayIcon(true);
         updateTrayMenu();
         notifyPopup('timer-started', currentEntry);
@@ -526,6 +572,8 @@ function startTimerSync() {
         currentEntry = null;
         activityMonitor?.stop();
         screenshotService?.stop();
+        idleDetector?.stop();
+        dismissIdleAlert();
         updateTrayIcon(false);
         updateTrayMenu();
         notifyPopup('timer-stopped', null);
@@ -544,6 +592,110 @@ function notifyPopup(event, data) {
     popupWindow.webContents.send(event, data);
   }
 }
+
+// ── Idle Alert System (Hubstaff-style) ───────────────────────────────────────
+
+function showIdleAlert(idleSeconds, idleStartedAt) {
+  // Don't show if alert is already visible or timer isn't running
+  if (idleAlertWindow && !idleAlertWindow.isDestroyed()) return;
+  if (!isTimerRunning) return;
+
+  // Pause screenshot service while idle (no point capturing idle screen)
+  screenshotService?.stop();
+
+  idleAlertWindow = new BrowserWindow({
+    width: 380,
+    height: 420,
+    frame: false,
+    resizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: false,
+    center: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'preload', 'index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  idleAlertWindow.loadFile(path.join(__dirname, '..', 'renderer', 'idle-alert.html'));
+
+  idleAlertWindow.once('ready-to-show', () => {
+    idleAlertWindow.show();
+    idleAlertWindow.focus();
+    // Send idle start time to renderer so it can show accurate idle duration
+    idleAlertWindow.webContents.send('idle-data', { idleStartedAt, idleSeconds });
+  });
+
+  idleAlertWindow.on('closed', () => {
+    idleAlertWindow = null;
+  });
+
+  // On macOS show dock briefly so the alert window is visible
+  if (process.platform === 'darwin') {
+    app.dock.show();
+  }
+}
+
+function dismissIdleAlert() {
+  if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
+    idleAlertWindow.destroy();
+  }
+  idleAlertWindow = null;
+
+  // Re-hide dock on macOS
+  if (process.platform === 'darwin' && isAuthenticated) {
+    app.dock.hide();
+  }
+}
+
+async function handleIdleAction(action, idleDurationOverride = null) {
+  const idleDuration = idleDurationOverride || idleDetector?.getIdleDuration() || 0;
+  const idleStartedAt = idleDetector?.idleStartedAt || null;
+
+  // Resolve the idle state in the detector
+  idleDetector?.resolveIdle();
+
+  switch (action) {
+    case 'keep':
+      // Keep all time including idle — just resume tracking normally
+      // Restart screenshot service
+      if (isTimerRunning && currentEntry) {
+        screenshotService?.start(currentEntry.id);
+      }
+      break;
+
+    case 'discard':
+      // Discard idle time — notify server to adjust the time entry
+      // The timer continues but idle period is removed
+      if (apiClient && currentEntry && idleStartedAt) {
+        try {
+          await apiClient.reportIdleTime({
+            time_entry_id: currentEntry.id,
+            idle_started_at: new Date(idleStartedAt).toISOString(),
+            idle_ended_at: new Date().toISOString(),
+            idle_seconds: idleDuration,
+            action: 'discard',
+          });
+        } catch (e) {
+          console.error('Failed to report idle time:', e.message);
+        }
+      }
+      // Restart screenshot service
+      if (isTimerRunning && currentEntry) {
+        screenshotService?.start(currentEntry.id);
+      }
+      break;
+
+    case 'stop':
+      // Stop the timer entirely
+      await stopTimer();
+      break;
+  }
+}
+
+// ── Login Window ─────────────────────────────────────────────────────────────
 
 function createLoginWindow() {
   const loginWindow = new BrowserWindow({

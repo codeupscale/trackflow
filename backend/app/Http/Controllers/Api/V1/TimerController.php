@@ -57,6 +57,29 @@ class TimerController extends Controller
         return response()->json($status);
     }
 
+    // TIME-05: Report idle time (from desktop agent)
+    public function idle(Request $request): JsonResponse
+    {
+        $request->validate([
+            'time_entry_id' => 'required|uuid',
+            'idle_started_at' => 'required|date',
+            'idle_ended_at' => 'required|date',
+            'idle_seconds' => 'required|integer|min:1',
+            'action' => 'required|in:discard,keep',
+        ]);
+
+        if ($request->action === 'keep') {
+            return response()->json(['message' => 'Idle time kept.']);
+        }
+
+        $entry = $this->timerService->reportIdle($request->all());
+
+        return response()->json([
+            'message' => 'Idle time recorded and discarded.',
+            'idle_entry' => $entry,
+        ]);
+    }
+
     // Heartbeat
     public function heartbeat(Request $request): JsonResponse
     {

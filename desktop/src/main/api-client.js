@@ -160,6 +160,11 @@ class ApiClient {
     return res.data.projects;
   }
 
+  async reportIdleTime(data) {
+    const res = await this.client.post('/timer/idle', data);
+    return res.data;
+  }
+
   async bulkUploadLogs(logs) {
     const res = await this.client.post('/agent/logs', { logs });
     return res.data;

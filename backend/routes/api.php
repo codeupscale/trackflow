@@ -54,6 +54,7 @@ Route::prefix('v1')->group(function () {
         Route::post('timer/pause', [\App\Http\Controllers\Api\V1\TimerController::class, 'pause']);
         Route::get('timer/status', [\App\Http\Controllers\Api\V1\TimerController::class, 'status']);
         Route::post('timer/heartbeat', [\App\Http\Controllers\Api\V1\TimerController::class, 'heartbeat'])->middleware('throttle:60,1');
+        Route::post('timer/idle', [\App\Http\Controllers\Api\V1\TimerController::class, 'idle']);
 
         // Time entries
         Route::apiResource('time-entries', \App\Http\Controllers\Api\V1\TimeEntryController::class);
