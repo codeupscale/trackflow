@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('trackflow', {
   getProjects: () => ipcRenderer.invoke('get-projects'),
   logout: () => ipcRenderer.invoke('logout'),
   login: (email, password) => ipcRenderer.invoke('login', email, password),
+  openDashboard: () => ipcRenderer.invoke('open-dashboard'),
 
   onTimerStarted: (callback) => ipcRenderer.on('timer-started', (_, data) => callback(data)),
   onTimerStopped: (callback) => ipcRenderer.on('timer-stopped', (_, data) => callback(data)),

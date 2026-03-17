@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell } = require('electron');
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
 const ApiClient = require('./api-client');
@@ -6,6 +6,8 @@ const ActivityMonitor = require('./activity-monitor');
 const ScreenshotService = require('./screenshot-service');
 const OfflineQueue = require('./offline-queue');
 const { getToken, setToken, deleteToken } = require('./keychain');
+
+const WEB_DASHBOARD_URL = process.env.TRACKFLOW_WEB_URL || 'https://trackflow.codeupscale.com';
 
 let tray = null;
 let popupWindow = null;
@@ -16,6 +18,7 @@ let offlineQueue = null;
 let isTimerRunning = false;
 let currentEntry = null;
 let config = {};
+let loginHandlerRegistered = false;
 
 // Single instance lock
 const gotTheLock = app.requestSingleInstanceLock();
@@ -23,12 +26,31 @@ if (!gotTheLock) {
   app.quit();
 }
 
+app.on('second-instance', () => {
+  showPopup();
+});
+
 app.on('ready', async () => {
   await initializeApp();
 });
 
 app.on('window-all-closed', () => {
   // Don't quit — keep running in system tray
+});
+
+// Stop timer gracefully before quitting
+app.on('before-quit', async (e) => {
+  if (isTimerRunning && apiClient) {
+    e.preventDefault();
+    try {
+      await apiClient.stopTimer();
+    } catch {}
+    isTimerRunning = false;
+    currentEntry = null;
+    activityMonitor?.stop();
+    screenshotService?.stop();
+    app.exit(0);
+  }
 });
 
 async function initializeApp() {
@@ -74,7 +96,7 @@ async function initializeApp() {
   // Flush offline queue
   offlineQueue.flush(apiClient);
 
-  // Check timer status
+  // Check timer status on server (sync state)
   try {
     const status = await apiClient.getTimerStatus();
     if (status.running) {
@@ -87,6 +109,8 @@ async function initializeApp() {
 }
 
 function createTray() {
+  if (tray) return; // Don't create multiple trays
+
   const iconPath = path.join(__dirname, '..', '..', 'assets', 'tray-icon.png');
   let icon = nativeImage.createFromPath(iconPath);
 
@@ -105,18 +129,32 @@ function createTray() {
 
   tray = new Tray(icon);
   tray.setToolTip('TrackFlow');
-
-  const contextMenu = Menu.buildFromTemplate([
-    { label: 'Open TrackFlow', click: () => showPopup() },
-    { type: 'separator' },
-    { label: 'Start Timer', click: () => startTimer() },
-    { label: 'Stop Timer', click: () => stopTimer() },
-    { type: 'separator' },
-    { label: 'Quit', click: () => { app.quit(); } },
-  ]);
-
-  tray.setContextMenu(contextMenu);
+  updateTrayMenu();
   tray.on('click', () => showPopup());
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
+  const contextMenu = Menu.buildFromTemplate([
+    { label: 'Open TrackFlow', click: () => shell.openExternal(WEB_DASHBOARD_URL) },
+    { type: 'separator' },
+    {
+      label: 'Start Timer',
+      enabled: !isTimerRunning,
+      click: () => startTimer(),
+    },
+    {
+      label: 'Stop Timer',
+      enabled: isTimerRunning,
+      click: () => stopTimer(),
+    },
+    { type: 'separator' },
+    {
+      label: 'Quit',
+      click: () => app.quit(),
+    },
+  ]);
+  tray.setContextMenu(contextMenu);
 }
 
 function showPopup() {
@@ -159,6 +197,14 @@ function showPopup() {
 }
 
 function setupIPC() {
+  // Remove previous handlers to avoid duplicate registration
+  ipcMain.removeHandler('get-timer-state');
+  ipcMain.removeHandler('start-timer');
+  ipcMain.removeHandler('stop-timer');
+  ipcMain.removeHandler('get-projects');
+  ipcMain.removeHandler('logout');
+  ipcMain.removeHandler('open-dashboard');
+
   ipcMain.handle('get-timer-state', () => ({
     isRunning: isTimerRunning,
     entry: currentEntry,
@@ -184,13 +230,28 @@ function setupIPC() {
   });
 
   ipcMain.handle('logout', async () => {
-    await stopTimer();
+    // Force stop timer on server regardless of local state
+    if (apiClient) {
+      try {
+        await apiClient.stopTimer();
+      } catch {}
+    }
+
+    isTimerRunning = false;
+    currentEntry = null;
     activityMonitor?.stop();
     screenshotService?.stop();
     await deleteToken();
     apiClient = null;
+    updateTrayMenu();
+
     if (popupWindow && !popupWindow.isDestroyed()) popupWindow.close();
+    popupWindow = null;
     createLoginWindow();
+  });
+
+  ipcMain.handle('open-dashboard', () => {
+    shell.openExternal(WEB_DASHBOARD_URL);
   });
 }
 
@@ -206,10 +267,11 @@ async function startTimer(projectId = null) {
     screenshotService.start(currentEntry.id);
 
     updateTrayIcon(true);
+    updateTrayMenu();
     notifyPopup('timer-started', currentEntry);
     return { success: true, entry: currentEntry };
   } catch (e) {
-    return { error: e.message };
+    return { error: e.response?.data?.message || e.message };
   }
 }
 
@@ -225,10 +287,19 @@ async function stopTimer() {
     screenshotService.stop();
 
     updateTrayIcon(false);
+    updateTrayMenu();
     notifyPopup('timer-stopped', result.entry);
     return { success: true, entry: result.entry };
   } catch (e) {
-    return { error: e.message };
+    // Even if API fails, stop local services
+    isTimerRunning = false;
+    currentEntry = null;
+    activityMonitor?.stop();
+    screenshotService?.stop();
+    updateTrayIcon(false);
+    updateTrayMenu();
+    notifyPopup('timer-stopped', null);
+    return { error: e.response?.data?.message || e.message };
   }
 }
 
@@ -258,19 +329,24 @@ function createLoginWindow() {
 
   loginWindow.loadFile(path.join(__dirname, '..', 'renderer', 'login.html'));
 
-  ipcMain.handle('login', async (_, email, password) => {
-    try {
-      const tempClient = new ApiClient(null);
-      const result = await tempClient.login(email, password);
-      await setToken(result.access_token);
+  // Only register the login handler once to avoid "already registered" errors
+  if (!loginHandlerRegistered) {
+    loginHandlerRegistered = true;
+    ipcMain.handle('login', async (_, email, password) => {
+      try {
+        const tempClient = new ApiClient(null);
+        const result = await tempClient.login(email, password);
+        await setToken(result.access_token);
 
-      loginWindow.close();
-      await initializeApp();
-      return { success: true };
-    } catch (e) {
-      return { error: e.response?.data?.message || e.message };
-    }
-  });
+        // Close all existing windows
+        BrowserWindow.getAllWindows().forEach((w) => w.close());
+        await initializeApp();
+        return { success: true };
+      } catch (e) {
+        return { error: e.response?.data?.message || e.message };
+      }
+    });
+  }
 }
 
 function checkForUpdates() {

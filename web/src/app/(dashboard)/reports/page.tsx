@@ -90,7 +90,7 @@ export default function ReportsPage() {
     queryKey: ['team-users'],
     queryFn: async () => {
       const res = await api.get('/users', { params: { per_page: 100 } });
-      return res.data.data || res.data;
+      return res.data.users || res.data.data || (Array.isArray(res.data) ? res.data : []);
     },
     enabled: !isEmployee,
   });

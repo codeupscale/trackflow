@@ -6,7 +6,7 @@
 FROM composer:2 AS composer
 WORKDIR /app
 COPY backend/composer.json backend/composer.lock ./
-RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist
+RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist --ignore-platform-reqs
 COPY backend/ .
 RUN composer dump-autoload --optimize --classmap-authoritative
 
@@ -16,15 +16,24 @@ WORKDIR /app/web
 COPY web/package.json web/package-lock.json* ./
 RUN npm ci --production=false
 COPY web/ .
+ARG NEXT_PUBLIC_API_URL=https://trackflow.codeupscale.com/api/v1
+ARG NEXT_PUBLIC_REVERB_APP_KEY=trackflow-key
+ARG NEXT_PUBLIC_REVERB_HOST=trackflow.codeupscale.com
+ARG NEXT_PUBLIC_REVERB_PORT=8081
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_REVERB_APP_KEY=$NEXT_PUBLIC_REVERB_APP_KEY
+ENV NEXT_PUBLIC_REVERB_HOST=$NEXT_PUBLIC_REVERB_HOST
+ENV NEXT_PUBLIC_REVERB_PORT=$NEXT_PUBLIC_REVERB_PORT
 RUN npm run build
 
 # Stage 3: Production image
-FROM php:8.3-fpm-alpine AS production
+FROM php:8.4-fpm-alpine AS production
 
-# Install system dependencies
+# Install system dependencies and PHP extensions
 RUN apk add --no-cache \
     nginx \
     supervisor \
+    curl \
     postgresql-dev \
     libzip-dev \
     icu-dev \
@@ -32,6 +41,8 @@ RUN apk add --no-cache \
     freetype-dev \
     libjpeg-turbo-dev \
     libpng-dev \
+    && apk add --no-cache --virtual .build-deps \
+    $PHPIZE_DEPS \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install \
         pdo_pgsql \
@@ -42,7 +53,8 @@ RUN apk add --no-cache \
         opcache \
         pcntl \
     && pecl install redis \
-    && docker-php-ext-enable redis
+    && docker-php-ext-enable redis \
+    && apk del .build-deps
 
 # PHP production configuration
 RUN mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
@@ -55,6 +67,7 @@ COPY backend/docker/production/nginx.conf /etc/nginx/nginx.conf
 COPY backend/docker/production/default.conf /etc/nginx/http.d/default.conf
 
 # Supervisor configuration
+RUN mkdir -p /var/log/supervisor /var/log/nginx /var/log/php-fpm /var/run
 COPY backend/docker/production/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Application code
@@ -66,10 +79,7 @@ COPY --from=frontend /app/web/.next /var/www/html/web/.next
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache \
     && chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
 
-# Optimize Laravel
-RUN php artisan config:cache \
-    && php artisan route:cache \
-    && php artisan view:cache
+# Optimization will be done at container startup via entrypoint
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
