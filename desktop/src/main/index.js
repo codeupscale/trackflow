@@ -360,37 +360,9 @@ function setupIPC() {
   ipcMain.removeHandler('logout');
   ipcMain.removeHandler('open-dashboard');
 
-  ipcMain.handle('get-timer-state', async () => {
-    // Sync with server to get latest state (handles start/stop from web dashboard)
-    if (apiClient) {
-      try {
-        const status = await apiClient.getTimerStatus();
-        todayTotalWithCurrent = status.today_total || 0;
-        if (status.running) {
-          todayTotalSeconds = Math.max(0, todayTotalWithCurrent - (status.elapsed_seconds || 0));
-        } else {
-          todayTotalSeconds = todayTotalWithCurrent;
-        }
-        if (status.running && !isTimerRunning) {
-          isTimerRunning = true;
-          currentEntry = status.entry;
-          activityMonitor?.start();
-          screenshotService?.start(currentEntry.id);
-          startTrayTimer();
-          updateTrayIcon(true);
-          updateTrayMenu();
-        } else if (!status.running && isTimerRunning) {
-          isTimerRunning = false;
-          currentEntry = null;
-          activityMonitor?.stop();
-          screenshotService?.stop();
-          stopTrayTimer();
-          updateTrayIcon(false);
-          updateTrayMenu();
-          updateTrayTitle();
-        }
-      } catch {}
-    }
+  ipcMain.handle('get-timer-state', () => {
+    // Return cached state INSTANTLY — no network call
+    // The 30-second sync interval keeps this state fresh
     return {
       isRunning: isTimerRunning,
       entry: currentEntry,
@@ -518,9 +490,6 @@ async function startTimer(projectId = null) {
 }
 
 async function stopTimer() {
-  // Always attempt to stop, even if local state says not running
-  const wasRunning = isTimerRunning;
-
   // Capture current session elapsed BEFORE clearing state
   const sessionElapsed = currentEntry
     ? Math.max(0, Math.floor((Date.now() - new Date(currentEntry.started_at).getTime()) / 1000))
@@ -531,44 +500,38 @@ async function stopTimer() {
   // Dismiss idle alert if open
   dismissIdleAlert();
 
+  // ALWAYS reset local state immediately — don't wait for API
+  isTimerRunning = false;
+  currentEntry = null;
+  todayTotalSeconds = localTodayTotal;
+
+  activityMonitor?.stop();
+  screenshotService?.stop();
+  idleDetector?.stop();
+  stopTrayTimer();
+  updateTrayTitle();
+  updateTrayIcon(false);
+  updateTrayMenu();
+
+  // Notify popup immediately so UI updates without waiting for network
+  notifyPopup('timer-stopped', { entry: null, todayTotal: todayTotalSeconds });
+
+  // Fire-and-forget API call with timeout — don't block the UI
   try {
-    const result = await apiClient.stopTimer();
-    isTimerRunning = false;
-    currentEntry = null;
-    // Use server today_total if it's > 0, otherwise use our local calculation
-    todayTotalSeconds = (result.today_total > 0) ? result.today_total : localTodayTotal;
-
-    activityMonitor?.stop();
-    screenshotService?.stop();
-    idleDetector?.stop();
-    stopTrayTimer();
-    updateTrayTitle();
-
-    updateTrayIcon(false);
-    updateTrayMenu();
-    notifyPopup('timer-stopped', { entry: result.entry, todayTotal: todayTotalSeconds });
+    const result = await Promise.race([
+      apiClient.stopTimer(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000)),
+    ]);
+    // Update with server value if available
+    if (result.today_total > 0) {
+      todayTotalSeconds = result.today_total;
+      updateTrayTitle();
+      notifyPopup('timer-stopped', { entry: result.entry, todayTotal: todayTotalSeconds });
+    }
     return { success: true, entry: result.entry, todayTotal: todayTotalSeconds };
   } catch (e) {
-    const status = e.response?.status;
-
-    // Use local calculation on error
-    isTimerRunning = false;
-    currentEntry = null;
-    todayTotalSeconds = localTodayTotal;
-
-    activityMonitor?.stop();
-    screenshotService?.stop();
-    idleDetector?.stop();
-    stopTrayTimer();
-    updateTrayTitle();
-    updateTrayIcon(false);
-    updateTrayMenu();
-    notifyPopup('timer-stopped', { entry: null, todayTotal: todayTotalSeconds });
-
-    if (status === 404) {
-      return { success: true, entry: null, todayTotal: todayTotalSeconds };
-    }
-    return { error: e.response?.data?.message || e.message };
+    // API failed or timed out — local state already updated, so just return
+    return { success: true, entry: null, todayTotal: todayTotalSeconds };
   }
 }
 
