@@ -47,12 +47,15 @@ app.on('window-all-closed', () => {
   // Don't quit — keep running in system tray
 });
 
-// Stop timer gracefully before quitting
+// Stop timer gracefully before quitting (with timeout to avoid hanging)
 app.on('before-quit', async (e) => {
   if (isTimerRunning && apiClient) {
     e.preventDefault();
     try {
-      await apiClient.stopTimer();
+      await Promise.race([
+        apiClient.stopTimer(),
+        new Promise((resolve) => setTimeout(resolve, 3000)),
+      ]);
     } catch {}
     isTimerRunning = false;
     currentEntry = null;
@@ -377,8 +380,8 @@ function setupIPC() {
     return await startTimer(projectId);
   });
 
-  ipcMain.handle('stop-timer', async () => {
-    return await stopTimer();
+  ipcMain.handle('stop-timer', () => {
+    return stopTimer();
   });
 
   ipcMain.handle('get-projects', async () => {
@@ -496,7 +499,7 @@ async function startTimer(projectId = null) {
   }
 }
 
-async function stopTimer() {
+function stopTimer() {
   // Capture current session elapsed BEFORE clearing state
   const sessionElapsed = currentEntry
     ? Math.max(0, Math.floor((Date.now() - new Date(currentEntry.started_at).getTime()) / 1000))
@@ -507,7 +510,7 @@ async function stopTimer() {
   // Dismiss idle alert if open
   dismissIdleAlert();
 
-  // ALWAYS reset local state immediately — don't wait for API
+  // Reset local state immediately — no awaiting
   isTimerRunning = false;
   currentEntry = null;
   todayTotalSeconds = localTodayTotal;
@@ -518,28 +521,21 @@ async function stopTimer() {
   stopTrayTimer();
   updateTrayTitle();
   updateTrayIcon(false);
-  updateTrayMenu();
 
-  // Notify popup immediately so UI updates without waiting for network
+  // Notify popup immediately
   notifyPopup('timer-stopped', { entry: null, todayTotal: todayTotalSeconds });
 
-  // Fire-and-forget API call with timeout — don't block the UI
-  try {
-    const result = await Promise.race([
-      apiClient.stopTimer(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000)),
-    ]);
-    // Update with server value if available
-    if (result.today_total > 0) {
+  // Fire-and-forget API call — don't block IPC response
+  apiClient.stopTimer().then((result) => {
+    if (result && result.today_total > 0) {
       todayTotalSeconds = result.today_total;
       updateTrayTitle();
       notifyPopup('timer-stopped', { entry: result.entry, todayTotal: todayTotalSeconds });
     }
-    return { success: true, entry: result.entry, todayTotal: todayTotalSeconds };
-  } catch (e) {
-    // API failed or timed out — local state already updated, so just return
-    return { success: true, entry: null, todayTotal: todayTotalSeconds };
-  }
+  }).catch(() => {});
+
+  // Return immediately with local state
+  return { success: true, entry: null, todayTotal: todayTotalSeconds };
 }
 
 // Periodically sync timer state with server to stay in sync with web dashboard
@@ -734,7 +730,7 @@ async function handleIdleAction(action, idleDurationOverride = null) {
 
     case 'stop':
       // Stop the timer entirely
-      await stopTimer();
+      stopTimer();
       break;
   }
 }
