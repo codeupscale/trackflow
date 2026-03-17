@@ -120,9 +120,11 @@
   <script>
     let timerInterval = null;
     let elapsedSeconds = 0;
+    let isRunning = false;
+    let currentStartedAt = null;
+    let projectsLoaded = false;
 
     function showNotification(msg) {
-      // Show a brief error notification in the UI
       const el = document.createElement('div');
       el.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:6px 16px;border-radius:6px;font-size:12px;z-index:999;opacity:1;transition:opacity 0.3s;';
       el.textContent = msg;
@@ -147,7 +149,14 @@
       return `${h}:${m}:${s}`;
     }
 
+    // Calculate elapsed time from server's started_at timestamp
+    function calcElapsedFromStartedAt() {
+      if (!currentStartedAt) return 0;
+      return Math.max(0, Math.floor((Date.now() - new Date(currentStartedAt).getTime()) / 1000));
+    }
+
     function updateDisplay(running) {
+      isRunning = running;
       timerDisplay.textContent = formatTime(elapsedSeconds);
       timerDisplay.className = `time ${running ? 'running' : 'stopped'}`;
       statusDot.className = `dot ${running ? 'green' : 'gray'}`;
@@ -160,7 +169,8 @@
     function startTicking() {
       if (timerInterval) clearInterval(timerInterval);
       timerInterval = setInterval(() => {
-        elapsedSeconds++;
+        // Always recalculate from started_at so time stays accurate even after hide/show
+        elapsedSeconds = calcElapsedFromStartedAt();
         timerDisplay.textContent = formatTime(elapsedSeconds);
       }, 1000);
     }
@@ -172,32 +182,57 @@
       }
     }
 
-    // Load initial state
-    async function init() {
-      const state = await window.trackflow.getTimerState();
-      if (state.isRunning) {
-        elapsedSeconds = state.elapsed;
-        updateDisplay(true);
-        startTicking();
-      }
+    // Sync timer state from main process — called on init and when popup re-appears
+    async function syncTimerState() {
+      try {
+        const state = await window.trackflow.getTimerState();
+        if (state.isRunning) {
+          currentStartedAt = state.entry?.started_at || null;
+          elapsedSeconds = state.elapsed || calcElapsedFromStartedAt();
+          updateDisplay(true);
+          startTicking();
+        } else {
+          currentStartedAt = null;
+          stopTicking();
+          elapsedSeconds = 0;
+          updateDisplay(false);
+        }
 
-      // Load projects
+        // Select current project if timer is running
+        if (state.entry && state.entry.project_id) {
+          projectSelect.value = state.entry.project_id;
+        }
+      } catch (e) {
+        console.error('Failed to sync timer state:', e);
+      }
+    }
+
+    // Load projects into dropdown (only once)
+    async function loadProjects() {
+      if (projectsLoaded) return;
       try {
         const projects = await window.trackflow.getProjects();
-        if (Array.isArray(projects)) {
-          projects.forEach(p => {
+        // Handle both array and paginated { data: [...] } response
+        const list = Array.isArray(projects) ? projects
+          : (projects?.data && Array.isArray(projects.data)) ? projects.data
+          : [];
+
+        if (list.length > 0) {
+          list.forEach(p => {
             const option = document.createElement('option');
             option.value = p.id;
             option.textContent = p.name;
             projectSelect.appendChild(option);
           });
-
-          // Select current project if timer is running
-          if (state.entry && state.entry.project_id) {
-            projectSelect.value = state.entry.project_id;
-          }
+          projectsLoaded = true;
         }
       } catch {}
+    }
+
+    // Load initial state
+    async function init() {
+      await loadProjects();
+      await syncTimerState();
     }
 
     startBtn.addEventListener('click', async () => {
@@ -207,6 +242,7 @@
       try {
         const result = await window.trackflow.startTimer(projectId);
         if (result.success) {
+          currentStartedAt = result.entry?.started_at || new Date().toISOString();
           elapsedSeconds = 0;
           updateDisplay(true);
           startTicking();
@@ -225,16 +261,16 @@
       stopBtn.textContent = 'Stopping...';
       try {
         const result = await window.trackflow.stopTimer();
-        // Always reset UI — timer is stopped regardless
         stopTicking();
+        currentStartedAt = null;
         elapsedSeconds = 0;
         updateDisplay(false);
         if (result.error) {
           showNotification(result.error);
         }
       } catch (e) {
-        // Still reset UI even on exception
         stopTicking();
+        currentStartedAt = null;
         elapsedSeconds = 0;
         updateDisplay(false);
         showNotification('Failed to stop timer');
@@ -246,6 +282,7 @@
     // Both logout buttons do the same thing
     async function handleLogout() {
       logoutBtn.disabled = true;
+      stopTicking();
       await window.trackflow.logout();
     }
     logoutBtn.addEventListener('click', handleLogout);
@@ -256,16 +293,24 @@
       window.trackflow.openDashboard();
     });
 
+    // Events from main process (timer sync, background state changes)
     window.trackflow.onTimerStarted((entry) => {
-      elapsedSeconds = 0;
+      currentStartedAt = entry?.started_at || new Date().toISOString();
+      elapsedSeconds = calcElapsedFromStartedAt();
       updateDisplay(true);
       startTicking();
     });
 
     window.trackflow.onTimerStopped(() => {
       stopTicking();
+      currentStartedAt = null;
       elapsedSeconds = 0;
       updateDisplay(false);
+    });
+
+    // Re-sync when popup window becomes visible again (user clicked tray icon)
+    window.trackflow.onSyncTimer(() => {
+      syncTimerState();
     });
 
     init();

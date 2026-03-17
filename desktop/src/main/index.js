@@ -20,6 +20,8 @@ let currentEntry = null;
 let config = {};
 let loginHandlerRegistered = false;
 let cachedProjects = [];
+let isAuthenticated = false;
+let timerSyncInterval = null;
 
 // Single instance lock
 const gotTheLock = app.requestSingleInstanceLock();
@@ -58,6 +60,8 @@ async function initializeApp() {
   // Load saved tokens
   const token = await getToken();
   if (!token) {
+    isAuthenticated = false;
+    createTray();
     createLoginWindow();
     return;
   }
@@ -76,9 +80,13 @@ async function initializeApp() {
     await apiClient.getMe();
   } catch {
     await deleteToken();
+    isAuthenticated = false;
+    createTray();
     createLoginWindow();
     return;
   }
+
+  isAuthenticated = true;
 
   // Fetch org config
   try {
@@ -124,7 +132,11 @@ async function initializeApp() {
 }
 
 function createTray() {
-  if (tray) return; // Don't create multiple trays
+  if (tray) {
+    // Tray already exists — just update the menu
+    updateTrayMenu();
+    return;
+  }
 
   const iconPath = path.join(__dirname, '..', '..', 'assets', 'tray-icon.png');
   let icon = nativeImage.createFromPath(iconPath);
@@ -144,8 +156,24 @@ function createTray() {
 
   tray = new Tray(icon);
   tray.setToolTip('TrackFlow');
-  updateTrayMenu();
-  tray.on('click', () => showPopup());
+
+  // macOS: left-click opens popup window, right-click opens context menu (like Hubstaff)
+  // Windows/Linux: click opens popup, right-click opens context menu
+  tray.on('click', () => {
+    if (isAuthenticated) {
+      showPopup();
+    } else {
+      createLoginWindow();
+    }
+  });
+
+  tray.on('right-click', () => {
+    const contextMenu = buildTrayContextMenu();
+    tray.popUpContextMenu(contextMenu);
+  });
+
+  // Don't set context menu directly — this prevents it from auto-opening on left-click on macOS
+  // tray.setContextMenu() is intentionally NOT called
 }
 
 async function loadProjects() {
@@ -172,8 +200,14 @@ async function openDashboardInBrowser() {
   }
 }
 
-function updateTrayMenu() {
-  if (!tray) return;
+function buildTrayContextMenu() {
+  if (!isAuthenticated) {
+    return Menu.buildFromTemplate([
+      { label: 'Open TrackFlow', click: () => createLoginWindow() },
+      { type: 'separator' },
+      { label: 'Quit', click: () => app.quit() },
+    ]);
+  }
 
   // Build project submenu items
   const projectItems = cachedProjects.map((p) => ({
@@ -184,6 +218,7 @@ function updateTrayMenu() {
 
   const template = [
     { label: 'Open Dashboard', click: () => openDashboardInBrowser() },
+    { label: 'Open TrackFlow', click: () => showPopup() },
     { type: 'separator' },
   ];
 
@@ -219,12 +254,24 @@ function updateTrayMenu() {
     }
   );
 
-  const contextMenu = Menu.buildFromTemplate(template);
-  tray.setContextMenu(contextMenu);
+  return Menu.buildFromTemplate(template);
+}
+
+function updateTrayMenu() {
+  // No-op — context menu is built on-demand via right-click
+  // This function exists so callers don't need to change
+  // Tooltip is updated via updateTrayIcon()
 }
 
 function showPopup() {
+  if (!isAuthenticated) {
+    createLoginWindow();
+    return;
+  }
+
   if (popupWindow && !popupWindow.isDestroyed()) {
+    // Re-sync timer state when popup becomes visible again
+    popupWindow.webContents.send('sync-timer');
     popupWindow.show();
     popupWindow.focus();
     return;
@@ -259,6 +306,10 @@ function showPopup() {
 
   popupWindow.on('blur', () => {
     popupWindow.hide();
+  });
+
+  popupWindow.on('closed', () => {
+    popupWindow = null;
   });
 }
 
@@ -328,14 +379,30 @@ function setupIPC() {
 
     isTimerRunning = false;
     currentEntry = null;
+    isAuthenticated = false;
     activityMonitor?.stop();
     screenshotService?.stop();
+
+    // Clear timer sync interval
+    if (timerSyncInterval) {
+      clearInterval(timerSyncInterval);
+      timerSyncInterval = null;
+    }
+
     await deleteToken();
     apiClient = null;
-    updateTrayMenu();
 
-    if (popupWindow && !popupWindow.isDestroyed()) popupWindow.close();
+    // Destroy popup window completely so it doesn't show stale logged-in UI
+    if (popupWindow && !popupWindow.isDestroyed()) {
+      popupWindow.destroy();
+    }
     popupWindow = null;
+
+    // Show dock on macOS so login window appears properly
+    if (process.platform === 'darwin') {
+      app.dock.show();
+    }
+
     createLoginWindow();
   });
 
@@ -435,8 +502,12 @@ async function stopTimer() {
 
 // Periodically sync timer state with server to stay in sync with web dashboard
 function startTimerSync() {
+  // Clear any existing sync interval
+  if (timerSyncInterval) {
+    clearInterval(timerSyncInterval);
+  }
   // Sync every 30 seconds
-  setInterval(async () => {
+  timerSyncInterval = setInterval(async () => {
     if (!apiClient) return;
     try {
       const status = await apiClient.getTimerStatus();
