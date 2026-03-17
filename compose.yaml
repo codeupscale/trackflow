@@ -1,7 +1,7 @@
 services:
     laravel.test:
         build:
-            context: ./docker/8.5
+            context: ./backend/docker/8.5
             dockerfile: Dockerfile
             args:
                 WWWGROUP: '${WWWGROUP}'
@@ -18,7 +18,7 @@ services:
             XDEBUG_CONFIG: '${SAIL_XDEBUG_CONFIG:-client_host=host.docker.internal}'
             IGNITION_LOCAL_SITES_PATH: '${PWD}'
         volumes:
-            - '.:/var/www/html'
+            - './backend:/var/www/html'
         networks:
             - sail
         depends_on:
@@ -37,7 +37,7 @@ services:
             POSTGRES_PASSWORD: '${DB_PASSWORD:-secret}'
         volumes:
             - 'sail-pgsql:/var/lib/postgresql'
-            - './docker/pgsql/create-testing-database.sql:/docker-entrypoint-initdb.d/10-create-testing-database.sql'
+            - './backend/docker/pgsql/create-testing-database.sql:/docker-entrypoint-initdb.d/10-create-testing-database.sql'
         networks:
             - sail
         healthcheck:
@@ -96,7 +96,7 @@ services:
             timeout: 5s
     horizon:
         build:
-            context: ./docker/8.5
+            context: ./backend/docker/8.5
             dockerfile: Dockerfile
             args:
                 WWWGROUP: '${WWWGROUP}'
@@ -108,7 +108,7 @@ services:
             LARAVEL_SAIL: 1
             APP_ENV: '${APP_ENV}'
         volumes:
-            - '.:/var/www/html'
+            - './backend:/var/www/html'
         networks:
             - sail
         depends_on:
@@ -117,7 +117,7 @@ services:
         command: 'php artisan horizon'
     reverb:
         build:
-            context: ./docker/8.5
+            context: ./backend/docker/8.5
             dockerfile: Dockerfile
             args:
                 WWWGROUP: '${WWWGROUP}'
@@ -131,7 +131,7 @@ services:
             LARAVEL_SAIL: 1
             APP_ENV: '${APP_ENV}'
         volumes:
-            - '.:/var/www/html'
+            - './backend:/var/www/html'
         networks:
             - sail
         depends_on:
@@ -140,7 +140,7 @@ services:
         command: 'php artisan reverb:start --host=0.0.0.0 --port=8080'
     scheduler:
         build:
-            context: ./docker/8.5
+            context: ./backend/docker/8.5
             dockerfile: Dockerfile
             args:
                 WWWGROUP: '${WWWGROUP}'
@@ -152,7 +152,7 @@ services:
             LARAVEL_SAIL: 1
             APP_ENV: '${APP_ENV}'
         volumes:
-            - '.:/var/www/html'
+            - './backend:/var/www/html'
         networks:
             - sail
         depends_on:
