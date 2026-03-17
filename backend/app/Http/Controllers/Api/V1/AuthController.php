@@ -88,8 +88,9 @@ class AuthController extends Controller
             ]);
         }
 
-        // Revoke existing tokens
-        $user->tokens()->delete();
+        // Clean up only expired tokens — allow multi-device sessions (desktop + web + mobile)
+        // Like Hubstaff, users must be able to stay logged in on desktop while also using web portal
+        $user->tokens()->where('expires_at', '<', now())->delete();
 
         $token = $user->createToken('access_token', ['*'], now()->addHours(24));
         $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
@@ -115,8 +116,11 @@ class AuthController extends Controller
             return response()->json(['message' => 'Invalid refresh token.'], 401);
         }
 
-        // Delete old tokens
-        $user->tokens()->delete();
+        // Delete only the current refresh token (not all tokens — preserve other device sessions)
+        $user->currentAccessToken()->delete();
+
+        // Clean up expired tokens
+        $user->tokens()->where('expires_at', '<', now())->delete();
 
         $token = $user->createToken('access_token', ['*'], now()->addHours(24));
         $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));

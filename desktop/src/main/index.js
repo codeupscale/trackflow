@@ -5,7 +5,7 @@ const ApiClient = require('./api-client');
 const ActivityMonitor = require('./activity-monitor');
 const ScreenshotService = require('./screenshot-service');
 const OfflineQueue = require('./offline-queue');
-const { getToken, setToken, deleteToken } = require('./keychain');
+const { getToken, setToken, getRefreshToken, setRefreshToken, deleteToken } = require('./keychain');
 
 const WEB_DASHBOARD_URL = process.env.TRACKFLOW_WEB_URL || 'https://trackflow.codeupscale.com';
 
@@ -54,16 +54,23 @@ app.on('before-quit', async (e) => {
 });
 
 async function initializeApp() {
-  // Load saved token
+  // Load saved tokens
   const token = await getToken();
   if (!token) {
     createLoginWindow();
     return;
   }
 
-  apiClient = new ApiClient(token);
+  const refreshToken = await getRefreshToken();
+  apiClient = new ApiClient(token, refreshToken);
 
-  // Test token validity
+  // Auto-persist refreshed tokens to keychain
+  apiClient.onTokenRefreshed(async (newAccessToken, newRefreshToken) => {
+    await setToken(newAccessToken);
+    await setRefreshToken(newRefreshToken);
+  });
+
+  // Test token validity (auto-refresh will kick in on 401 if refresh token is available)
   try {
     await apiClient.getMe();
   } catch {
@@ -435,6 +442,7 @@ function createLoginWindow() {
         const tempClient = new ApiClient(null);
         const result = await tempClient.login(email, password);
         await setToken(result.access_token);
+        await setRefreshToken(result.refresh_token);
 
         // Close all existing windows
         BrowserWindow.getAllWindows().forEach((w) => w.close());
