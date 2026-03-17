@@ -60,7 +60,7 @@ class DashboardController extends Controller
             }
         }
 
-        // Time entries strictly within the range: started_at >= start of day AND started_at <= end of day
+        // Time entries in range (completed, tracked) — team sum according to selected filter
         $rangeEntries = TimeEntry::withoutGlobalScopes()
             ->where('organization_id', $orgId)
             ->where('started_at', '>=', $dateFrom)
@@ -72,11 +72,30 @@ class DashboardController extends Controller
             ->get()
             ->keyBy('user_id');
 
-        $teamSummary = $users->map(function ($u) use ($rangeEntries) {
+        // Active projects in range: distinct project_id (exclude null)
+        $activeProjectsCount = (int) TimeEntry::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->where('started_at', '>=', $dateFrom)
+            ->where('started_at', '<=', $dateTo)
+            ->whereNotNull('ended_at')
+            ->where('type', 'tracked')
+            ->whereNotNull('project_id')
+            ->selectRaw('COUNT(DISTINCT project_id) as c')
+            ->value('c');
+
+        $now = Carbon::now();
+        $rangeIncludesNow = $now->between($dateFrom, $dateTo);
+        $onlineByUserId = collect($onlineUsers)->keyBy(fn ($o) => $o['user']->id);
+
+        $teamSummary = $users->map(function ($u) use ($rangeEntries, $rangeIncludesNow, $onlineByUserId) {
             $entry = $rangeEntries->get($u->id);
+            $seconds = $entry ? (int) $entry->total_seconds : 0;
+            if ($rangeIncludesNow && $onlineByUserId->has($u->id)) {
+                $seconds += (int) $onlineByUserId->get($u->id)['elapsed_seconds'];
+            }
             return [
                 'user' => $u,
-                'today_seconds' => $entry ? (int) $entry->total_seconds : 0,
+                'today_seconds' => $seconds,
                 'activity_score' => $entry ? (int) $entry->avg_activity : 0,
             ];
         });
@@ -85,6 +104,7 @@ class DashboardController extends Controller
             'online_users' => $onlineUsers,
             'team_summary' => $teamSummary,
             'total_online' => count($onlineUsers),
+            'active_projects' => $activeProjectsCount,
             'date_from' => $responseDateFrom,
             'date_to' => $responseDateTo,
         ]);
@@ -124,6 +144,11 @@ class DashboardController extends Controller
             ->whereNotNull('ended_at')
             ->where('type', 'tracked')
             ->sum('duration_seconds');
+
+        $now = Carbon::now();
+        if ($now->between($dateFrom, $dateTo) && $timer) {
+            $rangeSeconds += (int) $timer['elapsed_seconds'];
+        }
 
         $weekSeconds = TimeEntry::withoutGlobalScopes()
             ->where('user_id', $user->id)
