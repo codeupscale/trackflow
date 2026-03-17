@@ -1,6 +1,7 @@
 const axios = require('axios');
 
-const API_BASE = process.env.TRACKFLOW_API_URL || 'http://localhost:8000/api/v1';
+// Production API — change this when deploying to a new server
+const API_BASE = process.env.TRACKFLOW_API_URL || 'https://trackflow.codeupscale.com/api/v1';
 
 class ApiClient {
   constructor(token) {
