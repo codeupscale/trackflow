@@ -20,11 +20,14 @@ let idleDetector = null;
 let offlineQueue = null;
 let isTimerRunning = false;
 let currentEntry = null;
+let todayTotalSeconds = 0; // Today's total (completed entries only, excludes current running)
+let todayTotalWithCurrent = 0; // Today's total including current running entry
 let config = {};
 let loginHandlerRegistered = false;
 let cachedProjects = [];
 let isAuthenticated = false;
 let timerSyncInterval = null;
+let trayTimerInterval = null;
 
 // Single instance lock
 const gotTheLock = app.requestSingleInstanceLock();
@@ -145,13 +148,20 @@ async function initializeApp() {
   // Check timer status on server (sync state)
   try {
     const status = await apiClient.getTimerStatus();
+    todayTotalWithCurrent = status.today_total || 0;
     if (status.running) {
+      // When running, today_total includes current elapsed — subtract to get completed-only base
+      todayTotalSeconds = Math.max(0, todayTotalWithCurrent - (status.elapsed_seconds || 0));
       isTimerRunning = true;
       currentEntry = status.entry;
       activityMonitor.start();
       screenshotService.start(currentEntry.id);
       idleDetector.start();
       updateTrayIcon(true);
+      startTrayTimer();
+    } else {
+      todayTotalSeconds = todayTotalWithCurrent;
+      updateTrayTitle(); // Show today's total even when stopped
     }
   } catch {}
 
@@ -355,11 +365,18 @@ function setupIPC() {
     if (apiClient) {
       try {
         const status = await apiClient.getTimerStatus();
+        todayTotalWithCurrent = status.today_total || 0;
+        if (status.running) {
+          todayTotalSeconds = Math.max(0, todayTotalWithCurrent - (status.elapsed_seconds || 0));
+        } else {
+          todayTotalSeconds = todayTotalWithCurrent;
+        }
         if (status.running && !isTimerRunning) {
           isTimerRunning = true;
           currentEntry = status.entry;
           activityMonitor?.start();
           screenshotService?.start(currentEntry.id);
+          startTrayTimer();
           updateTrayIcon(true);
           updateTrayMenu();
         } else if (!status.running && isTimerRunning) {
@@ -367,8 +384,10 @@ function setupIPC() {
           currentEntry = null;
           activityMonitor?.stop();
           screenshotService?.stop();
+          stopTrayTimer();
           updateTrayIcon(false);
           updateTrayMenu();
+          updateTrayTitle();
         }
       } catch {}
     }
@@ -378,6 +397,7 @@ function setupIPC() {
       elapsed: currentEntry
         ? Math.floor((Date.now() - new Date(currentEntry.started_at).getTime()) / 1000)
         : 0,
+      todayTotal: todayTotalSeconds,
     };
   });
 
@@ -460,11 +480,12 @@ async function startTimer(projectId = null) {
     activityMonitor.start();
     screenshotService.start(currentEntry.id);
     idleDetector?.start();
+    startTrayTimer();
 
     updateTrayIcon(true);
     updateTrayMenu();
     notifyPopup('timer-started', currentEntry);
-    return { success: true, entry: currentEntry };
+    return { success: true, entry: currentEntry, todayTotal: todayTotalSeconds };
   } catch (e) {
     const status = e.response?.status;
 
@@ -507,15 +528,18 @@ async function stopTimer() {
     const result = await apiClient.stopTimer();
     isTimerRunning = false;
     currentEntry = null;
+    todayTotalSeconds = result.today_total || todayTotalSeconds;
 
     activityMonitor?.stop();
     screenshotService?.stop();
     idleDetector?.stop();
+    stopTrayTimer();
+    updateTrayTitle();
 
     updateTrayIcon(false);
     updateTrayMenu();
-    notifyPopup('timer-stopped', result.entry);
-    return { success: true, entry: result.entry };
+    notifyPopup('timer-stopped', { entry: result.entry, todayTotal: todayTotalSeconds });
+    return { success: true, entry: result.entry, todayTotal: todayTotalSeconds };
   } catch (e) {
     const status = e.response?.status;
 
@@ -526,10 +550,12 @@ async function stopTimer() {
       activityMonitor?.stop();
       screenshotService?.stop();
       idleDetector?.stop();
+      stopTrayTimer();
+      updateTrayTitle();
       updateTrayIcon(false);
       updateTrayMenu();
-      notifyPopup('timer-stopped', null);
-      return { success: true, entry: null };
+      notifyPopup('timer-stopped', { entry: null, todayTotal: todayTotalSeconds });
+      return { success: true, entry: null, todayTotal: todayTotalSeconds };
     }
 
     // For other errors, still stop local services
@@ -538,9 +564,11 @@ async function stopTimer() {
     activityMonitor?.stop();
     screenshotService?.stop();
     idleDetector?.stop();
+    stopTrayTimer();
+    updateTrayTitle();
     updateTrayIcon(false);
     updateTrayMenu();
-    notifyPopup('timer-stopped', null);
+    notifyPopup('timer-stopped', { entry: null, todayTotal: todayTotalSeconds });
     return { error: e.response?.data?.message || e.message };
   }
 }
@@ -556,6 +584,13 @@ function startTimerSync() {
     if (!apiClient) return;
     try {
       const status = await apiClient.getTimerStatus();
+      todayTotalWithCurrent = status.today_total || 0;
+      if (status.running) {
+        todayTotalSeconds = Math.max(0, todayTotalWithCurrent - (status.elapsed_seconds || 0));
+      } else {
+        todayTotalSeconds = todayTotalWithCurrent;
+      }
+
       if (status.running && !isTimerRunning) {
         // Server has running timer but we don't — sync up
         isTimerRunning = true;
@@ -563,6 +598,7 @@ function startTimerSync() {
         activityMonitor?.start();
         screenshotService?.start(currentEntry.id);
         idleDetector?.start();
+        startTrayTimer();
         updateTrayIcon(true);
         updateTrayMenu();
         notifyPopup('timer-started', currentEntry);
@@ -574,17 +610,56 @@ function startTimerSync() {
         screenshotService?.stop();
         idleDetector?.stop();
         dismissIdleAlert();
+        stopTrayTimer();
+        updateTrayTitle();
         updateTrayIcon(false);
         updateTrayMenu();
-        notifyPopup('timer-stopped', null);
+        notifyPopup('timer-stopped', { entry: null, todayTotal: todayTotalSeconds });
       }
     } catch {}
   }, 30000);
 }
 
+function formatTimeShort(seconds) {
+  const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+  const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+  const s = (seconds % 60).toString().padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
+
 function updateTrayIcon(running) {
   if (!tray) return;
   tray.setToolTip(running ? 'TrackFlow - Timer Running' : 'TrackFlow');
+}
+
+// Show today's total time in the tray title (like Hubstaff's menu bar timer)
+function updateTrayTitle() {
+  if (!tray) return;
+  if (todayTotalSeconds > 0) {
+    tray.setTitle(formatTimeShort(todayTotalSeconds));
+  } else {
+    tray.setTitle('');
+  }
+}
+
+// Tick tray title every second while timer is running (shows live today's total)
+function startTrayTimer() {
+  stopTrayTimer();
+  updateTrayTitle();
+  trayTimerInterval = setInterval(() => {
+    if (!isTimerRunning || !currentEntry) return;
+    const currentElapsed = Math.floor((Date.now() - new Date(currentEntry.started_at).getTime()) / 1000);
+    if (tray) {
+      tray.setTitle(formatTimeShort(todayTotalSeconds + currentElapsed));
+    }
+  }, 1000);
+}
+
+function stopTrayTimer() {
+  if (trayTimerInterval) {
+    clearInterval(trayTimerInterval);
+    trayTimerInterval = null;
+  }
 }
 
 function notifyPopup(event, data) {

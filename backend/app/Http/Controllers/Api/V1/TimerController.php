@@ -33,7 +33,16 @@ class TimerController extends Controller
     {
         try {
             $entry = $this->timerService->stop();
-            return response()->json(['entry' => $entry]);
+
+            // Return today's total so UI can show accumulated time after stop
+            $todayTotal = (int) \App\Models\TimeEntry::withoutGlobalScopes()
+                ->where('user_id', $entry->user_id)
+                ->whereDate('started_at', now()->toDateString())
+                ->whereNotNull('ended_at')
+                ->where('type', 'tracked')
+                ->sum('duration_seconds');
+
+            return response()->json(['entry' => $entry, 'today_total' => $todayTotal]);
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 404);
         }
