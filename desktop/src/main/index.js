@@ -363,16 +363,40 @@ function setupIPC() {
   ipcMain.removeHandler('logout');
   ipcMain.removeHandler('open-dashboard');
 
-  ipcMain.handle('get-timer-state', () => {
-    // Return cached state INSTANTLY — no network call
-    // The 30-second sync interval keeps this state fresh
+  ipcMain.handle('get-timer-state', async (_, projectId) => {
+    // Fetch fresh status so popup shows correct running state and today's total
+    if (apiClient) {
+      try {
+        const status = await apiClient.getTimerStatus();
+        todayTotalWithCurrent = status.today_total || 0;
+        if (status.running) {
+          todayTotalSeconds = Math.max(0, todayTotalWithCurrent - (status.elapsed_seconds || 0));
+          isTimerRunning = true;
+          currentEntry = status.entry;
+        } else {
+          todayTotalSeconds = todayTotalWithCurrent;
+          isTimerRunning = false;
+          currentEntry = null;
+        }
+      } catch {}
+    }
+    // Today total for display: when running use current entry's project, else use selected project
+    const projectIdForTotal = isTimerRunning && currentEntry?.project_id
+      ? currentEntry.project_id
+      : projectId || null;
+    let todayTotalForDisplay = todayTotalSeconds;
+    if (apiClient) {
+      try {
+        todayTotalForDisplay = await apiClient.getTodayTotal(projectIdForTotal);
+      } catch {}
+    }
     return {
       isRunning: isTimerRunning,
       entry: currentEntry,
       elapsed: currentEntry
         ? Math.floor((Date.now() - new Date(currentEntry.started_at).getTime()) / 1000)
         : 0,
-      todayTotal: todayTotalSeconds,
+      todayTotal: todayTotalForDisplay,
     };
   });
 
@@ -464,8 +488,13 @@ async function startTimer(projectId = null) {
 
     updateTrayIcon(true);
     updateTrayMenu();
-    notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalSeconds });
-    return { success: true, entry: currentEntry, todayTotal: todayTotalSeconds };
+    // Per-project today total so popup shows correct value when stopped/restarted
+    let todayTotalForPopup = todayTotalSeconds;
+    try {
+      todayTotalForPopup = await apiClient.getTodayTotal(projectId || currentEntry?.project_id);
+    } catch {}
+    notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup });
+    return { success: true, entry: currentEntry, todayTotal: todayTotalForPopup };
   } catch (e) {
     const status = e.response?.status;
 
@@ -488,8 +517,12 @@ async function startTimer(projectId = null) {
         startTrayTimer();
         updateTrayIcon(true);
         updateTrayMenu();
-        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalSeconds });
-        return { success: true, entry: currentEntry, todayTotal: todayTotalSeconds };
+        let todayTotalForPopup = todayTotalSeconds;
+        try {
+          todayTotalForPopup = await apiClient.getTodayTotal(projectId || currentEntry?.project_id);
+        } catch {}
+        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup });
+        return { success: true, entry: currentEntry, todayTotal: todayTotalForPopup };
       } catch (retryErr) {
         return { error: retryErr.response?.data?.message || retryErr.message };
       }
@@ -500,10 +533,11 @@ async function startTimer(projectId = null) {
 }
 
 function stopTimer() {
-  // Capture current session elapsed BEFORE clearing state
+  // Capture current session elapsed and project BEFORE clearing state
   const sessionElapsed = currentEntry
     ? Math.max(0, Math.floor((Date.now() - new Date(currentEntry.started_at).getTime()) / 1000))
     : 0;
+  const stoppedProjectId = currentEntry?.project_id || null;
   // Local today total = completed entries base + this session
   const localTodayTotal = todayTotalSeconds + sessionElapsed;
 
@@ -522,20 +556,24 @@ function stopTimer() {
   updateTrayTitle();
   updateTrayIcon(false);
 
-  // Notify popup immediately
-  notifyPopup('timer-stopped', { entry: null, todayTotal: todayTotalSeconds });
+  // Notify popup immediately with local total
+  notifyPopup('timer-stopped', { entry: null, todayTotal: localTodayTotal });
 
-  // Fire-and-forget API call — don't block IPC response
-  apiClient.stopTimer().then((result) => {
+  // Fire-and-forget API call — then notify with server's per-project today total
+  apiClient.stopTimer().then(async (result) => {
     if (result && result.today_total > 0) {
       todayTotalSeconds = result.today_total;
       updateTrayTitle();
-      notifyPopup('timer-stopped', { entry: result.entry, todayTotal: todayTotalSeconds });
+      let todayTotalForPopup = result.today_total;
+      try {
+        todayTotalForPopup = await apiClient.getTodayTotal(stoppedProjectId);
+      } catch {}
+      notifyPopup('timer-stopped', { entry: result.entry, todayTotal: todayTotalForPopup });
     }
   }).catch(() => {});
 
   // Return immediately with local state
-  return { success: true, entry: null, todayTotal: todayTotalSeconds };
+  return { success: true, entry: null, todayTotal: localTodayTotal };
 }
 
 // Periodically sync timer state with server to stay in sync with web dashboard

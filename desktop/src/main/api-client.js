@@ -137,6 +137,13 @@ class ApiClient {
     return res.data;
   }
 
+  /** Get today's total tracked seconds, optionally for a specific project. */
+  async getTodayTotal(projectId = null) {
+    const params = projectId ? { project_id: projectId } : {};
+    const res = await this.client.get('/timer/today-total', { params });
+    return res.data.today_total ?? 0;
+  }
+
   async sendHeartbeat(data) {
     const res = await this.client.post('/timer/heartbeat', data);
     return res.data;
