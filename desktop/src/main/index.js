@@ -19,6 +19,7 @@ let isTimerRunning = false;
 let currentEntry = null;
 let config = {};
 let loginHandlerRegistered = false;
+let cachedProjects = [];
 
 // Single instance lock
 const gotTheLock = app.requestSingleInstanceLock();
@@ -100,6 +101,9 @@ async function initializeApp() {
   setupIPC();
   checkForUpdates();
 
+  // Load projects for tray menu
+  loadProjects();
+
   // Flush offline queue
   offlineQueue.flush(apiClient);
 
@@ -144,16 +148,65 @@ function createTray() {
   tray.on('click', () => showPopup());
 }
 
+async function loadProjects() {
+  if (!apiClient) return;
+  try {
+    const projects = await apiClient.getProjects();
+    cachedProjects = Array.isArray(projects) ? projects : [];
+    updateTrayMenu();
+  } catch {
+    cachedProjects = [];
+  }
+}
+
+async function openDashboardInBrowser() {
+  // Open web dashboard with auto-login — pass token so user doesn't have to log in again
+  const token = await getToken();
+  const refresh = await getRefreshToken();
+  if (token) {
+    const params = new URLSearchParams({ token });
+    if (refresh) params.append('refresh', refresh);
+    shell.openExternal(`${WEB_DASHBOARD_URL}/auth/auto-login?${params.toString()}`);
+  } else {
+    shell.openExternal(WEB_DASHBOARD_URL);
+  }
+}
+
 function updateTrayMenu() {
   if (!tray) return;
-  const contextMenu = Menu.buildFromTemplate([
-    { label: 'Open TrackFlow', click: () => shell.openExternal(WEB_DASHBOARD_URL) },
+
+  // Build project submenu items
+  const projectItems = cachedProjects.map((p) => ({
+    label: p.name,
+    enabled: !isTimerRunning,
+    click: () => startTimer(p.id),
+  }));
+
+  const template = [
+    { label: 'Open Dashboard', click: () => openDashboardInBrowser() },
     { type: 'separator' },
-    {
+  ];
+
+  // Add projects submenu if there are projects
+  if (projectItems.length > 0) {
+    template.push({
+      label: 'Start Timer',
+      enabled: !isTimerRunning,
+      submenu: [
+        { label: 'No Project', click: () => startTimer() },
+        { type: 'separator' },
+        ...projectItems,
+      ],
+    });
+  } else {
+    template.push({
       label: 'Start Timer',
       enabled: !isTimerRunning,
       click: () => startTimer(),
-    },
+    });
+  }
+
+  template.push(
     {
       label: 'Stop Timer',
       enabled: isTimerRunning,
@@ -163,8 +216,10 @@ function updateTrayMenu() {
     {
       label: 'Quit',
       click: () => app.quit(),
-    },
-  ]);
+    }
+  );
+
+  const contextMenu = Menu.buildFromTemplate(template);
   tray.setContextMenu(contextMenu);
 }
 
@@ -284,8 +339,8 @@ function setupIPC() {
     createLoginWindow();
   });
 
-  ipcMain.handle('open-dashboard', () => {
-    shell.openExternal(WEB_DASHBOARD_URL);
+  ipcMain.handle('open-dashboard', async () => {
+    await openDashboardInBrowser();
   });
 }
 
