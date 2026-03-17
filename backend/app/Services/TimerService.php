@@ -7,6 +7,7 @@ use App\Events\TimerStopped;
 use App\Models\TimeEntry;
 use App\Models\ActivityLog;
 use App\Support\TimezoneAwareDateRange;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
@@ -119,8 +120,11 @@ class TimerService
     {
         $user = Auth::user();
         $redisKey = "timer:{$user->id}";
+        $tz = $user->getTimezoneForDates();
 
-        [$todayStartUtc, $todayEndUtc] = TimezoneAwareDateRange::userTodayUtcBounds($user->getTimezoneForDates());
+        // Current day = user's calendar day in their timezone (00:00–23:59 local → UTC bounds for DB)
+        [$todayStartUtc, $todayEndUtc] = TimezoneAwareDateRange::userTodayUtcBounds($tz);
+        $currentDay = Carbon::now($tz)->toDateString();
 
         $todayQuery = TimeEntry::withoutGlobalScopes()
             ->where('user_id', $user->id)
@@ -137,7 +141,13 @@ class TimerService
 
         $timerData = Redis::get($redisKey);
         if (!$timerData) {
-            return ['running' => false, 'entry' => null, 'elapsed_seconds' => 0, 'today_total' => $todayTotal];
+            return [
+                'running' => false,
+                'entry' => null,
+                'elapsed_seconds' => 0,
+                'today_total' => $todayTotal,
+                'current_day' => $currentDay,
+            ];
         }
 
         $data = json_decode($timerData, true);
@@ -156,6 +166,7 @@ class TimerService
             'entry' => $entry,
             'elapsed_seconds' => $currentElapsed,
             'today_total' => $todayTotal,
+            'current_day' => $currentDay,
         ];
     }
 

@@ -58,7 +58,7 @@ class TimerController extends Controller
         }
     }
 
-    // TIME-04: Get status (optional ?project_id= for project-scoped today_total)
+    // TIME-04: Get status — current day = user's timezone (today_total is that day's total). Optional ?project_id= for project scope.
     public function status(Request $request): JsonResponse
     {
         $projectId = $request->query('project_id');

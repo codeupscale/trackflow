@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
 use App\Services\AuditService;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
@@ -193,6 +194,24 @@ class AuthController extends Controller
     {
         return response()->json([
             'user' => $this->userResponse($request->user()),
+        ]);
+    }
+
+    /** Update current user profile (e.g. timezone). */
+    public function updateProfile(Request $request): JsonResponse
+    {
+        $valid = $request->validate([
+            'timezone' => ['sometimes', 'string', Rule::in(timezone_identifiers_list())],
+        ]);
+
+        $user = $request->user();
+        if (array_key_exists('timezone', $valid)) {
+            $user->timezone = $valid['timezone'];
+            $user->save();
+        }
+
+        return response()->json([
+            'user' => $this->userResponse($user->fresh()),
         ]);
     }
 
