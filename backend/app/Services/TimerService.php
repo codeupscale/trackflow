@@ -151,13 +151,26 @@ class TimerService
         }
 
         $data = json_decode($timerData, true);
-        $entry = TimeEntry::find($data['entry_id']);
-        $currentElapsed = (int) abs(now()->diffInSeconds($entry->started_at));
+        $entry = TimeEntry::find($data['entry_id'] ?? null);
+        if (!$entry) {
+            return [
+                'running' => false,
+                'entry' => null,
+                'elapsed_seconds' => 0,
+                'today_total' => $todayTotal,
+                'current_day' => $currentDay,
+            ];
+        }
+
+        $now = Carbon::now();
+        $currentElapsed = (int) abs($now->diffInSeconds($entry->started_at));
+        $entryProjectId = $entry->project_id !== null ? (string) $entry->project_id : null;
+        $requestedProjectId = $projectId !== null && $projectId !== '' ? (string) $projectId : null;
 
         // Include current running time only if it's for the requested project
-        if ($projectId !== null && $entry->project_id === $projectId) {
+        if ($requestedProjectId !== null && $entryProjectId === $requestedProjectId) {
             $todayTotal += $currentElapsed;
-        } elseif ($projectId === null) {
+        } elseif ($requestedProjectId === null) {
             $todayTotal += $currentElapsed;
         }
 
