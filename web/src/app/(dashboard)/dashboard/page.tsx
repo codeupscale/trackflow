@@ -1,11 +1,15 @@
 'use client';
 
+import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { format, startOfWeek, endOfWeek, isToday, isSameDay } from 'date-fns';
 import {
   Clock,
   Users,
   FolderOpen,
   Monitor,
+  Calendar,
+  ChevronDown,
 } from 'lucide-react';
 
 import {
@@ -17,6 +21,8 @@ import {
 } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   Table,
   TableBody,
@@ -25,6 +31,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import api from '@/lib/api';
 import { formatDuration } from '@/lib/utils';
 
@@ -51,11 +63,65 @@ interface DashboardData {
   team: TeamMember[];
 }
 
+type FilterPreset = 'today' | 'week' | 'custom';
+
+function getTodayRange(): { dateFrom: string; dateTo: string } {
+  const d = new Date();
+  const s = format(d, 'yyyy-MM-dd');
+  return { dateFrom: s, dateTo: s };
+}
+
+function getWeekRange(): { dateFrom: string; dateTo: string } {
+  const now = new Date();
+  const start = startOfWeek(now, { weekStartsOn: 1 });
+  const end = endOfWeek(now, { weekStartsOn: 1 });
+  const endUse = end > now ? now : end;
+  return {
+    dateFrom: format(start, 'yyyy-MM-dd'),
+    dateTo: format(endUse, 'yyyy-MM-dd'),
+  };
+}
+
 export default function DashboardPage() {
+  const [filterPreset, setFilterPreset] = useState<FilterPreset>('today');
+  const [dateFrom, setDateFrom] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  const [dateTo, setDateTo] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  const [customOpen, setCustomOpen] = useState(false);
+
+  const rangeLabel = useMemo(() => {
+    if (filterPreset === 'today') {
+      const d = new Date(dateFrom);
+      return isToday(d) ? 'Today' : format(d, 'EEE, MMM d, yyyy');
+    }
+    if (filterPreset === 'week') {
+      return `${format(new Date(dateFrom), 'MMM d')} – ${format(new Date(dateTo), 'MMM d, yyyy')}`;
+    }
+    return `${format(new Date(dateFrom), 'MMM d')} – ${format(new Date(dateTo), 'MMM d, yyyy')}`;
+  }, [filterPreset, dateFrom, dateTo]);
+
+  const applyPreset = (preset: FilterPreset) => {
+    setFilterPreset(preset);
+    if (preset === 'today') {
+      const { dateFrom: from, dateTo: to } = getTodayRange();
+      setDateFrom(from);
+      setDateTo(to);
+      setCustomOpen(false);
+    } else if (preset === 'week') {
+      const { dateFrom: from, dateTo: to } = getWeekRange();
+      setDateFrom(from);
+      setDateTo(to);
+      setCustomOpen(false);
+    } else {
+      setCustomOpen(true);
+    }
+  };
+
   const { data, isLoading, error } = useQuery<DashboardData>({
-    queryKey: ['dashboard'],
+    queryKey: ['dashboard', dateFrom, dateTo],
     queryFn: async () => {
-      const res = await api.get('/dashboard');
+      const res = await api.get('/dashboard', {
+        params: { date_from: dateFrom, date_to: dateTo },
+      });
       const raw = res.data;
 
       // Transform API response { online_users, team_summary } into our expected shape
@@ -94,6 +160,30 @@ export default function DashboardPage() {
   const stats = data?.stats;
   const team = data?.team || [];
 
+  const { data: timesheetData, isLoading: timesheetLoading } = useQuery({
+    queryKey: ['time-entries-dashboard', dateFrom, dateTo],
+    queryFn: async () => {
+      const res = await api.get('/time-entries', {
+        params: {
+          date_from: dateFrom,
+          date_to: `${dateTo} 23:59:59`,
+          per_page: 50,
+        },
+      });
+      const d = res.data;
+      const list = d?.data ?? (Array.isArray(d) ? d : []);
+      return list;
+    },
+  });
+  const timeEntries = (timesheetData ?? []) as Array<{
+    id: string;
+    started_at: string;
+    ended_at: string | null;
+    duration_seconds: number;
+    project?: { name: string; color?: string };
+    task?: { title: string };
+  }>;
+
   const statCards = [
     {
       label: 'Total Online',
@@ -103,7 +193,7 @@ export default function DashboardPage() {
       bg: 'bg-green-500/10',
     },
     {
-      label: "Today's Hours",
+      label: filterPreset === 'today' && isSameDay(new Date(dateFrom), new Date()) ? "Today's Hours" : 'Hours',
       value: stats?.today_hours != null
         ? `${Math.floor(stats.today_hours)}h ${Math.round((stats.today_hours % 1) * 60)}m`
         : '0h 0m',
@@ -137,10 +227,62 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Page header */}
-      <div>
-        <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-        <p className="text-slate-400 text-sm mt-1">Overview of your team&apos;s activity today</p>
+      {/* Page header + weekly filter */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Dashboard</h1>
+          <p className="text-slate-400 text-sm mt-1">
+            {filterPreset === 'today' && isSameDay(new Date(dateFrom), new Date())
+              ? "Overview of your team's activity today"
+              : `Overview for ${rangeLabel}`}
+          </p>
+        </div>
+        <DropdownMenu open={customOpen} onOpenChange={setCustomOpen}>
+          <DropdownMenuTrigger className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-800/50 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700/50 hover:text-white">
+            <Calendar className="h-4 w-4" />
+            {rangeLabel}
+            <ChevronDown className="h-4 w-4 opacity-70" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56 border-slate-800 bg-slate-900">
+            <DropdownMenuItem onClick={() => applyPreset('today')}>
+              Today
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => applyPreset('week')}>
+              This week
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={(e) => e.preventDefault()}
+              className="flex flex-col items-stretch gap-2 p-3"
+            >
+              <span className="text-xs text-slate-400 font-medium">Custom range</span>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className="h-8 text-sm bg-slate-800 border-slate-700"
+                />
+                <span className="text-slate-500">–</span>
+                <Input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className="h-8 text-sm bg-slate-800 border-slate-700"
+                />
+              </div>
+              <Button
+                size="sm"
+                className="mt-1"
+                onClick={() => {
+                  setFilterPreset('custom');
+                  setCustomOpen(false);
+                }}
+              >
+                Apply
+              </Button>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Stats cards */}
@@ -200,7 +342,11 @@ export default function DashboardPage() {
                 <TableRow className="border-slate-800 hover:bg-transparent">
                   <TableHead className="text-slate-400">Member</TableHead>
                   <TableHead className="text-slate-400">Status</TableHead>
-                  <TableHead className="text-slate-400">Today&apos;s Hours</TableHead>
+                  <TableHead className="text-slate-400">
+                    {filterPreset === 'today' && isSameDay(new Date(dateFrom), new Date())
+                      ? "Today's Hours"
+                      : 'Hours'}
+                  </TableHead>
                   <TableHead className="text-slate-400">Activity</TableHead>
                 </TableRow>
               </TableHeader>
@@ -283,6 +429,66 @@ export default function DashboardPage() {
                     </TableRow>
                   );
                 })}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Timesheet for selected range (current user's entries) */}
+      <Card className="border-slate-800 bg-slate-900/50">
+        <CardHeader>
+          <CardTitle className="text-white">Timesheet</CardTitle>
+          <CardDescription className="text-slate-400">
+            Your time entries for {rangeLabel.toLowerCase()}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {timesheetLoading ? (
+            <div className="space-y-3">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="h-12 bg-slate-800/50 rounded animate-pulse" />
+              ))}
+            </div>
+          ) : timeEntries.length === 0 ? (
+            <div className="text-center py-12">
+              <Clock className="h-10 w-10 text-slate-600 mx-auto mb-3" />
+              <p className="text-slate-400 font-medium">No time entries in this range</p>
+              <p className="text-sm text-slate-500 mt-1">
+                Start the timer or log time on the Time page
+              </p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow className="border-slate-800 hover:bg-transparent">
+                  <TableHead className="text-slate-400">Date / Time</TableHead>
+                  <TableHead className="text-slate-400">Project</TableHead>
+                  <TableHead className="text-slate-400">Task</TableHead>
+                  <TableHead className="text-slate-400 text-right">Duration</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {timeEntries.map((entry) => (
+                  <TableRow key={entry.id} className="border-slate-800">
+                    <TableCell className="text-slate-300 font-mono text-sm">
+                      {format(new Date(entry.started_at), 'MMM d, yyyy HH:mm')}
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-sm text-slate-300">
+                        {entry.project?.name ?? '—'}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-sm text-slate-400">
+                        {entry.task?.title ?? '—'}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-sm text-slate-300">
+                      {formatDuration(entry.duration_seconds)}
+                    </TableCell>
+                  </TableRow>
+                ))}
               </TableBody>
             </Table>
           )}

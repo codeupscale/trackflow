@@ -120,10 +120,9 @@
   <script>
     let timerInterval = null;
     let elapsedSeconds = 0;
-    let todayTotalBase = 0; // Completed entries today (excludes current running)
+    let todayTotalBase = 0; // Current day total (00:00–23:59 server time), per selected project
     let isRunning = false;
     let currentStartedAt = null;
-    let projectsLoaded = false;
 
     function showNotification(msg) {
       const el = document.createElement('div');
@@ -183,9 +182,10 @@
       }
     }
 
-    // Sync timer state from main process — called on init, when popup re-appears, or when project changes
+    // Sync timer state from main process — current day total (00:00–23:59) for selected project
     async function syncTimerState() {
       try {
+        await loadProjects();
         const selectedProjectId = projectSelect.value || null;
         const state = await window.trackflow.getTimerState(selectedProjectId);
         todayTotalBase = state.todayTotal ?? 0;
@@ -216,24 +216,24 @@
       }
     }
 
-    // Load projects into dropdown (only once)
+    // Fetch projects and refresh dropdown (called on init and every time popup opens so newly assigned projects appear)
     async function loadProjects() {
-      if (projectsLoaded) return;
       try {
         const projects = await window.trackflow.getProjects();
-        // Handle both array and paginated { data: [...] } response
         const list = Array.isArray(projects) ? projects
           : (projects?.data && Array.isArray(projects.data)) ? projects.data
           : [];
 
-        if (list.length > 0) {
-          list.forEach(p => {
-            const option = document.createElement('option');
-            option.value = p.id;
-            option.textContent = p.name;
-            projectSelect.appendChild(option);
-          });
-          projectsLoaded = true;
+        const currentValue = projectSelect.value || '';
+        projectSelect.innerHTML = '<option value="">No Project</option>';
+        list.forEach(p => {
+          const option = document.createElement('option');
+          option.value = p.id;
+          option.textContent = p.name;
+          projectSelect.appendChild(option);
+        });
+        if (currentValue && list.some(p => p.id === currentValue)) {
+          projectSelect.value = currentValue;
         }
       } catch {}
     }
@@ -242,7 +242,6 @@
     async function init() {
       await loadProjects();
       await syncTimerState();
-      // When user changes project, refresh to show that project's today total
       projectSelect.addEventListener('change', () => {
         if (!isRunning) syncTimerState();
       });

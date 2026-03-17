@@ -380,7 +380,7 @@ function setupIPC() {
         }
       } catch {}
     }
-    // Today total for display: when running use current entry's project, else use selected project
+    // Current day total (00:00–23:59 server time), per project — same logic as web
     const projectIdForTotal = isTimerRunning && currentEntry?.project_id
       ? currentEntry.project_id
       : projectId || null;

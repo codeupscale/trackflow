@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useTimerStore } from '@/stores/timer-store';
-import { formatDuration } from '@/lib/utils';
+import { formatDuration, cn } from '@/lib/utils';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 
@@ -50,8 +50,9 @@ export function TimerWidget() {
   // When timer is running, show running project in dropdown; otherwise show selected project
   const displayProjectId = isRunning ? projectId : selectedProjectId;
 
+  // Fetch status on mount and when project changes so header shows total time for selected project (or all)
   useEffect(() => {
-    fetchStatus(selectedProjectId).catch(() => {});
+    fetchStatus(selectedProjectId ?? null).catch(() => {});
     startPolling();
     return () => stopPolling();
   }, [fetchStatus, selectedProjectId, startPolling, stopPolling]);
@@ -107,15 +108,25 @@ export function TimerWidget() {
         </SelectContent>
       </Select>
 
-      {/* Timer display: total time for selected project today (resumes when you start again) */}
-      <div className="flex items-center gap-2 min-w-[100px]">
+      {/* Timer display: gray when stopped, active style when running */}
+      <div
+        className={cn(
+          'flex items-center gap-2 min-w-[100px] rounded-lg px-3 py-1.5 transition-colors',
+          isRunning
+            ? 'bg-green-950/40 border border-green-800/50'
+            : 'bg-slate-800 border border-slate-700'
+        )}
+      >
         {isRunning && (
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
           </span>
         )}
-        <span className={`font-mono text-sm font-medium tabular-nums ${isRunning ? 'text-green-400' : elapsedSeconds > 0 ? 'text-slate-300' : 'text-slate-400'}`}>
+        <span className={cn(
+          'font-mono text-sm font-medium tabular-nums',
+          isRunning ? 'text-green-400' : elapsedSeconds > 0 ? 'text-slate-300' : 'text-slate-400'
+        )}>
           {formatDuration(elapsedSeconds)}
         </span>
       </div>
