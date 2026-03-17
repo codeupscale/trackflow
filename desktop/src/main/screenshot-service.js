@@ -1,7 +1,7 @@
 // AGENT-02: Screenshot capture at org-configured interval
 // AGENT-09: Blur support via sharp
 
-const { desktopCapturer } = require('electron');
+const { desktopCapturer, Notification } = require('electron');
 const FormData = require('form-data');
 
 class ScreenshotService {
@@ -78,9 +78,28 @@ class ScreenshotService {
       // Re-check entryId in case timer was stopped during capture
       if (this.currentEntryId) {
         await this.upload(buffer);
+        this.showScreenshotNotification();
       }
     } catch (e) {
       console.error('Screenshot capture failed:', e.message);
+    }
+  }
+
+  showScreenshotNotification() {
+    try {
+      if (Notification.isSupported()) {
+        const notification = new Notification({
+          title: 'TrackFlow',
+          body: 'Screenshot captured',
+          silent: true,
+          timeoutType: 'default',
+        });
+        notification.show();
+        // Auto-close after 3 seconds (like Hubstaff)
+        setTimeout(() => notification.close(), 3000);
+      }
+    } catch (e) {
+      console.warn('Could not show screenshot notification:', e.message);
     }
   }
 

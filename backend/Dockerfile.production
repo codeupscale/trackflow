@@ -75,9 +75,13 @@ WORKDIR /var/www/html
 COPY --from=composer /app /var/www/html
 COPY --from=frontend /app/web/.next /var/www/html/web/.next
 
-# Set permissions
-RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache \
+# Set permissions (including screenshots directory for local storage fallback)
+RUN mkdir -p /var/www/html/storage/app/public/screenshots \
+    && chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache \
     && chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
+
+# Create storage symlink so public/storage -> storage/app/public
+RUN php artisan storage:link 2>/dev/null || ln -sf /var/www/html/storage/app/public /var/www/html/public/storage
 
 # Optimization will be done at container startup via entrypoint
 
