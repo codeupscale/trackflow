@@ -10,21 +10,30 @@ class ScreenshotService {
     this.config = config;
     this.offlineQueue = offlineQueue;
     this.interval = null;
+    this.initialTimeout = null;
     this.currentEntryId = null;
   }
 
   start(entryId) {
+    this.stop(); // Clear any previous timers
     this.currentEntryId = entryId;
     const intervalMs = (this.config.screenshot_interval || 5) * 60 * 1000;
 
     // Take first screenshot after 1 minute
-    setTimeout(() => this.capture(), 60000);
+    this.initialTimeout = setTimeout(() => {
+      this.capture();
+      this.initialTimeout = null;
+    }, 60000);
 
     // Then capture at configured interval
     this.interval = setInterval(() => this.capture(), intervalMs);
   }
 
   stop() {
+    if (this.initialTimeout) {
+      clearTimeout(this.initialTimeout);
+      this.initialTimeout = null;
+    }
     if (this.interval) {
       clearInterval(this.interval);
       this.interval = null;
@@ -43,6 +52,8 @@ class ScreenshotService {
 
       for (const source of sources) {
         const image = source.thumbnail;
+        if (image.isEmpty()) continue;
+
         let buffer = image.toJPEG(80);
 
         // AGENT-09: Blur if configured
@@ -77,6 +88,7 @@ class ScreenshotService {
     try {
       await this.apiClient.uploadScreenshot(formData);
     } catch (e) {
+      console.error('Screenshot upload failed:', e.message);
       // AGENT-06: Queue if offline
       this.offlineQueue.add('screenshot', {
         buffer: buffer.toString('base64'),

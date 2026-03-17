@@ -65,14 +65,17 @@
       outline: none;
     }
     .project-select:focus { border-color: #3b82f6; }
+    .project-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
     .actions {
       display: flex; gap: 8px; justify-content: center; padding: 12px 0;
     }
     .actions .btn { flex: 1; padding: 10px; font-size: 14px; }
+    .actions .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
     .footer {
-      text-align: center; padding-top: 12px;
+      display: flex; justify-content: space-between; align-items: center;
+      padding-top: 12px;
       border-top: 1px solid #1e293b; font-size: 11px; color: #475569;
     }
     .footer a {
@@ -80,6 +83,8 @@
       color: #64748b; cursor: pointer; text-decoration: none;
     }
     .footer a:hover { color: #94a3b8; }
+    .footer .dashboard-link { color: #3b82f6; }
+    .footer .dashboard-link:hover { color: #60a5fa; }
   </style>
 </head>
 <body>
@@ -107,6 +112,7 @@
     </div>
 
     <div class="footer">
+      <a id="dashboardLink" class="dashboard-link">Open Dashboard</a>
       <a id="logoutLink">Sign out</a>
     </div>
   </div>
@@ -122,6 +128,8 @@
     const stopBtn = document.getElementById('stopBtn');
     const projectSelect = document.getElementById('projectSelect');
     const logoutBtn = document.getElementById('logoutBtn');
+    const logoutLink = document.getElementById('logoutLink');
+    const dashboardLink = document.getElementById('dashboardLink');
 
     function formatTime(seconds) {
       const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
@@ -137,6 +145,7 @@
       statusText.textContent = running ? 'Tracking' : 'Stopped';
       startBtn.style.display = running ? 'none' : 'block';
       stopBtn.style.display = running ? 'block' : 'none';
+      projectSelect.disabled = running;
     }
 
     function startTicking() {
@@ -164,16 +173,27 @@
       }
 
       // Load projects
-      const projects = await window.trackflow.getProjects();
-      projects.forEach(p => {
-        const option = document.createElement('option');
-        option.value = p.id;
-        option.textContent = p.name;
-        projectSelect.appendChild(option);
-      });
+      try {
+        const projects = await window.trackflow.getProjects();
+        if (Array.isArray(projects)) {
+          projects.forEach(p => {
+            const option = document.createElement('option');
+            option.value = p.id;
+            option.textContent = p.name;
+            projectSelect.appendChild(option);
+          });
+
+          // Select current project if timer is running
+          if (state.entry && state.entry.project_id) {
+            projectSelect.value = state.entry.project_id;
+          }
+        }
+      } catch {}
     }
 
     startBtn.addEventListener('click', async () => {
+      startBtn.disabled = true;
+      startBtn.textContent = 'Starting...';
       const projectId = projectSelect.value || null;
       const result = await window.trackflow.startTimer(projectId);
       if (result.success) {
@@ -181,19 +201,33 @@
         updateDisplay(true);
         startTicking();
       }
+      startBtn.disabled = false;
+      startBtn.textContent = 'Start';
     });
 
     stopBtn.addEventListener('click', async () => {
-      const result = await window.trackflow.stopTimer();
-      if (result.success) {
-        stopTicking();
-        elapsedSeconds = 0;
-        updateDisplay(false);
-      }
+      stopBtn.disabled = true;
+      stopBtn.textContent = 'Stopping...';
+      await window.trackflow.stopTimer();
+      // Always stop UI (timer is stopped locally even if API fails)
+      stopTicking();
+      elapsedSeconds = 0;
+      updateDisplay(false);
+      stopBtn.disabled = false;
+      stopBtn.textContent = 'Stop';
     });
 
-    logoutBtn.addEventListener('click', async () => {
+    // Both logout buttons do the same thing
+    async function handleLogout() {
+      logoutBtn.disabled = true;
       await window.trackflow.logout();
+    }
+    logoutBtn.addEventListener('click', handleLogout);
+    logoutLink.addEventListener('click', handleLogout);
+
+    // Open web dashboard in browser
+    dashboardLink.addEventListener('click', () => {
+      window.trackflow.openDashboard();
     });
 
     window.trackflow.onTimerStarted((entry) => {
