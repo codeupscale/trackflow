@@ -27,10 +27,11 @@ class TimerTest extends TestCase
 
     public function test_can_start_timer(): void
     {
-        // TimerService::start() calls Redis::set(lockKey, 1, 'EX', 5, 'NX') then Redis::setex() then Redis::del()
+        // TimerService::start(): set(lock), setex(timer), del(lock); then controller calls todayTotal() which calls get()
         Redis::shouldReceive('set')->once()->andReturn(true);     // acquire lock
         Redis::shouldReceive('setex')->once()->andReturn(true);   // store timer data
         Redis::shouldReceive('del')->once()->andReturn(1);        // release lock
+        Redis::shouldReceive('get')->once()->andReturn(null);     // todayTotal() after start (no elapsed to add yet)
 
         $response = $this->postJson('/api/v1/timer/start');
         $response->assertStatus(201)
@@ -60,10 +61,12 @@ class TimerTest extends TestCase
             'ended_at' => null,
         ]);
 
-        Redis::shouldReceive('get')->once()->andReturn(json_encode([
+        $timerPayload = json_encode([
             'entry_id' => $entry->id,
             'started_at' => $entry->started_at->toISOString(),
-        ]));
+        ]);
+        // stop() calls get() once; then controller calls todayTotal() which calls get() again
+        Redis::shouldReceive('get')->twice()->andReturn($timerPayload, null);
         Redis::shouldReceive('del')->once()->andReturn(1);
 
         $response = $this->postJson('/api/v1/timer/stop');
