@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Play, Square } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/select';
 import { useTimerStore } from '@/stores/timer-store';
 import { formatDuration } from '@/lib/utils';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
 
 interface Project {
@@ -35,8 +35,9 @@ export function TimerWidget() {
     stopPolling,
   } = useTimerStore();
 
-  const selectedRef = useRef<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const queryClient = useQueryClient();
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ['projects-list'],
@@ -46,6 +47,19 @@ export function TimerWidget() {
     },
   });
 
+  // Today's total for the selected project (or current running project, or all if none)
+  const effectiveProjectKey = projectId ?? selectedProjectId ?? 'all';
+  const { data: todayTotalSeconds = 0 } = useQuery<number>({
+    queryKey: ['timer', 'today-total', effectiveProjectKey],
+    queryFn: async () => {
+      const params = effectiveProjectKey === 'all' ? {} : { project_id: effectiveProjectKey };
+      const res = await api.get<{ today_total: number }>('/timer/today-total', { params });
+      return res.data.today_total ?? 0;
+    },
+    // When timer is running for this project, refetch every second so display ticks
+    refetchInterval: isRunning && effectiveProjectKey === projectId ? 1000 : false,
+  });
+
   useEffect(() => {
     // Fetch initial status and start polling for cross-device sync
     fetchStatus().catch(() => {});
@@ -53,9 +67,10 @@ export function TimerWidget() {
     return () => stopPolling();
   }, [fetchStatus, startPolling, stopPolling]);
 
+  // When timer is running, sync selected project to current so dropdown shows it
   useEffect(() => {
     if (projectId) {
-      selectedRef.current = projectId;
+      setSelectedProjectId((prev) => prev ?? projectId);
     }
   }, [projectId]);
 
@@ -65,9 +80,11 @@ export function TimerWidget() {
       if (isRunning) {
         await stopTimer();
         toast.success('Timer stopped');
+        queryClient.invalidateQueries({ queryKey: ['timer', 'today-total'] });
       } else {
-        await startTimer(selectedRef.current ?? undefined);
+        await startTimer(selectedProjectId ?? undefined);
         toast.success('Timer started');
+        queryClient.invalidateQueries({ queryKey: ['timer', 'today-total'] });
       }
     } catch {
       // Even if we got an error, re-sync with server to get accurate state
@@ -78,11 +95,16 @@ export function TimerWidget() {
     }
   };
 
+  // When showing "all" and timer running, use store's live total; otherwise use API today-total (per-project or all)
+  const displaySeconds =
+    effectiveProjectKey === 'all' && isRunning ? elapsedSeconds : todayTotalSeconds;
+
   return (
     <div className="flex items-center gap-3">
       {/* Project selector */}
       <Select
-        onValueChange={(val) => { selectedRef.current = val as string | null; }}
+        value={projectId ?? selectedProjectId ?? ''}
+        onValueChange={(val) => setSelectedProjectId(val || null)}
         disabled={isRunning}
       >
         <SelectTrigger className="w-[160px] h-8 bg-slate-800/50 border-slate-700 text-sm">
@@ -103,7 +125,7 @@ export function TimerWidget() {
         </SelectContent>
       </Select>
 
-      {/* Timer display */}
+      {/* Timer display: today's total for selected project (resumes from where it left off) */}
       <div className="flex items-center gap-2 min-w-[100px]">
         {isRunning && (
           <span className="relative flex h-2 w-2">
@@ -111,8 +133,8 @@ export function TimerWidget() {
             <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
           </span>
         )}
-        <span className={`font-mono text-sm font-medium tabular-nums ${isRunning ? 'text-green-400' : elapsedSeconds > 0 ? 'text-slate-300' : 'text-slate-400'}`}>
-          {formatDuration(elapsedSeconds)}
+        <span className={`font-mono text-sm font-medium tabular-nums ${isRunning ? 'text-green-400' : displaySeconds > 0 ? 'text-slate-300' : 'text-slate-400'}`}>
+          {formatDuration(displaySeconds)}
         </span>
       </div>
 

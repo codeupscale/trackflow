@@ -53,6 +53,7 @@ Route::prefix('v1')->group(function () {
         Route::post('timer/stop', [\App\Http\Controllers\Api\V1\TimerController::class, 'stop']);
         Route::post('timer/pause', [\App\Http\Controllers\Api\V1\TimerController::class, 'pause']);
         Route::get('timer/status', [\App\Http\Controllers\Api\V1\TimerController::class, 'status']);
+        Route::get('timer/today-total', [\App\Http\Controllers\Api\V1\TimerController::class, 'todayTotal']);
         Route::post('timer/heartbeat', [\App\Http\Controllers\Api\V1\TimerController::class, 'heartbeat'])->middleware('throttle:60,1');
         Route::post('timer/idle', [\App\Http\Controllers\Api\V1\TimerController::class, 'idle']);
 
