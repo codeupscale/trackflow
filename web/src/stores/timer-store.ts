@@ -8,12 +8,15 @@ interface TimerState {
   startedAt: string | null;
   elapsedSeconds: number;
   todayTotalBase: number; // Completed entries today (excludes current running)
+  /** Project ID selected in header dropdown; when set, elapsedSeconds is scoped to this project */
+  selectedProjectId: string | null;
   intervalId: ReturnType<typeof setInterval> | null;
   pollId: ReturnType<typeof setInterval> | null;
 
   startTimer: (projectId?: string, taskId?: string) => Promise<void>;
   stopTimer: () => Promise<Record<string, unknown> | null>;
-  fetchStatus: () => Promise<void>;
+  fetchStatus: (projectId?: string | null) => Promise<void>;
+  setSelectedProjectId: (projectId: string | null) => void;
   startPolling: () => void;
   stopPolling: () => void;
   tick: () => void;
@@ -29,14 +32,15 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   startedAt: null,
   elapsedSeconds: 0,
   todayTotalBase: 0,
+  selectedProjectId: null,
   intervalId: null,
   pollId: null,
+
+  setSelectedProjectId: (projectId) => set({ selectedProjectId: projectId }),
 
   startTimer: async (projectId?: string, taskId?: string) => {
     try {
       const res = await api.post('/timer/start', { project_id: projectId, task_id: taskId });
-      // Use today_total from server (completed entries) as the base
-      // This ensures we always have the correct accumulated time even after page refresh
       const serverBase = res.data.today_total || 0;
       const base = serverBase > 0 ? serverBase : get().todayTotalBase;
       set({
@@ -48,11 +52,12 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
         todayTotalBase: base,
       });
       get().startTicking();
+      // Refresh display for the project we just started (project-scoped total)
+      await get().fetchStatus(projectId ?? get().selectedProjectId);
     } catch (err: unknown) {
       const status = (err as { response?: { status?: number } })?.response?.status;
-      // 409 = timer already running on server (e.g. started from desktop app)
       if (status === 409) {
-        await get().fetchStatus();
+        await get().fetchStatus(get().selectedProjectId);
         return;
       }
       throw err;
@@ -60,12 +65,11 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   },
 
   stopTimer: async () => {
-    // Capture current displayed total before stopping (local fallback)
     const localTotal = get().elapsedSeconds;
+    const selectedProjectId = get().selectedProjectId;
     try {
       const res = await api.post('/timer/stop');
       get().stopTicking();
-      // Use server today_total if > 0, otherwise keep the locally computed total
       const todayTotal = (res.data.today_total > 0) ? res.data.today_total : localTotal;
       set({
         isRunning: false,
@@ -75,6 +79,8 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
         elapsedSeconds: todayTotal,
         todayTotalBase: todayTotal,
       });
+      // Refresh display for selected project (project-scoped total after stop)
+      await get().fetchStatus(selectedProjectId);
       return res.data.entry;
     } catch (err: unknown) {
       const status = (err as { response?: { status?: number } })?.response?.status;
@@ -89,6 +95,7 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
           elapsedSeconds: currentElapsed,
           todayTotalBase: currentElapsed,
         });
+        await get().fetchStatus(selectedProjectId);
         return null;
       }
       get().stopTicking();
@@ -100,29 +107,30 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
         elapsedSeconds: currentElapsed,
         todayTotalBase: currentElapsed,
       });
+      await get().fetchStatus(selectedProjectId);
       throw err;
     }
   },
 
-  fetchStatus: async () => {
+  fetchStatus: async (projectId?: string | null) => {
+    const scopeProjectId = projectId ?? get().selectedProjectId;
     try {
-      const res = await api.get('/timer/status');
+      const params = scopeProjectId ? { project_id: scopeProjectId } : {};
+      const res = await api.get('/timer/status', { params });
       const wasRunning = get().isRunning;
       const todayTotal = res.data.today_total || 0;
 
       if (res.data.running) {
         const currentElapsed = res.data.elapsed_seconds || 0;
-        // todayTotal includes current elapsed; base = completed only
         const base = Math.max(0, todayTotal - currentElapsed);
         set({
           isRunning: true,
           entryId: res.data.entry?.id,
           projectId: res.data.entry?.project_id,
           startedAt: res.data.entry?.started_at,
-          elapsedSeconds: todayTotal, // Show full today's total
+          elapsedSeconds: todayTotal,
           todayTotalBase: base,
         });
-        // Only start ticking if we weren't already running
         if (!wasRunning || !get().intervalId) {
           get().startTicking();
         }
@@ -135,7 +143,7 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
           entryId: null,
           projectId: null,
           startedAt: null,
-          elapsedSeconds: todayTotal, // Show today's total when stopped
+          elapsedSeconds: todayTotal,
           todayTotalBase: todayTotal,
         });
       }
@@ -145,9 +153,8 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   },
 
   startPolling: () => {
-    get().stopPolling(); // Clear any existing poll
-    // Poll server every 10 seconds to detect changes from desktop app
-    const id = setInterval(() => get().fetchStatus(), 10000);
+    get().stopPolling();
+    const id = setInterval(() => get().fetchStatus(get().selectedProjectId), 10000);
     set({ pollId: id });
   },
 
@@ -158,7 +165,9 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   },
 
   tick: () => {
-    const { startedAt, todayTotalBase } = get();
+    const { startedAt, todayTotalBase, projectId, selectedProjectId } = get();
+    // Only tick when showing the running project (or "all" when no project selected)
+    if (selectedProjectId !== null && projectId !== selectedProjectId) return;
     if (startedAt) {
       const currentElapsed = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
       set({ elapsedSeconds: todayTotalBase + currentElapsed });

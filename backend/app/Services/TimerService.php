@@ -110,18 +110,25 @@ class TimerService
         return $stoppedEntry;
     }
 
-    public function status(): array
+    /**
+     * Get timer status. When $projectId is provided, today_total is scoped to that project.
+     */
+    public function status(?string $projectId = null): array
     {
         $user = Auth::user();
         $redisKey = "timer:{$user->id}";
 
-        // Calculate today's total tracked time (completed entries)
-        $todayTotal = (int) TimeEntry::withoutGlobalScopes()
+        $todayQuery = TimeEntry::withoutGlobalScopes()
             ->where('user_id', $user->id)
             ->whereDate('started_at', now()->toDateString())
             ->whereNotNull('ended_at')
-            ->where('type', 'tracked')
-            ->sum('duration_seconds');
+            ->where('type', 'tracked');
+
+        if ($projectId !== null) {
+            $todayQuery->where('project_id', $projectId);
+        }
+
+        $todayTotal = (int) $todayQuery->sum('duration_seconds');
 
         $timerData = Redis::get($redisKey);
         if (!$timerData) {
@@ -132,12 +139,54 @@ class TimerService
         $entry = TimeEntry::find($data['entry_id']);
         $currentElapsed = (int) abs(now()->diffInSeconds($entry->started_at));
 
+        // Include current running time only if it's for the requested project
+        if ($projectId !== null && $entry->project_id === $projectId) {
+            $todayTotal += $currentElapsed;
+        } elseif ($projectId === null) {
+            $todayTotal += $currentElapsed;
+        }
+
         return [
             'running' => true,
             'entry' => $entry,
             'elapsed_seconds' => $currentElapsed,
-            'today_total' => $todayTotal + $currentElapsed,
+            'today_total' => $todayTotal,
         ];
+    }
+
+    /**
+     * Get today's total tracked seconds for the current user.
+     * Optionally filter by project_id. If timer is running for that project, includes current elapsed.
+     */
+    public function todayTotal(?string $projectId = null): int
+    {
+        $user = Auth::user();
+        $today = now()->toDateString();
+
+        $query = TimeEntry::withoutGlobalScopes()
+            ->where('user_id', $user->id)
+            ->whereDate('started_at', $today)
+            ->whereNotNull('ended_at')
+            ->where('type', 'tracked');
+
+        if ($projectId !== null && $projectId !== '') {
+            $query->where('project_id', $projectId);
+        }
+
+        $total = (int) $query->sum('duration_seconds');
+
+        // If timer is running and entry is for this project, add current elapsed
+        $redisKey = "timer:{$user->id}";
+        $timerData = Redis::get($redisKey);
+        if ($timerData) {
+            $data = json_decode($timerData, true);
+            $entry = TimeEntry::find($data['entry_id'] ?? null);
+            if ($entry && ($projectId === null || $projectId === '' || $entry->project_id === $projectId)) {
+                $total += (int) abs(now()->diffInSeconds($entry->started_at));
+            }
+        }
+
+        return $total;
     }
 
     /**

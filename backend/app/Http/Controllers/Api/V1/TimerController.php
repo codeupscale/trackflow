@@ -68,11 +68,20 @@ class TimerController extends Controller
         }
     }
 
-    // TIME-04: Get status
-    public function status(): JsonResponse
+    // TIME-04: Get status (optional ?project_id= for project-scoped today_total)
+    public function status(Request $request): JsonResponse
     {
-        $status = $this->timerService->status();
+        $projectId = $request->query('project_id');
+        $status = $this->timerService->status($projectId ?: null);
         return response()->json($status);
+    }
+
+    // Today's total (optionally for a specific project)
+    public function todayTotal(Request $request): JsonResponse
+    {
+        $projectId = $request->query('project_id');
+        $total = $this->timerService->todayTotal($projectId ?: null);
+        return response()->json(['today_total' => $total]);
     }
 
     // TIME-05: Report idle time (from desktop agent)
