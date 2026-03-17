@@ -164,6 +164,13 @@
       startBtn.style.display = running ? 'none' : 'block';
       stopBtn.style.display = running ? 'block' : 'none';
       projectSelect.disabled = running;
+      updateStartButtonState();
+    }
+
+    // Start is only allowed when a project is selected (required for tracking)
+    function updateStartButtonState() {
+      const noProject = !projectSelect.value || projectSelect.value === '';
+      startBtn.disabled = !isRunning && noProject;
     }
 
     function startTicking() {
@@ -211,6 +218,7 @@
         if (state.entry && state.entry.project_id) {
           projectSelect.value = state.entry.project_id;
         }
+        updateStartButtonState();
       } catch (e) {
         console.error('Failed to sync timer state:', e);
       }
@@ -242,7 +250,9 @@
     async function init() {
       await loadProjects();
       await syncTimerState();
+      updateStartButtonState();
       projectSelect.addEventListener('change', () => {
+        updateStartButtonState();
         if (!isRunning) syncTimerState();
       });
     }
@@ -320,9 +330,14 @@
     window.trackflow.onTimerStopped((data) => {
       stopTicking();
       currentStartedAt = null;
-      // Show today's total when stopped from background sync
-      if (data && data.todayTotal !== undefined) {
+      if (data?.entry?.project_id) {
+        projectSelect.value = data.entry.project_id;
+        todayTotalBase = data.todayTotal ?? 0;
+      } else if (data?.todayTotal !== undefined) {
         todayTotalBase = data.todayTotal;
+      } else {
+        syncTimerState();
+        return;
       }
       elapsedSeconds = todayTotalBase;
       updateDisplay(false);
