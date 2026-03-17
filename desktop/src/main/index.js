@@ -521,6 +521,13 @@ async function stopTimer() {
   // Always attempt to stop, even if local state says not running
   const wasRunning = isTimerRunning;
 
+  // Capture current session elapsed BEFORE clearing state
+  const sessionElapsed = currentEntry
+    ? Math.max(0, Math.floor((Date.now() - new Date(currentEntry.started_at).getTime()) / 1000))
+    : 0;
+  // Local today total = completed entries base + this session
+  const localTodayTotal = todayTotalSeconds + sessionElapsed;
+
   // Dismiss idle alert if open
   dismissIdleAlert();
 
@@ -528,7 +535,8 @@ async function stopTimer() {
     const result = await apiClient.stopTimer();
     isTimerRunning = false;
     currentEntry = null;
-    todayTotalSeconds = result.today_total || todayTotalSeconds;
+    // Use server today_total if it's > 0, otherwise use our local calculation
+    todayTotalSeconds = (result.today_total > 0) ? result.today_total : localTodayTotal;
 
     activityMonitor?.stop();
     screenshotService?.stop();
@@ -543,24 +551,11 @@ async function stopTimer() {
   } catch (e) {
     const status = e.response?.status;
 
-    // 404 = timer already stopped on server — just reset local state
-    if (status === 404) {
-      isTimerRunning = false;
-      currentEntry = null;
-      activityMonitor?.stop();
-      screenshotService?.stop();
-      idleDetector?.stop();
-      stopTrayTimer();
-      updateTrayTitle();
-      updateTrayIcon(false);
-      updateTrayMenu();
-      notifyPopup('timer-stopped', { entry: null, todayTotal: todayTotalSeconds });
-      return { success: true, entry: null, todayTotal: todayTotalSeconds };
-    }
-
-    // For other errors, still stop local services
+    // Use local calculation on error
     isTimerRunning = false;
     currentEntry = null;
+    todayTotalSeconds = localTodayTotal;
+
     activityMonitor?.stop();
     screenshotService?.stop();
     idleDetector?.stop();
@@ -569,6 +564,10 @@ async function stopTimer() {
     updateTrayIcon(false);
     updateTrayMenu();
     notifyPopup('timer-stopped', { entry: null, todayTotal: todayTotalSeconds });
+
+    if (status === 404) {
+      return { success: true, entry: null, todayTotal: todayTotalSeconds };
+    }
     return { error: e.response?.data?.message || e.message };
   }
 }

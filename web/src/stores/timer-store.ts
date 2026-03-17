@@ -56,10 +56,13 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   },
 
   stopTimer: async () => {
+    // Capture current displayed total before stopping (local fallback)
+    const localTotal = get().elapsedSeconds;
     try {
       const res = await api.post('/timer/stop');
       get().stopTicking();
-      const todayTotal = res.data.today_total || get().elapsedSeconds;
+      // Use server today_total if > 0, otherwise keep the locally computed total
+      const todayTotal = (res.data.today_total > 0) ? res.data.today_total : localTotal;
       set({
         isRunning: false,
         entryId: null,
