@@ -59,19 +59,30 @@ class TimerController extends Controller
     }
 
     // TIME-04: Get status — current day = user's timezone (today_total is that day's total). Optional ?project_id= for project scope.
+    // Response must never be cached so elapsed_seconds and today_total stay live.
     public function status(Request $request): JsonResponse
     {
         $projectId = $request->query('project_id');
-        $status = $this->timerService->status($projectId ?: null);
-        return response()->json($status);
+        $projectId = is_string($projectId) ? trim($projectId) : $projectId;
+        $projectId = $projectId === '' ? null : $projectId;
+        $status = $this->timerService->status($projectId);
+        return response()->json($status)
+            ->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+            ->header('Pragma', 'no-cache')
+            ->header('Expires', '0');
     }
 
-    // Today's total (optionally for a specific project)
+    // Today's total (optionally for a specific project) — never cached so value stays live.
     public function todayTotal(Request $request): JsonResponse
     {
         $projectId = $request->query('project_id');
-        $total = $this->timerService->todayTotal($projectId ?: null);
-        return response()->json(['today_total' => $total]);
+        $projectId = is_string($projectId) ? trim($projectId) : $projectId;
+        $projectId = $projectId === '' ? null : $projectId;
+        $total = $this->timerService->todayTotal($projectId);
+        return response()->json(['today_total' => $total])
+            ->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+            ->header('Pragma', 'no-cache')
+            ->header('Expires', '0');
     }
 
     // TIME-05: Report idle time (from desktop agent)
