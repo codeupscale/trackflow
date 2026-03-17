@@ -41,15 +41,19 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   startTimer: async (projectId?: string, taskId?: string) => {
     try {
       const res = await api.post('/timer/start', { project_id: projectId, task_id: taskId });
-      const serverBase = res.data.today_total || 0;
-      const base = serverBase > 0 ? serverBase : get().todayTotalBase;
+      const serverTodayTotal = res.data.today_total || 0;
+      const startedAt = res.data.entry?.started_at;
+      const currentElapsed = startedAt
+        ? Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000)
+        : 0;
+      const completedOnlyBase = Math.max(0, serverTodayTotal - currentElapsed);
       set({
         isRunning: true,
         entryId: res.data.entry.id,
         projectId: res.data.entry.project_id,
         startedAt: res.data.entry.started_at,
-        elapsedSeconds: base,
-        todayTotalBase: base,
+        elapsedSeconds: serverTodayTotal,
+        todayTotalBase: completedOnlyBase,
       });
       get().startTicking();
       // Refresh display for the project we just started (project-scoped total)
