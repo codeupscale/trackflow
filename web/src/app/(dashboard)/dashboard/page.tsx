@@ -148,7 +148,7 @@ export default function DashboardPage() {
         stats: {
           total_online: onlineUserIds.size,
           today_hours: totalSeconds / 3600,
-          active_projects: 0, // Not in API response
+          active_projects: typeof raw.active_projects === 'number' ? raw.active_projects : 0,
           total_members: team.length,
         },
         team,
