@@ -31,6 +31,8 @@ export function TimerWidget() {
     startTimer,
     stopTimer,
     fetchStatus,
+    startPolling,
+    stopPolling,
   } = useTimerStore();
 
   const selectedRef = useRef<string | null>(null);
@@ -45,8 +47,11 @@ export function TimerWidget() {
   });
 
   useEffect(() => {
+    // Fetch initial status and start polling for cross-device sync
     fetchStatus().catch(() => {});
-  }, [fetchStatus]);
+    startPolling();
+    return () => stopPolling();
+  }, [fetchStatus, startPolling, stopPolling]);
 
   useEffect(() => {
     if (projectId) {
@@ -65,6 +70,8 @@ export function TimerWidget() {
         toast.success('Timer started');
       }
     } catch {
+      // Even if we got an error, re-sync with server to get accurate state
+      await fetchStatus().catch(() => {});
       toast.error(isRunning ? 'Failed to stop timer' : 'Failed to start timer');
     } finally {
       setIsLoading(false);

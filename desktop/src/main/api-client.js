@@ -63,9 +63,14 @@ class ApiClient {
   }
 
   async uploadScreenshot(formData) {
+    // Use FormData's own headers (includes correct boundary for multipart)
     const res = await this.client.post('/screenshots', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+      headers: {
+        ...formData.getHeaders(),
+      },
       timeout: 60000,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
     });
     return res.data;
   }
