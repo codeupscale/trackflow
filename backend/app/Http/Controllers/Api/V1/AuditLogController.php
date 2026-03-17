@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
+use App\Support\TimezoneAwareDateRange;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -32,11 +33,14 @@ class AuditLogController extends Controller
         if ($request->filled('resource_type')) {
             $query->where('resource_type', $request->resource_type);
         }
-        if ($request->filled('date_from')) {
-            $query->where('created_at', '>=', $request->date_from);
-        }
-        if ($request->filled('date_to')) {
-            $query->where('created_at', '<=', $request->date_to);
+        if ($request->filled('date_from') && $request->filled('date_to')) {
+            $tz = $request->user()->getTimezoneForDates();
+            [$dateFromUtc, $dateToUtc] = TimezoneAwareDateRange::toUtcBounds(
+                $request->date_from,
+                $request->date_to,
+                $tz
+            );
+            $query->where('created_at', '>=', $dateFromUtc)->where('created_at', '<=', $dateToUtc);
         }
 
         $logs = $query->paginate(min((int) $request->input('per_page', 50), 100));

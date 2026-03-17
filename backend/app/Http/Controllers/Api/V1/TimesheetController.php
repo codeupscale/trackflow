@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\TimeEntry;
 use App\Models\Timesheet;
+use App\Support\TimezoneAwareDateRange;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -19,10 +20,16 @@ class TimesheetController extends Controller
         ]);
 
         $user = $request->user();
+        $tz = $user->getTimezoneForDates();
+        [$dateFromUtc, $dateToUtc] = TimezoneAwareDateRange::toUtcBounds(
+            $request->period_start,
+            $request->period_end,
+            $tz
+        );
 
         $totalSeconds = TimeEntry::where('user_id', $user->id)
-            ->where('started_at', '>=', $request->period_start . ' 00:00:00')
-            ->where('started_at', '<=', $request->period_end . ' 23:59:59')
+            ->where('started_at', '>=', $dateFromUtc)
+            ->where('started_at', '<=', $dateToUtc)
             ->whereNotNull('ended_at')
             ->sum('duration_seconds');
 

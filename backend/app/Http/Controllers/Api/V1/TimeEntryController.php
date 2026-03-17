@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\TimeEntry;
+use App\Support\TimezoneAwareDateRange;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -27,11 +28,14 @@ class TimeEntryController extends Controller
         if ($request->has('project_id')) {
             $query->where('project_id', $request->project_id);
         }
-        if ($request->has('date_from')) {
-            $query->where('started_at', '>=', $request->date_from);
-        }
-        if ($request->has('date_to')) {
-            $query->where('started_at', '<=', $request->date_to);
+        if ($request->has('date_from') && $request->has('date_to')) {
+            $tz = $request->user()->getTimezoneForDates();
+            [$dateFromUtc, $dateToUtc] = TimezoneAwareDateRange::toUtcBounds(
+                $request->date_from,
+                $request->date_to,
+                $tz
+            );
+            $query->where('started_at', '>=', $dateFromUtc)->where('started_at', '<=', $dateToUtc);
         }
         if ($request->has('type')) {
             $query->where('type', $request->type);

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\Screenshot;
 use App\Jobs\ProcessScreenshotJob;
+use App\Support\TimezoneAwareDateRange;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -87,11 +88,14 @@ class ScreenshotController extends Controller
             $query->where('user_id', $request->user_id);
         }
 
-        if ($request->has('date_from')) {
-            $query->where('captured_at', '>=', $request->date_from);
-        }
-        if ($request->has('date_to')) {
-            $query->where('captured_at', '<=', $request->date_to . ' 23:59:59');
+        if ($request->has('date_from') && $request->has('date_to')) {
+            $tz = $request->user()->getTimezoneForDates();
+            [$dateFromUtc, $dateToUtc] = TimezoneAwareDateRange::toUtcBounds(
+                $request->date_from,
+                $request->date_to,
+                $tz
+            );
+            $query->where('captured_at', '>=', $dateFromUtc)->where('captured_at', '<=', $dateToUtc);
         }
         if ($request->has('time_entry_id')) {
             $query->where('time_entry_id', $request->time_entry_id);

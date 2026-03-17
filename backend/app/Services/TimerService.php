@@ -6,6 +6,7 @@ use App\Events\TimerStarted;
 use App\Events\TimerStopped;
 use App\Models\TimeEntry;
 use App\Models\ActivityLog;
+use App\Support\TimezoneAwareDateRange;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
@@ -112,15 +113,19 @@ class TimerService
 
     /**
      * Get timer status. When $projectId is provided, today_total is scoped to that project.
+     * "Today" is the user's current calendar day in their timezone (stored as UTC in DB).
      */
     public function status(?string $projectId = null): array
     {
         $user = Auth::user();
         $redisKey = "timer:{$user->id}";
 
+        [$todayStartUtc, $todayEndUtc] = TimezoneAwareDateRange::userTodayUtcBounds($user->getTimezoneForDates());
+
         $todayQuery = TimeEntry::withoutGlobalScopes()
             ->where('user_id', $user->id)
-            ->whereDate('started_at', now()->toDateString())
+            ->where('started_at', '>=', $todayStartUtc)
+            ->where('started_at', '<=', $todayEndUtc)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked');
 
@@ -155,17 +160,18 @@ class TimerService
     }
 
     /**
-     * Get today's total tracked seconds for the current user.
+     * Get today's total tracked seconds for the current user (user's calendar day in their timezone).
      * Optionally filter by project_id. If timer is running for that project, includes current elapsed.
      */
     public function todayTotal(?string $projectId = null): int
     {
         $user = Auth::user();
-        $today = now()->toDateString();
+        [$todayStartUtc, $todayEndUtc] = TimezoneAwareDateRange::userTodayUtcBounds($user->getTimezoneForDates());
 
         $query = TimeEntry::withoutGlobalScopes()
             ->where('user_id', $user->id)
-            ->whereDate('started_at', $today)
+            ->where('started_at', '>=', $todayStartUtc)
+            ->where('started_at', '<=', $todayEndUtc)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked');
 

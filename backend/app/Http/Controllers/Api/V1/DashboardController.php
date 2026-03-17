@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\TimeEntry;
 use App\Models\User;
+use App\Support\TimezoneAwareDateRange;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -25,13 +26,20 @@ class DashboardController extends Controller
             return $this->employeeDashboard($user, $request);
         }
 
-        // Date range: default to current day (00:00–23:59) so after midnight we show new day's data
-        $dateFrom = $request->has('date_from')
-            ? Carbon::parse($request->date_from)->startOfDay()->toDateString()
-            : today()->toDateString();
-        $dateTo = $request->has('date_to')
-            ? Carbon::parse($request->date_to)->endOfDay()->format('Y-m-d H:i:s')
-            : today()->endOfDay()->format('Y-m-d H:i:s');
+        $tz = $user->getTimezoneForDates();
+        if ($request->has('date_from') && $request->has('date_to')) {
+            [$dateFrom, $dateTo] = TimezoneAwareDateRange::toUtcBounds(
+                $request->date_from,
+                $request->date_to,
+                $tz
+            );
+            $responseDateFrom = $request->date_from;
+            $responseDateTo = $request->date_to;
+        } else {
+            [$dateFrom, $dateTo] = TimezoneAwareDateRange::userTodayUtcBounds($tz);
+            $responseDateFrom = Carbon::now($tz)->toDateString();
+            $responseDateTo = $responseDateFrom;
+        }
 
         // Managers/admins/owners see the full team dashboard
         $users = User::withoutGlobalScopes()
@@ -52,7 +60,7 @@ class DashboardController extends Controller
             }
         }
 
-        // Time entries in the selected date range (current day by default; resets after 12:00 AM)
+        // Time entries strictly within the range: started_at >= start of day AND started_at <= end of day
         $rangeEntries = TimeEntry::withoutGlobalScopes()
             ->where('organization_id', $orgId)
             ->where('started_at', '>=', $dateFrom)
@@ -77,8 +85,8 @@ class DashboardController extends Controller
             'online_users' => $onlineUsers,
             'team_summary' => $teamSummary,
             'total_online' => count($onlineUsers),
-            'date_from' => $dateFrom,
-            'date_to' => substr($dateTo, 0, 10),
+            'date_from' => $responseDateFrom,
+            'date_to' => $responseDateTo,
         ]);
     }
 
@@ -94,12 +102,20 @@ class DashboardController extends Controller
             ];
         }
 
-        $dateFrom = $request->has('date_from')
-            ? Carbon::parse($request->date_from)->startOfDay()->toDateString()
-            : today()->toDateString();
-        $dateTo = $request->has('date_to')
-            ? Carbon::parse($request->date_to)->endOfDay()->format('Y-m-d H:i:s')
-            : today()->endOfDay()->format('Y-m-d H:i:s');
+        $tz = $user->getTimezoneForDates();
+        if ($request->has('date_from') && $request->has('date_to')) {
+            [$dateFrom, $dateTo] = TimezoneAwareDateRange::toUtcBounds(
+                $request->date_from,
+                $request->date_to,
+                $tz
+            );
+            $responseDateFrom = $request->date_from;
+            $responseDateTo = $request->date_to;
+        } else {
+            [$dateFrom, $dateTo] = TimezoneAwareDateRange::userTodayUtcBounds($tz);
+            $responseDateFrom = Carbon::now($tz)->toDateString();
+            $responseDateTo = $responseDateFrom;
+        }
 
         $rangeSeconds = TimeEntry::withoutGlobalScopes()
             ->where('user_id', $user->id)
@@ -119,8 +135,8 @@ class DashboardController extends Controller
             'timer' => $timer,
             'today_seconds' => (int) $rangeSeconds,
             'week_seconds' => (int) $weekSeconds,
-            'date_from' => $dateFrom,
-            'date_to' => substr($dateTo, 0, 10),
+            'date_from' => $responseDateFrom,
+            'date_to' => $responseDateTo,
         ]);
     }
 }
