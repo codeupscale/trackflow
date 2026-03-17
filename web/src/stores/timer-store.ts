@@ -127,13 +127,16 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
       if (res.data.running) {
         const currentElapsed = res.data.elapsed_seconds || 0;
         const base = Math.max(0, todayTotal - currentElapsed);
+        const runningProjectId = res.data.entry?.project_id ?? null;
         set({
           isRunning: true,
           entryId: res.data.entry?.id,
-          projectId: res.data.entry?.project_id,
+          projectId: runningProjectId,
           startedAt: res.data.entry?.started_at,
           elapsedSeconds: todayTotal,
           todayTotalBase: base,
+          // Keep dropdown in sync when timer was started elsewhere (e.g. desktop)
+          selectedProjectId: get().selectedProjectId ?? runningProjectId,
         });
         if (!wasRunning || !get().intervalId) {
           get().startTicking();

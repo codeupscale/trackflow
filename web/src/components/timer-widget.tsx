@@ -49,13 +49,22 @@ export function TimerWidget() {
 
   // When timer is running, show running project in dropdown; otherwise show selected project
   const displayProjectId = isRunning ? projectId : selectedProjectId;
+  const displayProject = projects?.find((p) => p.id === displayProjectId);
 
-  // Fetch status on mount and when project changes so header shows total time for selected project (or all)
+  // Default to first project so portal shows per-project time (not global sum) on load
   useEffect(() => {
-    fetchStatus(selectedProjectId ?? null).catch(() => {});
+    if (projects?.length && selectedProjectId === null && !isRunning) {
+      setSelectedProjectId(projects[0].id);
+    }
+  }, [projects, selectedProjectId, isRunning, setSelectedProjectId]);
+
+  // Fetch status on mount and when project changes — pass project_id so time is per-project (never global on load)
+  const projectIdForFetch = selectedProjectId ?? projects?.[0]?.id ?? null;
+  useEffect(() => {
+    fetchStatus(projectIdForFetch).catch(() => {});
     startPolling();
     return () => stopPolling();
-  }, [fetchStatus, selectedProjectId, startPolling, stopPolling]);
+  }, [fetchStatus, projectIdForFetch, startPolling, stopPolling]);
 
   // When project changes, fetch status for that project so header shows its total
   const handleProjectChange = (val: string | null) => {
@@ -90,8 +99,19 @@ export function TimerWidget() {
         onValueChange={handleProjectChange}
         disabled={isRunning}
       >
-        <SelectTrigger className="w-[160px] h-8 bg-slate-800/50 border-slate-700 text-sm">
-          <SelectValue placeholder="Select project" />
+        <SelectTrigger className="w-[180px] min-w-[140px] h-8 bg-slate-800/50 border-slate-700 text-sm">
+          {/* Always show project name (never raw ID); fallback when value not in list (e.g. still loading) */}
+          {displayProject ? (
+            <div className="flex items-center gap-2 truncate">
+              <div
+                className="h-2 w-2 rounded-full shrink-0"
+                style={{ backgroundColor: displayProject.color || '#6366f1' }}
+              />
+              <span className="truncate">{displayProject.name}</span>
+            </div>
+          ) : (
+            <span className="text-slate-500">Select project</span>
+          )}
         </SelectTrigger>
         <SelectContent>
           {projects?.map((project) => (
