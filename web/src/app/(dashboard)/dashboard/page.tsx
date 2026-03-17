@@ -59,7 +59,10 @@ export default function DashboardPage() {
       const raw = res.data;
 
       // Transform API response { online_users, team_summary } into our expected shape
-      const onlineUserIds = new Set((raw.online_users || []).map((u: { id: string }) => u.id));
+      // online_users is [{ user: { id, ... }, timer, elapsed_seconds }]
+      const onlineUserIds = new Set(
+        (raw.online_users || []).map((u: { user: { id: string } }) => u.user.id)
+      );
       const teamSummary = raw.team_summary || [];
 
       const team: TeamMember[] = teamSummary.map((entry: { user: { id: string; name: string; email: string; avatar_url: string | null }; today_seconds: number; activity_score: number }) => ({
