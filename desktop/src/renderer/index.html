@@ -251,7 +251,10 @@
         const result = await window.trackflow.startTimer(projectId);
         if (result.success) {
           currentStartedAt = result.entry?.started_at || new Date().toISOString();
-          // todayTotalBase stays as-is (completed entries), timer adds on top
+          // todayTotalBase keeps accumulated completed time
+          if (result.todayTotal > 0) {
+            todayTotalBase = result.todayTotal;
+          }
           elapsedSeconds = todayTotalBase;
           updateDisplay(true);
           startTicking();
@@ -266,29 +269,27 @@
     });
 
     stopBtn.addEventListener('click', async () => {
-      stopBtn.disabled = true;
-      stopBtn.textContent = 'Stopping...';
+      // Update UI IMMEDIATELY — don't wait for network
+      stopTicking();
+      const stoppedTotal = elapsedSeconds; // Capture current displayed time
+      currentStartedAt = null;
+      todayTotalBase = stoppedTotal;
+      elapsedSeconds = stoppedTotal;
+      updateDisplay(false);
+
+      // Then fire the API call in background
       try {
         const result = await window.trackflow.stopTimer();
-        stopTicking();
-        currentStartedAt = null;
-        // Show today's total from server (includes the entry we just stopped)
-        todayTotalBase = result.todayTotal || elapsedSeconds;
-        elapsedSeconds = todayTotalBase;
-        updateDisplay(false);
-        if (result.error) {
-          showNotification(result.error);
+        // Update with server value if different
+        if (result.todayTotal > 0 && result.todayTotal !== stoppedTotal) {
+          todayTotalBase = result.todayTotal;
+          elapsedSeconds = result.todayTotal;
+          updateDisplay(false);
         }
       } catch (e) {
-        stopTicking();
-        currentStartedAt = null;
-        // Keep current elapsed as today's total on error
-        todayTotalBase = elapsedSeconds;
-        updateDisplay(false);
-        showNotification('Failed to stop timer');
+        // UI already updated — just show error notification
+        showNotification('Failed to stop timer on server');
       }
-      stopBtn.disabled = false;
-      stopBtn.textContent = 'Stop';
     });
 
     // Both logout buttons do the same thing
