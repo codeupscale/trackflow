@@ -43,6 +43,7 @@ Route::prefix('v1')->group(function () {
         Route::post('auth/refresh', [AuthController::class, 'refresh']);
         Route::post('auth/logout', [AuthController::class, 'logout']);
         Route::get('auth/me', [AuthController::class, 'me']);
+        Route::patch('auth/me', [AuthController::class, 'updateProfile']);
 
         // Invitations (owner/admin only)
         Route::post('invitations', [InvitationController::class, 'store'])

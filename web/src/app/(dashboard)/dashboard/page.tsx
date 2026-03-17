@@ -243,7 +243,7 @@ export default function DashboardPage() {
             {rangeLabel}
             <ChevronDown className="h-4 w-4 opacity-70" />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56 border-slate-800 bg-slate-900">
+          <DropdownMenuContent align="end" className="w-80 min-w-[320px] border-slate-800 bg-slate-900">
             <DropdownMenuItem onClick={() => applyPreset('today')}>
               Today
             </DropdownMenuItem>
@@ -260,14 +260,14 @@ export default function DashboardPage() {
                   type="date"
                   value={dateFrom}
                   onChange={(e) => setDateFrom(e.target.value)}
-                  className="h-8 text-sm bg-slate-800 border-slate-700"
+                  className="h-8 min-w-[140px] flex-1 text-sm bg-slate-800 border-slate-700"
                 />
-                <span className="text-slate-500">–</span>
+                <span className="text-slate-500 shrink-0">–</span>
                 <Input
                   type="date"
                   value={dateTo}
                   onChange={(e) => setDateTo(e.target.value)}
-                  className="h-8 text-sm bg-slate-800 border-slate-700"
+                  className="h-8 min-w-[140px] flex-1 text-sm bg-slate-800 border-slate-700"
                 />
               </div>
               <Button
