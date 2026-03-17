@@ -50,25 +50,33 @@ class ScreenshotService {
         thumbnailSize: { width: 1920, height: 1080 },
       });
 
-      for (const source of sources) {
-        const image = source.thumbnail;
-        if (image.isEmpty()) continue;
+      if (!sources || sources.length === 0) {
+        console.warn('No screen sources available for screenshot');
+        return;
+      }
 
-        let buffer = image.toJPEG(80);
+      // Only capture the primary screen (first source)
+      const source = sources[0];
+      const image = source.thumbnail;
+      if (image.isEmpty()) return;
 
-        // AGENT-09: Blur if configured
-        if (this.config.blur_screenshots) {
-          try {
-            const sharp = require('sharp');
-            buffer = await sharp(buffer)
-              .blur(15)
-              .jpeg({ quality: 80 })
-              .toBuffer();
-          } catch (e) {
-            console.warn('Sharp not available for blurring:', e.message);
-          }
+      let buffer = image.toJPEG(80);
+
+      // AGENT-09: Blur if configured
+      if (this.config.blur_screenshots) {
+        try {
+          const sharp = require('sharp');
+          buffer = await sharp(buffer)
+            .blur(15)
+            .jpeg({ quality: 80 })
+            .toBuffer();
+        } catch (e) {
+          console.warn('Sharp not available for blurring:', e.message);
         }
+      }
 
+      // Re-check entryId in case timer was stopped during capture
+      if (this.currentEntryId) {
         await this.upload(buffer);
       }
     } catch (e) {

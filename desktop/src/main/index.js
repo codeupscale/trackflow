@@ -104,8 +104,12 @@ async function initializeApp() {
       currentEntry = status.entry;
       activityMonitor.start();
       screenshotService.start(currentEntry.id);
+      updateTrayIcon(true);
     }
   } catch {}
+
+  // Start periodic sync between desktop and server
+  startTimerSync();
 }
 
 function createTray() {
@@ -205,13 +209,36 @@ function setupIPC() {
   ipcMain.removeHandler('logout');
   ipcMain.removeHandler('open-dashboard');
 
-  ipcMain.handle('get-timer-state', () => ({
-    isRunning: isTimerRunning,
-    entry: currentEntry,
-    elapsed: currentEntry
-      ? Math.floor((Date.now() - new Date(currentEntry.started_at).getTime()) / 1000)
-      : 0,
-  }));
+  ipcMain.handle('get-timer-state', async () => {
+    // Sync with server to get latest state (handles start/stop from web dashboard)
+    if (apiClient) {
+      try {
+        const status = await apiClient.getTimerStatus();
+        if (status.running && !isTimerRunning) {
+          isTimerRunning = true;
+          currentEntry = status.entry;
+          activityMonitor?.start();
+          screenshotService?.start(currentEntry.id);
+          updateTrayIcon(true);
+          updateTrayMenu();
+        } else if (!status.running && isTimerRunning) {
+          isTimerRunning = false;
+          currentEntry = null;
+          activityMonitor?.stop();
+          screenshotService?.stop();
+          updateTrayIcon(false);
+          updateTrayMenu();
+        }
+      } catch {}
+    }
+    return {
+      isRunning: isTimerRunning,
+      entry: currentEntry,
+      elapsed: currentEntry
+        ? Math.floor((Date.now() - new Date(currentEntry.started_at).getTime()) / 1000)
+        : 0,
+    };
+  });
 
   ipcMain.handle('start-timer', async (_, projectId) => {
     return await startTimer(projectId);
@@ -271,27 +298,68 @@ async function startTimer(projectId = null) {
     notifyPopup('timer-started', currentEntry);
     return { success: true, entry: currentEntry };
   } catch (e) {
+    const status = e.response?.status;
+
+    // 409 = timer already running on server — sync local state with server
+    if (status === 409) {
+      try {
+        // First stop the stale timer on server, then start fresh
+        await apiClient.stopTimer();
+      } catch {}
+
+      // Now try starting again
+      try {
+        const retryResult = await apiClient.startTimer(projectId);
+        currentEntry = retryResult.entry;
+        isTimerRunning = true;
+        activityMonitor.start();
+        screenshotService.start(currentEntry.id);
+        updateTrayIcon(true);
+        updateTrayMenu();
+        notifyPopup('timer-started', currentEntry);
+        return { success: true, entry: currentEntry };
+      } catch (retryErr) {
+        return { error: retryErr.response?.data?.message || retryErr.message };
+      }
+    }
+
     return { error: e.response?.data?.message || e.message };
   }
 }
 
 async function stopTimer() {
-  if (!isTimerRunning) return { error: 'Timer not running' };
+  // Always attempt to stop, even if local state says not running
+  // This handles cases where server has a running timer but local state is out of sync
+  const wasRunning = isTimerRunning;
 
   try {
     const result = await apiClient.stopTimer();
     isTimerRunning = false;
     currentEntry = null;
 
-    activityMonitor.stop();
-    screenshotService.stop();
+    activityMonitor?.stop();
+    screenshotService?.stop();
 
     updateTrayIcon(false);
     updateTrayMenu();
     notifyPopup('timer-stopped', result.entry);
     return { success: true, entry: result.entry };
   } catch (e) {
-    // Even if API fails, stop local services
+    const status = e.response?.status;
+
+    // 404 = timer already stopped on server — just reset local state
+    if (status === 404) {
+      isTimerRunning = false;
+      currentEntry = null;
+      activityMonitor?.stop();
+      screenshotService?.stop();
+      updateTrayIcon(false);
+      updateTrayMenu();
+      notifyPopup('timer-stopped', null);
+      return { success: true, entry: null };
+    }
+
+    // For other errors, still stop local services
     isTimerRunning = false;
     currentEntry = null;
     activityMonitor?.stop();
@@ -301,6 +369,36 @@ async function stopTimer() {
     notifyPopup('timer-stopped', null);
     return { error: e.response?.data?.message || e.message };
   }
+}
+
+// Periodically sync timer state with server to stay in sync with web dashboard
+function startTimerSync() {
+  // Sync every 30 seconds
+  setInterval(async () => {
+    if (!apiClient) return;
+    try {
+      const status = await apiClient.getTimerStatus();
+      if (status.running && !isTimerRunning) {
+        // Server has running timer but we don't — sync up
+        isTimerRunning = true;
+        currentEntry = status.entry;
+        activityMonitor?.start();
+        screenshotService?.start(currentEntry.id);
+        updateTrayIcon(true);
+        updateTrayMenu();
+        notifyPopup('timer-started', currentEntry);
+      } else if (!status.running && isTimerRunning) {
+        // Server has no running timer but we think one is running — sync down
+        isTimerRunning = false;
+        currentEntry = null;
+        activityMonitor?.stop();
+        screenshotService?.stop();
+        updateTrayIcon(false);
+        updateTrayMenu();
+        notifyPopup('timer-stopped', null);
+      }
+    } catch {}
+  }, 30000);
 }
 
 function updateTrayIcon(running) {

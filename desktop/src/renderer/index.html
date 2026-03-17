@@ -121,6 +121,15 @@
     let timerInterval = null;
     let elapsedSeconds = 0;
 
+    function showNotification(msg) {
+      // Show a brief error notification in the UI
+      const el = document.createElement('div');
+      el.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:6px 16px;border-radius:6px;font-size:12px;z-index:999;opacity:1;transition:opacity 0.3s;';
+      el.textContent = msg;
+      document.body.appendChild(el);
+      setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 3000);
+    }
+
     const timerDisplay = document.getElementById('timerDisplay');
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
@@ -195,11 +204,17 @@
       startBtn.disabled = true;
       startBtn.textContent = 'Starting...';
       const projectId = projectSelect.value || null;
-      const result = await window.trackflow.startTimer(projectId);
-      if (result.success) {
-        elapsedSeconds = 0;
-        updateDisplay(true);
-        startTicking();
+      try {
+        const result = await window.trackflow.startTimer(projectId);
+        if (result.success) {
+          elapsedSeconds = 0;
+          updateDisplay(true);
+          startTicking();
+        } else if (result.error) {
+          showNotification(result.error);
+        }
+      } catch (e) {
+        showNotification('Failed to start timer');
       }
       startBtn.disabled = false;
       startBtn.textContent = 'Start';
@@ -208,11 +223,22 @@
     stopBtn.addEventListener('click', async () => {
       stopBtn.disabled = true;
       stopBtn.textContent = 'Stopping...';
-      await window.trackflow.stopTimer();
-      // Always stop UI (timer is stopped locally even if API fails)
-      stopTicking();
-      elapsedSeconds = 0;
-      updateDisplay(false);
+      try {
+        const result = await window.trackflow.stopTimer();
+        // Always reset UI — timer is stopped regardless
+        stopTicking();
+        elapsedSeconds = 0;
+        updateDisplay(false);
+        if (result.error) {
+          showNotification(result.error);
+        }
+      } catch (e) {
+        // Still reset UI even on exception
+        stopTicking();
+        elapsedSeconds = 0;
+        updateDisplay(false);
+        showNotification('Failed to stop timer');
+      }
       stopBtn.disabled = false;
       stopBtn.textContent = 'Stop';
     });
