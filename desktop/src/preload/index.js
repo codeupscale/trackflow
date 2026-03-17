@@ -12,4 +12,5 @@ contextBridge.exposeInMainWorld('trackflow', {
 
   onTimerStarted: (callback) => ipcRenderer.on('timer-started', (_, data) => callback(data)),
   onTimerStopped: (callback) => ipcRenderer.on('timer-stopped', (_, data) => callback(data)),
+  onSyncTimer: (callback) => ipcRenderer.on('sync-timer', () => callback()),
 });
