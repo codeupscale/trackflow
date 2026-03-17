@@ -132,8 +132,10 @@ class ApiClient {
     return res.data;
   }
 
-  async getTimerStatus() {
-    const res = await this.client.get('/timer/status');
+  /** Get timer status. Optional projectId scopes today_total to that project (for per-project display). */
+  async getTimerStatus(projectId = null) {
+    const params = projectId ? { project_id: projectId } : {};
+    const res = await this.client.get('/timer/status', { params });
     return res.data;
   }
 

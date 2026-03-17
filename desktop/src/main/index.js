@@ -20,8 +20,9 @@ let idleDetector = null;
 let offlineQueue = null;
 let isTimerRunning = false;
 let currentEntry = null;
-let todayTotalSeconds = 0; // Today's total (completed entries only, excludes current running)
-let todayTotalWithCurrent = 0; // Today's total including current running entry
+// Two totals for multi-project clarity (see desktop/docs/TIMER-TOTALS-DESIGN.md)
+let todayTotalGlobal = 0;       // All projects today (tray when stopped)
+let todayTotalCurrentProject = 0; // Current entry's project today, completed only (tray when running)
 let config = {};
 let loginHandlerRegistered = false;
 let cachedProjects = [];
@@ -148,23 +149,32 @@ async function initializeApp() {
   // Flush offline queue
   offlineQueue.flush(apiClient);
 
-  // Check timer status on server (sync state)
+  // Check timer status on server (sync state): global total + per-project when running
   try {
     const status = await apiClient.getTimerStatus();
-    todayTotalWithCurrent = status.today_total || 0;
+    const globalTotal = status.today_total ?? 0;
+    const elapsed = status.elapsed_seconds ?? 0;
     if (status.running) {
-      // When running, today_total includes current elapsed — subtract to get completed-only base
-      todayTotalSeconds = Math.max(0, todayTotalWithCurrent - (status.elapsed_seconds || 0));
+      todayTotalGlobal = Math.max(0, globalTotal - elapsed);
       isTimerRunning = true;
       currentEntry = status.entry;
+      try {
+        todayTotalCurrentProject = await apiClient.getTodayTotal(currentEntry?.project_id ?? null);
+        if (currentEntry?.project_id) {
+          todayTotalCurrentProject = Math.max(0, todayTotalCurrentProject - elapsed);
+        }
+      } catch {
+        todayTotalCurrentProject = Math.max(0, globalTotal - elapsed);
+      }
       activityMonitor.start();
       screenshotService.start(currentEntry.id);
       idleDetector.start();
       updateTrayIcon(true);
       startTrayTimer();
     } else {
-      todayTotalSeconds = todayTotalWithCurrent;
-      updateTrayTitle(); // Show today's total even when stopped
+      todayTotalGlobal = globalTotal;
+      todayTotalCurrentProject = 0;
+      updateTrayTitle();
     }
   } catch {}
 
@@ -364,27 +374,35 @@ function setupIPC() {
   ipcMain.removeHandler('open-dashboard');
 
   ipcMain.handle('get-timer-state', async (_, projectId) => {
-    // Fetch fresh status so popup shows correct running state and today's total
+    // Fetch fresh status (global) so running state and tray totals stay correct
     if (apiClient) {
       try {
         const status = await apiClient.getTimerStatus();
-        todayTotalWithCurrent = status.today_total || 0;
+        const globalTotal = status.today_total ?? 0;
+        const elapsed = status.elapsed_seconds ?? 0;
         if (status.running) {
-          todayTotalSeconds = Math.max(0, todayTotalWithCurrent - (status.elapsed_seconds || 0));
+          todayTotalGlobal = Math.max(0, globalTotal - elapsed);
           isTimerRunning = true;
           currentEntry = status.entry;
+          try {
+            const withElapsed = await apiClient.getTodayTotal(currentEntry?.project_id ?? null);
+            todayTotalCurrentProject = Math.max(0, withElapsed - elapsed);
+          } catch {
+            todayTotalCurrentProject = todayTotalGlobal;
+          }
         } else {
-          todayTotalSeconds = todayTotalWithCurrent;
+          todayTotalGlobal = globalTotal;
+          todayTotalCurrentProject = 0;
           isTimerRunning = false;
           currentEntry = null;
         }
       } catch {}
     }
-    // Current day total (00:00–23:59 server time), per project — same logic as web
+    // Popup display: per-project total (selected when stopped, current when running)
     const projectIdForTotal = isTimerRunning && currentEntry?.project_id
       ? currentEntry.project_id
       : projectId || null;
-    let todayTotalForDisplay = todayTotalSeconds;
+    let todayTotalForDisplay = 0;
     if (apiClient) {
       try {
         todayTotalForDisplay = await apiClient.getTodayTotal(projectIdForTotal);
@@ -475,10 +493,11 @@ async function startTimer(projectId = null) {
     const result = await apiClient.startTimer(projectId);
     currentEntry = result.entry;
     isTimerRunning = true;
-
-    // Use server's today_total (completed entries) as the base
-    if (result.today_total > 0) {
-      todayTotalSeconds = result.today_total;
+    todayTotalCurrentProject = result.today_total ?? 0;
+    try {
+      todayTotalGlobal = await apiClient.getTodayTotal(null);
+    } catch {
+      todayTotalGlobal = todayTotalCurrentProject;
     }
 
     activityMonitor.start();
@@ -488,11 +507,7 @@ async function startTimer(projectId = null) {
 
     updateTrayIcon(true);
     updateTrayMenu();
-    // Per-project today total so popup shows correct value when stopped/restarted
-    let todayTotalForPopup = todayTotalSeconds;
-    try {
-      todayTotalForPopup = await apiClient.getTodayTotal(projectId || currentEntry?.project_id);
-    } catch {}
+    const todayTotalForPopup = todayTotalCurrentProject;
     notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup });
     return { success: true, entry: currentEntry, todayTotal: todayTotalForPopup };
   } catch (e) {
@@ -508,21 +523,18 @@ async function startTimer(projectId = null) {
         const retryResult = await apiClient.startTimer(projectId);
         currentEntry = retryResult.entry;
         isTimerRunning = true;
-        if (retryResult.today_total > 0) {
-          todayTotalSeconds = retryResult.today_total;
-        }
+        todayTotalCurrentProject = retryResult.today_total ?? 0;
+        try {
+          todayTotalGlobal = await apiClient.getTodayTotal(null);
+        } catch {}
         activityMonitor.start();
         screenshotService.start(currentEntry.id);
         idleDetector?.start();
         startTrayTimer();
         updateTrayIcon(true);
         updateTrayMenu();
-        let todayTotalForPopup = todayTotalSeconds;
-        try {
-          todayTotalForPopup = await apiClient.getTodayTotal(projectId || currentEntry?.project_id);
-        } catch {}
-        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup });
-        return { success: true, entry: currentEntry, todayTotal: todayTotalForPopup };
+        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
+        return { success: true, entry: currentEntry, todayTotal: todayTotalCurrentProject };
       } catch (retryErr) {
         return { error: retryErr.response?.data?.message || retryErr.message };
       }
@@ -533,82 +545,80 @@ async function startTimer(projectId = null) {
 }
 
 function stopTimer() {
-  // Capture current session elapsed and project BEFORE clearing state
   const sessionElapsed = currentEntry
     ? Math.max(0, Math.floor((Date.now() - new Date(currentEntry.started_at).getTime()) / 1000))
     : 0;
   const stoppedProjectId = currentEntry?.project_id || null;
-  // Local today total = completed entries base + this session
-  const localTodayTotal = todayTotalSeconds + sessionElapsed;
+  const localStoppedProjectTotal = todayTotalCurrentProject + sessionElapsed;
 
-  // Dismiss idle alert if open
   dismissIdleAlert();
 
-  // Reset local state immediately — no awaiting
   isTimerRunning = false;
   currentEntry = null;
-  todayTotalSeconds = localTodayTotal;
+  todayTotalCurrentProject = 0;
 
   activityMonitor?.stop();
   screenshotService?.stop();
   idleDetector?.stop();
   stopTrayTimer();
-  updateTrayTitle();
   updateTrayIcon(false);
 
-  // Notify popup immediately with local total
-  notifyPopup('timer-stopped', { entry: null, todayTotal: localTodayTotal });
+  notifyPopup('timer-stopped', { entry: null, todayTotal: localStoppedProjectTotal });
 
-  // Fire-and-forget API call — then notify with server's per-project today total
   apiClient.stopTimer().then(async (result) => {
-    if (result && result.today_total > 0) {
-      todayTotalSeconds = result.today_total;
-      updateTrayTitle();
-      let todayTotalForPopup = result.today_total;
-      try {
-        todayTotalForPopup = await apiClient.getTodayTotal(stoppedProjectId);
-      } catch {}
-      notifyPopup('timer-stopped', { entry: result.entry, todayTotal: todayTotalForPopup });
+    try {
+      todayTotalGlobal = await apiClient.getTodayTotal(null);
+    } catch {
+      if (result?.today_total != null) todayTotalGlobal = result.today_total;
     }
+    updateTrayTitle();
+    let todayTotalForPopup = result?.today_total ?? 0;
+    try {
+      todayTotalForPopup = await apiClient.getTodayTotal(stoppedProjectId);
+    } catch {}
+    notifyPopup('timer-stopped', { entry: result?.entry ?? null, todayTotal: todayTotalForPopup });
   }).catch(() => {});
 
-  // Return immediately with local state
-  return { success: true, entry: null, todayTotal: localTodayTotal };
+  return { success: true, entry: null, todayTotal: localStoppedProjectTotal };
 }
 
 // Periodically sync timer state with server to stay in sync with web dashboard
 function startTimerSync() {
-  // Clear any existing sync interval
-  if (timerSyncInterval) {
-    clearInterval(timerSyncInterval);
-  }
-  // Sync every 30 seconds
+  if (timerSyncInterval) clearInterval(timerSyncInterval);
   timerSyncInterval = setInterval(async () => {
     if (!apiClient) return;
     try {
       const status = await apiClient.getTimerStatus();
-      todayTotalWithCurrent = status.today_total || 0;
+      const globalTotal = status.today_total ?? 0;
+      const elapsed = status.elapsed_seconds ?? 0;
       if (status.running) {
-        todayTotalSeconds = Math.max(0, todayTotalWithCurrent - (status.elapsed_seconds || 0));
+        todayTotalGlobal = Math.max(0, globalTotal - elapsed);
+        try {
+          const withElapsed = await apiClient.getTodayTotal(status.entry?.project_id ?? null);
+          todayTotalCurrentProject = Math.max(0, withElapsed - elapsed);
+        } catch {
+          todayTotalCurrentProject = todayTotalGlobal;
+        }
       } else {
-        todayTotalSeconds = todayTotalWithCurrent;
+        todayTotalGlobal = globalTotal;
+        todayTotalCurrentProject = 0;
       }
 
       if (status.running && !isTimerRunning) {
-        // Server has running timer but we don't — sync up
         isTimerRunning = true;
         currentEntry = status.entry;
+        todayTotalCurrentProject = Math.max(0, (await apiClient.getTodayTotal(status.entry?.project_id ?? null).catch(() => 0)) - (status.elapsed_seconds ?? 0));
         activityMonitor?.start();
         screenshotService?.start(currentEntry.id);
         idleDetector?.start();
         startTrayTimer();
         updateTrayIcon(true);
         updateTrayMenu();
-        notifyPopup('timer-started', currentEntry);
+        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
       } else if (!status.running && isTimerRunning) {
-        // Server has no running timer but we think one is running — sync down
         isTimerRunning = false;
         currentEntry = null;
+        todayTotalCurrentProject = 0;
         activityMonitor?.stop();
         screenshotService?.stop();
         idleDetector?.stop();
@@ -617,7 +627,7 @@ function startTimerSync() {
         updateTrayTitle();
         updateTrayIcon(false);
         updateTrayMenu();
-        notifyPopup('timer-stopped', { entry: null, todayTotal: todayTotalSeconds });
+        notifyPopup('timer-stopped', { entry: null });
       }
     } catch {}
   }, 30000);
@@ -635,17 +645,17 @@ function updateTrayIcon(running) {
   tray.setToolTip(running ? 'TrackFlow - Timer Running' : 'TrackFlow');
 }
 
-// Show today's total time in the tray title (like Hubstaff's menu bar timer)
+// Tray: when stopped = all projects today; when running = current project today + elapsed
 function updateTrayTitle() {
   if (!tray) return;
-  if (todayTotalSeconds > 0) {
-    tray.setTitle(formatTimeShort(todayTotalSeconds));
+  const total = isTimerRunning ? todayTotalCurrentProject : todayTotalGlobal;
+  if (total > 0) {
+    tray.setTitle(formatTimeShort(total));
   } else {
     tray.setTitle('');
   }
 }
 
-// Tick tray title every second while timer is running (shows live today's total)
 function startTrayTimer() {
   stopTrayTimer();
   updateTrayTitle();
@@ -653,7 +663,7 @@ function startTrayTimer() {
     if (!isTimerRunning || !currentEntry) return;
     const currentElapsed = Math.floor((Date.now() - new Date(currentEntry.started_at).getTime()) / 1000);
     if (tray) {
-      tray.setTitle(formatTimeShort(todayTotalSeconds + currentElapsed));
+      tray.setTitle(formatTimeShort(todayTotalCurrentProject + currentElapsed));
     }
   }, 1000);
 }
