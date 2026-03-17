@@ -449,6 +449,11 @@ async function startTimer(projectId = null) {
     currentEntry = result.entry;
     isTimerRunning = true;
 
+    // Use server's today_total (completed entries) as the base
+    if (result.today_total > 0) {
+      todayTotalSeconds = result.today_total;
+    }
+
     activityMonitor.start();
     screenshotService.start(currentEntry.id);
     idleDetector?.start();
@@ -456,7 +461,7 @@ async function startTimer(projectId = null) {
 
     updateTrayIcon(true);
     updateTrayMenu();
-    notifyPopup('timer-started', currentEntry);
+    notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalSeconds });
     return { success: true, entry: currentEntry, todayTotal: todayTotalSeconds };
   } catch (e) {
     const status = e.response?.status;
@@ -464,22 +469,24 @@ async function startTimer(projectId = null) {
     // 409 = timer already running on server — sync local state with server
     if (status === 409) {
       try {
-        // First stop the stale timer on server, then start fresh
         await apiClient.stopTimer();
       } catch {}
 
-      // Now try starting again
       try {
         const retryResult = await apiClient.startTimer(projectId);
         currentEntry = retryResult.entry;
         isTimerRunning = true;
+        if (retryResult.today_total > 0) {
+          todayTotalSeconds = retryResult.today_total;
+        }
         activityMonitor.start();
         screenshotService.start(currentEntry.id);
         idleDetector?.start();
+        startTrayTimer();
         updateTrayIcon(true);
         updateTrayMenu();
-        notifyPopup('timer-started', currentEntry);
-        return { success: true, entry: currentEntry };
+        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalSeconds });
+        return { success: true, entry: currentEntry, todayTotal: todayTotalSeconds };
       } catch (retryErr) {
         return { error: retryErr.response?.data?.message || retryErr.message };
       }
