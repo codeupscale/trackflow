@@ -268,7 +268,7 @@
       startBtn.textContent = 'Start';
     });
 
-    stopBtn.addEventListener('click', async () => {
+    stopBtn.addEventListener('click', () => {
       // Update UI IMMEDIATELY — don't wait for network
       stopTicking();
       const stoppedTotal = elapsedSeconds; // Capture current displayed time
@@ -277,19 +277,14 @@
       elapsedSeconds = stoppedTotal;
       updateDisplay(false);
 
-      // Then fire the API call in background
-      try {
-        const result = await window.trackflow.stopTimer();
-        // Update with server value if different
-        if (result.todayTotal > 0 && result.todayTotal !== stoppedTotal) {
+      // Fire-and-forget — don't await, so the UI never blocks
+      window.trackflow.stopTimer().then((result) => {
+        if (result && result.todayTotal > 0 && result.todayTotal !== stoppedTotal) {
           todayTotalBase = result.todayTotal;
           elapsedSeconds = result.todayTotal;
           updateDisplay(false);
         }
-      } catch (e) {
-        // UI already updated — just show error notification
-        showNotification('Failed to stop timer on server');
-      }
+      }).catch(() => {});
     });
 
     // Both logout buttons do the same thing
