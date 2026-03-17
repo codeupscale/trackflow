@@ -2,7 +2,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('trackflow', {
-  getTimerState: () => ipcRenderer.invoke('get-timer-state'),
+  getTimerState: (projectId) => ipcRenderer.invoke('get-timer-state', projectId),
   startTimer: (projectId) => ipcRenderer.invoke('start-timer', projectId),
   stopTimer: () => ipcRenderer.invoke('stop-timer'),
   getProjects: () => ipcRenderer.invoke('get-projects'),

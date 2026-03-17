@@ -183,11 +183,12 @@
       }
     }
 
-    // Sync timer state from main process — called on init and when popup re-appears
+    // Sync timer state from main process — called on init, when popup re-appears, or when project changes
     async function syncTimerState() {
       try {
-        const state = await window.trackflow.getTimerState();
-        todayTotalBase = state.todayTotal || 0;
+        const selectedProjectId = projectSelect.value || null;
+        const state = await window.trackflow.getTimerState(selectedProjectId);
+        todayTotalBase = state.todayTotal ?? 0;
 
         if (state.isRunning) {
           currentStartedAt = state.entry?.started_at || null;
@@ -241,6 +242,10 @@
     async function init() {
       await loadProjects();
       await syncTimerState();
+      // When user changes project, refresh to show that project's today total
+      projectSelect.addEventListener('change', () => {
+        if (!isRunning) syncTimerState();
+      });
     }
 
     startBtn.addEventListener('click', async () => {
