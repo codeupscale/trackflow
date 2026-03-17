@@ -22,7 +22,16 @@ class TimerController extends Controller
 
         try {
             $entry = $this->timerService->start($request->only('project_id', 'task_id', 'notes'));
-            return response()->json(['entry' => $entry], 201);
+
+            // Return today's completed total so UI can show accumulated time
+            $todayTotal = (int) \App\Models\TimeEntry::withoutGlobalScopes()
+                ->where('user_id', $entry->user_id)
+                ->whereDate('started_at', now()->toDateString())
+                ->whereNotNull('ended_at')
+                ->where('type', 'tracked')
+                ->sum('duration_seconds');
+
+            return response()->json(['entry' => $entry, 'today_total' => $todayTotal], 201);
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 409);
         }

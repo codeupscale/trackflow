@@ -307,8 +307,12 @@
     });
 
     // Events from main process (timer sync, background state changes)
-    window.trackflow.onTimerStarted((entry) => {
-      currentStartedAt = entry?.started_at || new Date().toISOString();
+    window.trackflow.onTimerStarted((data) => {
+      currentStartedAt = data?.started_at || new Date().toISOString();
+      // Use todayTotal from server if available
+      if (data?.todayTotal > 0) {
+        todayTotalBase = data.todayTotal;
+      }
       elapsedSeconds = todayTotalBase + calcElapsedFromStartedAt();
       updateDisplay(true);
       startTicking();

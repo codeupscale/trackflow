@@ -35,13 +35,17 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   startTimer: async (projectId?: string, taskId?: string) => {
     try {
       const res = await api.post('/timer/start', { project_id: projectId, task_id: taskId });
-      const base = get().todayTotalBase;
+      // Use today_total from server (completed entries) as the base
+      // This ensures we always have the correct accumulated time even after page refresh
+      const serverBase = res.data.today_total || 0;
+      const base = serverBase > 0 ? serverBase : get().todayTotalBase;
       set({
         isRunning: true,
         entryId: res.data.entry.id,
         projectId: res.data.entry.project_id,
         startedAt: res.data.entry.started_at,
-        elapsedSeconds: base, // Start from today's accumulated total
+        elapsedSeconds: base,
+        todayTotalBase: base,
       });
       get().startTicking();
     } catch (err: unknown) {
