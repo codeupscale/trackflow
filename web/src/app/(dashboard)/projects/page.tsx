@@ -121,7 +121,16 @@ export default function ProjectsPage() {
       closeDialog();
       toast.success('Project created');
     },
-    onError: () => toast.error('Failed to create project'),
+    onError: (err: unknown) => {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      const message = (err as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message
+        ?? (err as { message?: string })?.message;
+      if (status === 403) {
+        toast.error('You don\'t have permission to create projects.');
+      } else {
+        toast.error(message || 'Failed to create project');
+      }
+    },
   });
 
   const updateMutation = useMutation({

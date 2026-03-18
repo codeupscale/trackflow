@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
   BarChart3,
@@ -175,8 +176,17 @@ const reportTypes: { value: ReportType; label: string; description: string }[] =
 ];
 
 export default function ReportsPage() {
+  const router = useRouter();
   const { user } = useAuthStore();
   const isEmployee = user?.role === 'employee';
+
+  // Reports are for owner/admin/manager only; redirect employees
+  useEffect(() => {
+    if (isEmployee) {
+      toast.error('You don\'t have access to Reports.');
+      router.replace('/dashboard');
+    }
+  }, [isEmployee, router]);
 
   const [reportType, setReportType] = useState<ReportType>('summary');
   const [dateFrom, setDateFrom] = useState(() => {
@@ -215,7 +225,7 @@ export default function ReportsPage() {
       const res = await api.get(`/reports/${reportType}`, { params });
       return transformReportResponse(reportType, res.data);
     },
-    enabled: shouldFetch,
+    enabled: shouldFetch && !isEmployee,
   });
 
   const handleGenerate = () => {
@@ -281,6 +291,10 @@ export default function ReportsPage() {
       .replace(/_/g, ' ')
       .replace(/\b\w/g, (c) => c.toUpperCase());
   };
+
+  if (isEmployee) {
+    return null; // Redirect in progress
+  }
 
   return (
     <div className="space-y-6">

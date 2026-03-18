@@ -106,11 +106,15 @@ async function initializeApp() {
   }
   if (config.idle_timeout === undefined) config.idle_timeout = 5;
   if (config.keep_idle_time === undefined) config.keep_idle_time = 'prompt';
+  if (config.capture_only_when_visible === undefined) config.capture_only_when_visible = true;
+  if (config.capture_multi_monitor === undefined) config.capture_multi_monitor = false;
 
   // Initialize services
   offlineQueue = new OfflineQueue();
   activityMonitor = new ActivityMonitor(apiClient, offlineQueue);
-  screenshotService = new ScreenshotService(apiClient, config, offlineQueue);
+  // Pass getter so screenshots can skip when app is in background (reduces permission re-prompts on Linux)
+  const getIsAppVisible = () => popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible();
+  screenshotService = new ScreenshotService(apiClient, config, offlineQueue, getIsAppVisible);
   idleDetector = new IdleDetector(config);
 
   // Wire idle detection events
@@ -335,10 +339,21 @@ function showPopup() {
   }
 
   if (popupWindow && !popupWindow.isDestroyed()) {
-    // Re-sync timer state when popup becomes visible again
-    popupWindow.webContents.send('sync-timer');
+    // Bring to front quickly (helps Linux: window was in background, slow to reopen)
+    if (typeof popupWindow.moveTop === 'function') {
+      popupWindow.moveTop();
+    }
+    if (process.platform === 'linux') {
+      popupWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    }
     popupWindow.show();
     popupWindow.focus();
+    // Defer sync so window appears immediately; renderer will request state when ready
+    setImmediate(() => {
+      if (popupWindow && !popupWindow.isDestroyed()) {
+        popupWindow.webContents.send('sync-timer');
+      }
+    });
     return;
   }
 
@@ -356,6 +371,7 @@ function showPopup() {
     skipTaskbar: true,
     alwaysOnTop: true,
     show: false,
+    ...(process.platform === 'linux' && { visibleOnAllWorkspaces: true }),
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
@@ -500,6 +516,24 @@ function setupIPC() {
   });
 }
 
+// Run after timer has started — tray, sync, screenshot. Keeps startTimer() return fast.
+function afterStartTimer(projectIdForTotal, todayTotalForPopup) {
+  if (!apiClient || !currentEntry) return;
+  (async () => {
+    try {
+      todayTotalGlobal = await apiClient.getTodayTotal(null);
+    } catch {
+      todayTotalGlobal = todayTotalForPopup;
+    }
+    activityMonitor.start();
+    screenshotService.start(currentEntry.id);
+    idleDetector?.start();
+    startTrayTimer();
+    updateTrayIcon(true);
+    updateTrayMenu();
+  })();
+}
+
 async function startTimer(projectId = null) {
   if (isTimerRunning) return { error: 'Timer already running' };
 
@@ -508,21 +542,17 @@ async function startTimer(projectId = null) {
     currentEntry = result.entry;
     isTimerRunning = true;
     todayTotalCurrentProject = result.today_total ?? 0;
-    try {
-      todayTotalGlobal = await apiClient.getTodayTotal(null);
-    } catch {
-      todayTotalGlobal = todayTotalCurrentProject;
-    }
 
-    activityMonitor.start();
-    screenshotService.start(currentEntry.id);
-    idleDetector?.start();
-    startTrayTimer();
-
-    updateTrayIcon(true);
-    updateTrayMenu();
+    // Return to renderer immediately so UI shows "Tracking" without waiting for tray/sync
     const todayTotalForPopup = todayTotalCurrentProject;
     notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup });
+    if (typeof setImmediate !== 'undefined') {
+      setImmediate(() => {
+        afterStartTimer(projectId, todayTotalForPopup);
+      });
+    } else {
+      afterStartTimer(projectId, todayTotalForPopup);
+    }
     return { success: true, entry: currentEntry, todayTotal: todayTotalForPopup };
   } catch (e) {
     const status = e.response?.status;
@@ -538,16 +568,8 @@ async function startTimer(projectId = null) {
         currentEntry = retryResult.entry;
         isTimerRunning = true;
         todayTotalCurrentProject = retryResult.today_total ?? 0;
-        try {
-          todayTotalGlobal = await apiClient.getTodayTotal(null);
-        } catch {}
-        activityMonitor.start();
-        screenshotService.start(currentEntry.id);
-        idleDetector?.start();
-        startTrayTimer();
-        updateTrayIcon(true);
-        updateTrayMenu();
         notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
+        setImmediate(() => afterStartTimer(projectId, todayTotalCurrentProject));
         return { success: true, entry: currentEntry, todayTotal: todayTotalCurrentProject };
       } catch (retryErr) {
         return { error: retryErr.response?.data?.message || retryErr.message };
