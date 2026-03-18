@@ -12,6 +12,7 @@ import {
   Trash2,
   Clock,
   DollarSign,
+  Users,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -42,10 +43,19 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import api from '@/lib/api';
+import { useAuthStore } from '@/stores/auth-store';
 
 interface Task {
   id: string;
   name: string;
+}
+
+interface MemberUser {
+  id: string;
+  name: string;
+  email: string;
+  role: 'owner' | 'admin' | 'manager' | 'employee';
+  avatar_url?: string | null;
 }
 
 interface Project {
@@ -66,20 +76,39 @@ const COLORS = [
 ];
 
 export default function ProjectsPage() {
+  const { user } = useAuthStore();
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [expandedProject, setExpandedProject] = useState<string | null>(null);
+  const [membersDialogOpen, setMembersDialogOpen] = useState(false);
+  const [membersProject, setMembersProject] = useState<Project | null>(null);
+  const [memberIds, setMemberIds] = useState<string[]>([]);
   const [formName, setFormName] = useState('');
   const [formColor, setFormColor] = useState('#3B82F6');
   const [formBillable, setFormBillable] = useState(false);
   const [formRate, setFormRate] = useState('');
+
+  const canCreateProjects = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
+  const canUpdateProjects = canCreateProjects;
+  const canDeleteProjects = user?.role === 'owner' || user?.role === 'admin';
+  const canManageMembers = canUpdateProjects; // backend uses ProjectPolicy::update
 
   const { data: projects, isLoading } = useQuery<Project[]>({
     queryKey: ['projects'],
     queryFn: async () => {
       const res = await api.get('/projects');
       return res.data.projects || res.data.data || res.data;
+    },
+  });
+
+  const { data: orgUsers } = useQuery<MemberUser[]>({
+    queryKey: ['org-users'],
+    enabled: canManageMembers && membersDialogOpen,
+    queryFn: async () => {
+      const res = await api.get('/users', { params: { per_page: 200 } });
+      // backend is apiResource paginate; normalize
+      return res.data.data || res.data.users || res.data;
     },
   });
 
@@ -118,6 +147,22 @@ export default function ProjectsPage() {
     onError: () => toast.error('Failed to delete project'),
   });
 
+  const syncMembersMutation = useMutation({
+    mutationFn: async ({ projectId, userIds }: { projectId: string; userIds: string[] }) => {
+      return api.put(`/projects/${projectId}/members`, { user_ids: userIds });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      toast.success('Project members updated');
+      setMembersDialogOpen(false);
+      setMembersProject(null);
+      setMemberIds([]);
+    },
+    onError: (err: unknown) => {
+      toast.error((err as { message?: string })?.message || 'Failed to update members');
+    },
+  });
+
   const closeDialog = () => {
     setDialogOpen(false);
     setEditingProject(null);
@@ -125,6 +170,20 @@ export default function ProjectsPage() {
     setFormColor('#3B82F6');
     setFormBillable(false);
     setFormRate('');
+  };
+
+  const openMembers = (project: Project) => {
+    setMembersProject(project);
+    setMembersDialogOpen(true);
+    setMemberIds([]);
+    api.get(`/projects/${project.id}/members`)
+      .then((res) => {
+        const members = (res.data?.members || []) as MemberUser[];
+        setMemberIds(members.map((m) => m.id));
+      })
+      .catch((err: unknown) => {
+        toast.error((err as { message?: string })?.message || 'Failed to load project members');
+      });
   };
 
   const openCreate = () => {
@@ -169,10 +228,12 @@ export default function ProjectsPage() {
           <h1 className="text-2xl font-bold text-white">Projects</h1>
           <p className="text-slate-400 text-sm mt-1">Manage your projects and tasks</p>
         </div>
-        <Button onClick={openCreate} className="bg-blue-600 hover:bg-blue-700 text-white">
-          <Plus className="mr-2 h-4 w-4" />
-          New Project
-        </Button>
+        {canCreateProjects && (
+          <Button onClick={openCreate} className="bg-blue-600 hover:bg-blue-700 text-white">
+            <Plus className="mr-2 h-4 w-4" />
+            New Project
+          </Button>
+        )}
       </div>
 
       {/* Projects Grid */}
@@ -191,9 +252,13 @@ export default function ProjectsPage() {
           <CardContent className="py-16">
             <div className="text-center">
               <FolderOpen className="h-10 w-10 text-slate-600 mx-auto mb-3" />
-              <p className="text-slate-400 font-medium">No projects yet</p>
+              <p className="text-slate-400 font-medium">
+                {user?.role === 'employee' ? 'No projects assigned' : 'No projects yet'}
+              </p>
               <p className="text-sm text-slate-500 mt-1">
-                Create your first project to start tracking time
+                {user?.role === 'employee'
+                  ? 'Ask your manager to assign you to a project.'
+                  : 'Create your first project to start tracking time'}
               </p>
             </div>
           </CardContent>
@@ -229,27 +294,41 @@ export default function ProjectsPage() {
                       <MoreHorizontal className="h-4 w-4" />
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openEdit(project); }}>
-                        <Pencil className="mr-2 h-4 w-4" />
-                        Edit
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          updateMutation.mutate({ id: project.id, is_archived: !project.is_archived });
-                        }}
-                      >
-                        <Archive className="mr-2 h-4 w-4" />
-                        {project.is_archived ? 'Unarchive' : 'Archive'}
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        variant="destructive"
-                        onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(project.id); }}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
-                      </DropdownMenuItem>
+                      {canManageMembers && (
+                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openMembers(project); }}>
+                          <Users className="mr-2 h-4 w-4" />
+                          Members
+                        </DropdownMenuItem>
+                      )}
+                      {canUpdateProjects && (
+                        <>
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openEdit(project); }}>
+                            <Pencil className="mr-2 h-4 w-4" />
+                            Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateMutation.mutate({ id: project.id, is_archived: !project.is_archived });
+                            }}
+                          >
+                            <Archive className="mr-2 h-4 w-4" />
+                            {project.is_archived ? 'Unarchive' : 'Archive'}
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                      {canDeleteProjects && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            variant="destructive"
+                            onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(project.id); }}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete
+                          </DropdownMenuItem>
+                        </>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
@@ -380,6 +459,86 @@ export default function ProjectsPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Members Dialog */}
+      <Dialog
+        open={membersDialogOpen}
+        onOpenChange={(open) => {
+          setMembersDialogOpen(open);
+          if (!open) {
+            setMembersProject(null);
+            setMemberIds([]);
+          }
+        }}
+      >
+        <DialogContent className="bg-slate-900 border-slate-800">
+          <DialogHeader>
+            <DialogTitle className="text-white">Project Members</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Assign team members to <span className="text-slate-200">{membersProject?.name}</span>.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-3 py-2">
+            <div className="text-sm text-slate-400">
+              {orgUsers ? `${orgUsers.length} users` : 'Loading users...'}
+            </div>
+
+            <div className="max-h-[320px] overflow-y-auto rounded-md border border-slate-800 bg-slate-950/40">
+              <div className="divide-y divide-slate-800">
+                {(orgUsers || []).map((u) => {
+                  const checked = memberIds.includes(u.id);
+                  return (
+                    <label
+                      key={u.id}
+                      className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-slate-900/40 cursor-pointer"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-slate-200 truncate">{u.name}</div>
+                        <div className="text-slate-500 truncate">{u.email} • {u.role}</div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                            ? [...memberIds, u.id]
+                            : memberIds.filter((id) => id !== u.id);
+                          setMemberIds(next);
+                        }}
+                        className="h-4 w-4 accent-blue-600"
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setMembersDialogOpen(false)}
+              className="border-slate-700 text-slate-300"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              disabled={!membersProject?.id || syncMembersMutation.isPending}
+              onClick={() => {
+                if (!membersProject?.id) return;
+                syncMembersMutation.mutate({ projectId: membersProject.id, userIds: memberIds });
+              }}
+            >
+              {syncMembersMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

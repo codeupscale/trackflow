@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { z } from 'zod/v4';
 import { useForm } from 'react-hook-form';
@@ -47,18 +47,14 @@ function AcceptInviteContent() {
 
   const token = useMemo(() => searchParams.get('token')?.trim() || '', [searchParams]);
   const [state, setState] = useState<'idle' | 'success'>('idle');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    token ? null : 'Missing invitation token. Please use the link from your email.'
+  );
 
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: { name: '', password: '', password_confirmation: '' },
   });
-
-  useEffect(() => {
-    if (!token) {
-      setError('Missing invitation token. Please use the link from your email.');
-    }
-  }, [token]);
 
   const onSubmit = async (values: Values) => {
     if (!token) return;

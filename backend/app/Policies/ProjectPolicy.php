@@ -9,12 +9,16 @@ class ProjectPolicy
 {
     public function viewAny(User $user): bool
     {
-        return true;
+        return true; // Listing is scoped in controller by role (employees see assigned only).
     }
 
     public function view(User $user, Project $project): bool
     {
-        return $user->organization_id === $project->organization_id;
+        if ($user->organization_id !== $project->organization_id) {
+            return false;
+        }
+        // Owner/Admin/Manager: full access. Employee: only if assigned or org allows "see all".
+        return $project->isAssignedTo($user);
     }
 
     public function create(User $user): bool

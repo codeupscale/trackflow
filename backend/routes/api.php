@@ -78,6 +78,13 @@ Route::prefix('v1')->group(function () {
 
         // Projects
         Route::apiResource('projects', \App\Http\Controllers\Api\V1\ProjectController::class);
+        Route::get('projects/{project}/members', [\App\Http\Controllers\Api\V1\ProjectController::class, 'members'])
+            ->middleware('role:owner,admin,manager');
+        Route::put('projects/{project}/members', [\App\Http\Controllers\Api\V1\ProjectController::class, 'syncMembers'])
+            ->middleware('role:owner,admin,manager');
+        Route::delete('projects/{project}/members/{user}', [\App\Http\Controllers\Api\V1\ProjectController::class, 'removeMember'])
+            ->middleware('role:owner,admin,manager')
+            ->name('projects.members.remove');
 
         // Tasks
         Route::apiResource('tasks', \App\Http\Controllers\Api\V1\TaskController::class);

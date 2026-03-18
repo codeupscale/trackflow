@@ -103,4 +103,43 @@ class TimerTest extends TestCase
         $response = $this->postJson('/api/v1/timer/start');
         $response->assertStatus(401);
     }
+
+    public function test_employee_cannot_start_timer_on_unassigned_project(): void
+    {
+        $project = Project::factory()->create([
+            'organization_id' => $this->org->id,
+            'created_by' => $this->user->id,
+        ]);
+        // Do not assign $this->user to the project
+
+        $response = $this->postJson('/api/v1/timer/start', [
+            'project_id' => $project->id,
+        ]);
+        $response->assertStatus(403)
+            ->assertJsonFragment(['message' => 'You are not assigned to this project.']);
+    }
+
+    public function test_employee_can_start_timer_on_assigned_project(): void
+    {
+        $project = Project::factory()->create([
+            'organization_id' => $this->org->id,
+            'created_by' => $this->user->id,
+        ]);
+        $project->members()->attach($this->user->id);
+
+        Redis::shouldReceive('set')->once()->andReturn(true);
+        Redis::shouldReceive('setex')->once()->andReturn(true);
+        Redis::shouldReceive('del')->once()->andReturn(1);
+        Redis::shouldReceive('get')->once()->andReturn(null);
+
+        $response = $this->postJson('/api/v1/timer/start', [
+            'project_id' => $project->id,
+        ]);
+        $response->assertStatus(201);
+        $this->assertDatabaseHas('time_entries', [
+            'user_id' => $this->user->id,
+            'project_id' => $project->id,
+            'type' => 'tracked',
+        ]);
+    }
 }

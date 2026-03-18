@@ -4,8 +4,10 @@ namespace App\Services;
 
 use App\Events\TimerStarted;
 use App\Events\TimerStopped;
+use App\Models\Project;
 use App\Models\TimeEntry;
 use App\Models\ActivityLog;
+use Illuminate\Auth\Access\AuthorizationException;
 use App\Support\TimezoneAwareDateRange;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
@@ -23,6 +25,15 @@ class TimerService
         $user = Auth::user();
         $redisKey = "timer:{$user->id}";
         $lockKey = "timer:lock:{$user->id}";
+
+        // Employees may only start a timer on projects they are assigned to
+        if (! empty($data['project_id'] ?? null)) {
+            $project = Project::where('organization_id', $user->organization_id)
+                ->findOrFail($data['project_id']);
+            if (! $project->isAssignedTo($user)) {
+                throw new AuthorizationException('You are not assigned to this project.');
+            }
+        }
 
         // Atomically acquire lock to prevent race condition
         if (!Redis::set($lockKey, 1, 'EX', 5, 'NX')) {

@@ -99,6 +99,7 @@ class Organization extends Model
             'keep_idle_time' => 'prompt', // prompt | always | never
             'timezone' => 'America/New_York',
             'can_add_manual_time' => true,
+            'employees_see_all_projects' => false, // if false, employees see only projects they are assigned to
         ];
     }
 

@@ -81,9 +81,12 @@ class TimeEntryController extends Controller
             return response()->json(['message' => 'Manual time entry is disabled for your organization.'], 403);
         }
 
-        // Verify project/task belong to user's organization
+        // Verify project/task belong to user's organization; employees must be assigned to the project
         if ($request->project_id) {
-            $request->user()->organization->projects()->findOrFail($request->project_id);
+            $project = $request->user()->organization->projects()->findOrFail($request->project_id);
+            if (! $project->isAssignedTo($request->user())) {
+                return response()->json(['message' => 'You are not assigned to this project.'], 403);
+            }
         }
         if ($request->task_id) {
             $request->user()->organization->tasks()->findOrFail($request->task_id);
@@ -124,7 +127,10 @@ class TimeEntryController extends Controller
         ]);
 
         if ($request->has('project_id') && $request->project_id) {
-            $request->user()->organization->projects()->findOrFail($request->project_id);
+            $project = $request->user()->organization->projects()->findOrFail($request->project_id);
+            if (! $project->isAssignedTo($request->user())) {
+                return response()->json(['message' => 'You are not assigned to this project.'], 403);
+            }
         }
         if ($request->has('task_id') && $request->task_id) {
             $request->user()->organization->tasks()->findOrFail($request->task_id);

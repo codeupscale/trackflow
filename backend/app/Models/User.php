@@ -93,6 +93,15 @@ class User extends Authenticatable
         return $this->hasMany(ApiKey::class);
     }
 
+    /**
+     * Projects this user is assigned to. Employees see only these projects
+     * (unless organization setting employees_see_all_projects is true).
+     */
+    public function assignedProjects(): BelongsToMany
+    {
+        return $this->belongsToMany(Project::class, 'project_user')->withTimestamps();
+    }
+
     public function approvedTimeEntries(): HasMany
     {
         return $this->hasMany(TimeEntry::class, 'approved_by');
