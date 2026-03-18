@@ -20,8 +20,19 @@ class AgentController extends Controller
             'idle_detection' => $idleTimeout > 0,
             'keep_idle_time' => $org->getSetting('keep_idle_time', 'prompt'),
             'blur_screenshots' => $org->getSetting('blur_screenshots', false),
+            // Idle alert auto-stop (minutes) for prompt mode
+            'idle_alert_auto_stop_min' => (int) ($org->getSetting('idle_alert_auto_stop_min', 10) ?? 10),
+            // After idle alert is resolved (or auto-discard), capture one screenshot immediately
+            'screenshot_capture_immediate_after_idle' => (bool) $org->getSetting(
+                'screenshot_capture_immediate_after_idle',
+                true
+            ),
             'track_urls' => $org->getSetting('track_urls', true),
             'can_add_manual_time' => $org->getSetting('can_add_manual_time', true),
+            'screenshot_first_capture_delay_min' => (int) $org->getSetting('screenshot_first_capture_delay_min', 1),
+            'idle_check_interval_sec' => (int) $org->getSetting('idle_check_interval_sec', 10),
+            'capture_only_when_visible' => (bool) $org->getSetting('capture_only_when_visible', false),
+            'capture_multi_monitor' => (bool) $org->getSetting('capture_multi_monitor', false),
         ]);
     }
 

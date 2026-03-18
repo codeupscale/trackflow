@@ -46,6 +46,12 @@ interface OrgSettings {
       blur_screenshots: boolean;
       idle_timeout: number | null;
       keep_idle_time?: 'prompt' | 'always' | 'never';
+      idle_alert_auto_stop_min?: number;
+      screenshot_capture_immediate_after_idle?: boolean;
+      screenshot_first_capture_delay_min?: number;
+      idle_check_interval_sec?: number;
+      capture_only_when_visible?: boolean;
+      capture_multi_monitor?: boolean;
       require_project?: boolean;
       can_add_manual_time: boolean;
       weekly_limit_hours?: number;
@@ -96,7 +102,13 @@ export default function SettingsPage() {
     screenshotBlur: settings?.blur_screenshots ?? false,
     idleTimeout: settings?.idle_timeout != null && settings.idle_timeout > 0 ? String(settings.idle_timeout) : '0',
     idleTimeoutCustom: settings?.idle_timeout != null && settings.idle_timeout > 0 && ![5, 10, 20].includes(settings.idle_timeout) ? String(settings.idle_timeout) : '',
-    keepIdleTime: (settings?.keep_idle_time as 'prompt' | 'always' | 'never') ?? 'prompt',
+    keepIdleTime: (settings?.keep_idle_time as 'prompt' | 'always' | 'never') ?? 'never',
+    idleAlertAutoStopMin: settings?.idle_alert_auto_stop_min != null ? String(settings.idle_alert_auto_stop_min) : '10',
+    screenshotImmediateAfterIdle: settings?.screenshot_capture_immediate_after_idle ?? true,
+    screenshotFirstCaptureDelayMin: settings?.screenshot_first_capture_delay_min != null ? String(settings.screenshot_first_capture_delay_min) : '1',
+    idleCheckIntervalSec: settings?.idle_check_interval_sec != null ? String(settings.idle_check_interval_sec) : '10',
+    captureOnlyWhenVisible: settings?.capture_only_when_visible ?? false,
+    captureMultiMonitor: settings?.capture_multi_monitor ?? false,
     allowManualTime: settings?.can_add_manual_time ?? true,
   }), [data, settings]);
 
@@ -107,6 +119,12 @@ export default function SettingsPage() {
   const [idleTimeout, setIdleTimeout] = useState('5');
   const [idleTimeoutCustom, setIdleTimeoutCustom] = useState('');
   const [keepIdleTime, setKeepIdleTime] = useState<'prompt' | 'always' | 'never'>('prompt');
+  const [idleAlertAutoStopMin, setIdleAlertAutoStopMin] = useState('10');
+  const [screenshotImmediateAfterIdle, setScreenshotImmediateAfterIdle] = useState(true);
+  const [screenshotFirstCaptureDelayMin, setScreenshotFirstCaptureDelayMin] = useState('1');
+  const [idleCheckIntervalSec, setIdleCheckIntervalSec] = useState('10');
+  const [captureOnlyWhenVisible, setCaptureOnlyWhenVisible] = useState(false);
+  const [captureMultiMonitor, setCaptureMultiMonitor] = useState(false);
   const [allowManualTime, setAllowManualTime] = useState(true);
   const [initialized, setInitialized] = useState(false);
   const [userTimezone, setUserTimezone] = useState(user?.timezone ?? 'UTC');
@@ -122,6 +140,12 @@ export default function SettingsPage() {
     setIdleTimeout(defaults.idleTimeout);
     setIdleTimeoutCustom(defaults.idleTimeoutCustom);
     setKeepIdleTime(defaults.keepIdleTime);
+    setIdleAlertAutoStopMin(defaults.idleAlertAutoStopMin);
+    setScreenshotImmediateAfterIdle(defaults.screenshotImmediateAfterIdle);
+    setScreenshotFirstCaptureDelayMin(defaults.screenshotFirstCaptureDelayMin);
+    setIdleCheckIntervalSec(defaults.idleCheckIntervalSec);
+    setCaptureOnlyWhenVisible(defaults.captureOnlyWhenVisible);
+    setCaptureMultiMonitor(defaults.captureMultiMonitor);
     setAllowManualTime(defaults.allowManualTime);
     setInitialized(true);
   }
@@ -151,14 +175,28 @@ export default function SettingsPage() {
   const handleSave = () => {
     const rawIdle = idleTimeout === '0' ? 0 : (idleTimeout === 'custom' ? idleTimeoutCustom : idleTimeout);
     const idleVal = rawIdle === '' || rawIdle === '0' ? 0 : Math.min(30, Math.max(0, parseInt(String(rawIdle), 10) || 0));
+    const idleAutoStopMinVal = Math.min(
+      60,
+      Math.max(1, parseInt(String(idleAlertAutoStopMin), 10) || 10)
+    );
+    const firstDelayMinVal = Math.min(60, Math.max(0, parseInt(String(screenshotFirstCaptureDelayMin), 10) ?? 1));
+    const idleCheckSecVal = Math.min(60, Math.max(1, parseInt(String(idleCheckIntervalSec), 10) ?? 10));
     updateMutation.mutate({
       name: orgName,
-      timezone,
-      screenshot_interval: parseInt(screenshotInterval),
-      blur_screenshots: screenshotBlur,
-      idle_timeout: idleVal,
-      keep_idle_time: keepIdleTime,
-      can_add_manual_time: allowManualTime,
+      settings: {
+        timezone,
+        screenshot_interval: parseInt(screenshotInterval),
+        blur_screenshots: screenshotBlur,
+        idle_timeout: idleVal,
+        keep_idle_time: keepIdleTime,
+        idle_alert_auto_stop_min: idleAutoStopMinVal,
+        screenshot_capture_immediate_after_idle: screenshotImmediateAfterIdle,
+        screenshot_first_capture_delay_min: firstDelayMinVal,
+        idle_check_interval_sec: idleCheckSecVal,
+        capture_only_when_visible: captureOnlyWhenVisible,
+        capture_multi_monitor: captureMultiMonitor,
+        can_add_manual_time: allowManualTime,
+      },
     });
   };
 
@@ -355,6 +393,20 @@ export default function SettingsPage() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="grid gap-2 max-w-xs">
+                <Label htmlFor="ss-first-delay" className="text-slate-300">First capture delay</Label>
+                <Input
+                  id="ss-first-delay"
+                  type="number"
+                  min={0}
+                  max={60}
+                  value={screenshotFirstCaptureDelayMin}
+                  onChange={(e) => setScreenshotFirstCaptureDelayMin(e.target.value)}
+                  disabled={!isAdmin}
+                  className="bg-slate-800/50 border-slate-700 text-white w-28"
+                />
+                <p className="text-xs text-slate-500">Minutes before first screenshot when timer starts (0 = immediate)</p>
+              </div>
               <Separator className="bg-slate-800" />
               <div className="flex items-center justify-between">
                 <div>
@@ -362,6 +414,20 @@ export default function SettingsPage() {
                   <p className="text-xs text-slate-500">Apply blur to screenshots for privacy</p>
                 </div>
                 <Switch checked={screenshotBlur} onCheckedChange={setScreenshotBlur} disabled={!isAdmin} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-slate-300">Capture only when app visible</Label>
+                  <p className="text-xs text-slate-500">Skip screenshots when desktop app is minimized (reduces permission prompts)</p>
+                </div>
+                <Switch checked={captureOnlyWhenVisible} onCheckedChange={setCaptureOnlyWhenVisible} disabled={!isAdmin} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-slate-300">Multi-monitor capture</Label>
+                  <p className="text-xs text-slate-500">Capture all monitors and composite into one image</p>
+                </div>
+                <Switch checked={captureMultiMonitor} onCheckedChange={setCaptureMultiMonitor} disabled={!isAdmin} />
               </div>
             </CardContent>
           </Card>
@@ -430,6 +496,47 @@ export default function SettingsPage() {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-slate-500">Whether to show the idle alert or auto-keep / auto-discard</p>
+              </div>
+              <div className="grid gap-2 max-w-xs">
+                <Label className="text-slate-300">Idle alert auto-stop</Label>
+                <p className="text-xs text-slate-500">
+                  If idle alert is shown in <strong>Prompt</strong> mode and user does not respond, auto-stop after this many minutes.
+                </p>
+                <Input
+                  type="number"
+                  min="1"
+                  max="60"
+                  value={idleAlertAutoStopMin}
+                  onChange={(e) => setIdleAlertAutoStopMin(e.target.value)}
+                  disabled={!isAdmin}
+                  className="w-28 bg-slate-800/50 border-slate-700 text-white"
+                />
+                <span className="text-xs text-slate-500">minutes</span>
+              </div>
+              <div className="grid gap-2 max-w-xs">
+                <Label className="text-slate-300">Idle check interval</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={idleCheckIntervalSec}
+                  onChange={(e) => setIdleCheckIntervalSec(e.target.value)}
+                  disabled={!isAdmin}
+                  className="w-28 bg-slate-800/50 border-slate-700 text-white"
+                />
+                <p className="text-xs text-slate-500">How often (seconds) the desktop app checks for idle activity</p>
+              </div>
+              <Separator className="bg-slate-800" />
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-slate-300">Screenshot on idle resume</Label>
+                  <p className="text-xs text-slate-500">Capture one screenshot immediately after idle alert is resolved/discarded.</p>
+                </div>
+                <Switch
+                  checked={screenshotImmediateAfterIdle}
+                  onCheckedChange={setScreenshotImmediateAfterIdle}
+                  disabled={!isAdmin}
+                />
               </div>
               <Separator className="bg-slate-800" />
               <div className="flex items-center justify-between">
