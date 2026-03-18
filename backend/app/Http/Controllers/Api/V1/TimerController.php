@@ -88,23 +88,34 @@ class TimerController extends Controller
     // TIME-05: Report idle time (from desktop agent)
     public function idle(Request $request): JsonResponse
     {
-        $request->validate([
+        $rules = [
             'time_entry_id' => 'required|uuid',
             'idle_started_at' => 'required|date',
             'idle_ended_at' => 'required|date',
             'idle_seconds' => 'required|integer|min:1',
-            'action' => 'required|in:discard,keep',
-        ]);
+            'action' => 'required|in:discard,keep,reassign',
+        ];
+        if ($request->action === 'reassign') {
+            $rules['project_id'] = 'required|uuid|exists:projects,id';
+        }
+        $request->validate($rules);
+
+        if ($request->action === 'reassign') {
+            $request->user()->organization->projects()->findOrFail($request->project_id);
+        }
 
         if ($request->action === 'keep') {
             return response()->json(['message' => 'Idle time kept.']);
         }
 
-        $entry = $this->timerService->reportIdle($request->all());
+        $result = $this->timerService->reportIdle($request->all());
 
         return response()->json([
-            'message' => 'Idle time recorded and discarded.',
-            'idle_entry' => $entry,
+            'message' => $request->action === 'reassign'
+                ? 'Idle time reassigned to project.'
+                : 'Idle time recorded and discarded.',
+            'idle_entry' => $result['idle_entry'],
+            'new_entry' => $result['new_entry'],
         ]);
     }
 

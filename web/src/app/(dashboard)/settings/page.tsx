@@ -44,7 +44,8 @@ interface OrgSettings {
     settings: {
       screenshot_interval: number;
       blur_screenshots: boolean;
-      idle_timeout: number;
+      idle_timeout: number | null;
+      keep_idle_time?: 'prompt' | 'always' | 'never';
       require_project?: boolean;
       can_add_manual_time: boolean;
       weekly_limit_hours?: number;
@@ -93,7 +94,9 @@ export default function SettingsPage() {
     timezone: settings?.timezone ?? 'UTC',
     screenshotInterval: settings ? String(settings.screenshot_interval) : '5',
     screenshotBlur: settings?.blur_screenshots ?? false,
-    idleTimeout: settings ? String(settings.idle_timeout) : '5',
+    idleTimeout: settings?.idle_timeout != null && settings.idle_timeout > 0 ? String(settings.idle_timeout) : '0',
+    idleTimeoutCustom: settings?.idle_timeout != null && settings.idle_timeout > 0 && ![5, 10, 20].includes(settings.idle_timeout) ? String(settings.idle_timeout) : '',
+    keepIdleTime: (settings?.keep_idle_time as 'prompt' | 'always' | 'never') ?? 'prompt',
     allowManualTime: settings?.can_add_manual_time ?? true,
   }), [data, settings]);
 
@@ -102,6 +105,8 @@ export default function SettingsPage() {
   const [screenshotInterval, setScreenshotInterval] = useState('5');
   const [screenshotBlur, setScreenshotBlur] = useState(false);
   const [idleTimeout, setIdleTimeout] = useState('5');
+  const [idleTimeoutCustom, setIdleTimeoutCustom] = useState('');
+  const [keepIdleTime, setKeepIdleTime] = useState<'prompt' | 'always' | 'never'>('prompt');
   const [allowManualTime, setAllowManualTime] = useState(true);
   const [initialized, setInitialized] = useState(false);
   const [userTimezone, setUserTimezone] = useState(user?.timezone ?? 'UTC');
@@ -115,6 +120,8 @@ export default function SettingsPage() {
     setScreenshotInterval(defaults.screenshotInterval);
     setScreenshotBlur(defaults.screenshotBlur);
     setIdleTimeout(defaults.idleTimeout);
+    setIdleTimeoutCustom(defaults.idleTimeoutCustom);
+    setKeepIdleTime(defaults.keepIdleTime);
     setAllowManualTime(defaults.allowManualTime);
     setInitialized(true);
   }
@@ -142,12 +149,15 @@ export default function SettingsPage() {
   });
 
   const handleSave = () => {
+    const rawIdle = idleTimeout === '0' ? 0 : (idleTimeout === 'custom' ? idleTimeoutCustom : idleTimeout);
+    const idleVal = rawIdle === '' || rawIdle === '0' ? 0 : Math.min(30, Math.max(0, parseInt(String(rawIdle), 10) || 0));
     updateMutation.mutate({
       name: orgName,
       timezone,
       screenshot_interval: parseInt(screenshotInterval),
       blur_screenshots: screenshotBlur,
-      idle_timeout: parseInt(idleTimeout),
+      idle_timeout: idleVal,
+      keep_idle_time: keepIdleTime,
       can_add_manual_time: allowManualTime,
     });
   };
@@ -366,18 +376,60 @@ export default function SettingsPage() {
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="grid gap-2 max-w-xs">
-                <Label htmlFor="idle-timeout" className="text-slate-300">Idle Timeout (minutes)</Label>
-                <Input
-                  id="idle-timeout"
-                  type="number"
-                  min="1"
-                  max="60"
-                  value={idleTimeout}
-                  onChange={(e) => setIdleTimeout(e.target.value)}
+                <Label className="text-slate-300">Idle detection</Label>
+                <Select
+                  value={idleTimeout === '0' ? '0' : [5, 10, 20].includes(parseInt(idleTimeout, 10)) ? idleTimeout : 'custom'}
+                  onValueChange={(v) => {
+                    if (v === '0') setIdleTimeout('0');
+                    else if (v === 'custom') setIdleTimeout(idleTimeoutCustom || '15');
+                    else if (v) setIdleTimeout(v);
+                  }}
                   disabled={!isAdmin}
-                  className="bg-slate-800/50 border-slate-700 text-white"
-                />
-                <p className="text-xs text-slate-500">Pause tracking after this many minutes of inactivity</p>
+                >
+                  <SelectTrigger className="bg-slate-800/50 border-slate-700">
+                    <SelectValue placeholder="Idle timeout" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="5">5 minutes</SelectItem>
+                    <SelectItem value="10">10 minutes</SelectItem>
+                    <SelectItem value="20">20 minutes</SelectItem>
+                    <SelectItem value="custom">Custom</SelectItem>
+                    <SelectItem value="0">Never (disabled)</SelectItem>
+                  </SelectContent>
+                </Select>
+                {(idleTimeout === 'custom' || (idleTimeout !== '0' && ![5, 10, 20].includes(parseInt(idleTimeout, 10)))) && idleTimeout !== '0' && (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      min="1"
+                      max="30"
+                      value={idleTimeout === 'custom' ? idleTimeoutCustom : idleTimeout}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setIdleTimeout('custom');
+                        setIdleTimeoutCustom(v);
+                      }}
+                      disabled={!isAdmin}
+                      className="w-24 bg-slate-800/50 border-slate-700 text-white"
+                    />
+                    <span className="text-xs text-slate-500">minutes</span>
+                  </div>
+                )}
+                <p className="text-xs text-slate-500">Show idle alert after this many minutes of no activity (or disable)</p>
+              </div>
+              <div className="grid gap-2 max-w-xs">
+                <Label className="text-slate-300">When idle is detected</Label>
+                <Select value={keepIdleTime} onValueChange={(v) => { if (v) setKeepIdleTime(v as 'prompt' | 'always' | 'never'); }} disabled={!isAdmin}>
+                  <SelectTrigger className="bg-slate-800/50 border-slate-700">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="prompt">Prompt (ask Keep / Discard / Reassign / Stop)</SelectItem>
+                    <SelectItem value="always">Always keep idle time</SelectItem>
+                    <SelectItem value="never">Always discard idle time</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-slate-500">Whether to show the idle alert or auto-keep / auto-discard</p>
               </div>
               <Separator className="bg-slate-800" />
               <div className="flex items-center justify-between">

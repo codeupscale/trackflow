@@ -22,13 +22,14 @@ const ALERT_AUTO_STOP_MIN = 10;       // Auto-stop if alert not dismissed
 
 class IdleDetector {
   constructor(config = {}) {
-    this.idleTimeoutSec = (config.idle_timeout || DEFAULT_IDLE_TIMEOUT_MIN) * 60;
+    const timeout = config.idle_timeout != null ? config.idle_timeout : DEFAULT_IDLE_TIMEOUT_MIN;
+    this.idleTimeoutSec = timeout > 0 ? timeout * 60 : 0;
     this.alertAutoStopSec = ALERT_AUTO_STOP_MIN * 60;
     this.checkInterval = null;
     this.isIdle = false;
     this.idleStartedAt = null;
     this.alertShownAt = null;
-    this.enabled = config.idle_detection !== false; // Enabled by default
+    this.enabled = config.idle_detection !== false && this.idleTimeoutSec > 0;
 
     // Callbacks — set by main process
     this._onIdleDetected = null;   // (idleSeconds, idleStartedAt) => void
@@ -46,10 +47,9 @@ class IdleDetector {
 
   // Update config (e.g., after fetching from server)
   updateConfig(config) {
-    if (config.idle_timeout) {
-      this.idleTimeoutSec = config.idle_timeout * 60;
-    }
-    this.enabled = config.idle_detection !== false;
+    const timeout = config.idle_timeout != null ? config.idle_timeout : DEFAULT_IDLE_TIMEOUT_MIN;
+    this.idleTimeoutSec = timeout > 0 ? timeout * 60 : 0;
+    this.enabled = config.idle_detection !== false && this.idleTimeoutSec > 0;
   }
 
   start() {

@@ -55,12 +55,40 @@ class ReportService
             }
 
             $totalEarnings = $billableQuery
+                ->where('time_entries.type', 'tracked')
                 ->selectRaw('SUM(time_entries.duration_seconds / 3600.0 * projects.hourly_rate) as total_earnings')
                 ->value('total_earnings') ?? 0;
+
+            $trackedQuery = TimeEntry::withoutGlobalScopes()
+                ->where('organization_id', $orgId)
+                ->whereBetween('started_at', [$dateFrom, $dateTo])
+                ->whereNotNull('ended_at')
+                ->where('type', 'tracked');
+            if ($userId) {
+                $trackedQuery->where('user_id', $userId);
+            }
+            $totalTrackedSeconds = (int) $trackedQuery->sum('duration_seconds');
+
+            $idleQuery = TimeEntry::withoutGlobalScopes()
+                ->where('organization_id', $orgId)
+                ->whereBetween('started_at', [$dateFrom, $dateTo])
+                ->whereNotNull('ended_at')
+                ->where('type', 'idle');
+            if ($userId) {
+                $idleQuery->where('user_id', $userId);
+            }
+            $totalIdleSeconds = (int) $idleQuery->sum('duration_seconds');
+
+            $totalWithIdle = $totalTrackedSeconds + $totalIdleSeconds;
+            $idlePercent = $totalWithIdle > 0 ? round($totalIdleSeconds / $totalWithIdle * 100, 1) : 0;
 
             return [
                 'daily' => $daily,
                 'total_seconds' => $daily->sum('total_seconds'),
+                'total_seconds_tracked' => $totalTrackedSeconds,
+                'total_seconds_idle' => $totalIdleSeconds,
+                'idle_hours' => round($totalIdleSeconds / 3600, 2),
+                'idle_percent' => $idlePercent,
                 'avg_activity' => $daily->avg('activity_score_avg'),
                 'total_entries' => $daily->sum('entry_count'),
                 'total_earnings' => round($totalEarnings, 2),
@@ -92,17 +120,34 @@ class ReportService
                 ->where('organization_id', $orgId)
                 ->where('is_active', true)
                 ->get()
-                ->map(function ($user) use ($userStats) {
-                    // Get stats from pre-aggregated data
+                ->map(function ($user) use ($dateFrom, $dateTo) {
                     $result = DB::table('time_entries')
                         ->where('user_id', $user->id)
+                        ->whereBetween('started_at', [$dateFrom, $dateTo])
+                        ->whereNotNull('ended_at')
                         ->selectRaw('
                             COALESCE(SUM(duration_seconds), 0) as total_seconds,
                             COALESCE(AVG(activity_score), 0) as avg_activity,
                             COALESCE(COUNT(*), 0) as entry_count
                         ')
-                        ->whereNotNull('ended_at')
                         ->first();
+
+                    $trackedSeconds = (int) DB::table('time_entries')
+                        ->where('user_id', $user->id)
+                        ->whereBetween('started_at', [$dateFrom, $dateTo])
+                        ->whereNotNull('ended_at')
+                        ->where('type', 'tracked')
+                        ->sum('duration_seconds');
+
+                    $idleSeconds = (int) DB::table('time_entries')
+                        ->where('user_id', $user->id)
+                        ->whereBetween('started_at', [$dateFrom, $dateTo])
+                        ->whereNotNull('ended_at')
+                        ->where('type', 'idle')
+                        ->sum('duration_seconds');
+
+                    $totalWithIdle = $trackedSeconds + $idleSeconds;
+                    $idlePercent = $totalWithIdle > 0 ? round($idleSeconds / $totalWithIdle * 100, 1) : 0;
 
                     return [
                         'user' => [
@@ -115,6 +160,9 @@ class ReportService
                         'total_seconds' => (int) $result->total_seconds,
                         'avg_activity' => (int) $result->avg_activity,
                         'entry_count' => (int) $result->entry_count,
+                        'seconds_idle' => $idleSeconds,
+                        'idle_hours' => round($idleSeconds / 3600, 2),
+                        'idle_percent' => $idlePercent,
                     ];
                 })
                 ->sortByDesc('total_seconds')

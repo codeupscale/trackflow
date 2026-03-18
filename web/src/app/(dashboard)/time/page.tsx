@@ -43,6 +43,7 @@ interface TimeEntry {
   started_at: string;
   ended_at: string | null;
   duration_seconds: number;
+  type?: 'tracked' | 'manual' | 'idle';
   activity_score: number;
   status: 'pending' | 'approved' | 'rejected';
   project?: {
@@ -80,6 +81,7 @@ export default function TimePage() {
   const [dateFrom, setDateFrom] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [dateTo, setDateTo] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [projectFilter, setProjectFilter] = useState<string>('all');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
   const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
   const [page, setPage] = useState(1);
 
@@ -92,7 +94,7 @@ export default function TimePage() {
   });
 
   const { data: entriesData, isLoading } = useQuery<PaginatedResponse>({
-    queryKey: ['time-entries', dateFrom, dateTo, projectFilter, page],
+    queryKey: ['time-entries', dateFrom, dateTo, projectFilter, typeFilter, page],
     queryFn: async () => {
       const params: Record<string, string | number> = {
         date_from: dateFrom,
@@ -102,6 +104,9 @@ export default function TimePage() {
       };
       if (projectFilter && projectFilter !== 'all') {
         params.project_id = projectFilter;
+      }
+      if (typeFilter && typeFilter !== 'all') {
+        params.type = typeFilter;
       }
       const res = await api.get('/time-entries', { params });
       // Backend returns is_approved boolean, map to status string for UI
@@ -213,6 +218,20 @@ export default function TimePage() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium text-slate-300">Time type</label>
+              <Select value={typeFilter} onValueChange={(val) => { setTypeFilter(val ?? 'all'); setPage(1); }}>
+                <SelectTrigger className="w-[160px] bg-slate-800/50 border-slate-700">
+                  <SelectValue placeholder="All types" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="tracked">Tracked</SelectItem>
+                  <SelectItem value="manual">Manual</SelectItem>
+                  <SelectItem value="idle">Idle</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
 
             {canApprove && selectedEntries.length > 0 && (
               <Button
@@ -275,6 +294,7 @@ export default function TimePage() {
                       </TableHead>
                     )}
                     <TableHead className="text-slate-400">Date</TableHead>
+                    <TableHead className="text-slate-400">Type</TableHead>
                     <TableHead className="text-slate-400">Project</TableHead>
                     <TableHead className="text-slate-400">Task</TableHead>
                     <TableHead className="text-slate-400 text-right">Duration</TableHead>
@@ -305,6 +325,15 @@ export default function TimePage() {
                           {format(new Date(entry.started_at), 'HH:mm')}
                           {entry.ended_at && ` - ${format(new Date(entry.ended_at), 'HH:mm')}`}
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className={
+                          entry.type === 'idle' ? 'border-amber-500/30 text-amber-400' :
+                          entry.type === 'manual' ? 'border-slate-500/30 text-slate-400' :
+                          'border-emerald-500/30 text-emerald-400'
+                        }>
+                          {entry.type === 'idle' ? 'Idle' : entry.type === 'manual' ? 'Manual' : 'Tracked'}
+                        </Badge>
                       </TableCell>
                       <TableCell>
                         {entry.project ? (

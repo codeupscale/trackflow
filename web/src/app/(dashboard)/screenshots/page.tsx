@@ -75,6 +75,7 @@ export default function ScreenshotsPage() {
   const [dateFrom, setDateFrom] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [dateTo, setDateTo] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [userFilter, setUserFilter] = useState<string>('all');
+  const [timeTypeFilter, setTimeTypeFilter] = useState<string>('all');
   const [selectedScreenshot, setSelectedScreenshot] = useState<Screenshot | null>(null);
   const [page, setPage] = useState(1);
 
@@ -88,7 +89,7 @@ export default function ScreenshotsPage() {
   });
 
   const { data: screenshotsData, isLoading } = useQuery<ScreenshotResponse>({
-    queryKey: ['screenshots', dateFrom, dateTo, userFilter, page],
+    queryKey: ['screenshots', dateFrom, dateTo, userFilter, timeTypeFilter, page],
     queryFn: async () => {
       const params: Record<string, string | number> = {
         date_from: dateFrom,
@@ -98,6 +99,9 @@ export default function ScreenshotsPage() {
       };
       if (userFilter && userFilter !== 'all') {
         params.user_id = userFilter;
+      }
+      if (timeTypeFilter && timeTypeFilter !== 'all') {
+        params.time_type = timeTypeFilter;
       }
       const res = await api.get('/screenshots', { params });
       return res.data;
@@ -179,6 +183,20 @@ export default function ScreenshotsPage() {
                 </Select>
               </div>
             )}
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium text-slate-300">Time type</label>
+              <Select value={timeTypeFilter} onValueChange={(val) => { setTimeTypeFilter(val ?? 'all'); setPage(1); }}>
+                <SelectTrigger className="w-[160px] bg-slate-800/50 border-slate-700">
+                  <SelectValue placeholder="All types" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="tracked">Tracked</SelectItem>
+                  <SelectItem value="manual">Manual</SelectItem>
+                  <SelectItem value="idle">Idle</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </CardContent>
       </Card>

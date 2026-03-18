@@ -10,8 +10,8 @@ contextBridge.exposeInMainWorld('trackflow', {
   login: (email, password) => ipcRenderer.invoke('login', email, password),
   openDashboard: () => ipcRenderer.invoke('open-dashboard'),
 
-  // Idle alert actions
-  resolveIdle: (action) => ipcRenderer.invoke('resolve-idle', action),
+  // Idle alert actions (action: 'keep'|'discard'|'stop'|'reassign'; projectId only for reassign)
+  resolveIdle: (action, projectId) => ipcRenderer.invoke('resolve-idle', action, projectId),
 
   // Events from main process
   onTimerStarted: (callback) => ipcRenderer.on('timer-started', (_, data) => callback(data)),

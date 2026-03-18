@@ -14,12 +14,14 @@
   "build": {
     "appId": "com.trackflow.agent",
     "productName": "TrackFlow",
+    "afterPack": "scripts/afterPack.js",
     "directories": {
       "output": "dist"
     },
     "files": [
       "src/**/*",
       "assets/**/*",
+      "scripts/**/*",
       "node_modules/**/*"
     ],
     "mac": {

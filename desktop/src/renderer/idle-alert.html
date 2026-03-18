@@ -94,6 +94,30 @@
     }
     .btn-stop:hover { background: #dc2626; }
 
+    .btn-reassign {
+      background: #6366f1;
+      color: white;
+    }
+    .btn-reassign:hover { background: #4f46e5; }
+    .btn-reassign:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .reassign-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .reassign-select {
+      flex: 1;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #e2e8f0;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .reassign-select:focus { outline: none; border-color: #6366f1; }
+
     .btn-desc {
       font-size: 11px;
       color: #64748b;
@@ -116,6 +140,14 @@
 
       <button class="btn btn-discard" id="discardBtn">Discard Idle Time</button>
       <div class="btn-desc">Continue tracking — remove idle period from time entry</div>
+
+      <div class="reassign-row">
+        <select id="reassignProject" class="reassign-select" title="Reassign idle time to a project">
+          <option value="">Reassign to project…</option>
+        </select>
+        <button class="btn btn-reassign" id="reassignBtn" disabled>Reassign</button>
+      </div>
+      <div class="btn-desc">Move this idle period to another project as tracked time</div>
 
       <button class="btn btn-stop" id="stopBtn">Stop Timer</button>
       <div class="btn-desc">Stop tracking completely</div>
@@ -144,7 +176,8 @@
       }, 1000);
     }
 
-    // Receive idle start time from main process
+    let projects = [];
+
     window.trackflow.onIdleData((data) => {
       if (data.idleStartedAt) {
         idleStartMs = data.idleStartedAt;
@@ -152,6 +185,22 @@
       const elapsed = Math.floor((Date.now() - idleStartMs) / 1000);
       idleTimeEl.textContent = formatIdleTime(elapsed);
       startTicking();
+
+      if (Array.isArray(data.projects)) {
+        projects = data.projects;
+        const sel = document.getElementById('reassignProject');
+        sel.innerHTML = '<option value="">Reassign to project…</option>';
+        projects.forEach((p) => {
+          const opt = document.createElement('option');
+          opt.value = p.id;
+          opt.textContent = p.name || p.id;
+          sel.appendChild(opt);
+        });
+      }
+    });
+
+    document.getElementById('reassignProject').addEventListener('change', function () {
+      document.getElementById('reassignBtn').disabled = !this.value;
     });
 
     document.getElementById('keepBtn').addEventListener('click', () => {
@@ -160,6 +209,11 @@
 
     document.getElementById('discardBtn').addEventListener('click', () => {
       window.trackflow.resolveIdle('discard');
+    });
+
+    document.getElementById('reassignBtn').addEventListener('click', () => {
+      const projectId = document.getElementById('reassignProject').value;
+      if (projectId) window.trackflow.resolveIdle('reassign', projectId);
     });
 
     document.getElementById('stopBtn').addEventListener('click', () => {
