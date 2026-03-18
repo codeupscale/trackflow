@@ -48,6 +48,9 @@ Route::prefix('v1')->group(function () {
         // Invitations (owner/admin only)
         Route::post('invitations', [InvitationController::class, 'store'])
             ->middleware('role:owner,admin');
+        // Backward-compatible alias used by older frontend builds
+        Route::post('users/invite', [InvitationController::class, 'store'])
+            ->middleware('role:owner,admin');
 
         // Timer
         Route::post('timer/start', [\App\Http\Controllers\Api\V1\TimerController::class, 'start']);
