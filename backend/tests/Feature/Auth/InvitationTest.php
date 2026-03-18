@@ -97,6 +97,70 @@ class InvitationTest extends TestCase
         $response->assertStatus(401);
     }
 
+    public function test_owner_can_list_pending_invitations(): void
+    {
+        $org = $this->createOrganization();
+        $owner = $this->createUser($org, 'owner');
+        $this->actingAs($owner, 'sanctum');
+
+        Invitation::factory()->create([
+            'organization_id' => $org->id,
+            'email' => 'pending@example.com',
+            'accepted_at' => null,
+            'expires_at' => now()->addDays(3),
+            'created_by' => $owner->id,
+        ]);
+
+        // Expired should not show
+        Invitation::factory()->expired()->create([
+            'organization_id' => $org->id,
+            'email' => 'expired@example.com',
+            'created_by' => $owner->id,
+        ]);
+
+        $res = $this->getJson('/api/v1/invitations');
+        $res->assertOk()
+            ->assertJsonStructure(['invitations'])
+            ->assertJsonFragment(['email' => 'pending@example.com'])
+            ->assertJsonMissing(['email' => 'expired@example.com']);
+    }
+
+    public function test_owner_can_resend_invitation(): void
+    {
+        $org = $this->createOrganization();
+        $owner = $this->createUser($org, 'owner');
+        $this->actingAs($owner, 'sanctum');
+
+        $invitation = Invitation::factory()->create([
+            'organization_id' => $org->id,
+            'expires_at' => now()->addHours(1),
+            'created_by' => $owner->id,
+        ]);
+
+        $res = $this->postJson("/api/v1/invitations/{$invitation->id}/resend");
+        $res->assertOk();
+
+        $invitation->refresh();
+        $this->assertTrue($invitation->expires_at->isFuture());
+    }
+
+    public function test_owner_can_revoke_invitation(): void
+    {
+        $org = $this->createOrganization();
+        $owner = $this->createUser($org, 'owner');
+        $this->actingAs($owner, 'sanctum');
+
+        $invitation = Invitation::factory()->create([
+            'organization_id' => $org->id,
+            'created_by' => $owner->id,
+        ]);
+
+        $res = $this->deleteJson("/api/v1/invitations/{$invitation->id}");
+        $res->assertOk();
+
+        $this->assertDatabaseMissing('invitations', ['id' => $invitation->id]);
+    }
+
     /** AUTH-10: Accept invitation */
     public function test_user_can_accept_valid_invitation(): void
     {

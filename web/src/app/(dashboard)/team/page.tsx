@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Users,
@@ -9,6 +9,9 @@ import {
   Loader2,
   Shield,
   MoreHorizontal,
+  Copy,
+  RefreshCw,
+  Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -75,6 +78,20 @@ interface BillingUsage {
   plan: string;
 }
 
+interface Invitation {
+  id: string;
+  email: string;
+  role: 'admin' | 'manager' | 'employee';
+  token: string;
+  expires_at: string;
+  created_at: string;
+  creator?: {
+    id: string;
+    name: string;
+    email: string;
+  };
+}
+
 const roleBadgeClass: Record<string, string> = {
   owner: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
   admin: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
@@ -104,6 +121,16 @@ export default function TeamPage() {
     },
   });
 
+  const { data: invitations = [], isLoading: invitesLoading } = useQuery<Invitation[]>({
+    queryKey: ['invitations'],
+    queryFn: async () => {
+      const res = await api.get('/invitations');
+      return res.data.invitations || [];
+    },
+    // Some roles may not have access; don't spam toasts
+    retry: false,
+  });
+
   const inviteMutation = useMutation({
     mutationFn: async (data: { email: string; role: string }) => {
       await api.post('/invitations', data);
@@ -111,6 +138,7 @@ export default function TeamPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['team-members'] });
       queryClient.invalidateQueries({ queryKey: ['billing-usage'] });
+      queryClient.invalidateQueries({ queryKey: ['invitations'] });
       setInviteOpen(false);
       setInviteEmail('');
       setInviteRole('employee');
@@ -148,6 +176,49 @@ export default function TeamPage() {
       toast.error('Failed to update member status');
     },
   });
+
+  const resendInviteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await api.post(`/invitations/${id}/resend`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['invitations'] });
+      toast.success('Invitation resent');
+    },
+    onError: (err: unknown) => {
+      const axiosError = err as { response?: { data?: { message?: string } } };
+      toast.error(axiosError.response?.data?.message || 'Failed to resend invitation');
+    },
+  });
+
+  const revokeInviteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await api.delete(`/invitations/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['invitations'] });
+      toast.success('Invitation revoked');
+    },
+    onError: (err: unknown) => {
+      const axiosError = err as { response?: { data?: { message?: string } } };
+      toast.error(axiosError.response?.data?.message || 'Failed to revoke invitation');
+    },
+  });
+
+  const inviteBaseUrl = useMemo(() => {
+    if (typeof window === 'undefined') return '';
+    return window.location.origin;
+  }, []);
+
+  const copyInviteLink = async (token: string) => {
+    const url = `${inviteBaseUrl}/invitations/accept?token=${token}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success('Invite link copied');
+    } catch {
+      toast.error('Failed to copy link');
+    }
+  };
 
   const activeMembers = members?.filter((m) => m.is_active).length || 0;
   const totalMembers = members?.length || 0;
@@ -296,6 +367,92 @@ export default function TeamPage() {
       </div>
 
       {/* Team Table */}
+      {/* Pending invitations */}
+      <Card className="border-slate-800 bg-slate-900/50">
+        <CardHeader>
+          <CardTitle className="text-white">Pending invitations</CardTitle>
+          <CardDescription className="text-slate-400">
+            Invites that haven&apos;t been accepted yet (expire after 7 days)
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {invitesLoading ? (
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-12 bg-slate-800/50 rounded animate-pulse" />
+              ))}
+            </div>
+          ) : invitations.length === 0 ? (
+            <div className="text-sm text-slate-500">
+              No pending invitations.
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow className="border-slate-800 hover:bg-transparent">
+                  <TableHead className="text-slate-400">Email</TableHead>
+                  <TableHead className="text-slate-400">Role</TableHead>
+                  <TableHead className="text-slate-400">Invited by</TableHead>
+                  <TableHead className="text-slate-400">Expires</TableHead>
+                  <TableHead className="text-slate-400 text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {invitations.map((inv) => (
+                  <TableRow key={inv.id} className="border-slate-800">
+                    <TableCell className="text-sm text-slate-300">{inv.email}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className={roleBadgeClass[inv.role]}>
+                        {inv.role}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-sm text-slate-400">
+                      {inv.creator?.name || '--'}
+                    </TableCell>
+                    <TableCell className="text-sm text-slate-400">
+                      {formatDate(inv.expires_at)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="inline-flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-slate-700 text-slate-300"
+                          onClick={() => copyInviteLink(inv.token)}
+                        >
+                          <Copy className="h-4 w-4 mr-1" />
+                          Copy link
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-slate-700 text-slate-300"
+                          disabled={resendInviteMutation.isPending}
+                          onClick={() => resendInviteMutation.mutate(inv.id)}
+                        >
+                          <RefreshCw className="h-4 w-4 mr-1" />
+                          Resend
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                          disabled={revokeInviteMutation.isPending}
+                          onClick={() => revokeInviteMutation.mutate(inv.id)}
+                        >
+                          <Trash2 className="h-4 w-4 mr-1" />
+                          Revoke
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
       <Card className="border-slate-800 bg-slate-900/50">
         <CardHeader>
           <CardTitle className="text-white">Members</CardTitle>
