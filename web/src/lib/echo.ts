@@ -35,12 +35,12 @@ export function getEcho(): Echo<'reverb'> {
   echo = new Echo({
     broadcaster: 'reverb',
     key: process.env.NEXT_PUBLIC_REVERB_APP_KEY || '',
-    wsHost: process.env.NEXT_PUBLIC_REVERB_HOST || 'localhost',
-    wsPort: Number(process.env.NEXT_PUBLIC_REVERB_PORT || 8080),
-    wssPort: Number(process.env.NEXT_PUBLIC_REVERB_PORT || 8080),
-    forceTLS: false,
+    wsHost: process.env.NEXT_PUBLIC_REVERB_HOST || 'trackflow.codeupscale.com',
+    wsPort: Number(process.env.NEXT_PUBLIC_REVERB_PORT || 8081),
+    wssPort: Number(process.env.NEXT_PUBLIC_REVERB_PORT || 8081),
+    forceTLS: true,
     enabledTransports: ['ws', 'wss'],
-    authEndpoint: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost/api/v1'}/broadcasting/auth`,
+    authEndpoint: `${process.env.NEXT_PUBLIC_API_URL || 'https://trackflow.codeupscale.com/api/v1'}/broadcasting/auth`,
     auth: {
       headers: {
         Authorization: `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('access_token') : ''}`,
