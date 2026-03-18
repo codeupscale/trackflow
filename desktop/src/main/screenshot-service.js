@@ -17,16 +17,24 @@ class ScreenshotService {
     this._cachedSourceId = null; // Reuse same source when possible to reduce permission prompts
   }
 
-  start(entryId) {
+  start(entryId, options = {}) {
     this.stop(); // Clear any previous timers
     this.currentEntryId = entryId;
+    const immediateCapture = options.immediateCapture === true;
     const intervalMs = (this.config.screenshot_interval || 5) * 60 * 1000;
+    const firstDelayMin = this.config.screenshot_first_capture_delay_min != null ? this.config.screenshot_first_capture_delay_min : 1;
+    const firstDelayMs = firstDelayMin * 60 * 1000;
 
-    // Take first screenshot after 1 minute
-    this.initialTimeout = setTimeout(() => {
-      this.capture();
-      this.initialTimeout = null;
-    }, 60000);
+    if (immediateCapture || firstDelayMs === 0) {
+      setImmediate(() => {
+        if (this.currentEntryId) this.capture();
+      });
+    } else {
+      this.initialTimeout = setTimeout(() => {
+        this.capture();
+        this.initialTimeout = null;
+      }, firstDelayMs);
+    }
 
     // Then capture at configured interval
     this.interval = setInterval(() => this.capture(), intervalMs);
@@ -48,8 +56,7 @@ class ScreenshotService {
   async capture() {
     if (!this.currentEntryId) return;
 
-    // Skip capture when app is in background (reduces permission re-prompts on Linux when reopening)
-    const captureOnlyWhenVisible = this.config.capture_only_when_visible !== false;
+    const captureOnlyWhenVisible = this.config.capture_only_when_visible === true;
     if (captureOnlyWhenVisible && this.getIsAppVisible && !this.getIsAppVisible()) {
       return;
     }

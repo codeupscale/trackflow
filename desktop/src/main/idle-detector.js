@@ -16,15 +16,17 @@
 
 const { powerMonitor } = require('electron');
 
-const IDLE_CHECK_INTERVAL_MS = 10000; // Check every 10 seconds
-const DEFAULT_IDLE_TIMEOUT_MIN = 5;   // Default idle threshold
-const ALERT_AUTO_STOP_MIN = 10;       // Auto-stop if alert not dismissed
+const DEFAULT_IDLE_TIMEOUT_MIN = 5;
+const DEFAULT_IDLE_CHECK_INTERVAL_SEC = 10;
 
 class IdleDetector {
   constructor(config = {}) {
     const timeout = config.idle_timeout != null ? config.idle_timeout : DEFAULT_IDLE_TIMEOUT_MIN;
     this.idleTimeoutSec = timeout > 0 ? timeout * 60 : 0;
-    this.alertAutoStopSec = ALERT_AUTO_STOP_MIN * 60;
+    const autoStopMin = config.idle_alert_auto_stop_min != null ? config.idle_alert_auto_stop_min : 10;
+    this.alertAutoStopSec = autoStopMin > 0 ? autoStopMin * 60 : 0;
+    const checkSec = config.idle_check_interval_sec != null ? config.idle_check_interval_sec : DEFAULT_IDLE_CHECK_INTERVAL_SEC;
+    this.checkIntervalMs = Math.min(60, Math.max(1, checkSec)) * 1000;
     this.checkInterval = null;
     this.isIdle = false;
     this.idleStartedAt = null;
@@ -49,6 +51,10 @@ class IdleDetector {
   updateConfig(config) {
     const timeout = config.idle_timeout != null ? config.idle_timeout : DEFAULT_IDLE_TIMEOUT_MIN;
     this.idleTimeoutSec = timeout > 0 ? timeout * 60 : 0;
+    const autoStopMin = config.idle_alert_auto_stop_min != null ? config.idle_alert_auto_stop_min : 10;
+    this.alertAutoStopSec = autoStopMin > 0 ? autoStopMin * 60 : 0;
+    const checkSec = config.idle_check_interval_sec != null ? config.idle_check_interval_sec : DEFAULT_IDLE_CHECK_INTERVAL_SEC;
+    this.checkIntervalMs = Math.min(60, Math.max(1, checkSec)) * 1000;
     this.enabled = config.idle_detection !== false && this.idleTimeoutSec > 0;
   }
 
@@ -60,7 +66,7 @@ class IdleDetector {
     this.idleStartedAt = null;
     this.alertShownAt = null;
 
-    this.checkInterval = setInterval(() => this._check(), IDLE_CHECK_INTERVAL_MS);
+    this.checkInterval = setInterval(() => this._check(), this.checkIntervalMs);
   }
 
   stop() {

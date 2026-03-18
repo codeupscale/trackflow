@@ -102,33 +102,56 @@ async function initializeApp() {
   try {
     config = await apiClient.getConfig();
   } catch (e) {
-    config = { screenshot_interval: 5, idle_timeout: 5, idle_detection: true, keep_idle_time: 'prompt', blur_screenshots: false };
+    config = {
+      screenshot_interval: 5,
+      idle_timeout: 5,
+      idle_detection: true,
+      keep_idle_time: 'never',
+      blur_screenshots: false,
+      idle_alert_auto_stop_min: 10,
+      screenshot_capture_immediate_after_idle: true,
+      screenshot_first_capture_delay_min: 1,
+      idle_check_interval_sec: 10,
+      capture_only_when_visible: false,
+      capture_multi_monitor: false,
+    };
   }
+  // Fallbacks only when API omits keys (e.g. older backend)
   if (config.idle_timeout === undefined) config.idle_timeout = 5;
-  if (config.keep_idle_time === undefined) config.keep_idle_time = 'prompt';
-  if (config.capture_only_when_visible === undefined) config.capture_only_when_visible = true;
+  if (config.keep_idle_time === undefined) config.keep_idle_time = 'never';
+  if (config.idle_alert_auto_stop_min === undefined) config.idle_alert_auto_stop_min = 10;
+  if (config.screenshot_capture_immediate_after_idle === undefined) config.screenshot_capture_immediate_after_idle = true;
+  if (config.screenshot_first_capture_delay_min === undefined) config.screenshot_first_capture_delay_min = 1;
+  if (config.idle_check_interval_sec === undefined) config.idle_check_interval_sec = 10;
+  if (config.capture_only_when_visible === undefined) config.capture_only_when_visible = false;
   if (config.capture_multi_monitor === undefined) config.capture_multi_monitor = false;
 
   // Initialize services
   offlineQueue = new OfflineQueue();
   activityMonitor = new ActivityMonitor(apiClient, offlineQueue);
-  // Pass getter so screenshots can skip when app is in background (reduces permission re-prompts on Linux)
+  // Pass getter so screenshots can optionally be gated when popup is visible.
+  // Default is OFF (so screenshots work in tray/background).
   const getIsAppVisible = () => popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible();
   screenshotService = new ScreenshotService(apiClient, config, offlineQueue, getIsAppVisible);
   idleDetector = new IdleDetector(config);
 
   // Wire idle detection events
   idleDetector.onIdleDetected((idleSeconds, idleStartedAt) => {
+    // Stop screenshots immediately when idle is detected — idle time should not produce evidence.
+    screenshotService?.stop();
     const policy = config.keep_idle_time || 'prompt';
     if (policy === 'always') {
       idleDetector.resolveIdle();
-      if (isTimerRunning && currentEntry) screenshotService?.start(currentEntry.id);
+      if (isTimerRunning && currentEntry) {
+        screenshotService?.start(currentEntry.id, {
+          immediateCapture: config.screenshot_capture_immediate_after_idle === true,
+        });
+      }
       return;
     }
     if (policy === 'never') {
       handleIdleAction('discard', idleSeconds, null);
       dismissIdleAlert();
-      if (isTimerRunning && currentEntry) screenshotService?.start(currentEntry.id);
       return;
     }
     showIdleAlert(idleSeconds, idleStartedAt);
@@ -786,7 +809,9 @@ async function handleIdleAction(action, idleDurationOverride = null, reassignPro
   switch (action) {
     case 'keep':
       if (isTimerRunning && currentEntry) {
-        screenshotService?.start(currentEntry.id);
+        screenshotService?.start(currentEntry.id, {
+          immediateCapture: config.screenshot_capture_immediate_after_idle === true,
+        });
       }
       break;
 
@@ -812,7 +837,9 @@ async function handleIdleAction(action, idleDurationOverride = null, reassignPro
         }
       }
       if (isTimerRunning && currentEntry) {
-        screenshotService?.start(currentEntry.id);
+        screenshotService?.start(currentEntry.id, {
+          immediateCapture: config.screenshot_capture_immediate_after_idle === true,
+        });
       }
       break;
 

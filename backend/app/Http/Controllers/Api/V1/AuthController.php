@@ -28,13 +28,10 @@ class AuthController extends Controller
                 'slug' => Str::slug($request->company_name) . '-' . Str::random(6),
                 'plan' => 'trial',
                 'trial_ends_at' => now()->addDays(14),
-                'settings' => [
-                    'screenshot_interval' => 5,
-                    'blur_screenshots' => false,
-                    'idle_timeout' => 5,
-                    'timezone' => $request->timezone ?? 'America/New_York',
-                    'can_add_manual_time' => true,
-                ],
+                'settings' => array_merge(
+                    (new \App\Models\Organization)->getDefaultSettings(),
+                    ['timezone' => $request->timezone ?? 'America/New_York']
+                ),
             ]);
 
             return User::create([
