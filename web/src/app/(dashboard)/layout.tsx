@@ -41,24 +41,29 @@ import { useAuthStore } from '@/stores/auth-store';
 import { useAuthGuard } from '@/hooks/use-auth-guard';
 import { cn } from '@/lib/utils';
 
-const navigation = [
-  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { name: 'Time', href: '/time', icon: Clock },
-  { name: 'Screenshots', href: '/screenshots', icon: Camera },
-  { name: 'Reports', href: '/reports', icon: BarChart3 },
-  { name: 'Team', href: '/team', icon: Users },
-  { name: 'Projects', href: '/projects', icon: FolderOpen },
-  { name: 'Settings', href: '/settings', icon: Settings },
+const allNavItems = [
+  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['owner', 'admin', 'manager', 'employee'] },
+  { name: 'Time', href: '/time', icon: Clock, roles: ['owner', 'admin', 'manager', 'employee'] },
+  { name: 'Screenshots', href: '/screenshots', icon: Camera, roles: ['owner', 'admin', 'manager', 'employee'] },
+  { name: 'Reports', href: '/reports', icon: BarChart3, roles: ['owner', 'admin', 'manager'] },
+  { name: 'Team', href: '/team', icon: Users, roles: ['owner', 'admin', 'manager'] },
+  { name: 'Projects', href: '/projects', icon: FolderOpen, roles: ['owner', 'admin', 'manager', 'employee'] },
+  { name: 'Settings', href: '/settings', icon: Settings, roles: ['owner', 'admin', 'manager', 'employee'] },
 ];
 
 function SidebarNav({
   collapsed,
   onNavClick,
+  role,
 }: {
   collapsed: boolean;
   onNavClick?: () => void;
+  role?: string;
 }) {
   const pathname = usePathname();
+  const navigation = role
+    ? allNavItems.filter((item) => item.roles.includes(role))
+    : allNavItems;
 
   return (
     <nav className="flex flex-col gap-1 px-3">
@@ -158,7 +163,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
         {/* Navigation */}
         <div className="flex-1 py-4 overflow-y-auto">
-          <SidebarNav collapsed={collapsed} />
+          <SidebarNav collapsed={collapsed} role={user?.role} />
         </div>
 
         {/* Sidebar footer */}
@@ -188,7 +193,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                   <SheetTitle className="text-white text-lg font-bold">TrackFlow</SheetTitle>
                 </SheetHeader>
                 <div className="py-4">
-                  <SidebarNav collapsed={false} onNavClick={() => setMobileOpen(false)} />
+                  <SidebarNav collapsed={false} onNavClick={() => setMobileOpen(false)} role={user?.role} />
                 </div>
               </SheetContent>
             </Sheet>

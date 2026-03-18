@@ -1,17 +1,20 @@
 // AGENT-02: Screenshot capture at org-configured interval
 // AGENT-09: Blur support via sharp
+// Multi-monitor: composite all screens; optional capture_only_when_visible to reduce permission prompts
 
 const { desktopCapturer, Notification } = require('electron');
 const FormData = require('form-data');
 
 class ScreenshotService {
-  constructor(apiClient, config, offlineQueue) {
+  constructor(apiClient, config, offlineQueue, getIsAppVisible = null) {
     this.apiClient = apiClient;
     this.config = config;
     this.offlineQueue = offlineQueue;
+    this.getIsAppVisible = typeof getIsAppVisible === 'function' ? getIsAppVisible : null;
     this.interval = null;
     this.initialTimeout = null;
     this.currentEntryId = null;
+    this._cachedSourceId = null; // Reuse same source when possible to reduce permission prompts
   }
 
   start(entryId) {
@@ -39,10 +42,17 @@ class ScreenshotService {
       this.interval = null;
     }
     this.currentEntryId = null;
+    this._cachedSourceId = null;
   }
 
   async capture() {
     if (!this.currentEntryId) return;
+
+    // Skip capture when app is in background (reduces permission re-prompts on Linux when reopening)
+    const captureOnlyWhenVisible = this.config.capture_only_when_visible !== false;
+    if (captureOnlyWhenVisible && this.getIsAppVisible && !this.getIsAppVisible()) {
+      return;
+    }
 
     try {
       const sources = await desktopCapturer.getSources({
@@ -55,12 +65,52 @@ class ScreenshotService {
         return;
       }
 
-      // Only capture the primary screen (first source)
-      const source = sources[0];
-      const image = source.thumbnail;
-      if (image.isEmpty()) return;
+      // Multi-monitor: capture all screens and composite left-to-right; else primary only
+      const multiMonitor = this.config.capture_multi_monitor === true && sources.length > 1;
+      let buffer;
 
-      let buffer = image.toJPEG(80);
+      if (multiMonitor) {
+        const sharp = require('sharp');
+        const sorted = [...sources].sort((a, b) => {
+          const idA = parseInt(a.display_id, 10) || 0;
+          const idB = parseInt(b.display_id, 10) || 0;
+          return idA - idB;
+        });
+        const images = sorted.filter(s => s.thumbnail && !s.thumbnail.isEmpty()).map(s => s.thumbnail.toJPEG(80));
+        if (images.length === 0) return;
+        if (images.length === 1) {
+          buffer = Buffer.from(images[0]);
+        } else {
+          const meta = await sharp(images[0]).metadata();
+          let width = meta.width || 1920;
+          let height = meta.height || 1080;
+          const composites = [];
+          let x = 0;
+          for (let i = 0; i < images.length; i++) {
+            const m = await sharp(images[i]).metadata();
+            const w = m.width || 1920;
+            const h = m.height || 1080;
+            height = Math.max(height, h);
+            composites.push({ input: images[i], left: x, top: 0 });
+            x += w;
+          }
+          width = x;
+          buffer = await sharp({
+            create: { width, height, channels: 3, background: { r: 0, g: 0, b: 0 } },
+          })
+            .composite(composites)
+            .jpeg({ quality: 80 })
+            .toBuffer();
+        }
+      } else {
+        const source = this._cachedSourceId
+          ? sources.find(s => s.id === this._cachedSourceId) || sources[0]
+          : sources[0];
+        this._cachedSourceId = source.id;
+        const image = source.thumbnail;
+        if (image.isEmpty()) return;
+        buffer = image.toJPEG(80);
+      }
 
       // AGENT-09: Blur if configured
       if (this.config.blur_screenshots) {
@@ -81,6 +131,7 @@ class ScreenshotService {
         this.showScreenshotNotification();
       }
     } catch (e) {
+      this._cachedSourceId = null;
       console.error('Screenshot capture failed:', e.message);
     }
   }

@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Users,
@@ -60,6 +61,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import api from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { useAuthStore } from '@/stores/auth-store';
 
 interface TeamMember {
   id: string;
@@ -100,10 +102,20 @@ const roleBadgeClass: Record<string, string> = {
 };
 
 export default function TeamPage() {
+  const router = useRouter();
+  const { user } = useAuthStore();
   const queryClient = useQueryClient();
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<string>('employee');
+
+  // Team is for owner/admin/manager only; redirect employees so they don't hit 403
+  useEffect(() => {
+    if (user?.role === 'employee') {
+      toast.error('You don\'t have access to the Team page.');
+      router.replace('/dashboard');
+    }
+  }, [user?.role, router]);
 
   const { data: members, isLoading } = useQuery<TeamMember[]>({
     queryKey: ['team-members'],
@@ -111,6 +123,7 @@ export default function TeamPage() {
       const res = await api.get('/users');
       return res.data.users || res.data.data || (Array.isArray(res.data) ? res.data : []);
     },
+    enabled: user?.role !== 'employee',
   });
 
   const { data: usage } = useQuery<BillingUsage>({
@@ -119,6 +132,7 @@ export default function TeamPage() {
       const res = await api.get('/billing/usage');
       return res.data;
     },
+    enabled: user?.role !== 'employee',
   });
 
   const { data: invitations = [], isLoading: invitesLoading } = useQuery<Invitation[]>({
@@ -127,8 +141,8 @@ export default function TeamPage() {
       const res = await api.get('/invitations');
       return res.data.invitations || [];
     },
-    // Some roles may not have access; don't spam toasts
     retry: false,
+    enabled: user?.role !== 'employee',
   });
 
   const inviteMutation = useMutation({
@@ -219,6 +233,10 @@ export default function TeamPage() {
       toast.error('Failed to copy link');
     }
   };
+
+  if (user?.role === 'employee') {
+    return null; // Redirect in progress
+  }
 
   const activeMembers = members?.filter((m) => m.is_active).length || 0;
   const totalMembers = members?.length || 0;
