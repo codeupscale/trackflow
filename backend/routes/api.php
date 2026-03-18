@@ -46,7 +46,13 @@ Route::prefix('v1')->group(function () {
         Route::patch('auth/me', [AuthController::class, 'updateProfile']);
 
         // Invitations (owner/admin only)
+        Route::get('invitations', [InvitationController::class, 'index'])
+            ->middleware('role:owner,admin');
         Route::post('invitations', [InvitationController::class, 'store'])
+            ->middleware('role:owner,admin');
+        Route::post('invitations/{id}/resend', [InvitationController::class, 'resend'])
+            ->middleware('role:owner,admin');
+        Route::delete('invitations/{id}', [InvitationController::class, 'destroy'])
             ->middleware('role:owner,admin');
         // Backward-compatible alias used by older frontend builds
         Route::post('users/invite', [InvitationController::class, 'store'])

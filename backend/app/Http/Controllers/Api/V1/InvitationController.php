@@ -14,6 +14,38 @@ use Illuminate\Support\Str;
 
 class InvitationController extends Controller
 {
+    private function sendInvitationEmail(Invitation $invitation, User $invitedBy): void
+    {
+        SendEmailNotificationJob::dispatch(
+            $invitation->email,
+            "You've been invited to join {$invitedBy->organization->name} on TrackFlow",
+            'emails.invitation',
+            [
+                'invitation_url' => config('app.frontend_url', config('app.url')) . '/invitations/accept?token=' . $invitation->token,
+                'organization_name' => $invitedBy->organization->name,
+                'role' => $invitation->role,
+                'invited_by' => $invitedBy->name,
+                'expires_at' => $invitation->expires_at->format('F j, Y'),
+            ]
+        );
+    }
+
+    /** AUTH-09: List invitations (pending only) */
+    public function index(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $invites = Invitation::query()
+            ->where('organization_id', $user->organization_id)
+            ->whereNull('accepted_at')
+            ->where('expires_at', '>', now())
+            ->with('creator:id,name,email')
+            ->orderByDesc('created_at')
+            ->get();
+
+        return response()->json(['invitations' => $invites]);
+    }
+
     /** AUTH-09: Create invitation */
     public function store(Request $request): JsonResponse
     {
@@ -57,23 +89,46 @@ class InvitationController extends Controller
             'created_by' => $user->id,
         ]);
 
-        SendEmailNotificationJob::dispatch(
-            $request->email,
-            "You've been invited to join {$user->organization->name} on TrackFlow",
-            'emails.invitation',
-            [
-                'invitation_url' => config('app.frontend_url', config('app.url')) . '/invitations/accept?token=' . $invitation->token,
-                'organization_name' => $user->organization->name,
-                'role' => $invitation->role,
-                'invited_by' => $user->name,
-                'expires_at' => $invitation->expires_at->format('F j, Y'),
-            ]
-        );
+        $this->sendInvitationEmail($invitation, $user);
 
         return response()->json([
             'invitation' => $invitation,
             'message' => 'Invitation sent successfully.',
         ], 201);
+    }
+
+    /** AUTH-09: Resend invitation (extends expiry) */
+    public function resend(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+
+        $invitation = Invitation::where('organization_id', $user->organization_id)->findOrFail($id);
+
+        if ($invitation->isAccepted()) {
+            return response()->json(['message' => 'Invitation was already accepted.'], 422);
+        }
+
+        // Extend expiry on resend
+        $invitation->update(['expires_at' => now()->addDays(7)]);
+
+        $this->sendInvitationEmail($invitation->fresh(), $user);
+
+        return response()->json(['message' => 'Invitation resent successfully.']);
+    }
+
+    /** AUTH-09: Revoke invitation */
+    public function destroy(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+        $invitation = Invitation::where('organization_id', $user->organization_id)->findOrFail($id);
+
+        if ($invitation->isAccepted()) {
+            return response()->json(['message' => 'Cannot revoke an accepted invitation.'], 422);
+        }
+
+        $invitation->delete();
+
+        return response()->json(['message' => 'Invitation revoked.']);
     }
 
     /** AUTH-10: Accept invitation */
@@ -99,6 +154,14 @@ class InvitationController extends Controller
         }
 
         $user = DB::transaction(function () use ($request, $invitation) {
+            $existing = User::withoutGlobalScopes()
+                ->where('organization_id', $invitation->organization_id)
+                ->where('email', $invitation->email)
+                ->exists();
+            if ($existing) {
+                abort(422, 'A user with this email already exists in this organization.');
+            }
+
             $user = User::create([
                 'organization_id' => $invitation->organization_id,
                 'name' => $request->name,
