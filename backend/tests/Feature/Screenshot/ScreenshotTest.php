@@ -260,12 +260,13 @@ class ScreenshotTest extends TestCase
 
         $this->actingAs($this->employee, 'sanctum');
 
-        $response = $this->getJson('/api/v1/screenshots?date_from=' . $today->format('Y-m-d'));
+        // API applies date filter only when both date_from and date_to are present
+        $dateStr = $today->format('Y-m-d');
+        $response = $this->getJson('/api/v1/screenshots?date_from=' . $dateStr . '&date_to=' . $dateStr);
 
         $response->assertOk();
         $screenshots = $response->json('data');
-        foreach ($screenshots as $screenshot) {
-            $this->assertGreaterThanOrEqual($today->format('Y-m-d'), substr($screenshot['captured_at'], 0, 10));
-        }
+        $this->assertCount(1, $screenshots);
+        $this->assertGreaterThanOrEqual($dateStr, substr($screenshots[0]['captured_at'], 0, 10));
     }
 }

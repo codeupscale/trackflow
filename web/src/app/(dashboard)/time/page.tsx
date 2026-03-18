@@ -87,7 +87,7 @@ export default function TimePage() {
     queryKey: ['projects-list'],
     queryFn: async () => {
       const res = await api.get('/projects', { params: { per_page: 100 } });
-      return res.data.data || res.data;
+      return res.data.projects || res.data.data || (Array.isArray(res.data) ? res.data : []);
     },
   });
 
@@ -96,7 +96,7 @@ export default function TimePage() {
     queryFn: async () => {
       const params: Record<string, string | number> = {
         date_from: dateFrom,
-        date_to: dateTo,
+        date_to: dateTo + ' 23:59:59',
         page,
         per_page: 20,
       };
@@ -104,7 +104,15 @@ export default function TimePage() {
         params.project_id = projectFilter;
       }
       const res = await api.get('/time-entries', { params });
-      return res.data;
+      // Backend returns is_approved boolean, map to status string for UI
+      const data = res.data;
+      if (data.data) {
+        data.data = data.data.map((entry: Record<string, unknown>) => ({
+          ...entry,
+          status: entry.is_approved ? 'approved' : 'pending',
+        }));
+      }
+      return data;
     },
   });
 
@@ -113,7 +121,7 @@ export default function TimePage() {
 
   const approveMutation = useMutation({
     mutationFn: async (entryIds: string[]) => {
-      await api.post('/time-entries/approve', { entry_ids: entryIds });
+      await Promise.all(entryIds.map((id) => api.post(`/time-entries/${id}/approve`)));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['time-entries'] });

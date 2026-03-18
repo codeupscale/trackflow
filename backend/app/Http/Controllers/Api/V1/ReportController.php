@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Jobs\GenerateReportJob;
 use App\Services\ReportService;
+use App\Support\TimezoneAwareDateRange;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -13,6 +14,16 @@ use Illuminate\Support\Str;
 class ReportController extends Controller
 {
     public function __construct(private ReportService $reportService) {}
+
+    private function parseDateRange(Request $request): array
+    {
+        $tz = $request->user()->getTimezoneForDates();
+        return TimezoneAwareDateRange::toUtcBounds(
+            $request->date_from,
+            $request->date_to,
+            $tz
+        );
+    }
 
     // REPT-01: Summary
     public function summary(Request $request): JsonResponse
@@ -26,16 +37,17 @@ class ReportController extends Controller
         $user = $request->user();
         $userId = $request->user_id;
 
-        // Employees can only see own data
         if ($user->isEmployee()) {
             $userId = $user->id;
         }
 
+        [$dateFrom, $dateTo] = $this->parseDateRange($request);
+
         $data = $this->reportService->summary(
             $user->organization_id,
             $userId,
-            $request->date_from,
-            $request->date_to
+            $dateFrom,
+            $dateTo
         );
 
         return response()->json($data);
@@ -53,10 +65,12 @@ class ReportController extends Controller
             'date_to' => 'required|date|after_or_equal:date_from',
         ]);
 
+        [$dateFrom, $dateTo] = $this->parseDateRange($request);
+
         $data = $this->reportService->team(
             $request->user()->organization_id,
-            $request->date_from,
-            $request->date_to
+            $dateFrom,
+            $dateTo
         );
 
         return response()->json(['team' => $data]);
@@ -70,10 +84,12 @@ class ReportController extends Controller
             'date_to' => 'required|date|after_or_equal:date_from',
         ]);
 
+        [$dateFrom, $dateTo] = $this->parseDateRange($request);
+
         $data = $this->reportService->projects(
             $request->user()->organization_id,
-            $request->date_from,
-            $request->date_to
+            $dateFrom,
+            $dateTo
         );
 
         return response()->json(['projects' => $data]);
@@ -93,11 +109,13 @@ class ReportController extends Controller
             $userId = $request->user()->id;
         }
 
+        [$dateFrom, $dateTo] = $this->parseDateRange($request);
+
         $data = $this->reportService->apps(
             $request->user()->organization_id,
             $userId,
-            $request->date_from,
-            $request->date_to
+            $dateFrom,
+            $dateTo
         );
 
         return response()->json(['apps' => $data]);
@@ -135,6 +153,8 @@ class ReportController extends Controller
             'date_to' => 'required|date|after_or_equal:date_from',
         ]);
 
+        [$dateFrom, $dateTo] = $this->parseDateRange($request);
+
         $jobId = Str::uuid()->toString();
 
         GenerateReportJob::dispatch(
@@ -143,8 +163,8 @@ class ReportController extends Controller
             $request->user()->id,
             $request->type,
             $request->format,
-            $request->date_from,
-            $request->date_to
+            $dateFrom,
+            $dateTo
         );
 
         return response()->json(['job_id' => $jobId], 202);
@@ -162,10 +182,12 @@ class ReportController extends Controller
             'date_to' => 'required|date|after_or_equal:date_from',
         ]);
 
+        [$dateFrom, $dateTo] = $this->parseDateRange($request);
+
         $data = $this->reportService->payroll(
             $request->user()->organization_id,
-            $request->date_from,
-            $request->date_to
+            $dateFrom,
+            $dateTo
         );
 
         return response()->json(['payroll' => $data]);
@@ -183,10 +205,12 @@ class ReportController extends Controller
             'date_to' => 'required|date|after_or_equal:date_from',
         ]);
 
+        [$dateFrom, $dateTo] = $this->parseDateRange($request);
+
         $data = $this->reportService->attendance(
             $request->user()->organization_id,
-            $request->date_from,
-            $request->date_to
+            $dateFrom,
+            $dateTo
         );
 
         return response()->json(['attendance' => $data]);

@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/select';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
+import { User as UserIcon } from 'lucide-react';
 
 interface OrgSettings {
   organization: {
@@ -65,6 +66,7 @@ const timezones = [
   'Europe/Berlin',
   'Europe/Moscow',
   'Asia/Dubai',
+  'Asia/Karachi',
   'Asia/Kolkata',
   'Asia/Shanghai',
   'Asia/Tokyo',
@@ -102,11 +104,14 @@ export default function SettingsPage() {
   const [idleTimeout, setIdleTimeout] = useState('5');
   const [allowManualTime, setAllowManualTime] = useState(true);
   const [initialized, setInitialized] = useState(false);
+  const [userTimezone, setUserTimezone] = useState(user?.timezone ?? 'UTC');
+  const { fetchUser } = useAuthStore();
 
   // Sync form state from fetched data without using setState in useEffect
   if (data && !initialized) {
     setOrgName(defaults.orgName);
     setTimezone(defaults.timezone);
+    setUserTimezone(user?.timezone ?? defaults.timezone);
     setScreenshotInterval(defaults.screenshotInterval);
     setScreenshotBlur(defaults.screenshotBlur);
     setIdleTimeout(defaults.idleTimeout);
@@ -125,6 +130,17 @@ export default function SettingsPage() {
     onError: () => toast.error('Failed to save settings'),
   });
 
+  const updateProfileMutation = useMutation({
+    mutationFn: async (payload: { timezone: string }) => {
+      return api.patch('/auth/me', payload);
+    },
+    onSuccess: async () => {
+      await fetchUser();
+      toast.success('Your timezone has been updated');
+    },
+    onError: () => toast.error('Failed to update timezone'),
+  });
+
   const handleSave = () => {
     updateMutation.mutate({
       name: orgName,
@@ -134,6 +150,10 @@ export default function SettingsPage() {
       idle_timeout: parseInt(idleTimeout),
       can_add_manual_time: allowManualTime,
     });
+  };
+
+  const handleSaveUserTimezone = () => {
+    updateProfileMutation.mutate({ timezone: userTimezone });
   };
 
   if (isLoading) {
@@ -183,6 +203,49 @@ export default function SettingsPage() {
 
         {/* General Tab */}
         <TabsContent value="general" className="space-y-6 mt-6">
+          {/* Your timezone — used for "today", dashboard dates, timer */}
+          <Card className="border-slate-800 bg-slate-900/50">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-white">
+                <UserIcon className="h-5 w-5" />
+                Your timezone
+              </CardTitle>
+              <CardDescription className="text-slate-400">
+                Used for today’s total, dashboard date filters, and reports
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-2 max-w-md">
+                <Label htmlFor="user-tz" className="text-slate-300">Timezone</Label>
+                <div className="flex gap-2 items-center">
+                  <Select value={userTimezone} onValueChange={(v) => v && setUserTimezone(v)}>
+                    <SelectTrigger id="user-tz" className="bg-slate-800/50 border-slate-700">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {timezones.map((tz) => (
+                        <SelectItem key={tz} value={tz}>{tz.replace(/_/g, ' ')}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    onClick={handleSaveUserTimezone}
+                    disabled={updateProfileMutation.isPending || userTimezone === (user?.timezone ?? 'UTC')}
+                    variant="outline"
+                    className="border-slate-700 text-slate-300"
+                  >
+                    {updateProfileMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Save className="h-4 w-4 mr-1" />
+                    )}
+                    Save
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
           <Card className="border-slate-800 bg-slate-900/50">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-white">

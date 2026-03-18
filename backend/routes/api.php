@@ -43,9 +43,13 @@ Route::prefix('v1')->group(function () {
         Route::post('auth/refresh', [AuthController::class, 'refresh']);
         Route::post('auth/logout', [AuthController::class, 'logout']);
         Route::get('auth/me', [AuthController::class, 'me']);
+        Route::patch('auth/me', [AuthController::class, 'updateProfile']);
 
         // Invitations (owner/admin only)
         Route::post('invitations', [InvitationController::class, 'store'])
+            ->middleware('role:owner,admin');
+        // Backward-compatible alias used by older frontend builds
+        Route::post('users/invite', [InvitationController::class, 'store'])
             ->middleware('role:owner,admin');
 
         // Timer
@@ -53,7 +57,9 @@ Route::prefix('v1')->group(function () {
         Route::post('timer/stop', [\App\Http\Controllers\Api\V1\TimerController::class, 'stop']);
         Route::post('timer/pause', [\App\Http\Controllers\Api\V1\TimerController::class, 'pause']);
         Route::get('timer/status', [\App\Http\Controllers\Api\V1\TimerController::class, 'status']);
+        Route::get('timer/today-total', [\App\Http\Controllers\Api\V1\TimerController::class, 'todayTotal']);
         Route::post('timer/heartbeat', [\App\Http\Controllers\Api\V1\TimerController::class, 'heartbeat'])->middleware('throttle:60,1');
+        Route::post('timer/idle', [\App\Http\Controllers\Api\V1\TimerController::class, 'idle']);
 
         // Time entries
         Route::apiResource('time-entries', \App\Http\Controllers\Api\V1\TimeEntryController::class);

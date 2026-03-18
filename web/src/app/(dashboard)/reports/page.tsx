@@ -62,6 +62,103 @@ interface TeamUser {
   name: string;
 }
 
+function transformReportResponse(type: ReportType, raw: Record<string, unknown>): ReportData {
+  switch (type) {
+    case 'summary': {
+      const daily = (raw.daily || []) as Record<string, unknown>[];
+      return {
+        columns: ['date', 'total_seconds', 'activity_score_avg', 'entry_count'],
+        rows: daily.map((d) => ({
+          date: String(d.date ?? ''),
+          total_seconds: Number(d.total_seconds ?? 0),
+          activity_score_avg: Number(d.activity_score_avg ?? 0),
+          entry_count: Number(d.entry_count ?? 0),
+        })),
+        summary: {
+          total_hours: Number(raw.total_seconds ?? 0) / 3600,
+          average_activity: Math.round(Number(raw.avg_activity ?? 0)),
+          total_amount: Number(raw.total_earnings ?? 0),
+        },
+      };
+    }
+    case 'team': {
+      const team = (raw.team || []) as Record<string, unknown>[];
+      return {
+        columns: ['name', 'email', 'role', 'total_seconds', 'avg_activity', 'entry_count'],
+        rows: team.map((t) => {
+          const user = (t.user || {}) as Record<string, unknown>;
+          return {
+            name: String(user.name ?? ''),
+            email: String(user.email ?? ''),
+            role: String(user.role ?? ''),
+            total_seconds: Number(t.total_seconds ?? 0),
+            avg_activity: Number(t.avg_activity ?? 0),
+            entry_count: Number(t.entry_count ?? 0),
+          };
+        }),
+      };
+    }
+    case 'projects': {
+      const projects = (raw.projects || []) as Record<string, unknown>[];
+      return {
+        columns: ['project_name', 'total_seconds', 'billable', 'hourly_rate'],
+        rows: projects.map((p) => ({
+          project_name: String(p.project_name ?? ''),
+          total_seconds: Number(p.total_seconds ?? 0),
+          billable: Boolean(p.billable),
+          hourly_rate: Number(p.hourly_rate ?? 0),
+        })),
+      };
+    }
+    case 'apps': {
+      const apps = (raw.apps || []) as Record<string, unknown>[];
+      return {
+        columns: ['active_app', 'count', 'estimated_seconds'],
+        rows: apps.map((a) => ({
+          active_app: String(a.active_app ?? ''),
+          count: Number(a.count ?? 0),
+          estimated_seconds: Number(a.estimated_seconds ?? 0),
+        })),
+      };
+    }
+    case 'payroll': {
+      const payroll = (raw.payroll || []) as Record<string, unknown>[];
+      return {
+        columns: ['name', 'email', 'total_hours', 'billable_hours', 'earnings'],
+        rows: payroll.map((p) => {
+          const user = (p.user || {}) as Record<string, unknown>;
+          return {
+            name: String(user.name ?? ''),
+            email: String(user.email ?? ''),
+            total_hours: Number(p.total_hours ?? 0),
+            billable_hours: Number(p.billable_hours ?? 0),
+            earnings: Number(p.earnings ?? 0),
+          };
+        }),
+        summary: {
+          total_hours: payroll.reduce((s, p) => s + Number((p as Record<string, unknown>).total_hours ?? 0), 0),
+          total_amount: payroll.reduce((s, p) => s + Number((p as Record<string, unknown>).earnings ?? 0), 0),
+        },
+      };
+    }
+    case 'attendance': {
+      const attendance = (raw.attendance || []) as Record<string, unknown>[];
+      return {
+        columns: ['user_id', 'date', 'first_seen', 'last_seen', 'total_seconds'],
+        rows: attendance.map((a) => ({
+          user_id: String(a.user_id ?? ''),
+          date: String(a.date ?? ''),
+          first_seen: String(a.first_seen ?? ''),
+          last_seen: String(a.last_seen ?? ''),
+          total_seconds: Number(a.total_seconds ?? 0),
+        })),
+      };
+    }
+    default:
+      return { columns: [], rows: [] };
+  }
+}
+
 const reportTypes: { value: ReportType; label: string; description: string }[] = [
   { value: 'summary', label: 'Summary', description: 'Overview of hours and activity' },
   { value: 'team', label: 'Team', description: 'Breakdown by team member' },
@@ -90,7 +187,7 @@ export default function ReportsPage() {
     queryKey: ['team-users'],
     queryFn: async () => {
       const res = await api.get('/users', { params: { per_page: 100 } });
-      return res.data.data || res.data;
+      return res.data.users || res.data.data || (Array.isArray(res.data) ? res.data : []);
     },
     enabled: !isEmployee,
   });
@@ -103,15 +200,14 @@ export default function ReportsPage() {
     queryKey: ['report', reportType, dateFrom, dateTo, userFilter],
     queryFn: async () => {
       const params: Record<string, string> = {
-        type: reportType,
         date_from: dateFrom,
         date_to: dateTo,
       };
       if (userFilter && userFilter !== 'all') {
         params.user_id = userFilter;
       }
-      const res = await api.get('/reports', { params });
-      return res.data;
+      const res = await api.get(`/reports/${reportType}`, { params });
+      return transformReportResponse(reportType, res.data);
     },
     enabled: shouldFetch,
   });
@@ -159,7 +255,10 @@ export default function ReportsPage() {
     if (key.includes('seconds') || key.includes('duration')) {
       return formatDuration(Number(value));
     }
-    if (key.includes('amount') || key.includes('cost') || key.includes('rate')) {
+    if (key.includes('hours')) {
+      return `${Number(value).toFixed(1)}h`;
+    }
+    if (key.includes('amount') || key.includes('cost') || key.includes('rate') || key.includes('earnings')) {
       return `$${Number(value).toFixed(2)}`;
     }
     if (key.includes('score') || key.includes('percentage') || key.includes('activity')) {

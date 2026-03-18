@@ -22,7 +22,11 @@ class TimerController extends Controller
 
         try {
             $entry = $this->timerService->start($request->only('project_id', 'task_id', 'notes'));
-            return response()->json(['entry' => $entry], 201);
+
+            // Return today's total for this project so header shows correct total (resumes from where it stopped)
+            $todayTotal = $this->timerService->todayTotal($entry->project_id);
+
+            return response()->json(['entry' => $entry, 'today_total' => $todayTotal], 201);
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 409);
         }
@@ -33,7 +37,11 @@ class TimerController extends Controller
     {
         try {
             $entry = $this->timerService->stop();
-            return response()->json(['entry' => $entry]);
+
+            // Return today's total for this project so header shows correct total
+            $todayTotal = $this->timerService->todayTotal($entry->project_id);
+
+            return response()->json(['entry' => $entry, 'today_total' => $todayTotal]);
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 404);
         }
@@ -50,11 +58,54 @@ class TimerController extends Controller
         }
     }
 
-    // TIME-04: Get status
-    public function status(): JsonResponse
+    // TIME-04: Get status — current day = user's timezone (today_total is that day's total). Optional ?project_id= for project scope.
+    // Response must never be cached so elapsed_seconds and today_total stay live.
+    public function status(Request $request): JsonResponse
     {
-        $status = $this->timerService->status();
-        return response()->json($status);
+        $projectId = $request->query('project_id');
+        $projectId = is_string($projectId) ? trim($projectId) : $projectId;
+        $projectId = $projectId === '' ? null : $projectId;
+        $status = $this->timerService->status($projectId);
+        return response()->json($status)
+            ->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+            ->header('Pragma', 'no-cache')
+            ->header('Expires', '0');
+    }
+
+    // Today's total (optionally for a specific project) — never cached so value stays live.
+    public function todayTotal(Request $request): JsonResponse
+    {
+        $projectId = $request->query('project_id');
+        $projectId = is_string($projectId) ? trim($projectId) : $projectId;
+        $projectId = $projectId === '' ? null : $projectId;
+        $total = $this->timerService->todayTotal($projectId);
+        return response()->json(['today_total' => $total])
+            ->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+            ->header('Pragma', 'no-cache')
+            ->header('Expires', '0');
+    }
+
+    // TIME-05: Report idle time (from desktop agent)
+    public function idle(Request $request): JsonResponse
+    {
+        $request->validate([
+            'time_entry_id' => 'required|uuid',
+            'idle_started_at' => 'required|date',
+            'idle_ended_at' => 'required|date',
+            'idle_seconds' => 'required|integer|min:1',
+            'action' => 'required|in:discard,keep',
+        ]);
+
+        if ($request->action === 'keep') {
+            return response()->json(['message' => 'Idle time kept.']);
+        }
+
+        $entry = $this->timerService->reportIdle($request->all());
+
+        return response()->json([
+            'message' => 'Idle time recorded and discarded.',
+            'idle_entry' => $entry,
+        ]);
     }
 
     // Heartbeat
