@@ -30,11 +30,10 @@ api.interceptors.response.use(
       return Promise.reject({ ...error, message: errorMessage });
     }
 
-    // Handle forbidden (403) - insufficient permissions
+    // Handle forbidden (403)
+    // Do NOT globally redirect on 403 because employees can legitimately hit 403
+    // (e.g. trying to start a timer on an unassigned project). Let the caller decide.
     if (error.response?.status === 403) {
-      if (typeof window !== 'undefined') {
-        window.location.href = '/';
-      }
       return Promise.reject({ ...error, message: errorMessage });
     }
 

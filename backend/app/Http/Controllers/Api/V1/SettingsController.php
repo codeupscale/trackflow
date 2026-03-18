@@ -38,6 +38,7 @@ class SettingsController extends Controller
             'settings.keep_idle_time' => 'sometimes|string|in:prompt,always,never',
             'settings.timezone' => 'sometimes|string',
             'settings.can_add_manual_time' => 'sometimes|boolean',
+            'settings.employees_see_all_projects' => 'sometimes|boolean',
         ]);
 
         $org = $request->user()->organization;

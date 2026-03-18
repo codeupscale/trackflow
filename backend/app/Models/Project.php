@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Project extends Model
@@ -45,5 +46,27 @@ class Project extends Model
     public function timeEntries(): HasMany
     {
         return $this->hasMany(TimeEntry::class);
+    }
+
+    /**
+     * Team members assigned to this project (for time tracking visibility and access).
+     * Owner/Admin/Manager see all projects; employees see only projects they are assigned to
+     * (unless organization setting employees_see_all_projects is true).
+     */
+    public function members(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'project_user')->withTimestamps();
+    }
+
+    public function isAssignedTo(User $user): bool
+    {
+        if ($user->hasRole('owner', 'admin', 'manager')) {
+            return true;
+        }
+        $org = $user->relationLoaded('organization') ? $user->organization : $user->organization()->first();
+        if ($org && $org->getSetting('employees_see_all_projects', false)) {
+            return true;
+        }
+        return $this->members()->where('user_id', $user->id)->exists();
     }
 }

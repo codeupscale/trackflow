@@ -10,12 +10,12 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from '@/components/ui/select';
 import { useTimerStore } from '@/stores/timer-store';
 import { formatDuration, cn } from '@/lib/utils';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
+import { useAuthStore } from '@/stores/auth-store';
 
 interface Project {
   id: string;
@@ -24,6 +24,7 @@ interface Project {
 }
 
 export function TimerWidget() {
+  const { user } = useAuthStore();
   const {
     isRunning,
     elapsedSeconds,
@@ -97,7 +98,7 @@ export function TimerWidget() {
       <Select
         value={displayProjectId ?? ''}
         onValueChange={handleProjectChange}
-        disabled={isRunning}
+        disabled={isRunning || !projects?.length}
       >
         <SelectTrigger className="w-[180px] min-w-[140px] h-8 bg-slate-800/50 border-slate-700 text-sm">
           {/* Always show project name (never raw ID); fallback when value not in list (e.g. still loading) */}
@@ -110,7 +111,9 @@ export function TimerWidget() {
               <span className="truncate">{displayProject.name}</span>
             </div>
           ) : (
-            <span className="text-slate-500">Select project</span>
+            <span className="text-slate-500">
+              {projects?.length ? 'Select project' : (user?.role === 'employee' ? 'No projects assigned' : 'No projects')}
+            </span>
           )}
         </SelectTrigger>
         <SelectContent>

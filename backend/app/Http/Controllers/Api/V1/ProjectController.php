@@ -11,10 +11,17 @@ class ProjectController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $projects = $request->user()->organization->projects()
+        $user = $request->user();
+        $query = $user->organization->projects()
             ->with('tasks')
-            ->where('is_archived', false)
-            ->get();
+            ->where('is_archived', false);
+
+        // Employees see only projects they are assigned to (unless org setting allows "see all").
+        if ($user->isEmployee() && ! $user->organization->getSetting('employees_see_all_projects', false)) {
+            $query->whereHas('members', fn ($q) => $q->where('user_id', $user->id));
+        }
+
+        $projects = $query->get();
         return response()->json(['projects' => $projects]);
     }
 
@@ -73,5 +80,57 @@ class ProjectController extends Controller
         $project->delete();
 
         return response()->json(['message' => 'Project deleted.']);
+    }
+
+    /**
+     * List members assigned to the project (owner/admin/manager only).
+     */
+    public function members(Request $request, Project $project): JsonResponse
+    {
+        $this->authorize('update', $project);
+
+        $members = $project->members()
+            ->select('users.id', 'users.name', 'users.email', 'users.role', 'users.avatar_url')
+            ->get();
+
+        return response()->json(['members' => $members]);
+    }
+
+    /**
+     * Assign team members to the project (owner/admin/manager only).
+     * Body: { "user_ids": ["uuid", ...] } — syncs the member list (replaces existing).
+     */
+    public function syncMembers(Request $request, Project $project): JsonResponse
+    {
+        $this->authorize('update', $project);
+
+        $request->validate([
+            'user_ids' => 'required|array',
+            'user_ids.*' => 'uuid|exists:users,id',
+        ]);
+
+        $userIds = $request->input('user_ids', []);
+        // Ensure all users belong to the same organization
+        $orgUserIds = $request->user()->organization->users()->whereIn('id', $userIds)->pluck('id')->toArray();
+        $project->members()->sync($orgUserIds);
+
+        $members = $project->members()
+            ->select('users.id', 'users.name', 'users.email', 'users.role')
+            ->get();
+
+        return response()->json(['members' => $members]);
+    }
+
+    /**
+     * Remove a single member from the project (owner/admin/manager only).
+     */
+    public function removeMember(Request $request, Project $project, string $user): JsonResponse
+    {
+        $this->authorize('update', $project);
+
+        $request->user()->organization->users()->findOrFail($user);
+        $project->members()->detach($user);
+
+        return response()->json(['message' => 'Member removed from project.']);
     }
 }

@@ -163,14 +163,16 @@
       statusText.textContent = running ? 'Tracking' : (todayTotalBase > 0 ? 'Today\'s Total' : 'Stopped');
       startBtn.style.display = running ? 'none' : 'block';
       stopBtn.style.display = running ? 'block' : 'none';
-      projectSelect.disabled = running;
+      // Disable project selection while running; also disabled when there are no assigned projects
+      projectSelect.disabled = running || projectSelect.options.length <= 1;
       updateStartButtonState();
     }
 
-    // Start is only allowed when a project is selected (required for tracking)
+    // Start is allowed even with "No Project" selected.
+    // Employees may have zero assigned projects; in that case they can still track to "No Project"
+    // (and managers can later reassign time if needed).
     function updateStartButtonState() {
-      const noProject = !projectSelect.value || projectSelect.value === '';
-      startBtn.disabled = !isRunning && noProject;
+      startBtn.disabled = isRunning;
     }
 
     function startTicking() {
