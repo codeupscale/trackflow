@@ -134,6 +134,27 @@ class User extends Authenticatable
         return in_array($this->role, $roles);
     }
 
+    /**
+     * Timezone for date filters and "today" (user → organization default → app).
+     * Used so all date ranges and "today" are in the user's local time.
+     */
+    public function getTimezoneForDates(): string
+    {
+        if (! empty($this->timezone)) {
+            return $this->timezone;
+        }
+
+        $org = $this->relationLoaded('organization') ? $this->organization : $this->organization()->first();
+        if ($org !== null) {
+            $setting = $org->getSetting('timezone');
+            if ($setting !== null && $setting !== '') {
+                return $setting;
+            }
+        }
+
+        return config('app.timezone', 'UTC');
+    }
+
     public function hasPermission(string $permission): bool
     {
         if ($this->isOwner()) {

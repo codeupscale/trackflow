@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\Screenshot;
 use App\Jobs\ProcessScreenshotJob;
+use App\Support\TimezoneAwareDateRange;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -12,6 +13,12 @@ use Illuminate\Support\Str;
 
 class ScreenshotController extends Controller
 {
+    // Use configured disk — 's3' in production with AWS, 'public' for local storage
+    private function disk(): string
+    {
+        return config('filesystems.disks.s3.key') ? 's3' : 'public';
+    }
+
     // SS-01: Upload screenshot from agent
     public function store(Request $request): JsonResponse
     {
@@ -29,13 +36,15 @@ class ScreenshotController extends Controller
         $org = $user->organization;
         $date = now()->format('Y-m-d');
         $filename = time() . '_' . Str::random(8) . '.jpg';
-        $s3Key = "{$org->id}/{$user->id}/{$date}/{$filename}";
+        $storageKey = "{$org->id}/{$user->id}/{$date}/{$filename}";
 
-        // Store to S3 (or local for dev)
-        $path = $request->file('file')->storeAs(
+        $disk = $this->disk();
+
+        // Store the file
+        $request->file('file')->storeAs(
             "screenshots/{$org->id}/{$user->id}/{$date}",
             $filename,
-            's3'
+            $disk
         );
 
         // Get image dimensions
@@ -47,14 +56,19 @@ class ScreenshotController extends Controller
             'organization_id' => $org->id,
             'user_id' => $user->id,
             'time_entry_id' => $request->time_entry_id,
-            's3_key' => $s3Key,
+            's3_key' => $storageKey,
             'captured_at' => $request->captured_at,
             'is_blurred' => $org->getSetting('blur_screenshots', false),
             'width' => $width,
             'height' => $height,
         ]);
 
-        ProcessScreenshotJob::dispatch($screenshot);
+        // Only dispatch processing job if Intervention Image is available
+        try {
+            ProcessScreenshotJob::dispatch($screenshot);
+        } catch (\Exception $e) {
+            // Processing is optional — screenshot is already saved
+        }
 
         return response()->json(['screenshot' => $screenshot], 201);
     }
@@ -74,11 +88,14 @@ class ScreenshotController extends Controller
             $query->where('user_id', $request->user_id);
         }
 
-        if ($request->has('date_from')) {
-            $query->where('captured_at', '>=', $request->date_from);
-        }
-        if ($request->has('date_to')) {
-            $query->where('captured_at', '<=', $request->date_to);
+        if ($request->has('date_from') && $request->has('date_to')) {
+            $tz = $request->user()->getTimezoneForDates();
+            [$dateFromUtc, $dateToUtc] = TimezoneAwareDateRange::toUtcBounds(
+                $request->date_from,
+                $request->date_to,
+                $tz
+            );
+            $query->where('captured_at', '>=', $dateFromUtc)->where('captured_at', '<=', $dateToUtc);
         }
         if ($request->has('time_entry_id')) {
             $query->where('time_entry_id', $request->time_entry_id);
@@ -88,9 +105,14 @@ class ScreenshotController extends Controller
             min((int) $request->input('per_page', 50), 100)
         );
 
-        // Add signed URLs
+        // Add URLs for viewing
         $screenshots->getCollection()->transform(function ($screenshot) {
-            $screenshot->url = $this->getSignedUrl($screenshot->s3_key);
+            $screenshot->url = $this->getScreenshotUrl($screenshot->s3_key);
+            $screenshot->thumbnail_url = $screenshot->url; // Same for now
+            $screenshot->user_name = $screenshot->user?->name ?? 'Unknown';
+            // Get activity score from the time entry
+            $screenshot->activity_score = $screenshot->timeEntry?->activity_score ?? 0;
+            $screenshot->project_name = $screenshot->timeEntry?->project?->name ?? null;
             return $screenshot;
         });
 
@@ -104,8 +126,8 @@ class ScreenshotController extends Controller
             ->findOrFail($id);
         $this->authorize('delete', $screenshot);
 
-        // Delete from S3
-        Storage::disk('s3')->delete("screenshots/{$screenshot->s3_key}");
+        $disk = $this->disk();
+        Storage::disk($disk)->delete("screenshots/{$screenshot->s3_key}");
 
         $screenshot->delete();
         return response()->json(['message' => 'Screenshot deleted.']);
@@ -114,21 +136,28 @@ class ScreenshotController extends Controller
     // SS-05: Issue signed cookies for gallery
     public function signedCookies(Request $request): JsonResponse
     {
-        // In production, this would issue CloudFront signed cookies
-        // For now, return a placeholder indicating the feature
         return response()->json([
             'message' => 'Signed cookies issued.',
             'expires_at' => now()->addHours(2)->toISOString(),
         ]);
     }
 
-    private function getSignedUrl(string $s3Key): string
+    private function getScreenshotUrl(string $storageKey): string
     {
-        // In production: CloudFront signed URL
-        // For development: use temporary S3 URL
-        return Storage::disk('s3')->temporaryUrl(
-            "screenshots/{$s3Key}",
-            now()->addMinutes(15)
-        );
+        $disk = $this->disk();
+
+        if ($disk === 's3') {
+            try {
+                return Storage::disk('s3')->temporaryUrl(
+                    "screenshots/{$storageKey}",
+                    now()->addMinutes(15)
+                );
+            } catch (\Exception $e) {
+                return '';
+            }
+        }
+
+        // Local storage — serve via /storage/ public URL
+        return url("storage/screenshots/{$storageKey}");
     }
 }

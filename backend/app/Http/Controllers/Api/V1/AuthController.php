@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
 use App\Services\AuditService;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
@@ -88,8 +89,9 @@ class AuthController extends Controller
             ]);
         }
 
-        // Revoke existing tokens
-        $user->tokens()->delete();
+        // Clean up only expired tokens — allow multi-device sessions (desktop + web + mobile)
+        // Like Hubstaff, users must be able to stay logged in on desktop while also using web portal
+        $user->tokens()->where('expires_at', '<', now())->delete();
 
         $token = $user->createToken('access_token', ['*'], now()->addHours(24));
         $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
@@ -115,8 +117,11 @@ class AuthController extends Controller
             return response()->json(['message' => 'Invalid refresh token.'], 401);
         }
 
-        // Delete old tokens
-        $user->tokens()->delete();
+        // Delete only the current refresh token (not all tokens — preserve other device sessions)
+        $user->currentAccessToken()->delete();
+
+        // Clean up expired tokens
+        $user->tokens()->where('expires_at', '<', now())->delete();
 
         $token = $user->createToken('access_token', ['*'], now()->addHours(24));
         $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
@@ -189,6 +194,24 @@ class AuthController extends Controller
     {
         return response()->json([
             'user' => $this->userResponse($request->user()),
+        ]);
+    }
+
+    /** Update current user profile (e.g. timezone). */
+    public function updateProfile(Request $request): JsonResponse
+    {
+        $valid = $request->validate([
+            'timezone' => ['sometimes', 'string', Rule::in(timezone_identifiers_list())],
+        ]);
+
+        $user = $request->user();
+        if (array_key_exists('timezone', $valid)) {
+            $user->timezone = $valid['timezone'];
+            $user->save();
+        }
+
+        return response()->json([
+            'user' => $this->userResponse($user->fresh()),
         ]);
     }
 

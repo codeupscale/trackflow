@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useForm } from 'react-hook-form';
@@ -39,6 +39,14 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 export default function LoginPage() {
   const router = useRouter();
   const { login } = useAuthStore();
+
+  // If already logged in, redirect to dashboard
+  useEffect(() => {
+    const token = localStorage.getItem('access_token');
+    if (token) {
+      router.replace('/dashboard');
+    }
+  }, [router]);
   const [error, setError] = useState<string | null>(null);
 
   const form = useForm<LoginFormValues>({

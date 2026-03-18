@@ -106,7 +106,7 @@ export default function TeamPage() {
 
   const inviteMutation = useMutation({
     mutationFn: async (data: { email: string; role: string }) => {
-      await api.post('/users/invite', data);
+      await api.post('/invitations', data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['team-members'] });
