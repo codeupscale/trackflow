@@ -102,8 +102,10 @@ async function initializeApp() {
   try {
     config = await apiClient.getConfig();
   } catch (e) {
-    config = { screenshot_interval: 5, idle_timeout: 5, blur_screenshots: false };
+    config = { screenshot_interval: 5, idle_timeout: 5, idle_detection: true, keep_idle_time: 'prompt', blur_screenshots: false };
   }
+  if (config.idle_timeout === undefined) config.idle_timeout = 5;
+  if (config.keep_idle_time === undefined) config.keep_idle_time = 'prompt';
 
   // Initialize services
   offlineQueue = new OfflineQueue();
@@ -113,6 +115,18 @@ async function initializeApp() {
 
   // Wire idle detection events
   idleDetector.onIdleDetected((idleSeconds, idleStartedAt) => {
+    const policy = config.keep_idle_time || 'prompt';
+    if (policy === 'always') {
+      idleDetector.resolveIdle();
+      if (isTimerRunning && currentEntry) screenshotService?.start(currentEntry.id);
+      return;
+    }
+    if (policy === 'never') {
+      handleIdleAction('discard', idleSeconds, null);
+      dismissIdleAlert();
+      if (isTimerRunning && currentEntry) screenshotService?.start(currentEntry.id);
+      return;
+    }
     showIdleAlert(idleSeconds, idleStartedAt);
   });
 
@@ -479,8 +493,8 @@ function setupIPC() {
 
   // Idle alert actions
   ipcMain.removeHandler('resolve-idle');
-  ipcMain.handle('resolve-idle', async (_, action) => {
-    await handleIdleAction(action);
+  ipcMain.handle('resolve-idle', async (_, action, projectId = null) => {
+    await handleIdleAction(action, null, projectId);
     dismissIdleAlert();
     return { success: true };
   });
@@ -693,7 +707,7 @@ function showIdleAlert(idleSeconds, idleStartedAt) {
 
   idleAlertWindow = new BrowserWindow({
     width: 380,
-    height: 420,
+    height: 480,
     frame: false,
     resizable: false,
     alwaysOnTop: true,
@@ -712,8 +726,11 @@ function showIdleAlert(idleSeconds, idleStartedAt) {
   idleAlertWindow.once('ready-to-show', () => {
     idleAlertWindow.show();
     idleAlertWindow.focus();
-    // Send idle start time to renderer so it can show accurate idle duration
-    idleAlertWindow.webContents.send('idle-data', { idleStartedAt, idleSeconds });
+    idleAlertWindow.webContents.send('idle-data', {
+      idleStartedAt,
+      idleSeconds,
+      projects: cachedProjects || [],
+    });
   });
 
   idleAlertWindow.on('closed', () => {
@@ -738,46 +755,46 @@ function dismissIdleAlert() {
   }
 }
 
-async function handleIdleAction(action, idleDurationOverride = null) {
+async function handleIdleAction(action, idleDurationOverride = null, reassignProjectId = null) {
   const idleDuration = idleDurationOverride || idleDetector?.getIdleDuration() || 0;
   const idleStartedAt = idleDetector?.idleStartedAt || null;
 
-  // Resolve the idle state in the detector
   idleDetector?.resolveIdle();
 
   switch (action) {
     case 'keep':
-      // Keep all time including idle — just resume tracking normally
-      // Restart screenshot service
       if (isTimerRunning && currentEntry) {
         screenshotService?.start(currentEntry.id);
       }
       break;
 
     case 'discard':
-      // Discard idle time — notify server to adjust the time entry
-      // The timer continues but idle period is removed
+    case 'reassign':
       if (apiClient && currentEntry && idleStartedAt) {
         try {
-          await apiClient.reportIdleTime({
+          const payload = {
             time_entry_id: currentEntry.id,
             idle_started_at: new Date(idleStartedAt).toISOString(),
             idle_ended_at: new Date().toISOString(),
             idle_seconds: idleDuration,
-            action: 'discard',
-          });
+            action: action === 'reassign' && reassignProjectId ? 'reassign' : 'discard',
+          };
+          if (payload.action === 'reassign') payload.project_id = reassignProjectId;
+
+          const result = await apiClient.reportIdleTime(payload);
+          if (result?.new_entry) {
+            currentEntry = result.new_entry;
+          }
         } catch (e) {
           console.error('Failed to report idle time:', e.message);
         }
       }
-      // Restart screenshot service
       if (isTimerRunning && currentEntry) {
         screenshotService?.start(currentEntry.id);
       }
       break;
 
     case 'stop':
-      // Stop the timer entirely
       stopTimer();
       break;
   }

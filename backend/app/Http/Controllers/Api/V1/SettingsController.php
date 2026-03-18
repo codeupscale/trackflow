@@ -34,7 +34,8 @@ class SettingsController extends Controller
             'settings' => 'sometimes|array',
             'settings.screenshot_interval' => 'sometimes|integer|in:5,10,15',
             'settings.blur_screenshots' => 'sometimes|boolean',
-            'settings.idle_timeout' => 'sometimes|integer|min:1|max:30',
+            'settings.idle_timeout' => 'sometimes|nullable|integer|min:0|max:30',
+            'settings.keep_idle_time' => 'sometimes|string|in:prompt,always,never',
             'settings.timezone' => 'sometimes|string',
             'settings.can_add_manual_time' => 'sometimes|boolean',
         ]);

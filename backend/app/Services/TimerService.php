@@ -222,40 +222,111 @@ class TimerService
     /**
      * Report idle time from the desktop agent.
      *
-     * When user chooses "discard idle time", the idle period is split out
-     * of the running time entry:
-     *   1. Current entry's effective duration is reduced by idle_seconds
-     *   2. An 'idle' type entry is created for the idle period (for audit trail)
-     *
-     * This preserves the audit trail while ensuring idle time doesn't count
-     * toward billable/tracked hours.
+     * Actions:
+     * - keep: no change, timer continues.
+     * - discard: shorten running entry to idle_started_at, create idle entry (audit),
+     *   create new tracked entry from idle_ended_at and set Redis so timer continues.
+     * - reassign: same as discard but create a tracked entry on project_id for the
+     *   idle period so that time counts toward the chosen project.
      */
-    public function reportIdle(array $data): ?TimeEntry
+    public function reportIdle(array $data): array
     {
         $user = Auth::user();
         $redisKey = "timer:{$user->id}";
 
         $timerData = Redis::get($redisKey);
         if (!$timerData) {
-            return null;
+            return ['idle_entry' => null, 'new_entry' => null];
         }
 
         $timerInfo = json_decode($timerData, true);
+        $entryId = $timerInfo['entry_id'] ?? null;
+        if (!$entryId) {
+            return ['idle_entry' => null, 'new_entry' => null];
+        }
 
-        // Create an idle entry for the idle period (audit trail)
-        $idleEntry = TimeEntry::create([
-            'organization_id' => $user->organization_id,
-            'user_id' => $user->id,
-            'project_id' => $data['project_id'] ?? null,
-            'task_id' => $data['task_id'] ?? null,
-            'started_at' => $data['idle_started_at'],
-            'ended_at' => $data['idle_ended_at'],
-            'duration_seconds' => $data['idle_seconds'],
-            'type' => 'idle',
-            'notes' => 'Idle time discarded by user',
-        ]);
+        $currentEntry = TimeEntry::withoutGlobalScopes()
+            ->where('id', $entryId)
+            ->where('user_id', $user->id)
+            ->first();
+        if (!$currentEntry) {
+            return ['idle_entry' => null, 'new_entry' => null];
+        }
 
-        return $idleEntry;
+        $idleStartedAt = \Carbon\Carbon::parse($data['idle_started_at']);
+        $idleEndedAt = \Carbon\Carbon::parse($data['idle_ended_at']);
+        $idleSeconds = (int) ($data['idle_seconds'] ?? 0);
+        $action = $data['action'] ?? 'discard';
+        $reassignProjectId = $data['project_id'] ?? null;
+
+        $result = DB::transaction(function () use (
+            $user,
+            $currentEntry,
+            $redisKey,
+            $timerInfo,
+            $idleStartedAt,
+            $idleEndedAt,
+            $idleSeconds,
+            $action,
+            $reassignProjectId
+        ) {
+            // 1. Close current entry at idle start (shorten it)
+            $currentEntry->update([
+                'ended_at' => $idleStartedAt,
+                'duration_seconds' => (int) abs($idleStartedAt->diffInSeconds($currentEntry->started_at)),
+            ]);
+
+            // 2. Idle entry for audit (always created on discard/reassign)
+            $idleEntry = TimeEntry::create([
+                'organization_id' => $user->organization_id,
+                'user_id' => $user->id,
+                'project_id' => $currentEntry->project_id,
+                'task_id' => $currentEntry->task_id,
+                'started_at' => $idleStartedAt,
+                'ended_at' => $idleEndedAt,
+                'duration_seconds' => $idleSeconds,
+                'type' => 'idle',
+                'notes' => $action === 'reassign' ? 'Idle time reassigned to another project' : 'Idle time discarded by user',
+            ]);
+
+            $newEntry = null;
+
+            if ($action === 'reassign' && $reassignProjectId) {
+                // 3a. Create tracked entry on target project for the idle period
+                TimeEntry::create([
+                    'organization_id' => $user->organization_id,
+                    'user_id' => $user->id,
+                    'project_id' => $reassignProjectId,
+                    'task_id' => null,
+                    'started_at' => $idleStartedAt,
+                    'ended_at' => $idleEndedAt,
+                    'duration_seconds' => $idleSeconds,
+                    'type' => 'tracked',
+                    'notes' => 'Idle time reassigned from timer',
+                ]);
+            }
+
+            // 4. New running entry from idle_ended_at (same project as original) and set Redis
+            $newEntry = TimeEntry::create([
+                'organization_id' => $user->organization_id,
+                'user_id' => $user->id,
+                'project_id' => $currentEntry->project_id,
+                'task_id' => $currentEntry->task_id,
+                'started_at' => $idleEndedAt,
+                'type' => 'tracked',
+            ]);
+
+            Redis::setex($redisKey, 2592000, json_encode([
+                'entry_id' => $newEntry->id,
+                'started_at' => $newEntry->started_at->toISOString(),
+                'project_id' => $newEntry->project_id,
+                'task_id' => $newEntry->task_id,
+            ]));
+
+            return ['idle_entry' => $idleEntry, 'new_entry' => $newEntry];
+        });
+
+        return $result;
     }
 
     public function processHeartbeat(array $data): ActivityLog

@@ -78,7 +78,7 @@ class ScreenshotController extends Controller
     {
         $query = Screenshot::query()
             ->where('organization_id', $request->user()->organization_id)
-            ->with('user');
+            ->with(['user', 'timeEntry', 'timeEntry.project']);
 
         // Employees see only own screenshots
         if ($request->user()->isEmployee()) {
@@ -99,6 +99,10 @@ class ScreenshotController extends Controller
         }
         if ($request->has('time_entry_id')) {
             $query->where('time_entry_id', $request->time_entry_id);
+        }
+        if ($request->has('time_type')) {
+            $request->validate(['time_type' => 'string|in:tracked,manual,idle']);
+            $query->whereHas('timeEntry', fn ($q) => $q->where('type', $request->time_type));
         }
 
         $screenshots = $query->orderBy('captured_at', 'desc')->paginate(

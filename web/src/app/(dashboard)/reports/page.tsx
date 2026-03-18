@@ -54,6 +54,8 @@ interface ReportData {
     total_hours?: number;
     total_amount?: number;
     average_activity?: number;
+    idle_hours?: number;
+    idle_percent?: number;
   };
 }
 
@@ -78,13 +80,15 @@ function transformReportResponse(type: ReportType, raw: Record<string, unknown>)
           total_hours: Number(raw.total_seconds ?? 0) / 3600,
           average_activity: Math.round(Number(raw.avg_activity ?? 0)),
           total_amount: Number(raw.total_earnings ?? 0),
+          idle_hours: Number(raw.idle_hours ?? 0),
+          idle_percent: Number(raw.idle_percent ?? 0),
         },
       };
     }
     case 'team': {
       const team = (raw.team || []) as Record<string, unknown>[];
       return {
-        columns: ['name', 'email', 'role', 'total_seconds', 'avg_activity', 'entry_count'],
+        columns: ['name', 'email', 'role', 'total_seconds', 'avg_activity', 'entry_count', 'idle_hours', 'idle_percent'],
         rows: team.map((t) => {
           const user = (t.user || {}) as Record<string, unknown>;
           return {
@@ -94,6 +98,8 @@ function transformReportResponse(type: ReportType, raw: Record<string, unknown>)
             total_seconds: Number(t.total_seconds ?? 0),
             avg_activity: Number(t.avg_activity ?? 0),
             entry_count: Number(t.entry_count ?? 0),
+            idle_hours: Number(t.idle_hours ?? 0),
+            idle_percent: Number(t.idle_percent ?? 0),
           };
         }),
       };
@@ -255,8 +261,11 @@ export default function ReportsPage() {
     if (key.includes('seconds') || key.includes('duration')) {
       return formatDuration(Number(value));
     }
-    if (key.includes('hours')) {
+    if (key.includes('hours') || key === 'idle_hours') {
       return `${Number(value).toFixed(1)}h`;
+    }
+    if (key === 'idle_percent') {
+      return `${Number(value).toFixed(1)}%`;
     }
     if (key.includes('amount') || key.includes('cost') || key.includes('rate') || key.includes('earnings')) {
       return `$${Number(value).toFixed(2)}`;
@@ -479,6 +488,26 @@ export default function ReportsPage() {
                           <p className="text-xs text-slate-400">Avg Activity</p>
                           <p className="text-xl font-bold text-white">
                             {reportData.summary.average_activity}%
+                          </p>
+                        </CardContent>
+                      </Card>
+                    )}
+                    {reportData.summary.idle_hours !== undefined && (
+                      <Card className="border-slate-800 bg-slate-800/30">
+                        <CardContent className="pt-4 pb-3">
+                          <p className="text-xs text-slate-400">Idle (hr)</p>
+                          <p className="text-xl font-bold text-white">
+                            {reportData.summary.idle_hours.toFixed(1)}h
+                          </p>
+                        </CardContent>
+                      </Card>
+                    )}
+                    {reportData.summary.idle_percent !== undefined && (
+                      <Card className="border-slate-800 bg-slate-800/30">
+                        <CardContent className="pt-4 pb-3">
+                          <p className="text-xs text-slate-400">Idle (%)</p>
+                          <p className="text-xl font-bold text-white">
+                            {reportData.summary.idle_percent.toFixed(1)}%
                           </p>
                         </CardContent>
                       </Card>

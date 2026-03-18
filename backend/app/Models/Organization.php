@@ -96,6 +96,7 @@ class Organization extends Model
             'screenshot_interval' => 5,
             'blur_screenshots' => false,
             'idle_timeout' => 5,
+            'keep_idle_time' => 'prompt', // prompt | always | never
             'timezone' => 'America/New_York',
             'can_add_manual_time' => true,
         ];
