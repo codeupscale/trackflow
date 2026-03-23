@@ -3,131 +3,156 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
   <title>TrackFlow</title>
+  <link rel="stylesheet" href="shared.css">
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f172a;
-      color: #e2e8f0;
-      height: 100vh;
-      overflow: hidden;
-      user-select: none;
-      -webkit-app-region: drag;
-    }
-    .container { padding: 16px; height: 100%; display: flex; flex-direction: column; }
-    .header {
-      display: flex; justify-content: space-between; align-items: center;
-      padding-bottom: 12px; border-bottom: 1px solid #1e293b;
-    }
-    .logo { font-size: 16px; font-weight: 700; color: #3b82f6; }
-    .btn {
-      -webkit-app-region: no-drag;
-      padding: 6px 14px; border: none; border-radius: 6px;
-      font-size: 13px; font-weight: 600; cursor: pointer;
-      transition: all 0.15s;
-    }
-    .btn-primary { background: #3b82f6; color: white; }
-    .btn-primary:hover { background: #2563eb; }
-    .btn-danger { background: #ef4444; color: white; }
-    .btn-danger:hover { background: #dc2626; }
-    .btn-ghost { background: transparent; color: #94a3b8; }
-    .btn-ghost:hover { color: #e2e8f0; }
+    body { height: 100vh; }
 
+    .container {
+      padding: 0;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .content {
+      padding: 12px 16px 16px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Timer Display ──────────────────────────────────────── */
     .timer-display {
-      text-align: center; padding: 24px 0;
-      flex: 1; display: flex; flex-direction: column; justify-content: center;
+      text-align: center;
+      padding: 20px 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
     }
     .time {
-      font-size: 42px; font-weight: 700; font-variant-numeric: tabular-nums;
+      font-size: 42px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
       letter-spacing: 2px;
+      transition: color 0.2s;
     }
     .time.running { color: #22c55e; }
     .time.stopped { color: #64748b; }
-    .status { font-size: 13px; color: #64748b; margin-top: 4px; }
-    .status .dot {
-      display: inline-block; width: 8px; height: 8px;
-      border-radius: 50%; margin-right: 4px; vertical-align: middle;
+
+    .status {
+      font-size: 13px;
+      color: #64748b;
+      margin-top: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
     }
     .dot.green { background: #22c55e; animation: pulse 2s infinite; }
     .dot.gray { background: #64748b; }
 
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.4; }
+    /* ── Project Select ─────────────────────────────────────── */
+    .select-wrap {
+      margin: 8px 0;
     }
 
-    .project-select {
-      -webkit-app-region: no-drag;
-      width: 100%; padding: 8px 12px; margin: 12px 0;
-      background: #1e293b; border: 1px solid #334155;
-      border-radius: 6px; color: #e2e8f0; font-size: 13px;
-      outline: none;
-    }
-    .project-select:focus { border-color: #3b82f6; }
-    .project-select:disabled { opacity: 0.5; cursor: not-allowed; }
-
+    /* ── Action Buttons ─────────────────────────────────────── */
     .actions {
-      display: flex; gap: 8px; justify-content: center; padding: 12px 0;
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      padding: 8px 0;
     }
-    .actions .btn { flex: 1; padding: 10px; font-size: 14px; }
-    .actions .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .actions .btn {
+      flex: 1;
+      padding: 10px;
+      font-size: 14px;
+    }
 
+    /* ── Footer ─────────────────────────────────────────────── */
     .footer {
-      display: flex; justify-content: space-between; align-items: center;
-      padding-top: 12px;
-      border-top: 1px solid #1e293b; font-size: 11px; color: #475569;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 10px;
+      border-top: 1px solid #1e293b;
+      font-size: 11px;
     }
-    .footer a {
-      -webkit-app-region: no-drag;
-      color: #64748b; cursor: pointer; text-decoration: none;
-    }
-    .footer a:hover { color: #94a3b8; }
-    .footer .dashboard-link { color: #3b82f6; }
-    .footer .dashboard-link:hover { color: #60a5fa; }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="header">
-      <span class="logo">TrackFlow</span>
-      <button class="btn btn-ghost" id="logoutBtn">Logout</button>
-    </div>
-
-    <div class="timer-display">
-      <div class="time stopped" id="timerDisplay">00:00:00</div>
-      <div class="status">
-        <span class="dot gray" id="statusDot"></span>
-        <span id="statusText">Stopped</span>
+    <!-- Custom titlebar — identical on all platforms -->
+    <div class="titlebar" id="titlebar">
+      <span class="titlebar-title">TrackFlow</span>
+      <div class="titlebar-controls">
+        <button class="titlebar-btn" id="logoutBtn" title="Sign out">
+          <!-- Logout icon (SVG) -->
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        </button>
       </div>
     </div>
 
-    <select class="project-select" id="projectSelect">
-      <option value="">No Project</option>
-    </select>
+    <div class="content">
+      <div class="timer-display">
+        <div class="time stopped" id="timerDisplay" role="timer" aria-live="polite">00:00:00</div>
+        <div class="status">
+          <span class="dot gray" id="statusDot" aria-hidden="true"></span>
+          <span id="statusText">Stopped</span>
+        </div>
+      </div>
 
-    <div class="actions">
-      <button class="btn btn-primary" id="startBtn">Start</button>
-      <button class="btn btn-danger" id="stopBtn" style="display:none">Stop</button>
-    </div>
+      <!-- Custom-styled select — identical on all platforms -->
+      <div class="select-wrap">
+        <select id="projectSelect" aria-label="Select project">
+          <option value="">No Project</option>
+        </select>
+      </div>
 
-    <div class="footer">
-      <a id="dashboardLink" class="dashboard-link">Open Dashboard</a>
-      <a id="logoutLink">Sign out</a>
+      <div class="actions">
+        <button class="btn btn-primary" id="startBtn">
+          <span id="startBtnText">Start</span>
+        </button>
+        <button class="btn btn-danger" id="stopBtn" style="display:none">Stop</button>
+      </div>
+
+      <div class="footer">
+        <a id="dashboardLink" class="link-primary" tabindex="0" role="link">Open Dashboard</a>
+        <a id="logoutLink" tabindex="0" role="link" class="text-muted text-xs">Sign out</a>
+      </div>
     </div>
   </div>
 
   <script>
+    // ── Platform detection for shortcut labels ──
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    const modKey = isMac ? 'Cmd' : 'Ctrl';
+
+    // Apply shortcut hints
+    document.getElementById('logoutBtn').title = `Sign out (${modKey}+Q)`;
+
     let timerInterval = null;
     let elapsedSeconds = 0;
-    let todayTotalBase = 0; // Current day total (00:00–23:59 server time), per selected project
+    let todayTotalBase = 0;
     let isRunning = false;
     let currentStartedAt = null;
+    let _startedAtMs = null;
 
     function showNotification(msg) {
       const el = document.createElement('div');
-      el.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:6px 16px;border-radius:6px;font-size:12px;z-index:999;opacity:1;transition:opacity 0.3s;';
+      el.className = 'notification';
       el.textContent = msg;
+      el.setAttribute('role', 'alert');
       document.body.appendChild(el);
       setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 3000);
     }
@@ -136,6 +161,7 @@
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     const startBtn = document.getElementById('startBtn');
+    const startBtnText = document.getElementById('startBtnText');
     const stopBtn = document.getElementById('stopBtn');
     const projectSelect = document.getElementById('projectSelect');
     const logoutBtn = document.getElementById('logoutBtn');
@@ -149,10 +175,20 @@
       return `${h}:${m}:${s}`;
     }
 
-    // Calculate elapsed time from server's started_at timestamp
     function calcElapsedFromStartedAt() {
-      if (!currentStartedAt) return 0;
-      return Math.max(0, Math.floor((Date.now() - new Date(currentStartedAt).getTime()) / 1000));
+      if (!_startedAtMs) return 0;
+      return Math.max(0, Math.floor((Date.now() - _startedAtMs) / 1000));
+    }
+
+    function setStartedAt(isoOrMs) {
+      if (!isoOrMs) { currentStartedAt = null; _startedAtMs = null; return; }
+      if (typeof isoOrMs === 'number') {
+        _startedAtMs = isoOrMs;
+        currentStartedAt = new Date(isoOrMs).toISOString();
+      } else {
+        currentStartedAt = isoOrMs;
+        _startedAtMs = new Date(isoOrMs).getTime();
+      }
     }
 
     function updateDisplay(running) {
@@ -160,80 +196,57 @@
       timerDisplay.textContent = formatTime(elapsedSeconds);
       timerDisplay.className = `time ${running ? 'running' : 'stopped'}`;
       statusDot.className = `dot ${running ? 'green' : 'gray'}`;
-      statusText.textContent = running ? 'Tracking' : (todayTotalBase > 0 ? 'Today\'s Total' : 'Stopped');
-      startBtn.style.display = running ? 'none' : 'block';
-      stopBtn.style.display = running ? 'block' : 'none';
-      // Disable project selection while running; also disabled when there are no assigned projects
+      statusText.textContent = running ? 'Tracking' : (todayTotalBase > 0 ? 'Today\u2019s Total' : 'Stopped');
+      startBtn.style.display = running ? 'none' : 'flex';
+      stopBtn.style.display = running ? 'flex' : 'none';
       projectSelect.disabled = running || projectSelect.options.length <= 1;
-      updateStartButtonState();
-    }
-
-    // Start is allowed even with "No Project" selected.
-    // Employees may have zero assigned projects; in that case they can still track to "No Project"
-    // (and managers can later reassign time if needed).
-    function updateStartButtonState() {
       startBtn.disabled = isRunning;
     }
 
     function startTicking() {
       if (timerInterval) clearInterval(timerInterval);
       timerInterval = setInterval(() => {
-        // Show today's total (completed + current running)
         elapsedSeconds = todayTotalBase + calcElapsedFromStartedAt();
         timerDisplay.textContent = formatTime(elapsedSeconds);
       }, 1000);
     }
 
     function stopTicking() {
-      if (timerInterval) {
-        clearInterval(timerInterval);
-        timerInterval = null;
-      }
+      if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
     }
 
-    // Sync timer state from main process — current day total (00:00–23:59) for selected project
     async function syncTimerState() {
       try {
         await loadProjects();
         const selectedProjectId = projectSelect.value || null;
         const state = await window.trackflow.getTimerState(selectedProjectId);
         todayTotalBase = state.todayTotal ?? 0;
-
         if (state.isRunning) {
-          currentStartedAt = state.entry?.started_at || null;
+          setStartedAt(state.entry?.started_at || null);
           const currentElapsed = state.elapsed || calcElapsedFromStartedAt();
-          // When running, todayTotal from server includes current elapsed
-          // Base = todayTotal - currentElapsed (completed entries only)
           todayTotalBase = Math.max(0, todayTotalBase - currentElapsed);
           elapsedSeconds = todayTotalBase + currentElapsed;
           updateDisplay(true);
           startTicking();
         } else {
-          currentStartedAt = null;
+          setStartedAt(null);
           stopTicking();
-          // Show today's total when stopped (not 00:00:00)
           elapsedSeconds = todayTotalBase;
           updateDisplay(false);
         }
-
-        // Select current project if timer is running
         if (state.entry && state.entry.project_id) {
           projectSelect.value = state.entry.project_id;
         }
-        updateStartButtonState();
       } catch (e) {
         console.error('Failed to sync timer state:', e);
       }
     }
 
-    // Fetch projects and refresh dropdown (called on init and every time popup opens so newly assigned projects appear)
     async function loadProjects() {
       try {
         const projects = await window.trackflow.getProjects();
         const list = Array.isArray(projects) ? projects
-          : (projects?.data && Array.isArray(projects.data)) ? projects.data
-          : [];
-
+          : (projects?.data && Array.isArray(projects.data)) ? projects.data : [];
         const currentValue = projectSelect.value || '';
         projectSelect.innerHTML = '<option value="">No Project</option>';
         list.forEach(p => {
@@ -242,35 +255,29 @@
           option.textContent = p.name;
           projectSelect.appendChild(option);
         });
-        if (currentValue && list.some(p => p.id === currentValue)) {
+        if (currentValue && list.some(p => String(p.id) === currentValue)) {
           projectSelect.value = currentValue;
         }
       } catch {}
     }
 
-    // Load initial state
     async function init() {
       await loadProjects();
       await syncTimerState();
-      updateStartButtonState();
       projectSelect.addEventListener('change', () => {
-        updateStartButtonState();
         if (!isRunning) syncTimerState();
       });
     }
 
     startBtn.addEventListener('click', async () => {
       startBtn.disabled = true;
-      startBtn.textContent = 'Starting...';
+      startBtnText.textContent = 'Starting\u2026';
       const projectId = projectSelect.value || null;
       try {
         const result = await window.trackflow.startTimer(projectId);
         if (result.success) {
-          currentStartedAt = result.entry?.started_at || new Date().toISOString();
-          // todayTotalBase keeps accumulated completed time
-          if (result.todayTotal > 0) {
-            todayTotalBase = result.todayTotal;
-          }
+          setStartedAt(result.entry?.started_at || new Date().toISOString());
+          if (result.todayTotal > 0) todayTotalBase = result.todayTotal;
           elapsedSeconds = todayTotalBase;
           updateDisplay(true);
           startTicking();
@@ -281,19 +288,16 @@
         showNotification('Failed to start timer');
       }
       startBtn.disabled = false;
-      startBtn.textContent = 'Start';
+      startBtnText.textContent = 'Start';
     });
 
     stopBtn.addEventListener('click', () => {
-      // Update UI IMMEDIATELY — don't wait for network
       stopTicking();
-      const stoppedTotal = elapsedSeconds; // Capture current displayed time
-      currentStartedAt = null;
+      const stoppedTotal = elapsedSeconds;
+      setStartedAt(null);
       todayTotalBase = stoppedTotal;
       elapsedSeconds = stoppedTotal;
       updateDisplay(false);
-
-      // Fire-and-forget — don't await, so the UI never blocks
       window.trackflow.stopTimer().then((result) => {
         if (result && result.todayTotal > 0 && result.todayTotal !== stoppedTotal) {
           todayTotalBase = result.todayTotal;
@@ -303,7 +307,6 @@
       }).catch(() => {});
     });
 
-    // Both logout buttons do the same thing
     async function handleLogout() {
       logoutBtn.disabled = true;
       stopTicking();
@@ -311,19 +314,25 @@
     }
     logoutBtn.addEventListener('click', handleLogout);
     logoutLink.addEventListener('click', handleLogout);
+    dashboardLink.addEventListener('click', () => window.trackflow.openDashboard());
 
-    // Open web dashboard in browser
-    dashboardLink.addEventListener('click', () => {
-      window.trackflow.openDashboard();
+    // Keyboard shortcuts — platform-aware
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.repeat) {
+        e.preventDefault();
+        if (isRunning) stopBtn.click(); else startBtn.click();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'q') {
+        e.preventDefault();
+        handleLogout();
+      }
+      if (e.key === 'Escape') window.blur();
     });
 
-    // Events from main process (timer sync, background state changes)
+    // Events from main process
     window.trackflow.onTimerStarted((data) => {
-      currentStartedAt = data?.started_at || new Date().toISOString();
-      // Use todayTotal from server if available
-      if (data?.todayTotal > 0) {
-        todayTotalBase = data.todayTotal;
-      }
+      setStartedAt(data?.started_at || new Date().toISOString());
+      if (data?.todayTotal > 0) todayTotalBase = data.todayTotal;
       elapsedSeconds = todayTotalBase + calcElapsedFromStartedAt();
       updateDisplay(true);
       startTicking();
@@ -331,24 +340,21 @@
 
     window.trackflow.onTimerStopped((data) => {
       stopTicking();
-      currentStartedAt = null;
+      setStartedAt(null);
       if (data?.entry?.project_id) {
         projectSelect.value = data.entry.project_id;
         todayTotalBase = data.todayTotal ?? 0;
       } else if (data?.todayTotal !== undefined) {
         todayTotalBase = data.todayTotal;
-      } else {
-        syncTimerState();
-        return;
-      }
+      } else { syncTimerState(); return; }
       elapsedSeconds = todayTotalBase;
       updateDisplay(false);
     });
 
-    // Re-sync when popup window becomes visible again (user clicked tray icon)
-    window.trackflow.onSyncTimer(() => {
-      syncTimerState();
-    });
+    window.trackflow.onSyncTimer(() => syncTimerState());
+
+    window.addEventListener('error', (e) => console.error('Renderer error:', e.message));
+    window.addEventListener('unhandledrejection', (e) => console.error('Renderer unhandled rejection:', e.reason));
 
     init();
   </script>

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification, screen } = require('electron');
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
 const ApiClient = require('./api-client');
@@ -10,8 +10,24 @@ const { getToken, setToken, getRefreshToken, setRefreshToken, deleteToken } = re
 
 const WEB_DASHBOARD_URL = process.env.TRACKFLOW_WEB_URL || 'https://trackflow.codeupscale.com';
 
+// Default configuration values — single source of truth
+const DEFAULT_CONFIG = {
+  screenshot_interval: 5,
+  idle_timeout: 5,
+  idle_detection: true,
+  keep_idle_time: 'never',
+  blur_screenshots: false,
+  idle_alert_auto_stop_min: 10,
+  screenshot_capture_immediate_after_idle: true,
+  screenshot_first_capture_delay_min: 1,
+  idle_check_interval_sec: 10,
+  capture_only_when_visible: false,
+  capture_multi_monitor: false,
+};
+
 let tray = null;
 let popupWindow = null;
+let loginWindow = null;
 let idleAlertWindow = null;
 let apiClient = null;
 let activityMonitor = null;
@@ -20,7 +36,7 @@ let idleDetector = null;
 let offlineQueue = null;
 let isTimerRunning = false;
 let currentEntry = null;
-// Two totals for multi-project clarity (see desktop/docs/TIMER-TOTALS-DESIGN.md)
+// Two totals for multi-project clarity
 let todayTotalGlobal = 0;       // All projects today (tray when stopped)
 let todayTotalCurrentProject = 0; // Current entry's project today, completed only (tray when running)
 let config = {};
@@ -29,8 +45,23 @@ let cachedProjects = [];
 let isAuthenticated = false;
 let timerSyncInterval = null;
 let trayTimerInterval = null;
+let isQuitting = false;
+// Cache parsed started_at timestamp to avoid re-parsing every second
+let _cachedStartedAtMs = null;
 
-// Single instance lock
+// ── Global Error Handlers ────────────────────────────────────────────────────
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+  // Don't crash — log and continue. Critical for a background agent.
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason);
+});
+
+// ── Single Instance Lock ─────────────────────────────────────────────────────
+
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
@@ -50,8 +81,11 @@ app.on('window-all-closed', () => {
 
 // Stop timer gracefully before quitting (with timeout to avoid hanging)
 app.on('before-quit', async (e) => {
+  if (isQuitting) return; // Prevent re-entry
+
   if (isTimerRunning && apiClient) {
     e.preventDefault();
+    isQuitting = true;
     try {
       await Promise.race([
         apiClient.stopTimer(),
@@ -62,9 +96,23 @@ app.on('before-quit', async (e) => {
     currentEntry = null;
     activityMonitor?.stop();
     screenshotService?.stop();
+    idleDetector?.stop();
+    cleanupOnExit();
     app.exit(0);
+  } else {
+    idleDetector?.stop();
+    cleanupOnExit();
   }
 });
+
+function cleanupOnExit() {
+  if (timerSyncInterval) {
+    clearInterval(timerSyncInterval);
+    timerSyncInterval = null;
+  }
+  stopTrayTimer();
+  offlineQueue?.close();
+}
 
 async function initializeApp() {
   // Load saved tokens
@@ -85,10 +133,25 @@ async function initializeApp() {
     await setRefreshToken(newRefreshToken);
   });
 
-  // Test token validity (auto-refresh will kick in on 401 if refresh token is available)
-  try {
-    await apiClient.getMe();
-  } catch {
+  // Test token validity with retry for transient network errors
+  let tokenValid = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await apiClient.getMe();
+      tokenValid = true;
+      break;
+    } catch (e) {
+      const status = e.response?.status;
+      // If 401/403 after refresh attempt, token is truly invalid
+      if (status === 401 || status === 403) break;
+      // Transient error — retry after short delay
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+      }
+    }
+  }
+
+  if (!tokenValid) {
     await deleteToken();
     isAuthenticated = false;
     createTray();
@@ -98,46 +161,23 @@ async function initializeApp() {
 
   isAuthenticated = true;
 
-  // Fetch org config
+  // Fetch org config with fallback to defaults
   try {
-    config = await apiClient.getConfig();
-  } catch (e) {
-    config = {
-      screenshot_interval: 5,
-      idle_timeout: 5,
-      idle_detection: true,
-      keep_idle_time: 'never',
-      blur_screenshots: false,
-      idle_alert_auto_stop_min: 10,
-      screenshot_capture_immediate_after_idle: true,
-      screenshot_first_capture_delay_min: 1,
-      idle_check_interval_sec: 10,
-      capture_only_when_visible: false,
-      capture_multi_monitor: false,
-    };
+    const serverConfig = await apiClient.getConfig();
+    config = { ...DEFAULT_CONFIG, ...serverConfig };
+  } catch {
+    config = { ...DEFAULT_CONFIG };
   }
-  // Fallbacks only when API omits keys (e.g. older backend)
-  if (config.idle_timeout === undefined) config.idle_timeout = 5;
-  if (config.keep_idle_time === undefined) config.keep_idle_time = 'never';
-  if (config.idle_alert_auto_stop_min === undefined) config.idle_alert_auto_stop_min = 10;
-  if (config.screenshot_capture_immediate_after_idle === undefined) config.screenshot_capture_immediate_after_idle = true;
-  if (config.screenshot_first_capture_delay_min === undefined) config.screenshot_first_capture_delay_min = 1;
-  if (config.idle_check_interval_sec === undefined) config.idle_check_interval_sec = 10;
-  if (config.capture_only_when_visible === undefined) config.capture_only_when_visible = false;
-  if (config.capture_multi_monitor === undefined) config.capture_multi_monitor = false;
 
   // Initialize services
   offlineQueue = new OfflineQueue();
   activityMonitor = new ActivityMonitor(apiClient, offlineQueue);
-  // Pass getter so screenshots can optionally be gated when popup is visible.
-  // Default is OFF (so screenshots work in tray/background).
   const getIsAppVisible = () => popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible();
   screenshotService = new ScreenshotService(apiClient, config, offlineQueue, getIsAppVisible);
   idleDetector = new IdleDetector(config);
 
   // Wire idle detection events
   idleDetector.onIdleDetected((idleSeconds, idleStartedAt) => {
-    // Stop screenshots immediately when idle is detected — idle time should not produce evidence.
     screenshotService?.stop();
     const policy = config.keep_idle_time || 'prompt';
     if (policy === 'always') {
@@ -158,11 +198,9 @@ async function initializeApp() {
   });
 
   idleDetector.onAutoStop((totalIdleSeconds) => {
-    // Auto-stop after extended idle (user never responded to alert)
     handleIdleAction('stop', totalIdleSeconds);
     dismissIdleAlert();
 
-    // Show notification so user knows timer was auto-stopped
     try {
       if (Notification.isSupported()) {
         const n = new Notification({
@@ -190,7 +228,7 @@ async function initializeApp() {
   // Flush offline queue
   offlineQueue.flush(apiClient);
 
-  // Check timer status on server (sync state): global total + per-project when running
+  // Check timer status on server
   try {
     const status = await apiClient.getTimerStatus();
     const globalTotal = status.today_total ?? 0;
@@ -199,6 +237,7 @@ async function initializeApp() {
       todayTotalGlobal = Math.max(0, globalTotal - elapsed);
       isTimerRunning = true;
       currentEntry = status.entry;
+      _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
       try {
         todayTotalCurrentProject = await apiClient.getTodayTotal(currentEntry?.project_id ?? null);
         if (currentEntry?.project_id) {
@@ -225,8 +264,6 @@ async function initializeApp() {
 
 function createTray() {
   if (tray) {
-    // Tray already exists — just update the menu
-    updateTrayMenu();
     return;
   }
 
@@ -238,7 +275,7 @@ function createTray() {
     const size = 16;
     const buf = Buffer.alloc(size * size * 4);
     for (let i = 0; i < size * size; i++) {
-      buf[i * 4] = 59;    // R (blue: #3b82f6)
+      buf[i * 4] = 59;      // R (#3b82f6)
       buf[i * 4 + 1] = 130; // G
       buf[i * 4 + 2] = 246; // B
       buf[i * 4 + 3] = 255; // A
@@ -249,8 +286,6 @@ function createTray() {
   tray = new Tray(icon);
   tray.setToolTip('TrackFlow');
 
-  // macOS: left-click opens popup window, right-click opens context menu (like Hubstaff)
-  // Windows/Linux: click opens popup, right-click opens context menu
   tray.on('click', () => {
     if (isAuthenticated) {
       showPopup();
@@ -263,9 +298,6 @@ function createTray() {
     const contextMenu = buildTrayContextMenu();
     tray.popUpContextMenu(contextMenu);
   });
-
-  // Don't set context menu directly — this prevents it from auto-opening on left-click on macOS
-  // tray.setContextMenu() is intentionally NOT called
 }
 
 async function loadProjects() {
@@ -273,23 +305,15 @@ async function loadProjects() {
   try {
     const projects = await apiClient.getProjects();
     cachedProjects = Array.isArray(projects) ? projects : [];
-    updateTrayMenu();
   } catch {
     cachedProjects = [];
   }
 }
 
 async function openDashboardInBrowser() {
-  // Open web dashboard with auto-login — pass token so user doesn't have to log in again
-  const token = await getToken();
-  const refresh = await getRefreshToken();
-  if (token) {
-    const params = new URLSearchParams({ token });
-    if (refresh) params.append('refresh', refresh);
-    shell.openExternal(`${WEB_DASHBOARD_URL}/auth/auto-login?${params.toString()}`);
-  } else {
-    shell.openExternal(WEB_DASHBOARD_URL);
-  }
+  // Open web dashboard — do NOT pass tokens in URL (security risk: browser history, referrer headers, server logs)
+  // The web app should handle its own authentication
+  shell.openExternal(WEB_DASHBOARD_URL);
 }
 
 function buildTrayContextMenu() {
@@ -301,7 +325,6 @@ function buildTrayContextMenu() {
     ]);
   }
 
-  // Build project submenu items
   const projectItems = cachedProjects.map((p) => ({
     label: p.name,
     enabled: !isTimerRunning,
@@ -314,7 +337,6 @@ function buildTrayContextMenu() {
     { type: 'separator' },
   ];
 
-  // Add projects submenu if there are projects
   if (projectItems.length > 0) {
     template.push({
       label: 'Start Timer',
@@ -349,12 +371,6 @@ function buildTrayContextMenu() {
   return Menu.buildFromTemplate(template);
 }
 
-function updateTrayMenu() {
-  // No-op — context menu is built on-demand via right-click
-  // This function exists so callers don't need to change
-  // Tooltip is updated via updateTrayIcon()
-}
-
 function showPopup() {
   if (!isAuthenticated) {
     createLoginWindow();
@@ -362,7 +378,6 @@ function showPopup() {
   }
 
   if (popupWindow && !popupWindow.isDestroyed()) {
-    // Bring to front quickly (helps Linux: window was in background, slow to reopen)
     if (typeof popupWindow.moveTop === 'function') {
       popupWindow.moveTop();
     }
@@ -371,7 +386,6 @@ function showPopup() {
     }
     popupWindow.show();
     popupWindow.focus();
-    // Defer sync so window appears immediately; renderer will request state when ready
     setImmediate(() => {
       if (popupWindow && !popupWindow.isDestroyed()) {
         popupWindow.webContents.send('sync-timer');
@@ -384,21 +398,55 @@ function showPopup() {
   const windowWidth = 320;
   const windowHeight = 400;
 
+  // Calculate position — platform-aware:
+  //   macOS: tray is at the top → popup below tray
+  //   Windows: taskbar is at bottom → popup above tray
+  //   Linux: taskbar can be anywhere → detect and adapt
+  let x = Math.round(trayBounds.x - windowWidth / 2 + trayBounds.width / 2);
+  let y;
+
+  try {
+    const display = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
+    const workArea = display.workArea;
+
+    // Determine if tray is in the top or bottom half of the screen
+    const trayCenter = trayBounds.y + trayBounds.height / 2;
+    const screenCenter = workArea.y + workArea.height / 2;
+    const trayIsAtTop = trayCenter < screenCenter;
+
+    if (trayIsAtTop) {
+      // macOS / Linux top panel: popup below tray
+      y = trayBounds.y + trayBounds.height + 4;
+    } else {
+      // Windows / Linux bottom panel: popup above tray
+      y = trayBounds.y - windowHeight - 4;
+    }
+
+    // Clamp to work area so popup never goes off-screen
+    x = Math.max(workArea.x, Math.min(x, workArea.x + workArea.width - windowWidth));
+    y = Math.max(workArea.y, Math.min(y, workArea.y + workArea.height - windowHeight));
+  } catch {
+    // Fallback: below tray
+    y = trayBounds.y + trayBounds.height + 4;
+  }
+
   popupWindow = new BrowserWindow({
     width: windowWidth,
     height: windowHeight,
-    x: Math.round(trayBounds.x - windowWidth / 2 + trayBounds.width / 2),
-    y: trayBounds.y + trayBounds.height + 4,
+    x,
+    y,
     frame: false,
     resizable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
     show: false,
+    backgroundColor: '#0f172a',   // Prevent white flash on all platforms
     ...(process.platform === 'linux' && { visibleOnAllWorkspaces: true }),
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   });
 
@@ -408,13 +456,48 @@ function showPopup() {
     popupWindow.show();
   });
 
+  // Hide on blur — with debounce for Linux DEs that fire spurious blur events
+  // (e.g. KDE fires blur then immediately re-focuses when clicking tray)
+  let blurTimeout = null;
   popupWindow.on('blur', () => {
-    popupWindow.hide();
+    if (process.platform === 'linux') {
+      blurTimeout = setTimeout(() => {
+        if (popupWindow && !popupWindow.isDestroyed() && !popupWindow.isFocused()) {
+          popupWindow.hide();
+        }
+      }, 150);
+    } else {
+      popupWindow.hide();
+    }
+  });
+  popupWindow.on('focus', () => {
+    if (blurTimeout) { clearTimeout(blurTimeout); blurTimeout = null; }
   });
 
   popupWindow.on('closed', () => {
     popupWindow = null;
   });
+}
+
+// ── IPC Input Validation Helpers ─────────────────────────────────────────────
+
+function validateProjectId(id) {
+  if (id === null || id === undefined || id === '') return null;
+  // Keep as string — backend expects UUID strings, not integers.
+  // Accept any non-empty string that looks like an ID (alphanumeric, hyphens, underscores).
+  if (typeof id === 'string') {
+    const trimmed = id.trim();
+    if (trimmed && /^[a-zA-Z0-9_-]+$/.test(trimmed)) return trimmed;
+    return null;
+  }
+  // If renderer somehow sends a number, convert to string for the API
+  if (typeof id === 'number' && id > 0) return String(id);
+  return null;
+}
+
+function validateIdleAction(action) {
+  const valid = ['keep', 'discard', 'stop', 'reassign'];
+  return valid.includes(action) ? action : null;
 }
 
 function setupIPC() {
@@ -427,7 +510,7 @@ function setupIPC() {
   ipcMain.removeHandler('open-dashboard');
 
   ipcMain.handle('get-timer-state', async (_, projectId) => {
-    // Fetch fresh status (global) so running state and tray totals stay correct
+    const validProjectId = validateProjectId(projectId);
     if (apiClient) {
       try {
         const status = await apiClient.getTimerStatus();
@@ -437,6 +520,7 @@ function setupIPC() {
           todayTotalGlobal = Math.max(0, globalTotal - elapsed);
           isTimerRunning = true;
           currentEntry = status.entry;
+          _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
           try {
             const withElapsed = await apiClient.getTodayTotal(currentEntry?.project_id ?? null);
             todayTotalCurrentProject = Math.max(0, withElapsed - elapsed);
@@ -448,13 +532,13 @@ function setupIPC() {
           todayTotalCurrentProject = 0;
           isTimerRunning = false;
           currentEntry = null;
+          _cachedStartedAtMs = null;
         }
       } catch {}
     }
-    // Popup display: per-project total (selected when stopped, current when running)
     const projectIdForTotal = isTimerRunning && currentEntry?.project_id
       ? currentEntry.project_id
-      : projectId || null;
+      : validProjectId || null;
     let todayTotalForDisplay = 0;
     if (apiClient) {
       try {
@@ -464,15 +548,16 @@ function setupIPC() {
     return {
       isRunning: isTimerRunning,
       entry: currentEntry,
-      elapsed: currentEntry
-        ? Math.floor((Date.now() - new Date(currentEntry.started_at).getTime()) / 1000)
+      elapsed: currentEntry && _cachedStartedAtMs
+        ? Math.floor((Date.now() - _cachedStartedAtMs) / 1000)
         : 0,
       todayTotal: todayTotalForDisplay,
     };
   });
 
   ipcMain.handle('start-timer', async (_, projectId) => {
-    return await startTimer(projectId);
+    const validProjectId = validateProjectId(projectId);
+    return await startTimer(validProjectId);
   });
 
   ipcMain.handle('stop-timer', () => {
@@ -497,28 +582,41 @@ function setupIPC() {
 
     isTimerRunning = false;
     currentEntry = null;
+    _cachedStartedAtMs = null;
     isAuthenticated = false;
     activityMonitor?.stop();
     screenshotService?.stop();
     idleDetector?.stop();
     dismissIdleAlert();
 
-    // Clear timer sync interval
     if (timerSyncInterval) {
       clearInterval(timerSyncInterval);
       timerSyncInterval = null;
     }
+    stopTrayTimer();
+
+    // CRITICAL: Clear and close offline queue BEFORE deleting tokens.
+    // Prevents queued heartbeats/screenshots from being uploaded under a different user.
+    if (offlineQueue) {
+      offlineQueue.close();
+      offlineQueue = null;
+    }
 
     await deleteToken();
     apiClient = null;
+    activityMonitor = null;
+    screenshotService = null;
+    idleDetector = null;
+    cachedProjects = [];
+    todayTotalGlobal = 0;
+    todayTotalCurrentProject = 0;
+    config = {};
 
-    // Destroy popup window completely so it doesn't show stale logged-in UI
     if (popupWindow && !popupWindow.isDestroyed()) {
       popupWindow.destroy();
     }
     popupWindow = null;
 
-    // Show dock on macOS so login window appears properly
     if (process.platform === 'darwin') {
       app.dock.show();
     }
@@ -533,7 +631,10 @@ function setupIPC() {
   // Idle alert actions
   ipcMain.removeHandler('resolve-idle');
   ipcMain.handle('resolve-idle', async (_, action, projectId = null) => {
-    await handleIdleAction(action, null, projectId);
+    const validAction = validateIdleAction(action);
+    if (!validAction) return { error: 'Invalid action' };
+    const validProjectId = validateProjectId(projectId);
+    await handleIdleAction(validAction, null, validProjectId);
     dismissIdleAlert();
     return { success: true };
   });
@@ -553,7 +654,6 @@ function afterStartTimer(projectIdForTotal, todayTotalForPopup) {
     idleDetector?.start();
     startTrayTimer();
     updateTrayIcon(true);
-    updateTrayMenu();
   })();
 }
 
@@ -563,24 +663,18 @@ async function startTimer(projectId = null) {
   try {
     const result = await apiClient.startTimer(projectId);
     currentEntry = result.entry;
+    _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
     isTimerRunning = true;
     todayTotalCurrentProject = result.today_total ?? 0;
 
-    // Return to renderer immediately so UI shows "Tracking" without waiting for tray/sync
     const todayTotalForPopup = todayTotalCurrentProject;
     notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup });
-    if (typeof setImmediate !== 'undefined') {
-      setImmediate(() => {
-        afterStartTimer(projectId, todayTotalForPopup);
-      });
-    } else {
-      afterStartTimer(projectId, todayTotalForPopup);
-    }
+    setImmediate(() => afterStartTimer(projectId, todayTotalForPopup));
     return { success: true, entry: currentEntry, todayTotal: todayTotalForPopup };
   } catch (e) {
     const status = e.response?.status;
 
-    // 409 = timer already running on server — sync local state with server
+    // 409 = timer already running on server — sync local state
     if (status === 409) {
       try {
         await apiClient.stopTimer();
@@ -589,6 +683,7 @@ async function startTimer(projectId = null) {
       try {
         const retryResult = await apiClient.startTimer(projectId);
         currentEntry = retryResult.entry;
+        _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
         isTimerRunning = true;
         todayTotalCurrentProject = retryResult.today_total ?? 0;
         notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
@@ -604,8 +699,8 @@ async function startTimer(projectId = null) {
 }
 
 function stopTimer() {
-  const sessionElapsed = currentEntry
-    ? Math.max(0, Math.floor((Date.now() - new Date(currentEntry.started_at).getTime()) / 1000))
+  const sessionElapsed = currentEntry && _cachedStartedAtMs
+    ? Math.max(0, Math.floor((Date.now() - _cachedStartedAtMs) / 1000))
     : 0;
   const stoppedProjectId = currentEntry?.project_id || null;
   const localStoppedProjectTotal = todayTotalCurrentProject + sessionElapsed;
@@ -614,6 +709,7 @@ function stopTimer() {
 
   isTimerRunning = false;
   currentEntry = null;
+  _cachedStartedAtMs = null;
   todayTotalCurrentProject = 0;
 
   activityMonitor?.stop();
@@ -666,17 +762,22 @@ function startTimerSync() {
       if (status.running && !isTimerRunning) {
         isTimerRunning = true;
         currentEntry = status.entry;
-        todayTotalCurrentProject = Math.max(0, (await apiClient.getTodayTotal(status.entry?.project_id ?? null).catch(() => 0)) - (status.elapsed_seconds ?? 0));
+        _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+        try {
+          todayTotalCurrentProject = Math.max(0, (await apiClient.getTodayTotal(status.entry?.project_id ?? null)) - (status.elapsed_seconds ?? 0));
+        } catch {
+          todayTotalCurrentProject = 0;
+        }
         activityMonitor?.start();
         screenshotService?.start(currentEntry.id);
         idleDetector?.start();
         startTrayTimer();
         updateTrayIcon(true);
-        updateTrayMenu();
         notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
       } else if (!status.running && isTimerRunning) {
         isTimerRunning = false;
         currentEntry = null;
+        _cachedStartedAtMs = null;
         todayTotalCurrentProject = 0;
         activityMonitor?.stop();
         screenshotService?.stop();
@@ -685,8 +786,7 @@ function startTimerSync() {
         stopTrayTimer();
         updateTrayTitle();
         updateTrayIcon(false);
-        updateTrayMenu();
-        notifyPopup('timer-stopped', { entry: null });
+        notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal });
       }
     } catch {}
   }, 30000);
@@ -704,14 +804,29 @@ function updateTrayIcon(running) {
   tray.setToolTip(running ? 'TrackFlow - Timer Running' : 'TrackFlow');
 }
 
-// Tray: when stopped = all projects today; when running = current project today + elapsed
+// Cross-platform tray text:
+//   macOS: tray.setTitle() shows text next to icon in menu bar
+//   Windows/Linux: tray.setTitle() is not visible — use tooltip instead
+function setTrayText(text) {
+  if (!tray) return;
+  if (process.platform === 'darwin') {
+    tray.setTitle(text);
+  }
+  // All platforms: update tooltip so hover shows the time
+  if (text) {
+    tray.setToolTip(`TrackFlow — ${text}`);
+  } else {
+    tray.setToolTip('TrackFlow');
+  }
+}
+
 function updateTrayTitle() {
   if (!tray) return;
   const total = isTimerRunning ? todayTotalCurrentProject : todayTotalGlobal;
   if (total > 0) {
-    tray.setTitle(formatTimeShort(total));
+    setTrayText(formatTimeShort(total));
   } else {
-    tray.setTitle('');
+    setTrayText('');
   }
 }
 
@@ -719,11 +834,9 @@ function startTrayTimer() {
   stopTrayTimer();
   updateTrayTitle();
   trayTimerInterval = setInterval(() => {
-    if (!isTimerRunning || !currentEntry) return;
-    const currentElapsed = Math.floor((Date.now() - new Date(currentEntry.started_at).getTime()) / 1000);
-    if (tray) {
-      tray.setTitle(formatTimeShort(todayTotalCurrentProject + currentElapsed));
-    }
+    if (!isTimerRunning || !_cachedStartedAtMs) return;
+    const currentElapsed = Math.floor((Date.now() - _cachedStartedAtMs) / 1000);
+    setTrayText(formatTimeShort(todayTotalCurrentProject + currentElapsed));
   }, 1000);
 }
 
@@ -740,29 +853,32 @@ function notifyPopup(event, data) {
   }
 }
 
-// ── Idle Alert System (Hubstaff-style) ───────────────────────────────────────
+// ── Idle Alert System ────────────────────────────────────────────────────────
 
-function showIdleAlert(idleSeconds, idleStartedAt) {
-  // Don't show if alert is already visible or timer isn't running
+async function showIdleAlert(idleSeconds, idleStartedAt) {
   if (idleAlertWindow && !idleAlertWindow.isDestroyed()) return;
   if (!isTimerRunning) return;
 
-  // Pause screenshot service while idle (no point capturing idle screen)
   screenshotService?.stop();
+
+  // Refresh project list so idle reassign dropdown is up-to-date
+  await loadProjects();
 
   idleAlertWindow = new BrowserWindow({
     width: 380,
-    height: 480,
+    height: 520,
     frame: false,
     resizable: false,
     alwaysOnTop: true,
     skipTaskbar: false,
     center: true,
     show: false,
+    backgroundColor: '#0f172a',   // Prevent white flash on all platforms
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   });
 
@@ -782,7 +898,6 @@ function showIdleAlert(idleSeconds, idleStartedAt) {
     idleAlertWindow = null;
   });
 
-  // On macOS show dock briefly so the alert window is visible
   if (process.platform === 'darwin') {
     app.dock.show();
   }
@@ -794,7 +909,6 @@ function dismissIdleAlert() {
   }
   idleAlertWindow = null;
 
-  // Re-hide dock on macOS
   if (process.platform === 'darwin' && isAuthenticated) {
     app.dock.hide();
   }
@@ -831,6 +945,7 @@ async function handleIdleAction(action, idleDurationOverride = null, reassignPro
           const result = await apiClient.reportIdleTime(payload);
           if (result?.new_entry) {
             currentEntry = result.new_entry;
+            _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
           }
         } catch (e) {
           console.error('Failed to report idle time:', e.message);
@@ -852,31 +967,53 @@ async function handleIdleAction(action, idleDurationOverride = null, reassignPro
 // ── Login Window ─────────────────────────────────────────────────────────────
 
 function createLoginWindow() {
-  const loginWindow = new BrowserWindow({
+  // Prevent duplicate login windows
+  if (loginWindow && !loginWindow.isDestroyed()) {
+    loginWindow.show();
+    loginWindow.focus();
+    return;
+  }
+
+  loginWindow = new BrowserWindow({
     width: 400,
     height: 500,
-    frame: true,
+    frame: false,        // Custom titlebar for identical look on macOS/Windows/Linux
     resizable: false,
+    center: true,
+    backgroundColor: '#0f172a',
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   });
 
   loginWindow.loadFile(path.join(__dirname, '..', 'renderer', 'login.html'));
 
-  // Only register the login handler once to avoid "already registered" errors
+  loginWindow.on('closed', () => {
+    loginWindow = null;
+  });
+
+  // Only register the login handler once
   if (!loginHandlerRegistered) {
     loginHandlerRegistered = true;
     ipcMain.handle('login', async (_, email, password) => {
+      // Validate inputs
+      if (typeof email !== 'string' || typeof password !== 'string') {
+        return { error: 'Invalid credentials format' };
+      }
+      email = email.trim();
+      if (!email || !password) {
+        return { error: 'Email and password are required' };
+      }
+
       try {
         const tempClient = new ApiClient(null);
         const result = await tempClient.login(email, password);
         await setToken(result.access_token);
         await setRefreshToken(result.refresh_token);
 
-        // Close all existing windows
         BrowserWindow.getAllWindows().forEach((w) => w.close());
         await initializeApp();
         return { success: true };
@@ -889,10 +1026,12 @@ function createLoginWindow() {
 
 function checkForUpdates() {
   if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
-    return; // Skip auto-updates in development
+    return;
   }
   autoUpdater.checkForUpdatesAndNotify().catch(() => {});
 }
 
-// Auto-start on login (AGENT-07)
-app.setLoginItemSettings({ openAtLogin: true });
+// Auto-start on login — only set if packaged (don't interfere with dev)
+if (app.isPackaged) {
+  app.setLoginItemSettings({ openAtLogin: true });
+}
