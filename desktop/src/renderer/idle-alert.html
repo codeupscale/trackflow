@@ -3,30 +3,35 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
   <title>TrackFlow — Idle Alert</title>
+  <link rel="stylesheet" href="shared.css">
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f172a;
-      color: #e2e8f0;
       height: 100vh;
-      overflow: hidden;
-      user-select: none;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .main {
+      flex: 1;
       display: flex;
       align-items: center;
       justify-content: center;
+      padding: 16px;
     }
 
     .container {
-      padding: 24px;
       width: 100%;
       text-align: center;
     }
 
-    .icon {
-      font-size: 48px;
-      margin-bottom: 16px;
+    /* SVG icon instead of emoji — renders identically on all platforms */
+    .idle-icon {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 16px;
+      color: #f59e0b;
       opacity: 0.9;
     }
 
@@ -62,95 +67,128 @@
     .actions {
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 6px;
     }
 
-    .btn {
+    .actions .btn {
       padding: 10px 16px;
-      border: none;
-      border-radius: 8px;
       font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.15s;
       width: 100%;
     }
 
-    .btn-keep {
-      background: #22c55e;
-      color: white;
-    }
-    .btn-keep:hover { background: #16a34a; }
+    .btn-keep { background: #22c55e; color: white; }
+    .btn-keep:hover:not(:disabled) { background: #16a34a; }
+    .btn-keep:active:not(:disabled) { background: #15803d; }
 
-    .btn-discard {
-      background: #f59e0b;
-      color: #0f172a;
-    }
-    .btn-discard:hover { background: #d97706; }
+    .btn-discard { background: #f59e0b; color: #0f172a; }
+    .btn-discard:hover:not(:disabled) { background: #d97706; }
+    .btn-discard:active:not(:disabled) { background: #b45309; }
 
-    .btn-stop {
-      background: #ef4444;
-      color: white;
-    }
-    .btn-stop:hover { background: #dc2626; }
+    .btn-stop { background: #ef4444; color: white; }
+    .btn-stop:hover:not(:disabled) { background: #dc2626; }
+    .btn-stop:active:not(:disabled) { background: #b91c1c; }
 
-    .btn-reassign {
-      background: #6366f1;
-      color: white;
-    }
-    .btn-reassign:hover { background: #4f46e5; }
-    .btn-reassign:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-reassign { background: #6366f1; color: white; }
+    .btn-reassign:hover:not(:disabled) { background: #4f46e5; }
+    .btn-reassign:active:not(:disabled) { background: #4338ca; }
 
     .reassign-row {
       display: flex;
       gap: 8px;
       align-items: center;
     }
-    .reassign-select {
-      flex: 1;
-      padding: 10px 12px;
-      border-radius: 8px;
-      border: 1px solid #334155;
-      background: #1e293b;
-      color: #e2e8f0;
-      font-size: 14px;
-      cursor: pointer;
-    }
-    .reassign-select:focus { outline: none; border-color: #6366f1; }
 
     .btn-desc {
       font-size: 11px;
       color: #64748b;
-      margin-top: -4px;
-      margin-bottom: 4px;
+      margin-top: -2px;
+      margin-bottom: 2px;
+    }
+
+    /* Reassign select uses shared .select-wrap but inline */
+    .reassign-select-wrap {
+      flex: 1;
+      position: relative;
+    }
+    .reassign-select-wrap::after {
+      content: '';
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 0; height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-top: 5px solid #64748b;
+      pointer-events: none;
+    }
+    .reassign-select-wrap select {
+      width: 100%;
+      padding: 10px 32px 10px 12px;
+      font-family: inherit;
+      font-size: 14px;
+      color: #e2e8f0;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      outline: none;
+      cursor: pointer;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      appearance: none;
+      transition: border-color 0.15s;
+    }
+    .reassign-select-wrap select:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+    }
+    .reassign-select-wrap select option {
+      background: #1e293b;
+      color: #e2e8f0;
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="icon">⏸️</div>
-    <div class="title">You appear to be idle</div>
-    <div class="message">No keyboard or mouse activity detected</div>
-    <div class="idle-time" id="idleTime">00:00</div>
-    <div class="subtitle">idle time</div>
+  <!-- Custom titlebar — matches other windows exactly -->
+  <div class="titlebar" id="titlebar">
+    <span class="titlebar-title">TrackFlow — Idle</span>
+    <span></span>
+  </div>
 
-    <div class="actions">
-      <button class="btn btn-keep" id="keepBtn">Keep Idle Time</button>
-      <div class="btn-desc">Continue tracking — idle time counts as work</div>
+  <div class="main">
+    <div class="container">
+      <!-- SVG pause icon — renders identically on macOS, Windows, and Linux -->
+      <svg class="idle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="10" y1="15" x2="10" y2="9"/>
+        <line x1="14" y1="15" x2="14" y2="9"/>
+      </svg>
 
-      <button class="btn btn-discard" id="discardBtn">Discard Idle Time</button>
-      <div class="btn-desc">Continue tracking — remove idle period from time entry</div>
+      <div class="title">You appear to be idle</div>
+      <div class="message">No keyboard or mouse activity detected</div>
+      <div class="idle-time" id="idleTime" role="timer" aria-live="polite">00:00:00</div>
+      <div class="subtitle">idle time</div>
 
-      <div class="reassign-row">
-        <select id="reassignProject" class="reassign-select" title="Reassign idle time to a project">
-          <option value="">Reassign to project…</option>
-        </select>
-        <button class="btn btn-reassign" id="reassignBtn" disabled>Reassign</button>
+      <div class="actions">
+        <button class="btn btn-keep" id="keepBtn">Keep Idle Time <kbd class="kbd">K</kbd></button>
+        <div class="btn-desc">Continue tracking — idle time counts as work</div>
+
+        <button class="btn btn-discard" id="discardBtn">Discard Idle Time <kbd class="kbd">D</kbd></button>
+        <div class="btn-desc">Continue tracking — remove idle period from time entry</div>
+
+        <div class="reassign-row">
+          <div class="reassign-select-wrap">
+            <select id="reassignProject" aria-label="Select project to reassign idle time">
+              <option value="">Reassign to project...</option>
+            </select>
+          </div>
+          <button class="btn btn-reassign" id="reassignBtn" disabled>Reassign <kbd class="kbd">R</kbd></button>
+        </div>
+        <div class="btn-desc">Move idle period to another project as tracked time</div>
+
+        <button class="btn btn-stop" id="stopBtn">Stop Timer <kbd class="kbd">S</kbd></button>
+        <div class="btn-desc">Stop tracking completely</div>
       </div>
-      <div class="btn-desc">Move this idle period to another project as tracked time</div>
-
-      <button class="btn btn-stop" id="stopBtn">Stop Timer</button>
-      <div class="btn-desc">Stop tracking completely</div>
     </div>
   </div>
 
@@ -160,16 +198,14 @@
     let tickInterval = null;
 
     function formatIdleTime(seconds) {
-      const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+      const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+      const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
       const s = (seconds % 60).toString().padStart(2, '0');
-      if (seconds >= 3600) {
-        const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
-        return `${h}:${m}:${s}`;
-      }
-      return `${m}:${s}`;
+      return `${h}:${m}:${s}`;
     }
 
     function startTicking() {
+      if (tickInterval) clearInterval(tickInterval);
       tickInterval = setInterval(() => {
         const elapsed = Math.floor((Date.now() - idleStartMs) / 1000);
         idleTimeEl.textContent = formatIdleTime(elapsed);
@@ -179,9 +215,7 @@
     let projects = [];
 
     window.trackflow.onIdleData((data) => {
-      if (data.idleStartedAt) {
-        idleStartMs = data.idleStartedAt;
-      }
+      if (data.idleStartedAt) idleStartMs = data.idleStartedAt;
       const elapsed = Math.floor((Date.now() - idleStartMs) / 1000);
       idleTimeEl.textContent = formatIdleTime(elapsed);
       startTicking();
@@ -189,7 +223,7 @@
       if (Array.isArray(data.projects)) {
         projects = data.projects;
         const sel = document.getElementById('reassignProject');
-        sel.innerHTML = '<option value="">Reassign to project…</option>';
+        sel.innerHTML = '<option value="">Reassign to project\u2026</option>';
         projects.forEach((p) => {
           const opt = document.createElement('option');
           opt.value = p.id;
@@ -203,22 +237,30 @@
       document.getElementById('reassignBtn').disabled = !this.value;
     });
 
-    document.getElementById('keepBtn').addEventListener('click', () => {
-      window.trackflow.resolveIdle('keep');
-    });
-
-    document.getElementById('discardBtn').addEventListener('click', () => {
-      window.trackflow.resolveIdle('discard');
-    });
-
+    document.getElementById('keepBtn').addEventListener('click', () => window.trackflow.resolveIdle('keep'));
+    document.getElementById('discardBtn').addEventListener('click', () => window.trackflow.resolveIdle('discard'));
     document.getElementById('reassignBtn').addEventListener('click', () => {
       const projectId = document.getElementById('reassignProject').value;
       if (projectId) window.trackflow.resolveIdle('reassign', projectId);
     });
+    document.getElementById('stopBtn').addEventListener('click', () => window.trackflow.resolveIdle('stop'));
 
-    document.getElementById('stopBtn').addEventListener('click', () => {
-      window.trackflow.resolveIdle('stop');
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      switch (e.key.toLowerCase()) {
+        case 'k': document.getElementById('keepBtn').click(); break;
+        case 'd': document.getElementById('discardBtn').click(); break;
+        case 's': document.getElementById('stopBtn').click(); break;
+        case 'r':
+          const sel = document.getElementById('reassignProject');
+          if (sel.value) document.getElementById('reassignBtn').click();
+          else sel.focus();
+          break;
+      }
     });
+
+    window.addEventListener('error', (e) => console.error('Idle alert renderer error:', e.message));
   </script>
 </body>
 </html>
