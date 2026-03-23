@@ -1,9 +1,11 @@
-// AGENT-02: Screenshot capture at org-configured interval
-// AGENT-09: Blur support via sharp
-// Multi-monitor: composite all screens at native resolution
-// Cross-platform: macOS (permission check), Windows, Linux
+// Screenshot capture service
+// - Captures at org-configured interval while timer is running
+// - Multi-monitor: captures all screens and composites them side-by-side
+// - Cross-platform: macOS (permission check), Windows, Linux
+// - Blur support via sharp
+// - Stops when timer stops (no orphan screenshots)
 
-const { desktopCapturer, Notification, screen, systemPreferences } = require('electron');
+const { desktopCapturer, Notification, screen, systemPreferences, BrowserWindow } = require('electron');
 const FormData = require('form-data');
 
 // Lazy-load sharp — may not be available on all platforms
@@ -21,9 +23,7 @@ function getSharp() {
   return _sharp;
 }
 
-// Max consecutive failures before pausing captures (avoids CPU waste when permission denied)
 const MAX_CONSECUTIVE_FAILURES = 5;
-// Pause duration after max failures (5 minutes) before retrying
 const FAILURE_PAUSE_MS = 5 * 60 * 1000;
 
 class ScreenshotService {
@@ -35,7 +35,6 @@ class ScreenshotService {
     this.interval = null;
     this.initialTimeout = null;
     this.currentEntryId = null;
-    this._cachedSourceId = null;
     this._capturing = false;
     this._consecutiveFailures = 0;
     this._pauseTimeout = null;
@@ -54,7 +53,6 @@ class ScreenshotService {
     const firstDelayMs = firstDelayMin * 60 * 1000;
 
     if (immediateCapture || firstDelayMs === 0) {
-      // Capture immediately, then start interval regardless of capture result
       setImmediate(() => {
         if (!this.currentEntryId) return;
         this.capture().finally(() => {
@@ -91,31 +89,27 @@ class ScreenshotService {
       this._pauseTimeout = null;
     }
     this.currentEntryId = null;
-    this._cachedSourceId = null;
     this._capturing = false;
     this._closeNotification();
   }
 
-  // ── macOS Screen Recording Permission Check ─────────────────────────────
+  // ── macOS Screen Recording Permission ─────────────────────────────
 
   _hasScreenPermission() {
-    if (process.platform !== 'darwin') return true; // Windows/Linux don't require explicit permission
-    // systemPreferences.getMediaAccessStatus('screen') available since Electron 11
+    if (process.platform !== 'darwin') return true;
     try {
       const status = systemPreferences.getMediaAccessStatus('screen');
-      return status === 'granted';
+      // 'granted' = full access, 'not-determined' = never prompted yet (still can capture)
+      // Only 'denied' or 'restricted' should block capture
+      return status !== 'denied' && status !== 'restricted';
     } catch {
-      // Older Electron or API unavailable — assume granted
       return true;
     }
   }
 
-  // ── Native Resolution for Each Display ──────────────────────────────────
+  // ── Capture Size ──────────────────────────────────────────────────
 
   _getCaptureSizeForDisplay(display) {
-    // Use the display's actual pixel size (accounts for HiDPI/Retina)
-    // scaleFactor: 2 on Retina means 1440x900 logical = 2880x1800 physical
-    // We cap at the physical resolution for quality but limit to 3840 to prevent huge files
     const maxWidth = 3840;
     const maxHeight = 2160;
     const physicalWidth = Math.round(display.size.width * display.scaleFactor);
@@ -135,7 +129,7 @@ class ScreenshotService {
     }
   }
 
-  // ── Core Capture Logic ──────────────────────────────────────────────────
+  // ── Core Capture — uses desktopCapturer correctly ─────────────────
 
   async capture() {
     if (!this.currentEntryId) return;
@@ -143,8 +137,6 @@ class ScreenshotService {
     this._capturing = true;
 
     // Skip if capture_only_when_visible is enabled and popup is not visible
-    // NOTE: This flag means "only capture when the TrackFlow popup is open" —
-    // it's an org privacy setting, NOT the default behavior.
     if (this.config.capture_only_when_visible === true) {
       if (this.getIsAppVisible && !this.getIsAppVisible()) {
         this._capturing = false;
@@ -152,17 +144,18 @@ class ScreenshotService {
       }
     }
 
-    // macOS: Check screen recording permission before attempting capture
+    // macOS: Check screen recording permission
     if (!this._hasScreenPermission()) {
       this._capturing = false;
-      this._handleCaptureFailure('Screen recording permission not granted on macOS');
+      this._handleCaptureFailure('Screen recording permission denied on macOS');
       return;
     }
 
     try {
-      // Use native display resolution instead of fixed 1920x1080
       const captureSize = this._getPrimaryDisplaySize();
 
+      // desktopCapturer.getSources works from main process in Electron 28
+      // but requires proper thumbnail size matching the display
       const sources = await desktopCapturer.getSources({
         types: ['screen'],
         thumbnailSize: captureSize,
@@ -170,7 +163,7 @@ class ScreenshotService {
 
       if (!sources || sources.length === 0) {
         this._capturing = false;
-        this._handleCaptureFailure('No screen sources available');
+        this._handleCaptureFailure('No screen sources available — check screen recording permission');
         return;
       }
 
@@ -183,9 +176,9 @@ class ScreenshotService {
         buffer = this._captureSingleMonitor(sources);
       }
 
-      if (!buffer) {
+      if (!buffer || buffer.length === 0) {
         this._capturing = false;
-        this._handleCaptureFailure('Capture returned empty buffer');
+        this._handleCaptureFailure('Capture returned empty buffer — screen may be locked or permission missing');
         return;
       }
 
@@ -198,55 +191,38 @@ class ScreenshotService {
       if (this.currentEntryId) {
         await this.upload(buffer);
         this._showNotification();
-        this._consecutiveFailures = 0; // Reset on success
+        this._consecutiveFailures = 0;
       }
     } catch (e) {
-      this._cachedSourceId = null;
       this._handleCaptureFailure(e.message);
     } finally {
       this._capturing = false;
     }
   }
 
-  // ── Single Monitor Capture ──────────────────────────────────────────────
+  // ── Single Monitor ────────────────────────────────────────────────
 
   _captureSingleMonitor(sources) {
-    const source = this._cachedSourceId
-      ? sources.find(s => s.id === this._cachedSourceId) || sources[0]
-      : sources[0];
-    this._cachedSourceId = source.id;
+    // Pick "Entire Screen" or the first source (index 0 is usually the primary)
+    const source = sources.find(s => s.name === 'Entire Screen') || sources[0];
+    if (!source) return null;
     const image = source.thumbnail;
     if (!image || image.isEmpty()) return null;
     return image.toJPEG(80);
   }
 
-  // ── Multi-Monitor Capture ───────────────────────────────────────────────
+  // ── Multi-Monitor ─────────────────────────────────────────────────
 
   async _captureMultiMonitor(sources) {
     const sharpLib = getSharp();
 
     if (!sharpLib) {
-      // Fallback: capture only primary screen when sharp unavailable
       return this._captureSingleMonitor(sources);
     }
 
-    // Sort sources by physical left-to-right position using screen.getAllDisplays()
-    let sorted;
-    try {
-      const displays = screen.getAllDisplays().sort((a, b) => a.bounds.x - b.bounds.x);
-      const displayOrder = new Map(displays.map((d, i) => [String(d.id), i]));
-      sorted = [...sources].sort((a, b) => {
-        const orderA = displayOrder.get(a.display_id) ?? 999;
-        const orderB = displayOrder.get(b.display_id) ?? 999;
-        return orderA - orderB;
-      });
-    } catch {
-      sorted = [...sources];
-    }
-
-    // Get valid thumbnails as PNG buffers (NOT JPEG — avoid double compression)
+    // Get all valid thumbnails as PNG buffers
     const pngImages = [];
-    for (const s of sorted) {
+    for (const s of sources) {
       if (s.thumbnail && !s.thumbnail.isEmpty()) {
         pngImages.push(s.thumbnail.toPNG());
       }
@@ -254,12 +230,15 @@ class ScreenshotService {
 
     if (pngImages.length === 0) return null;
     if (pngImages.length === 1) {
-      // Single valid source — encode to JPEG once
       return sharpLib(pngImages[0]).jpeg({ quality: 80 }).toBuffer();
     }
 
-    // Composite all screens left-to-right
-    // First, get dimensions of each image
+    // Sort by display position (left-to-right) using bounds.x
+    // Since desktopCapturer doesn't reliably map to display IDs,
+    // we sort sources by their index and trust the OS ordering (usually left-to-right).
+    // On macOS, sources are already ordered by display arrangement.
+
+    // Get dimensions
     const metas = [];
     for (const img of pngImages) {
       metas.push(await sharpLib(img).metadata());
@@ -277,7 +256,6 @@ class ScreenshotService {
       totalWidth += w;
     }
 
-    // Create canvas and composite — single JPEG encode at the end
     return sharpLib({
       create: {
         width: totalWidth,
@@ -291,7 +269,7 @@ class ScreenshotService {
       .toBuffer();
   }
 
-  // ── Blur ────────────────────────────────────────────────────────────────
+  // ── Blur ──────────────────────────────────────────────────────────
 
   async _applyBlur(buffer) {
     const sharpLib = getSharp();
@@ -304,20 +282,18 @@ class ScreenshotService {
     }
   }
 
-  // ── Failure Tracking ────────────────────────────────────────────────────
+  // ── Failure Tracking ──────────────────────────────────────────────
 
   _handleCaptureFailure(reason) {
     this._consecutiveFailures++;
     console.error(`Screenshot capture failed (${this._consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}):`, reason);
 
     if (this._consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-      console.warn(`Screenshot capture paused after ${MAX_CONSECUTIVE_FAILURES} consecutive failures. Retrying in 5 minutes.`);
-      // Pause the interval to stop wasting CPU
+      console.warn(`Screenshot capture paused after ${MAX_CONSECUTIVE_FAILURES} failures. Retrying in 5 minutes.`);
       if (this.interval) {
         clearInterval(this.interval);
         this.interval = null;
       }
-      // Retry after pause
       this._pauseTimeout = setTimeout(() => {
         this._pauseTimeout = null;
         this._consecutiveFailures = 0;
@@ -329,13 +305,11 @@ class ScreenshotService {
     }
   }
 
-  // ── Notification (cross-platform safe) ──────────────────────────────────
+  // ── Notification ──────────────────────────────────────────────────
 
   _showNotification() {
     try {
       if (!Notification.isSupported()) return;
-
-      // Close previous notification before showing new one
       this._closeNotification();
 
       const notification = new Notification({
@@ -347,7 +321,6 @@ class ScreenshotService {
       notification.show();
       this._lastNotification = notification;
 
-      // Auto-close after 3 seconds — use weak reference pattern to avoid leak
       const ref = notification;
       setTimeout(() => {
         try { ref.close(); } catch {}
@@ -365,7 +338,7 @@ class ScreenshotService {
     }
   }
 
-  // ── Upload ──────────────────────────────────────────────────────────────
+  // ── Upload ────────────────────────────────────────────────────────
 
   async upload(buffer) {
     const formData = new FormData();
@@ -380,17 +353,16 @@ class ScreenshotService {
       await this.apiClient.uploadScreenshot(formData);
     } catch (e) {
       console.error('Screenshot upload failed:', e.message);
-      // Only queue if buffer is reasonable size (< 500KB as base64 ≈ 375KB raw JPEG)
-      // Prevents SQLite bloat from huge multi-monitor composites
-      const base64 = buffer.toString('base64');
-      if (base64.length < 500 * 1024) {
+      // Queue for offline sync — but only if buffer is small enough
+      // to avoid SQLite bloat (500KB base64 ≈ 375KB raw JPEG)
+      if (buffer.length < 375 * 1024) {
         this.offlineQueue.add('screenshot', {
-          buffer: base64,
+          buffer: buffer.toString('base64'),
           time_entry_id: String(this.currentEntryId),
           captured_at: new Date().toISOString(),
         });
       } else {
-        console.warn('Screenshot too large for offline queue, discarding');
+        console.warn(`Screenshot too large for offline queue (${Math.round(buffer.length / 1024)}KB), skipping`);
       }
     }
   }

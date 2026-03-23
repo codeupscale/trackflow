@@ -707,6 +707,12 @@ function stopTimer() {
 
   dismissIdleAlert();
 
+  // Send final heartbeat BEFORE stopping — captures last 0-29s of activity data
+  // This is critical: without it, 10-50% of activity in short sessions is lost
+  if (activityMonitor) {
+    activityMonitor.sendFinalHeartbeat().catch(() => {});
+  }
+
   isTimerRunning = false;
   currentEntry = null;
   _cachedStartedAtMs = null;

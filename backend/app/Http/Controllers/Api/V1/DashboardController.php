@@ -47,27 +47,48 @@ class DashboardController extends Controller
             ->where('is_active', true)
             ->get(['id', 'name', 'email', 'role', 'last_active_at', 'avatar_url']);
 
+        // Batch Redis fetch: 1 call instead of N (one per user)
+        $redisKeys = $users->map(fn ($u) => "timer:{$u->id}")->values()->all();
+        $redisValues = count($redisKeys) > 0 ? Redis::mget($redisKeys) : [];
+        $userById = $users->keyBy('id');
+        $now = now();
+
         $onlineUsers = [];
-        foreach ($users as $u) {
-            $timerData = Redis::get("timer:{$u->id}");
+        foreach ($redisKeys as $i => $key) {
+            $timerData = $redisValues[$i] ?? null;
             if ($timerData) {
                 $data = json_decode($timerData, true);
-                $onlineUsers[] = [
-                    'user' => $u,
-                    'timer' => $data,
-                    'elapsed_seconds' => (int) abs(now()->diffInSeconds(Carbon::parse($data['started_at']))),
-                ];
+                $userId = str_replace('timer:', '', $key);
+                $u = $userById->get($userId);
+                if ($u) {
+                    $onlineUsers[] = [
+                        'user' => $u,
+                        'timer' => $data,
+                        'elapsed_seconds' => (int) abs($now->diffInSeconds(Carbon::parse($data['started_at']))),
+                    ];
+                }
             }
         }
 
-        // Time entries in range (completed, tracked) — team sum according to selected filter
+        // Time entries in range (completed, tracked) — team sum + duration-weighted activity
+        // Duration-weighted average: longer entries contribute more to the score.
+        // This matches Hubstaff's approach: a 1-min entry at 10% shouldn't drag down
+        // an 8-hour entry at 90%. COALESCE handles NULL activity_score (short entries with no heartbeats).
         $rangeEntries = TimeEntry::withoutGlobalScopes()
             ->where('organization_id', $orgId)
             ->where('started_at', '>=', $dateFrom)
             ->where('started_at', '<=', $dateTo)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked')
-            ->selectRaw('user_id, SUM(duration_seconds) as total_seconds, AVG(activity_score) as avg_activity')
+            ->selectRaw('
+                user_id,
+                SUM(duration_seconds) as total_seconds,
+                CASE
+                    WHEN SUM(CASE WHEN activity_score IS NOT NULL THEN duration_seconds ELSE 0 END) > 0
+                    THEN SUM(COALESCE(activity_score, 0) * duration_seconds) / SUM(CASE WHEN activity_score IS NOT NULL THEN duration_seconds ELSE 0 END)
+                    ELSE 0
+                END as avg_activity
+            ')
             ->groupBy('user_id')
             ->get()
             ->keyBy('user_id');

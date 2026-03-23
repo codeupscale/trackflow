@@ -91,9 +91,16 @@ class TimerService
                 ->firstOrFail();
 
             $now = now();
+            $duration = (int) abs($now->diffInSeconds($entry->started_at));
+
+            // Finalize activity_score from actual ActivityLog records (ground truth).
+            // This replaces the running EMA with a proper weighted calculation.
+            $finalScore = $this->computeFinalActivityScore($entry->id);
+
             $entry->update([
                 'ended_at' => $now,
-                'duration_seconds' => (int) abs($now->diffInSeconds($entry->started_at)),
+                'duration_seconds' => $duration,
+                'activity_score' => $finalScore ?? $entry->activity_score ?? 0,
             ]);
 
             Redis::del($redisKey);
@@ -364,22 +371,56 @@ class TimerService
             'active_url' => $data['active_url'] ?? null,
         ]);
 
-        // Update activity score on entry
+        // Update activity score on entry using exponential moving average (EMA).
+        // EMA gives recent heartbeats more weight but doesn't let a single
+        // heartbeat dominate the entire history. Alpha = 0.3 means ~70% history, ~30% new.
         $entry = TimeEntry::find($timerInfo['entry_id']);
         if ($entry) {
-            $maxExpected = 300; // expected max events per 30s interval
+            $maxExpected = 300; // expected max events per 30s interval (calibrated with fallback mode)
             $total = ($data['keyboard_events'] ?? 0) + ($data['mouse_events'] ?? 0);
-            $score = min(100, (int) ($total / $maxExpected * 100));
+            $instantScore = min(100, (int) round($total / $maxExpected * 100));
 
-            // Average with existing score
-            if ($entry->activity_score !== null) {
-                $score = (int) (($entry->activity_score + $score) / 2);
+            $alpha = 0.3; // smoothing factor
+            if ($entry->activity_score !== null && $entry->activity_score > 0) {
+                $score = (int) round($alpha * $instantScore + (1 - $alpha) * $entry->activity_score);
+            } else {
+                $score = $instantScore;
             }
-            $entry->update(['activity_score' => $score]);
+            $entry->update(['activity_score' => max(0, min(100, $score))]);
         }
 
         $user->update(['last_active_at' => now()]);
 
         return $log;
+    }
+
+    /**
+     * Compute final activity score from ActivityLog records (ground truth).
+     *
+     * Instead of relying on the running EMA (which can drift), this reads
+     * all heartbeat logs for the entry and computes an average score.
+     * Each heartbeat represents a 30s interval, so equal-weight average is correct here.
+     *
+     * Returns null if no activity logs exist (entry had no heartbeats).
+     */
+    private function computeFinalActivityScore(string $entryId): ?int
+    {
+        $maxExpected = 300;
+
+        $logs = ActivityLog::where('time_entry_id', $entryId)
+            ->select('keyboard_events', 'mouse_events')
+            ->get();
+
+        if ($logs->isEmpty()) {
+            return null;
+        }
+
+        $totalScore = 0;
+        foreach ($logs as $log) {
+            $events = $log->keyboard_events + $log->mouse_events;
+            $totalScore += min(100, (int) round($events / $maxExpected * 100));
+        }
+
+        return (int) round($totalScore / $logs->count());
     }
 }
