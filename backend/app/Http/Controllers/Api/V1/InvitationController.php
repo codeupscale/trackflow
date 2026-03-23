@@ -89,7 +89,7 @@ class InvitationController extends Controller
             'created_by' => $user->id,
         ]);
 
-        $this->sendInvitationEmail($invitation, $user);
+        $this->sendInvitationEmail($invitation, $user->loadMissing('organization'));
 
         return response()->json([
             'invitation' => $invitation,
@@ -111,7 +111,7 @@ class InvitationController extends Controller
         // Extend expiry on resend
         $invitation->update(['expires_at' => now()->addDays(7)]);
 
-        $this->sendInvitationEmail($invitation->fresh(), $user);
+        $this->sendInvitationEmail($invitation->fresh(), $user->loadMissing('organization'));
 
         return response()->json(['message' => 'Invitation resent successfully.']);
     }

@@ -1,19 +1,38 @@
-// AGENT-03: Activity monitoring — keyboard + mouse counts only, NEVER keystrokes
-// AGENT-04: Active app name tracking
+// Activity monitoring — keyboard + mouse counts only, NEVER keystrokes
+// Active app name tracking
+//
+// Hubstaff-calibrated activity scoring:
+//   - 10-minute intervals, each split into 30s heartbeats
+//   - mousemove is THROTTLED (1 count per 200ms, not per pixel)
+//   - Final heartbeat sent on timer stop (no data loss)
+//   - Backend maxExpected = 300 events/30s for 100% score
 //
 // Two modes:
 //   1. uiohook-napi (if available + accessibility permission granted)
 //      → Precise keyboard/mouse event counts
-//      → Requires macOS Accessibility permission
+//      → mousemove throttled to 1 event per 200ms (Hubstaff-style)
 //
 //   2. powerMonitor fallback (no extra permissions needed)
 //      → Uses system idle time to estimate activity
-//      → If system was idle < 5s during a 30s heartbeat, user was active
-//      → Less granular but works everywhere without prompts
+//      → Calibrated so 100% active ≈ 300 total events per 30s
 
 const { execFile } = require('child_process');
 const { powerMonitor, systemPreferences } = require('electron');
 const os = require('os');
+
+// Backend maxExpected is 300 events per 30s for 100% score.
+const HEARTBEAT_INTERVAL_MS = 30000;
+
+// Fallback polls 10 times per 30s (every 3s). Each active poll = 30 events (300/10).
+const FALLBACK_POLL_INTERVAL_MS = 3000;
+const FALLBACK_KEYBOARD_PER_ACTIVE_POLL = 12;
+const FALLBACK_MOUSE_PER_ACTIVE_POLL = 18;
+const IDLE_ACTIVE_THRESHOLD_SEC = 5;
+
+// Throttle mousemove: count max 1 movement per 200ms.
+// Raw mousemove fires every pixel (~500-2000/sec during movement).
+// Hubstaff counts "mouse activity intervals" not raw events.
+const MOUSEMOVE_THROTTLE_MS = 200;
 
 class ActivityMonitor {
   constructor(apiClient, offlineQueue) {
@@ -26,13 +45,20 @@ class ActivityMonitor {
     this._hookStarted = false;
     this._hookAvailable = false;
     this._useIdleFallback = false;
+    this._idlePollInterval = null;
+    this._lastMouseMoveTime = 0;
+
     // Bound handlers so we can add/remove them without leaking
     this._onKeydown = () => { this.keyboardCount++; };
     this._onClick = () => { this.mouseCount++; };
-    this._onMousemove = () => { this.mouseCount++; };
-    // powerMonitor fallback state
-    this._lastIdleCheck = 0;
-    this._activeSeconds = 0;
+    this._onMousemove = () => {
+      // Throttle: only count 1 movement per 200ms
+      const now = Date.now();
+      if (now - this._lastMouseMoveTime >= MOUSEMOVE_THROTTLE_MS) {
+        this._lastMouseMoveTime = now;
+        this.mouseCount++;
+      }
+    };
   }
 
   start() {
@@ -40,8 +66,7 @@ class ActivityMonitor {
 
     this.keyboardCount = 0;
     this.mouseCount = 0;
-    this._activeSeconds = 0;
-    this._lastIdleCheck = Date.now();
+    this._lastMouseMoveTime = 0;
 
     // Try uiohook-napi, but only if accessibility permission is available
     if (!this._hookStarted) {
@@ -59,29 +84,26 @@ class ActivityMonitor {
           this._hookAvailable = true;
           this._useIdleFallback = false;
         } catch (e) {
-          console.warn('uiohook-napi not available, using idle-time fallback');
+          console.warn('uiohook-napi not available, using idle-time fallback:', e.message);
           this._useIdleFallback = true;
         }
       } else {
-        // No accessibility permission — use fallback without prompting
         console.log('Accessibility permission not granted — using idle-time activity estimation');
         this._useIdleFallback = true;
       }
     }
 
-    // If using fallback, poll idle time every 5 seconds to estimate activity
+    // If using fallback, poll idle time every 3 seconds to estimate activity
     if (this._useIdleFallback) {
-      this._idlePollInterval = setInterval(() => this._pollIdleTime(), 5000);
+      this._idlePollInterval = setInterval(() => this._pollIdleTime(), FALLBACK_POLL_INTERVAL_MS);
     }
 
     // Send heartbeat every 30 seconds
-    this.interval = setInterval(() => this.sendHeartbeat(), 30000);
+    this.interval = setInterval(() => this.sendHeartbeat(), HEARTBEAT_INTERVAL_MS);
   }
 
   _checkAccessibilityPermission() {
     if (process.platform !== 'darwin') return true;
-    // On macOS, check if accessibility is trusted WITHOUT prompting
-    // systemPreferences.isTrustedAccessibilityClient(false) = check only, don't prompt
     try {
       return systemPreferences.isTrustedAccessibilityClient(false);
     } catch {
@@ -89,22 +111,24 @@ class ActivityMonitor {
     }
   }
 
-  // powerMonitor-based activity estimation:
-  // System idle time < 5 seconds = user is active right now
   _pollIdleTime() {
     try {
       const idleSec = powerMonitor.getSystemIdleTime();
-      if (idleSec < 5) {
-        // User was active in the last 5 seconds
-        const now = Date.now();
-        const elapsed = (now - this._lastIdleCheck) / 1000;
-        this._activeSeconds += Math.min(elapsed, 5);
-        // Estimate: each active 5s poll ≈ ~3 keyboard + ~5 mouse events
-        this.keyboardCount += 3;
-        this.mouseCount += 5;
+      if (idleSec < IDLE_ACTIVE_THRESHOLD_SEC) {
+        this.keyboardCount += FALLBACK_KEYBOARD_PER_ACTIVE_POLL;
+        this.mouseCount += FALLBACK_MOUSE_PER_ACTIVE_POLL;
       }
-      this._lastIdleCheck = Date.now();
     } catch {}
+  }
+
+  // Send final heartbeat before stopping — prevents losing the last 0-29s of data
+  async sendFinalHeartbeat() {
+    if (this.keyboardCount === 0 && this.mouseCount === 0) return;
+    try {
+      await this.sendHeartbeat();
+    } catch {
+      // Best effort — don't block timer stop
+    }
   }
 
   stop() {
@@ -130,7 +154,7 @@ class ActivityMonitor {
 
     this.keyboardCount = 0;
     this.mouseCount = 0;
-    this._activeSeconds = 0;
+    this._lastMouseMoveTime = 0;
   }
 
   async sendHeartbeat() {
@@ -144,7 +168,6 @@ class ActivityMonitor {
 
     this.keyboardCount = 0;
     this.mouseCount = 0;
-    this._activeSeconds = 0;
 
     try {
       await this.apiClient.sendHeartbeat(data);
@@ -156,7 +179,6 @@ class ActivityMonitor {
     }
   }
 
-  // Spawn a child process with timeout + cleanup to avoid orphans
   _execWithTimeout(cmd, args, timeoutMs = 3000) {
     return new Promise((resolve) => {
       let child = null;
@@ -182,21 +204,17 @@ class ActivityMonitor {
         '-e', 'tell application "System Events" to get name of first application process whose frontmost is true',
       ]);
     }
-
     if (os.platform() === 'win32') {
       return this._execWithTimeout('powershell.exe', [
         '-NoProfile', '-NonInteractive', '-Command',
         '(Get-Process | Where-Object {$_.MainWindowHandle -ne 0 -and $_.MainWindowTitle} | Select-Object -First 1).ProcessName',
       ]);
     }
-
-    // Linux: Try xdotool → ps to get process name from PID
     return new Promise((resolve) => {
       let resolved = false;
       const done = (val) => { if (!resolved) { resolved = true; resolve(val); } };
       const timer = setTimeout(() => done(null), 3000);
-
-      const child = execFile('xdotool', ['getactivewindow', 'getwindowpid'], { timeout: 2500 }, (err, stdout) => {
+      execFile('xdotool', ['getactivewindow', 'getwindowpid'], { timeout: 2500 }, (err, stdout) => {
         if (err) { clearTimeout(timer); done(null); return; }
         const pid = (stdout || '').trim();
         if (!pid) { clearTimeout(timer); done(null); return; }
@@ -214,15 +232,12 @@ class ActivityMonitor {
         '-e', 'tell application "System Events" to get title of front window of (first application process whose frontmost is true)',
       ]);
     }
-
     if (os.platform() === 'win32') {
       return this._execWithTimeout('powershell.exe', [
         '-NoProfile', '-NonInteractive', '-Command',
         '(Get-Process | Where-Object {$_.MainWindowHandle -ne 0 -and $_.MainWindowTitle} | Select-Object -First 1).MainWindowTitle',
       ]);
     }
-
-    // Linux
     return this._execWithTimeout('xdotool', ['getactivewindow', 'getwindowname']);
   }
 }
