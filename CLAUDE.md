@@ -1,73 +1,94 @@
-# TrackFlow — Project Instructions for Claude
+# TrackFlow — Engineering Standards & Project Context
 
-## Project Overview
-TrackFlow is a workforce time tracking & monitoring platform (like Hubstaff). It consists of three codebases in a monorepo:
+## What This Is
+TrackFlow is a production workforce time tracking & monitoring platform (comparable to Hubstaff). Monorepo with three codebases:
 
-| Component | Tech | Path |
+| Component | Stack | Path | Runtime |
+|---|---|---|---|
+| Backend API | Laravel 12, PHP 8.2+, PostgreSQL 18, Redis 7 | `/backend` | Docker / Sail |
+| Web Dashboard | Next.js 16, React 19, TypeScript 5.x, Zustand, TanStack Query v5 | `/web` | Node 20+ |
+| Desktop Agent | Electron 28, Node.js, better-sqlite3, sharp | `/desktop` | Native binary |
+
+## System Architecture
+```
+                    ┌──────────────────────────────────┐
+                    │        PostgreSQL 18              │
+                    │   (multi-tenant, UUID PKs,        │
+                    │    org_id scoping on all tables)   │
+                    └──────────┬───────────────────────┘
+                               │
+Desktop Agent ──► Laravel REST API v1 ──► Redis (cache + queue)
+  (Electron)       │    │    │              │
+                   │    │    │         Horizon (workers)
+Web Dashboard ─────┘    │    │
+  (Next.js SSR)         │    └──► S3 / CloudFront (screenshots)
+                        │
+                   Reverb WebSocket (real-time updates)
+```
+
+## Non-Negotiable Engineering Rules
+
+### 1. Data Isolation (Multi-Tenancy)
+Every database query MUST be scoped by `organization_id`. The `GlobalOrganizationScope` trait handles this for Eloquent models. For raw/aggregate queries, add explicit `WHERE organization_id = ?`. A query that leaks data across orgs is a P0 security incident.
+
+### 2. API Design
+- All list endpoints: `->paginate()`, NEVER `->get()` for unbounded collections
+- Response envelope: `{ "data": [...], "meta": { "current_page", "last_page", "total" } }`
+- Errors: `{ "message": "Human-readable", "errors": { "field": ["..."] } }` (Laravel default)
+- Auth: Bearer token via Sanctum. Access token (24h) + refresh token (30d)
+- Versioning: All routes under `/api/v1/`
+- Rate limits defined in `AppServiceProvider`: auth=10/min, general=1000/min
+
+### 3. Code Organization
+- **Controllers**: Thin. Validate input, call service, return response. Max ~30 lines per method.
+- **Services**: `app/Services/` — all business logic. Constructor injection via Laravel DI.
+- **Jobs**: Background work. Every job MUST have `$tries`, `$timeout`, `$backoff`, and `failed()` handler.
+- **Policies**: Authorization logic. Every controller action that accesses a resource must `$this->authorize()`.
+- **Models**: Eloquent with `$fillable`, UUID traits, relationship definitions. No business logic in models.
+
+### 4. Frontend Patterns
+- Data fetching: TanStack Query (`useQuery`/`useMutation`). Never raw `useEffect + fetch`.
+- State: Zustand stores. Cleanup intervals on unmount and logout. No stale subscriptions.
+- SSR safety: `typeof window !== 'undefined'` guard on all browser-only APIs.
+- Error handling: Every query destructures `isLoading`, `isError` and renders both states.
+- Role-based: Early return with `<PageLoading />` for unauthorized roles. No content flash.
+
+### 5. Desktop Security
+- `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` on ALL BrowserWindows
+- ALL renderer ↔ main communication through `contextBridge` in preload script
+- Token storage: AES-256-GCM via Node.js `crypto`. NOT keytar, NOT safeStorage (both trigger macOS keychain popups on ad-hoc signed apps)
+- Screenshots on macOS: window capture first (avoids wallpaper-only bug), screen capture fallback
+
+### 6. Performance Budgets
+| Metric | Target | Measured By |
 |---|---|---|
-| Backend API | Laravel 12, PHP 8.2+, PostgreSQL 18, Redis | `/backend` |
-| Web Frontend | Next.js 16, React 19, TypeScript, Zustand, TanStack Query | `/web` |
-| Desktop Agent | Electron 28, Node.js, better-sqlite3 | `/desktop` |
+| API response (p95) | < 200ms | Laravel Telescope / logs |
+| Dashboard first paint | < 2s | Lighthouse |
+| Desktop memory (idle) | < 150MB | Activity Monitor |
+| Desktop memory (tracking) | < 250MB | Activity Monitor |
+| Screenshot capture | < 3s | `[SS]` log timestamps |
+| Time entry query (1M rows) | < 500ms | EXPLAIN ANALYZE |
 
-## Architecture
+### 7. Git & Release
+- Branch: `fix/web-frontend-and-desktop-app` (current), merge to `main`
+- Commits: conventional commits (`feat:`, `fix:`, `refactor:`, `chore:`)
+- Desktop releases: GitHub Releases with `latest-mac.yml` / `latest.yml` manifests
+- CI: `.github/workflows/tests.yml` — PHPUnit + `composer audit` + `npm audit`
 
-```
-Desktop Agent ──► Laravel REST API (v1) ──► PostgreSQL + Redis + S3
-Web Dashboard ──►        ▲
-                         │
-                    Reverb WebSocket (real-time)
-```
+## Quick Reference — Key Files
 
-## Key Conventions
-
-### Backend (Laravel)
-- **Multi-tenant**: All queries scoped by `organization_id` via `GlobalOrganizationScope`
-- **Auth**: Laravel Sanctum with access + refresh tokens (24h / 30d)
-- **Roles**: owner > admin > manager > employee (4-tier)
-- **Services**: Business logic in `app/Services/`, controllers stay thin
-- **Jobs**: All background work in `app/Jobs/` with retry logic and timeouts
-- **Routes**: All API routes in `routes/api.php` under `/api/v1/`
-- **UUIDs**: All models use UUIDs as primary keys
-- **Pagination**: All list endpoints MUST use `->paginate()`, never `->get()` for collections
-
-### Frontend (Next.js)
-- **App Router**: Pages in `src/app/(dashboard)/` with layout groups
-- **State**: Zustand stores in `src/stores/` (auth-store, timer-store)
-- **Data fetching**: TanStack Query (`useQuery`/`useMutation`) — never raw `useEffect` for API calls
-- **UI**: shadcn/ui components in `src/components/ui/`, Tailwind CSS
-- **API client**: `src/lib/api.ts` with token refresh mutex (handles concurrent 401s)
-- **Role-based**: Check `user?.role` for conditional rendering, early return with loading spinner for unauthorized pages
-
-### Desktop (Electron)
-- **Security**: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` on ALL windows
-- **IPC**: All renderer ↔ main communication through preload bridge (`src/preload/index.js`)
-- **Services**: Modular services in `src/main/` (screenshot-service, activity-monitor, idle-detector, offline-queue, keychain, api-client)
-- **Tokens**: AES-256-GCM encrypted file (NOT keytar/safeStorage — both cause macOS keychain popups)
-- **Screenshots**: Window capture first on macOS (avoids wallpaper-only bug with ad-hoc signing), screen capture on Windows/Linux
-- **Build**: electron-builder, ad-hoc signing with entitlements, auto-update via GitHub Releases
-
-## Database
-- PostgreSQL 18 with 20+ tables
-- Key tables: `organizations`, `users`, `time_entries`, `screenshots`, `activity_logs`, `timesheets`
-- All foreign keys indexed, composite indexes on frequently queried columns
-- Migrations in `backend/database/migrations/`
-
-## Testing
-- Backend: `php artisan test` (PHPUnit)
-- Desktop: `npx jest` in `/desktop`
-- Web: `npm test` in `/web` (if configured)
-- CI: `.github/workflows/tests.yml` runs backend tests + security audits
-
-## Deployment
-- Docker Compose for dev (`compose.yaml`) and production (`compose.production.yaml`)
-- Desktop releases via GitHub Releases with auto-update
-- Build: `npm run build:mac`, `npm run build:win`, `npm run build:linux`
-
-## Security Rules
-- NEVER use `->get()` without pagination on list endpoints
-- NEVER expose user passwords, tokens, or API keys in responses
-- ALWAYS validate `organization_id` scope on data access
-- ALWAYS use parameterized queries (Eloquent), never raw SQL with user input
-- CORS restricted to explicit headers and origins
-- CSP headers on both web frontend and Electron renderer
-- Rate limiting on all auth and agent endpoints
+| What | Where |
+|---|---|
+| API routes | `backend/routes/api.php` |
+| Controllers | `backend/app/Http/Controllers/Api/V1/` |
+| Services | `backend/app/Services/` (Timer, Report, Billing, Audit, Permission) |
+| Models | `backend/app/Models/` |
+| Migrations | `backend/database/migrations/` |
+| Frontend pages | `web/src/app/(dashboard)/*/page.tsx` |
+| API client | `web/src/lib/api.ts` (axios + token refresh mutex) |
+| Zustand stores | `web/src/stores/` (auth-store, timer-store) |
+| Desktop main | `desktop/src/main/index.js` |
+| Desktop services | `desktop/src/main/` (screenshot, activity, idle, offline, keychain) |
+| Build config | `desktop/package.json` (build field) |
+| Docker dev | `compose.yaml` |
+| Docker prod | `compose.production.yaml` |
