@@ -104,11 +104,11 @@ const screen = {
   }])),
 };
 
+// safeStorage removed — we use Node.js crypto instead (no Keychain popup)
 const safeStorage = {
-  isEncryptionAvailable: jest.fn(() => true),
-  // Mock encryption: just base64 encode/decode (simulates encrypt/decrypt round-trip)
-  encryptString: jest.fn((str) => Buffer.from(str, 'utf8')),
-  decryptString: jest.fn((buf) => buf.toString('utf8')),
+  isEncryptionAvailable: jest.fn(() => false),
+  encryptString: jest.fn(() => Buffer.alloc(0)),
+  decryptString: jest.fn(() => ''),
 };
 
 const systemPreferences = {

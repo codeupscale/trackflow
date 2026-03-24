@@ -12,7 +12,7 @@
   "homepage": "https://trackflow.codeupscale.com",
   "repository": {
     "type": "git",
-    "url": "https://github.com/trackflow/trackflow-agent.git"
+    "url": "https://github.com/codeupscale/trackflow-agent.git"
   },
   "scripts": {
     "start": "electron .",
@@ -26,6 +26,11 @@
     "build:linux": "electron-builder --linux --x64",
     "build:linux:arm64": "electron-builder --linux --arm64",
     "build:all": "electron-builder -mwl",
+    "publish": "electron-builder --mac --win --linux --publish always",
+    "publish:mac": "electron-builder --mac --x64 --arm64 --publish always",
+    "publish:win": "electron-builder --win --x64 --publish always",
+    "publish:linux": "electron-builder --linux --x64 --publish always",
+    "release": "npm run test && npm run publish",
     "test": "jest --verbose",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
@@ -75,9 +80,11 @@
       "darkModeSupport": true,
       "type": "distribution",
       "notarize": false,
+      "identity": null,
       "extendInfo": {
         "NSScreenCaptureUsageDescription": "TrackFlow needs screen capture access to take periodic screenshots for time tracking.",
-        "NSAppleEventsUsageDescription": "TrackFlow needs automation access to detect the active application name."
+        "NSAppleEventsUsageDescription": "TrackFlow needs automation access to detect the active application name.",
+        "LSUIElement": true
       }
     },
     "dmg": {
@@ -140,9 +147,10 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "trackflow",
+      "owner": "codeupscale",
       "repo": "trackflow-agent",
-      "releaseType": "release"
+      "releaseType": "release",
+      "private": true
     }
   },
   "dependencies": {
