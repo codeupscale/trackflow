@@ -1080,20 +1080,19 @@ function checkForUpdates() {
   }
   try {
     // For private GitHub repos, electron-updater needs a GH_TOKEN
-    // Set it via environment variable or hardcode for internal distribution
     if (process.env.GH_TOKEN) {
       autoUpdater.requestHeaders = { Authorization: `token ${process.env.GH_TOKEN}` };
     }
 
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.logger = null; // Suppress default electron-updater logging (we do our own)
 
     autoUpdater.on('update-available', (info) => {
       console.log(`[updater] Update available: v${info.version}`);
     });
     autoUpdater.on('update-downloaded', (info) => {
       console.log(`[updater] Update downloaded: v${info.version} — will install on quit`);
-      // Notify user
       try {
         const notification = new Notification({
           title: 'TrackFlow Update Ready',
@@ -1103,13 +1102,10 @@ function checkForUpdates() {
         notification.show();
       } catch {}
     });
-    autoUpdater.on('error', (err) => {
-      console.warn('[updater] Update check failed:', err.message);
-    });
+    // Silently ignore update errors — don't spam logs when no releases exist yet
+    autoUpdater.on('error', () => {});
 
-    autoUpdater.checkForUpdatesAndNotify().catch((e) => {
-      console.warn('[updater] Update check failed:', e.message);
-    });
+    autoUpdater.checkForUpdatesAndNotify().catch(() => {});
   } catch {
     // autoUpdater not configured — skip silently
   }

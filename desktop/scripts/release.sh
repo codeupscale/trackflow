@@ -8,13 +8,13 @@
 # What it does:
 #   1. Runs tests
 #   2. Bumps version (default: patch)
-#   3. Builds for macOS (x64 + arm64), Windows, Linux
-#   4. Publishes to GitHub Releases
+#   3. Builds for macOS (x64 + arm64)
+#   4. Creates a GitHub Release with all artifacts attached
 #   5. Team members get auto-updated on next app launch
 #
 # Prerequisites:
-#   - GH_TOKEN environment variable set (GitHub Personal Access Token)
-#   - On macOS for building .dmg (can cross-compile .exe and .AppImage)
+#   - `gh` CLI authenticated (run `gh auth login` if not)
+#   - On macOS for building .dmg
 #   - npm install already done
 # ─────────────────────────────────────────────────────────────────
 
@@ -23,13 +23,13 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Check GH_TOKEN
-if [ -z "$GH_TOKEN" ]; then
-  echo -e "${RED}Error: GH_TOKEN not set.${NC}"
-  echo "Get one from: https://github.com/settings/tokens"
-  echo "Then run: export GH_TOKEN=ghp_your_token_here"
+# Check gh CLI is authenticated
+if ! gh auth status &>/dev/null; then
+  echo -e "${RED}Error: gh CLI not authenticated.${NC}"
+  echo "Run: gh auth login"
   exit 1
 fi
 
@@ -55,32 +55,86 @@ echo -e "\n${YELLOW}[2/5] Bumping version ($BUMP)...${NC}"
 NEW_VERSION=$(npm version $BUMP --no-git-tag-version)
 echo -e "${GREEN}✓ Version bumped to $NEW_VERSION${NC}"
 
-# Step 3: Build + publish for macOS
+# Step 3: Build macOS (both architectures)
 echo -e "\n${YELLOW}[3/5] Building macOS (Intel + Apple Silicon)...${NC}"
-npx electron-builder --mac --x64 --arm64 --publish always
-echo -e "${GREEN}✓ macOS builds published${NC}"
+npx electron-builder --mac --x64 --arm64
+echo -e "${GREEN}✓ macOS builds complete${NC}"
 
-# Step 4: Build + publish for Windows
+# Step 4: Build Windows (cross-compile from macOS)
 echo -e "\n${YELLOW}[4/5] Building Windows (x64)...${NC}"
-npx electron-builder --win --x64 --publish always
-echo -e "${GREEN}✓ Windows build published${NC}"
+npx electron-builder --win --x64 || echo -e "${YELLOW}⚠ Windows build skipped (may need Wine for cross-compile)${NC}"
 
-# Step 5: Build + publish for Linux
-echo -e "\n${YELLOW}[5/5] Building Linux (x64)...${NC}"
-npx electron-builder --linux --x64 --publish always
-echo -e "${GREEN}✓ Linux build published${NC}"
+# Step 5: Build Linux
+echo -e "\n${YELLOW}[4/5] Building Linux (x64)...${NC}"
+npx electron-builder --linux --x64 || echo -e "${YELLOW}⚠ Linux build skipped (cross-compile not available)${NC}"
+
+# Step 5: Create GitHub Release with all artifacts
+echo -e "\n${YELLOW}[5/5] Creating GitHub Release...${NC}"
+
+VERSION_NUM=${NEW_VERSION#v}
+TAG="v${VERSION_NUM}"
+DIST_DIR="dist"
+
+# Collect all release artifacts
+ARTIFACTS=()
+for f in \
+  "$DIST_DIR/TrackFlow-${VERSION_NUM}-mac-arm64.dmg" \
+  "$DIST_DIR/TrackFlow-${VERSION_NUM}-mac-x64.dmg" \
+  "$DIST_DIR/TrackFlow-${VERSION_NUM}-mac-arm64.zip" \
+  "$DIST_DIR/TrackFlow-${VERSION_NUM}-mac-x64.zip" \
+  "$DIST_DIR/TrackFlow-${VERSION_NUM}-mac-arm64.dmg.blockmap" \
+  "$DIST_DIR/TrackFlow-${VERSION_NUM}-mac-x64.dmg.blockmap" \
+  "$DIST_DIR/TrackFlow Setup ${VERSION_NUM}.exe" \
+  "$DIST_DIR/TrackFlow-${VERSION_NUM}.exe.blockmap" \
+  "$DIST_DIR/TrackFlow-${VERSION_NUM}-x64.AppImage" \
+  "$DIST_DIR/latest-mac.yml" \
+  "$DIST_DIR/latest.yml" \
+  "$DIST_DIR/latest-linux.yml" \
+; do
+  if [ -f "$f" ]; then
+    ARTIFACTS+=("$f")
+  fi
+done
+
+echo -e "${BLUE}Artifacts to upload:${NC}"
+for a in "${ARTIFACTS[@]}"; do
+  SIZE=$(du -h "$a" | cut -f1)
+  echo "  ${SIZE}  $(basename "$a")"
+done
+
+# Create the release using gh CLI (uses existing auth, no separate token needed)
+gh release create "$TAG" \
+  --repo codeupscale/trackflow \
+  --title "TrackFlow Desktop $TAG" \
+  --notes "$(cat <<EOF
+## TrackFlow Desktop $TAG
+
+### Downloads
+| Platform | File |
+|---|---|
+| macOS Apple Silicon (M1/M2/M3/M4) | TrackFlow-${VERSION_NUM}-mac-arm64.dmg |
+| macOS Intel | TrackFlow-${VERSION_NUM}-mac-x64.dmg |
+| Windows | TrackFlow Setup ${VERSION_NUM}.exe |
+| Linux | TrackFlow-${VERSION_NUM}-x64.AppImage |
+
+### Installation
+1. Download the file for your platform
+2. macOS: Open the .dmg, drag TrackFlow to Applications
+3. Windows: Run the .exe installer
+4. Linux: Make the .AppImage executable and run it
+
+### Auto-Updates
+Existing users will be automatically updated on next app launch.
+EOF
+)" \
+  "${ARTIFACTS[@]}"
 
 echo ""
 echo -e "${GREEN}══════════════════════════════════════════${NC}"
-echo -e "${GREEN}  Release $NEW_VERSION published! 🚀${NC}"
+echo -e "${GREEN}  Release $TAG published! 🚀${NC}"
 echo -e "${GREEN}══════════════════════════════════════════${NC}"
+echo ""
+echo "Download page:"
+echo -e "  ${BLUE}https://github.com/codeupscale/trackflow/releases/tag/$TAG${NC}"
 echo ""
 echo "Your team will auto-update on next app launch."
-echo "Or they can download manually from:"
-echo "  https://github.com/codeupscale/trackflow-agent/releases/latest"
-echo ""
-echo "Artifacts:"
-echo "  macOS Intel:   TrackFlow-${NEW_VERSION#v}-mac-x64.dmg"
-echo "  macOS Silicon: TrackFlow-${NEW_VERSION#v}-mac-arm64.dmg"
-echo "  Windows:       TrackFlow-Setup-${NEW_VERSION#v}.exe"
-echo "  Linux:         TrackFlow-${NEW_VERSION#v}-x64.AppImage"

@@ -66,11 +66,20 @@ describe('ScreenshotService', () => {
     };
     mockGetIsAppVisible = jest.fn(() => true);
 
-    // Default: one screen source available
+    // Default: one screen source + one window source available
+    // The capture() method now requests types: ['screen', 'window']
+    // and uses toJPEG which returns a buffer — mock needs realistic size (>20KB)
+    // to pass the wallpaper-detection check
+    const bigImage = {
+      isEmpty: jest.fn(() => false),
+      toJPEG: jest.fn(() => Buffer.alloc(50000, 0x42)), // 50KB — passes wallpaper check
+      toPNG: jest.fn(() => Buffer.alloc(50000, 0x42)),
+      getSize: jest.fn(() => ({ width: 1920, height: 1080 })),
+    };
     desktopCapturer.getSources.mockResolvedValue([{
       id: 'screen:0:0',
       name: 'Entire Screen',
-      thumbnail: makeMockImage(false),
+      thumbnail: bigImage,
       display_id: '1',
     }]);
 
@@ -113,8 +122,9 @@ describe('ScreenshotService', () => {
     service.currentEntryId = 'entry-1';
     await service.capture();
     expect(desktopCapturer.getSources).toHaveBeenCalledWith({
-      types: ['screen'],
+      types: ['screen', 'window'],
       thumbnailSize: expect.any(Object),
+      fetchWindowIcons: false,
     });
     expect(mockApiClient.uploadScreenshot).toHaveBeenCalled();
     expect(service._consecutiveFailures).toBe(0);
@@ -170,11 +180,13 @@ describe('ScreenshotService', () => {
     Object.defineProperty(process, 'platform', { value: origPlatform });
   });
 
-  test('shows permission dialog when sources are empty on macOS', async () => {
+  test('shows permission dialog when sources are empty on macOS and permission denied', async () => {
     const origPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'darwin' });
     const { dialog } = require('electron');
 
+    // Permission must be denied for dialog to show (it skips if 'granted')
+    systemPreferences.getMediaAccessStatus.mockReturnValue('denied');
     desktopCapturer.getSources.mockResolvedValue([]);
     service.currentEntryId = 'entry-1';
     await service.capture();
