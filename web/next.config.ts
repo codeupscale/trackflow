@@ -8,6 +8,14 @@ const nextConfig: NextConfig = {
         protocol: 'https',
         hostname: '*.codeupscale.com',
       },
+      {
+        protocol: 'https',
+        hostname: '*.s3.*.amazonaws.com',
+      },
+      {
+        protocol: 'https',
+        hostname: '*.s3.amazonaws.com',
+      },
     ],
   },
   async headers() {
