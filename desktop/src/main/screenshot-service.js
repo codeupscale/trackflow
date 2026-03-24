@@ -140,15 +140,19 @@ class ScreenshotService {
   }
 
   _showPermissionDialog() {
+    // Only show once per app session AND only if permission is truly not granted
     if (this._permissionDialogShown) return;
+    const status = this._checkScreenPermissionStatus();
+    if (status === 'granted') return; // Permission is fine, don't nag
+
     this._permissionDialogShown = true;
 
     console.log('[SS] Showing screen recording permission dialog');
     dialog.showMessageBox({
       type: 'warning',
       title: 'Screen Recording Permission Required',
-      message: 'TrackFlow needs screen recording access to capture screenshots while tracking time.',
-      detail: 'Steps:\n1. Click "Open Settings" below\n2. Toggle TrackFlow ON\n3. When macOS asks, click "Quit & Reopen"\n\nIf TrackFlow is already toggled ON, quit and reopen the app manually.',
+      message: 'TrackFlow needs screen recording access to capture screenshots.',
+      detail: 'Steps:\n1. Click "Open Settings" below\n2. Toggle TrackFlow ON\n3. When macOS asks, click "Quit & Reopen"\n\nIf already toggled ON: quit TrackFlow completely (Cmd+Q) and reopen it.',
       buttons: ['Open Settings', 'Later'],
       defaultId: 0,
       cancelId: 1,
@@ -160,6 +164,18 @@ class ScreenshotService {
   }
 
   // ── Core Capture ──────────────────────────────────────────────────
+  //
+  // CRITICAL macOS ISSUE — ad-hoc signed apps get wallpaper-only screenshots:
+  //   desktopCapturer.getSources({ types: ['screen'] }) returns thumbnails
+  //   showing ONLY the wallpaper, not application windows on top.
+  //   This happens because macOS composites windows separately and restricts
+  //   the screen layer for apps without a real Apple Developer certificate.
+  //
+  // SOLUTION — Platform-aware capture strategy:
+  //   macOS:    ALWAYS capture the active WINDOW first (reliable for ad-hoc)
+  //             Fall back to screen capture only if no windows available
+  //   Windows:  Screen capture works perfectly (no signing restriction)
+  //   Linux:    Screen capture works perfectly
 
   async capture() {
     if (!this.currentEntryId) return;
@@ -174,73 +190,87 @@ class ScreenshotService {
       }
     }
 
-    // Log macOS permission status (informational only — we always attempt capture)
     const permStatus = this._checkScreenPermissionStatus();
     if (process.platform === 'darwin') {
-      console.log(`[SS] macOS screen permission status: ${permStatus} (attempting capture regardless)`);
+      console.log(`[SS] macOS screen permission: ${permStatus}`);
     }
 
     try {
-      // Use fixed 1920x1080 — NOT native resolution.
       const thumbnailSize = { width: CAPTURE_WIDTH, height: CAPTURE_HEIGHT };
+      const isMac = process.platform === 'darwin';
 
-      console.log(`[SS] Requesting sources with thumbnailSize=${thumbnailSize.width}x${thumbnailSize.height}`);
+      // Request sources — always include windows on macOS for reliable capture
+      const sourceTypes = isMac ? ['screen', 'window'] : ['screen'];
+      console.log(`[SS] Requesting ${sourceTypes.join('+')} sources at ${thumbnailSize.width}x${thumbnailSize.height}`);
 
-      // desktopCapturer.getSources() can HANG on macOS if permission was never
-      // prompted. Wrap with timeout to prevent blocking forever.
-      const sources = await Promise.race([
+      const allSources = await Promise.race([
         desktopCapturer.getSources({
-          types: ['screen'],
+          types: sourceTypes,
           thumbnailSize,
+          fetchWindowIcons: false,
         }),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('desktopCapturer.getSources() timed out after 10s — screen recording permission likely not granted')), 10000)
+          setTimeout(() => reject(new Error('desktopCapturer.getSources() timed out after 10s')), 10000)
         ),
       ]);
 
-      console.log(`[SS] Got ${sources.length} source(s): ${sources.map(s => `"${s.name}" (${s.thumbnail?.getSize()?.width}x${s.thumbnail?.getSize()?.height})`).join(', ')}`);
+      const screenSources = allSources.filter(s => s.id.startsWith('screen:'));
+      const windowSources = allSources.filter(s => s.id.startsWith('window:'));
 
-      if (!sources || sources.length === 0) {
+      console.log(`[SS] Got ${screenSources.length} screen(s), ${windowSources.length} window(s)`);
+
+      if (screenSources.length === 0 && windowSources.length === 0) {
         this._capturing = false;
-        this._handleCaptureFailure('No screen sources returned — screen recording permission may not be granted');
+        this._handleCaptureFailure('No sources returned — screen recording permission not granted');
         this._showPermissionDialog();
         return;
       }
 
-      let buffer;
+      let buffer = null;
 
-      if (sources.length > 1 && this.config.capture_multi_monitor === true) {
-        // Multi-monitor: composite ALL screens side-by-side (like Hubstaff)
-        console.log(`[SS] Multi-monitor mode: compositing ${sources.length} screens`);
-        buffer = await this._captureMultiMonitor(sources);
-      } else if (sources.length > 1) {
-        // Multiple screens but multi-monitor disabled — capture the ACTIVE screen
-        // (where the cursor is), not always the first/primary
-        console.log(`[SS] Single-monitor mode with ${sources.length} screens — finding active screen`);
-        buffer = this._captureActiveScreen(sources);
+      if (isMac) {
+        // ── macOS: Window capture FIRST (avoids wallpaper-only bug) ──
+        // Ad-hoc signed apps reliably get window thumbnails even when
+        // screen thumbnails only show the wallpaper layer.
+        if (windowSources.length > 0) {
+          console.log(`[SS] macOS: trying window capture first (${windowSources.length} windows)`);
+          buffer = this._captureActiveWindow(windowSources);
+          if (buffer) {
+            console.log(`[SS] Window capture succeeded (${Math.round(buffer.length / 1024)}KB)`);
+          }
+        }
+
+        // Fall back to screen capture if no valid windows
+        if (!buffer && screenSources.length > 0) {
+          console.log('[SS] macOS: window capture failed, falling back to screen capture');
+          buffer = this._captureSingleMonitor(screenSources);
+        }
       } else {
-        // Single screen — just capture it
-        buffer = this._captureSingleMonitor(sources);
+        // ── Windows / Linux: Screen capture works perfectly ──
+        if (screenSources.length > 1 && this.config.capture_multi_monitor === true) {
+          console.log(`[SS] Multi-monitor: compositing ${screenSources.length} screens`);
+          buffer = await this._captureMultiMonitor(screenSources);
+        } else if (screenSources.length > 1) {
+          console.log(`[SS] Finding active screen among ${screenSources.length}`);
+          buffer = this._captureActiveScreen(screenSources);
+        } else {
+          buffer = this._captureSingleMonitor(screenSources);
+        }
       }
 
       if (!buffer || buffer.length === 0) {
         this._capturing = false;
-        this._handleCaptureFailure('Capture returned empty buffer. Possible causes: screen locked, permission not yet granted, or GPU limitation.');
-        // Empty buffer on macOS usually means screen recording permission not granted
-        if (process.platform === 'darwin') {
-          this._showPermissionDialog();
-        }
+        this._handleCaptureFailure('Capture returned empty. Try: System Settings > Privacy > Screen Recording > Remove TrackFlow > Re-add > Restart app.');
+        if (isMac) this._showPermissionDialog();
         return;
       }
 
-      console.log(`[SS] Captured ${buffer.length} bytes`);
+      console.log(`[SS] Captured ${buffer.length} bytes (${Math.round(buffer.length / 1024)}KB)`);
 
-      // Blur if configured
       if (this.config.blur_screenshots) {
         buffer = await this._applyBlur(buffer);
       }
 
-      // Re-check entryId in case timer was stopped during async capture
       if (this.currentEntryId) {
         await this.upload(buffer);
         this._showNotification();
@@ -251,6 +281,48 @@ class ScreenshotService {
     } finally {
       this._capturing = false;
     }
+  }
+
+  // ── Active Window Capture (fallback for macOS wallpaper-only bug) ──
+  //
+  // When screen capture only returns wallpaper, we capture the frontmost
+  // WINDOW instead. This works because macOS grants window-level access
+  // more reliably than screen-level access for ad-hoc signed apps.
+
+  _captureActiveWindow(windowSources) {
+    if (!windowSources || windowSources.length === 0) return null;
+
+    // Filter out TrackFlow's own windows, system UI, and tiny windows
+    const skipPatterns = [
+      'TrackFlow', 'Notification Center', 'Dock', 'WindowServer',
+      'StatusBar', 'Control Center', 'Spotlight', 'Item-0',
+    ];
+    const validWindows = windowSources.filter(s => {
+      const name = s.name || '';
+      if (skipPatterns.some(skip => name.includes(skip))) return false;
+      if (!s.thumbnail || s.thumbnail.isEmpty()) return false;
+      const size = s.thumbnail.getSize();
+      // Skip tiny windows (menubar items, tooltips, etc.)
+      return size.width > 200 && size.height > 200;
+    });
+
+    // Log all valid windows for debugging
+    for (const w of validWindows.slice(0, 5)) {
+      const sz = w.thumbnail.getSize();
+      console.log(`[SS]   window: "${w.name}" (${sz.width}x${sz.height})`);
+    }
+
+    if (validWindows.length === 0) {
+      console.warn('[SS] No valid application windows found');
+      return null;
+    }
+
+    // desktopCapturer returns windows in z-order — first = frontmost
+    const activeWindow = validWindows[0];
+    const size = activeWindow.thumbnail.getSize();
+    const buffer = activeWindow.thumbnail.toJPEG(80);
+    console.log(`[SS] Captured active window "${activeWindow.name}" (${size.width}x${size.height}, ${Math.round(buffer.length / 1024)}KB)`);
+    return buffer;
   }
 
   // ── Active Screen Detection ──────────────────────────────────────
