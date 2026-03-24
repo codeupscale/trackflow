@@ -248,7 +248,7 @@
         const list = Array.isArray(projects) ? projects
           : (projects?.data && Array.isArray(projects.data)) ? projects.data : [];
         const currentValue = projectSelect.value || '';
-        projectSelect.innerHTML = '<option value="">No Project</option>';
+        projectSelect.innerHTML = '<option value="">Select a project</option>';
         list.forEach(p => {
           const option = document.createElement('option');
           option.value = p.id;
@@ -258,21 +258,43 @@
         if (currentValue && list.some(p => String(p.id) === currentValue)) {
           projectSelect.value = currentValue;
         }
+        updateStartBtnState();
       } catch {}
+    }
+
+    // Disable Start button when no project selected
+    function updateStartBtnState() {
+      if (isRunning) return; // Don't touch button state while running
+      const hasProject = projectSelect.value && projectSelect.value !== '';
+      startBtn.disabled = !hasProject;
+      startBtn.style.opacity = hasProject ? '1' : '0.5';
+      startBtn.style.cursor = hasProject ? 'pointer' : 'not-allowed';
+      if (!hasProject) {
+        startBtn.title = 'Select a project to start tracking';
+      } else {
+        startBtn.title = '';
+      }
     }
 
     async function init() {
       await loadProjects();
       await syncTimerState();
+      updateStartBtnState();
       projectSelect.addEventListener('change', () => {
+        updateStartBtnState();
         if (!isRunning) syncTimerState();
       });
     }
 
     startBtn.addEventListener('click', async () => {
+      const projectId = projectSelect.value || null;
+      if (!projectId) {
+        // Safety check — button should already be disabled
+        projectSelect.focus();
+        return;
+      }
       startBtn.disabled = true;
       startBtnText.textContent = 'Starting\u2026';
-      const projectId = projectSelect.value || null;
       try {
         const result = await window.trackflow.startTimer(projectId);
         if (result.success) {
@@ -287,8 +309,8 @@
       } catch (e) {
         showNotification('Failed to start timer');
       }
-      startBtn.disabled = false;
       startBtnText.textContent = 'Start';
+      updateStartBtnState();
     });
 
     stopBtn.addEventListener('click', () => {
@@ -298,6 +320,7 @@
       todayTotalBase = stoppedTotal;
       elapsedSeconds = stoppedTotal;
       updateDisplay(false);
+      updateStartBtnState();
       window.trackflow.stopTimer().then((result) => {
         if (result && result.todayTotal > 0 && result.todayTotal !== stoppedTotal) {
           todayTotalBase = result.todayTotal;
