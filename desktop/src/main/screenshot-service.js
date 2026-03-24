@@ -15,7 +15,11 @@
 //   2. All failure paths log with console.error AND increment a failure counter.
 //      After 5 consecutive failures, capture pauses for 5 minutes to avoid CPU waste.
 
-const { desktopCapturer, Notification, screen, systemPreferences, shell, dialog, BrowserWindow, powerMonitor } = require('electron');
+const { desktopCapturer, Notification, screen, systemPreferences, shell, dialog, BrowserWindow, powerMonitor, app } = require('electron');
+const { execFile } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const FormData = require('form-data');
 
 // Lazy-load sharp
@@ -255,21 +259,24 @@ class ScreenshotService {
       let buffer = null;
 
       if (isMac) {
-        // ── macOS: Window capture FIRST (avoids wallpaper-only bug) ──
-        // Ad-hoc signed apps reliably get window thumbnails even when
-        // screen thumbnails only show the wallpaper layer.
-        if (windowSources.length > 0) {
-          console.log(`[SS] macOS: trying window capture first (${windowSources.length} windows)`);
-          buffer = this._captureActiveWindow(windowSources);
-          if (buffer) {
-            console.log(`[SS] Window capture succeeded (${Math.round(buffer.length / 1024)}KB)`);
-          }
-        }
+        // ── macOS: Use native `screencapture` CLI (ONLY reliable method) ──
+        // desktopCapturer returns wallpaper-only for ad-hoc signed apps.
+        // The macOS `screencapture` binary captures the ACTUAL screen content
+        // including all windows, and respects Screen Recording permission.
+        console.log('[SS] macOS: using native screencapture command');
+        buffer = await this._macNativeCapture();
 
-        // Fall back to screen capture if no valid windows
-        if (!buffer && screenSources.length > 0) {
-          console.log('[SS] macOS: window capture failed, falling back to screen capture');
-          buffer = this._captureSingleMonitor(screenSources);
+        if (buffer) {
+          console.log(`[SS] Native capture succeeded (${Math.round(buffer.length / 1024)}KB)`);
+        } else {
+          // Fallback: try desktopCapturer window capture
+          console.log('[SS] macOS: native capture failed, trying desktopCapturer fallback');
+          if (windowSources.length > 0) {
+            buffer = this._captureActiveWindow(windowSources);
+          }
+          if (!buffer && screenSources.length > 0) {
+            buffer = this._captureSingleMonitor(screenSources);
+          }
         }
       } else {
         // ── Windows / Linux: Screen capture works perfectly ──
@@ -310,11 +317,91 @@ class ScreenshotService {
     }
   }
 
-  // ── Active Window Capture (fallback for macOS wallpaper-only bug) ──
+  // ── macOS Native Capture ──────────────────────────────────────────
   //
-  // When screen capture only returns wallpaper, we capture the frontmost
-  // WINDOW instead. This works because macOS grants window-level access
-  // more reliably than screen-level access for ad-hoc signed apps.
+  // Uses the macOS `screencapture` CLI tool instead of Electron's desktopCapturer.
+  // This is the ONLY reliable way to capture actual screen content (including
+  // application windows) on ad-hoc signed apps.
+  //
+  // `desktopCapturer.getSources()` uses CGWindowListCreateImage internally,
+  // which macOS restricts for ad-hoc signed apps — returning only the wallpaper
+  // layer. The `screencapture` binary is Apple-signed and trusted by the OS,
+  // so it captures the real screen content as long as Screen Recording
+  // permission is granted to the HOST app (TrackFlow).
+  //
+  // Options used:
+  //   -x  = no sound
+  //   -t jpg = JPEG format
+  //   -C  = capture cursor
+  //   -D 1 = main display (or -D for all displays)
+
+  async _macNativeCapture() {
+    const tmpFile = path.join(
+      app.getPath('temp'),
+      `trackflow_ss_${Date.now()}.jpg`
+    );
+
+    return new Promise((resolve) => {
+      // Capture the main display as JPEG, no sound, include cursor
+      execFile('/usr/sbin/screencapture', ['-x', '-t', 'jpg', '-C', tmpFile], {
+        timeout: 10000,
+      }, (err) => {
+        if (err) {
+          console.error(`[SS] macOS screencapture failed: ${err.message}`);
+          // Clean up temp file if it exists
+          try { fs.unlinkSync(tmpFile); } catch {}
+          resolve(null);
+          return;
+        }
+
+        try {
+          if (!fs.existsSync(tmpFile)) {
+            console.error('[SS] macOS screencapture produced no file');
+            resolve(null);
+            return;
+          }
+
+          const rawBuffer = fs.readFileSync(tmpFile);
+          fs.unlinkSync(tmpFile); // Clean up immediately
+
+          if (rawBuffer.length < 1000) {
+            console.warn(`[SS] macOS screencapture file too small (${rawBuffer.length} bytes)`);
+            resolve(null);
+            return;
+          }
+
+          // Resize to 1920x1080 using sharp if available (Retina displays capture at 2x)
+          const sharpLib = getSharp();
+          if (sharpLib) {
+            sharpLib(rawBuffer)
+              .resize(CAPTURE_WIDTH, CAPTURE_HEIGHT, { fit: 'inside', withoutEnlargement: true })
+              .jpeg({ quality: 80 })
+              .toBuffer()
+              .then((resized) => {
+                console.log(`[SS] macOS native capture: ${rawBuffer.length} bytes raw → ${resized.length} bytes resized`);
+                resolve(resized);
+              })
+              .catch((e) => {
+                console.warn(`[SS] sharp resize failed, using raw: ${e.message}`);
+                resolve(rawBuffer);
+              });
+          } else {
+            // No sharp — return raw JPEG (may be large on Retina)
+            resolve(rawBuffer);
+          }
+        } catch (e) {
+          console.error(`[SS] Error reading screencapture file: ${e.message}`);
+          try { fs.unlinkSync(tmpFile); } catch {}
+          resolve(null);
+        }
+      });
+    });
+  }
+
+  // ── Active Window Capture (fallback for desktopCapturer) ──
+  //
+  // Only used as a fallback if macOS native capture fails.
+  // desktopCapturer window capture is unreliable for ad-hoc signed apps.
 
   _captureActiveWindow(windowSources) {
     if (!windowSources || windowSources.length === 0) return null;
