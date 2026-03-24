@@ -160,15 +160,18 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   },
 
   startPolling: () => {
-    get().stopPolling();
+    // Mutex: if a poll interval already exists, don't create another
+    if (get().pollId) return;
     const id = setInterval(() => get().fetchStatus(get().selectedProjectId), 10000);
     set({ pollId: id });
   },
 
   stopPolling: () => {
     const id = get().pollId;
-    if (id) clearInterval(id);
-    set({ pollId: null });
+    if (id) {
+      clearInterval(id);
+      set({ pollId: null });
+    }
   },
 
   tick: () => {
@@ -197,13 +200,17 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   },
 
   resetState: () => {
-    const base = get().todayTotalBase;
+    // Clean up all intervals on reset (e.g. logout) to prevent leaked timers
+    get().stopPolling();
+    get().stopTicking();
     set({
       isRunning: false,
       entryId: null,
       projectId: null,
       startedAt: null,
-      elapsedSeconds: base, // Keep today's total visible
+      elapsedSeconds: 0,
+      todayTotalBase: 0,
+      selectedProjectId: null,
     });
   },
 }));

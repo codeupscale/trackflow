@@ -55,7 +55,23 @@ class SettingsController extends Controller
 
         if ($request->has('settings')) {
             $currentSettings = $org->settings ?? $org->getDefaultSettings();
-            $org->settings = array_merge($currentSettings, $request->settings);
+            $allowedKeys = array_flip([
+                'screenshot_interval',
+                'blur_screenshots',
+                'idle_timeout',
+                'keep_idle_time',
+                'idle_alert_auto_stop_min',
+                'screenshot_capture_immediate_after_idle',
+                'screenshot_first_capture_delay_min',
+                'idle_check_interval_sec',
+                'capture_only_when_visible',
+                'capture_multi_monitor',
+                'timezone',
+                'can_add_manual_time',
+                'employees_see_all_projects',
+            ]);
+            $filteredSettings = array_intersect_key($request->settings, $allowedKeys);
+            $org->settings = array_merge($currentSettings, $filteredSettings);
         }
 
         $org->save();

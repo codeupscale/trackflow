@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
+import { useTimerStore } from '@/stores/timer-store';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -102,6 +103,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const handleLogout = async () => {
+    useTimerStore.getState().resetState();
     await logout();
     router.push('/login');
   };

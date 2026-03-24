@@ -94,7 +94,7 @@ export default function ProjectsPage() {
   const canDeleteProjects = user?.role === 'owner' || user?.role === 'admin';
   const canManageMembers = canUpdateProjects; // backend uses ProjectPolicy::update
 
-  const { data: projects, isLoading } = useQuery<Project[]>({
+  const { data: projects, isLoading, isError: isProjectsError } = useQuery<Project[]>({
     queryKey: ['projects'],
     queryFn: async () => {
       const res = await api.get('/projects');
@@ -246,7 +246,19 @@ export default function ProjectsPage() {
       </div>
 
       {/* Projects Grid */}
-      {isLoading ? (
+      {isProjectsError ? (
+        <Card className="border-slate-800 bg-slate-900/50">
+          <CardContent className="py-16">
+            <div className="text-center">
+              <FolderOpen className="h-10 w-10 text-red-500/60 mx-auto mb-3" />
+              <p className="text-slate-400 font-medium">Failed to load projects</p>
+              <p className="text-sm text-slate-500 mt-1">
+                Please try again.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : isLoading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
             <Card key={i} className="border-slate-800 bg-slate-900/50">

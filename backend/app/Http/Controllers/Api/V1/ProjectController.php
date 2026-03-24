@@ -21,8 +21,8 @@ class ProjectController extends Controller
             $query->whereHas('members', fn ($q) => $q->where('user_id', $user->id));
         }
 
-        $projects = $query->get();
-        return response()->json(['projects' => $projects]);
+        $projects = $query->paginate(50);
+        return response()->json($projects);
     }
 
     public function store(Request $request): JsonResponse
@@ -31,7 +31,7 @@ class ProjectController extends Controller
 
         $request->validate([
             'name' => 'required|string|max:255',
-            'color' => 'sometimes|string|max:7',
+            'color' => ['sometimes', 'string', 'max:7', 'regex:/^#[0-9A-Fa-f]{6}$/'],
             'billable' => 'sometimes|boolean',
             'hourly_rate' => 'nullable|numeric|min:0',
         ]);
@@ -48,9 +48,11 @@ class ProjectController extends Controller
         return response()->json(['project' => $project], 201);
     }
 
-    public function show(string $id): JsonResponse
+    public function show(Request $request, string $id): JsonResponse
     {
-        $project = Project::with('tasks')->findOrFail($id);
+        $project = Project::where('organization_id', $request->user()->organization_id)
+            ->with('tasks')
+            ->findOrFail($id);
         $this->authorize('view', $project);
         return response()->json(['project' => $project]);
     }
@@ -62,7 +64,7 @@ class ProjectController extends Controller
 
         $request->validate([
             'name' => 'sometimes|string|max:255',
-            'color' => 'sometimes|string|max:7',
+            'color' => ['sometimes', 'string', 'max:7', 'regex:/^#[0-9A-Fa-f]{6}$/'],
             'billable' => 'sometimes|boolean',
             'hourly_rate' => 'nullable|numeric|min:0',
             'is_archived' => 'sometimes|boolean',

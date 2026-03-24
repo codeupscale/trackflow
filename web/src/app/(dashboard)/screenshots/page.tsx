@@ -88,7 +88,7 @@ export default function ScreenshotsPage() {
     enabled: isManager,
   });
 
-  const { data: screenshotsData, isLoading } = useQuery<ScreenshotResponse>({
+  const { data: screenshotsData, isLoading, isError: isScreenshotsError } = useQuery<ScreenshotResponse>({
     queryKey: ['screenshots', dateFrom, dateTo, userFilter, timeTypeFilter, page],
     queryFn: async () => {
       const params: Record<string, string | number> = {
@@ -97,7 +97,8 @@ export default function ScreenshotsPage() {
         page,
         per_page: 24,
       };
-      if (userFilter && userFilter !== 'all') {
+      // Only pass user_id filter for managers; employees rely on backend scoping
+      if (isManager && userFilter && userFilter !== 'all') {
         params.user_id = userFilter;
       }
       if (timeTypeFilter && timeTypeFilter !== 'all') {
@@ -202,7 +203,19 @@ export default function ScreenshotsPage() {
       </Card>
 
       {/* Screenshot Grid */}
-      {isLoading ? (
+      {isScreenshotsError ? (
+        <Card className="border-slate-800 bg-slate-900/50">
+          <CardContent className="py-16">
+            <div className="text-center">
+              <Camera className="h-10 w-10 text-red-500/60 mx-auto mb-3" />
+              <p className="text-slate-400 font-medium">Failed to load screenshots</p>
+              <p className="text-sm text-slate-500 mt-1">
+                Please try again.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : isLoading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {Array.from({ length: 8 }).map((_, i) => (
             <Card key={i} className="overflow-hidden border-slate-800 bg-slate-900/50">

@@ -63,3 +63,27 @@ jobs:
         env:
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: 6379
+
+      - name: Audit PHP dependencies for vulnerabilities
+        run: composer audit
+
+  frontend-security:
+    runs-on: ubuntu-latest
+    name: Frontend Security Audit
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit frontend dependencies for vulnerabilities
+        run: npm audit --audit-level=high

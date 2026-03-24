@@ -41,9 +41,9 @@ class InvitationController extends Controller
             ->where('expires_at', '>', now())
             ->with('creator:id,name,email')
             ->orderByDesc('created_at')
-            ->get();
+            ->paginate(50);
 
-        return response()->json(['invitations' => $invites]);
+        return response()->json($invites);
     }
 
     /** AUTH-09: Create invitation */
