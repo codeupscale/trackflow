@@ -251,33 +251,45 @@ class TimerService
     {
         $user = Auth::user();
         $redisKey = "timer:{$user->id}";
+        $lockKey = "timer:lock:{$user->id}";
 
-        $timerData = Redis::get($redisKey);
-        if (!$timerData) {
-            return ['idle_entry' => null, 'new_entry' => null];
+        // Atomically acquire lock to prevent race condition (same pattern as start())
+        if (!Redis::set($lockKey, 1, 'EX', 5, 'NX')) {
+            throw new \RuntimeException('Timer operation in progress');
         }
 
-        $timerInfo = json_decode($timerData, true);
-        $entryId = $timerInfo['entry_id'] ?? null;
-        if (!$entryId) {
-            return ['idle_entry' => null, 'new_entry' => null];
-        }
+        try {
+            $timerData = Redis::get($redisKey);
+            if (!$timerData) {
+                return ['idle_entry' => null, 'new_entry' => null];
+            }
 
-        $currentEntry = TimeEntry::withoutGlobalScopes()
-            ->where('id', $entryId)
-            ->where('user_id', $user->id)
-            ->first();
-        if (!$currentEntry) {
-            return ['idle_entry' => null, 'new_entry' => null];
-        }
+            $timerInfo = json_decode($timerData, true);
+            $entryId = $timerInfo['entry_id'] ?? null;
+            if (!$entryId) {
+                return ['idle_entry' => null, 'new_entry' => null];
+            }
 
-        $idleStartedAt = \Carbon\Carbon::parse($data['idle_started_at']);
-        $idleEndedAt = \Carbon\Carbon::parse($data['idle_ended_at']);
-        $idleSeconds = (int) ($data['idle_seconds'] ?? 0);
-        $action = $data['action'] ?? 'discard';
-        $reassignProjectId = $data['project_id'] ?? null;
+            $currentEntry = TimeEntry::withoutGlobalScopes()
+                ->where('id', $entryId)
+                ->where('user_id', $user->id)
+                ->first();
+            if (!$currentEntry) {
+                return ['idle_entry' => null, 'new_entry' => null];
+            }
 
-        $result = DB::transaction(function () use (
+            $idleStartedAt = \Carbon\Carbon::parse($data['idle_started_at']);
+            $idleEndedAt = \Carbon\Carbon::parse($data['idle_ended_at']);
+            $idleSeconds = (int) ($data['idle_seconds'] ?? 0);
+            $action = $data['action'] ?? 'discard';
+            $reassignProjectId = $data['project_id'] ?? null;
+
+            // Clamp idle_started_at to entry's started_at to prevent negative durations
+            if ($idleStartedAt->lt($currentEntry->started_at)) {
+                $idleStartedAt = $currentEntry->started_at->copy();
+            }
+
+            $result = DB::transaction(function () use (
             $user,
             $currentEntry,
             $redisKey,
@@ -344,7 +356,10 @@ class TimerService
             return ['idle_entry' => $idleEntry, 'new_entry' => $newEntry];
         });
 
-        return $result;
+            return $result;
+        } finally {
+            Redis::del($lockKey);
+        }
     }
 
     public function processHeartbeat(array $data): ActivityLog
