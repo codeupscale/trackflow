@@ -47,6 +47,12 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->throttleApi('api');
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        // Force JSON responses for API routes (prevents 500 on AuthenticationException
+        // when the request doesn't have Accept: application/json header)
+        $exceptions->shouldRenderJsonWhen(function (Request $request) {
+            return $request->is('api/*');
+        });
+
         // Consistent JSON error responses for API
         $exceptions->render(function (Throwable $e, Request $request) {
             if (!$request->is('api/*') && !$request->expectsJson()) {

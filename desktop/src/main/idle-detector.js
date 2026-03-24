@@ -115,10 +115,14 @@ class IdleDetector {
         return;
       }
 
-      // Check auto-stop timeout (alert has been shown too long)
-      if (this.alertShownAt) {
-        const alertDuration = (Date.now() - this.alertShownAt) / 1000;
-        if (alertDuration >= this.alertAutoStopSec) {
+      // Check auto-stop timeout measured from when user actually went idle,
+      // not from when the alert was shown. This ensures auto-stop fires at
+      // the configured total idle time (idle_threshold + auto_stop_threshold
+      // from the user's perspective), not idle_threshold + auto_stop_threshold
+      // stacked on top of each other.
+      if (this.idleStartedAt) {
+        const totalIdleDuration = (Date.now() - this.idleStartedAt) / 1000;
+        if (totalIdleDuration >= this.idleTimeoutSec + this.alertAutoStopSec) {
           // Auto-stop timer — user has been idle way too long
           if (this._onAutoStop) {
             this._onAutoStop(this.getIdleDuration());

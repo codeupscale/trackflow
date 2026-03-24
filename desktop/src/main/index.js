@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification, screen, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -203,10 +203,14 @@ async function initializeApp() {
 
   // Wire idle detection events
   idleDetector.onIdleDetected((idleSeconds, idleStartedAt) => {
+    // Pause both screenshot and activity capture during idle.
+    // This prevents zero-event heartbeats from dragging down the activity score.
     screenshotService?.stop();
+    activityMonitor?.stop();
     const policy = config.keep_idle_time || 'prompt';
     if (policy === 'always') {
       idleDetector.resolveIdle();
+      activityMonitor?.start();
       if (isTimerRunning && currentEntry) {
         screenshotService?.start(currentEntry.id, {
           immediateCapture: config.screenshot_capture_immediate_after_idle === true,
@@ -282,6 +286,94 @@ async function initializeApp() {
       updateTrayTitle();
     }
   } catch {}
+
+  // ── Sleep / Wake / Lock / Unlock handling ──────────────────────────────────
+  // When the OS suspends or the screen locks, we must stop capturing screenshots
+  // and send a final heartbeat. On resume/unlock, if the sleep duration exceeds
+  // the idle threshold, show the idle alert so the user can decide what to do
+  // with the sleep time. Short sleeps resume tracking normally.
+
+  let _suspendedAt = null;
+
+  const handleSuspend = () => {
+    if (!isTimerRunning) return;
+    _suspendedAt = Date.now();
+    console.log('[power] Suspended/locked — pausing capture');
+    // Send final heartbeat to capture any pending activity data
+    if (activityMonitor) {
+      activityMonitor.sendFinalHeartbeat().catch(() => {});
+      activityMonitor.stop();
+    }
+    screenshotService?.stop();
+  };
+
+  const handleResume = () => {
+    if (!isTimerRunning || !_suspendedAt) {
+      _suspendedAt = null;
+      return;
+    }
+    const sleepDurationSec = Math.floor((Date.now() - _suspendedAt) / 1000);
+    const sleepStartedAt = _suspendedAt;
+    _suspendedAt = null;
+    console.log(`[power] Resumed/unlocked after ${sleepDurationSec}s`);
+
+    const idleThresholdSec = idleDetector?.idleTimeoutSec || (config.idle_timeout || 5) * 60;
+
+    if (sleepDurationSec >= idleThresholdSec) {
+      // Long sleep — treat as idle. Stop activity monitor (already stopped in suspend),
+      // pause idle detector polling, and show the idle alert.
+      idleDetector?.stop();
+      const policy = config.keep_idle_time || 'prompt';
+      if (policy === 'always') {
+        // Auto-keep: just resume everything
+        activityMonitor?.start();
+        if (currentEntry) {
+          screenshotService?.start(currentEntry.id, {
+            immediateCapture: config.screenshot_capture_immediate_after_idle === true,
+          });
+        }
+        idleDetector?.start();
+        return;
+      }
+      if (policy === 'never') {
+        // Set idleDetector state so handleIdleAction can read idleStartedAt
+        if (idleDetector) {
+          idleDetector.isIdle = true;
+          idleDetector.idleStartedAt = sleepStartedAt;
+        }
+        // Auto-discard sleep time. handleIdleAction restarts activityMonitor
+        // and screenshotService internally (P2-2 fix).
+        handleIdleAction('discard', sleepDurationSec, null).catch((e) => {
+          console.error('[power] Failed to discard sleep idle time:', e.message);
+        });
+        idleDetector?.start();
+        return;
+      }
+      // Prompt user — show idle alert with sleep duration
+      // Temporarily set idleDetector state so handleIdleAction can read idleStartedAt
+      if (idleDetector) {
+        idleDetector.isIdle = true;
+        idleDetector.idleStartedAt = sleepStartedAt;
+        idleDetector.alertShownAt = Date.now();
+      }
+      showIdleAlert(sleepDurationSec, sleepStartedAt);
+    } else {
+      // Short sleep — resume tracking normally
+      activityMonitor?.start();
+      if (currentEntry) {
+        screenshotService?.start(currentEntry.id, {
+          immediateCapture: false,
+        });
+      }
+      // Restart idle detector (it was running before suspend)
+      idleDetector?.start();
+    }
+  };
+
+  powerMonitor.on('suspend', handleSuspend);
+  powerMonitor.on('resume', handleResume);
+  powerMonitor.on('lock-screen', handleSuspend);
+  powerMonitor.on('unlock-screen', handleResume);
 
   // Start periodic sync between desktop and server
   startTimerSync();
@@ -906,10 +998,35 @@ function notifyPopup(event, data) {
 // ── Idle Alert System ────────────────────────────────────────────────────────
 
 async function showIdleAlert(idleSeconds, idleStartedAt) {
-  if (idleAlertWindow && !idleAlertWindow.isDestroyed()) return;
+  if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
+    // Alert already showing — bring it to front and update idle data
+    idleAlertWindow.focus();
+    if (typeof idleAlertWindow.moveTop === 'function') {
+      idleAlertWindow.moveTop();
+    }
+    idleAlertWindow.webContents.send('idle-data', {
+      idleStartedAt,
+      idleSeconds,
+      projects: cachedProjects || [],
+    });
+    return;
+  }
   if (!isTimerRunning) return;
 
   screenshotService?.stop();
+
+  // Play system notification sound to alert the user they are idle
+  try {
+    if (Notification.isSupported()) {
+      const idleNotification = new Notification({
+        title: 'TrackFlow',
+        body: `You've been idle for ${Math.floor(idleSeconds / 60)} minutes`,
+        silent: false, // Enables the default system notification sound
+      });
+      idleNotification.show();
+      setTimeout(() => { try { idleNotification.close(); } catch {} }, 5000);
+    }
+  } catch {}
 
   // Refresh project list so idle reassign dropdown is up-to-date
   await loadProjects();
@@ -972,6 +1089,8 @@ async function handleIdleAction(action, idleDurationOverride = null, reassignPro
 
   switch (action) {
     case 'keep':
+      // Resume activity monitor and screenshots — idle is over
+      activityMonitor?.start();
       if (isTimerRunning && currentEntry) {
         screenshotService?.start(currentEntry.id, {
           immediateCapture: config.screenshot_capture_immediate_after_idle === true,
@@ -1001,6 +1120,8 @@ async function handleIdleAction(action, idleDurationOverride = null, reassignPro
           console.error('Failed to report idle time:', e.message);
         }
       }
+      // Resume activity monitor and screenshots — idle is over
+      activityMonitor?.start();
       if (isTimerRunning && currentEntry) {
         screenshotService?.start(currentEntry.id, {
           immediateCapture: config.screenshot_capture_immediate_after_idle === true,
@@ -1009,6 +1130,22 @@ async function handleIdleAction(action, idleDurationOverride = null, reassignPro
       break;
 
     case 'stop':
+      // P1-2: Deduct idle time BEFORE stopping the timer.
+      // stopTimer() sets entry end = now(), so we must report idle time first
+      // to ensure the idle period is excluded from the time entry.
+      if (apiClient && currentEntry && idleStartedAt) {
+        try {
+          await apiClient.reportIdleTime({
+            time_entry_id: currentEntry.id,
+            idle_started_at: new Date(idleStartedAt).toISOString(),
+            idle_ended_at: new Date().toISOString(),
+            idle_seconds: idleDuration,
+            action: 'discard',
+          });
+        } catch (e) {
+          console.error('Failed to discard idle time before stop:', e.message);
+        }
+      }
       stopTimer();
       break;
   }
