@@ -91,14 +91,47 @@ async function main() {
   }
 
   // 4. Generate .ico (Windows)
-  // electron-builder can auto-convert PNG → ICO, but for best quality we create it manually
-  // ICO format = multiple PNG sizes concatenated
-  // For now, copy 256x256 PNG and let electron-builder handle ICO conversion
-  const icoSourcePath = path.join(buildDir, 'icon.png');
-  if (!fs.existsSync(path.join(buildDir, 'icon.ico'))) {
-    console.log('  ⚠ icon.ico not generated (requires png-to-ico or electron-builder auto-convert)');
-    console.log('    electron-builder will auto-convert icon.png → icon.ico during build');
+  // ICO format: header + directory entries + PNG image data for each size
+  const icoPath = path.join(buildDir, 'icon.ico');
+  const icoSizes = [16, 24, 32, 48, 64, 128, 256];
+  const pngBuffers = [];
+
+  for (const size of icoSizes) {
+    const buf = await sharp(sourcePath).resize(size, size).png().toBuffer();
+    pngBuffers.push({ size, buffer: buf });
   }
+
+  const numImages = pngBuffers.length;
+  const headerSize = 6;
+  const dirEntrySize = 16;
+
+  // ICO header
+  const header = Buffer.alloc(headerSize);
+  header.writeUInt16LE(0, 0);           // Reserved
+  header.writeUInt16LE(1, 2);           // Type: 1 = ICO
+  header.writeUInt16LE(numImages, 4);   // Number of images
+
+  // Directory entries
+  const dirEntries = Buffer.alloc(dirEntrySize * numImages);
+  let dataOffset = headerSize + dirEntrySize * numImages;
+
+  for (let i = 0; i < numImages; i++) {
+    const { size, buffer } = pngBuffers[i];
+    const off = i * dirEntrySize;
+    dirEntries.writeUInt8(size >= 256 ? 0 : size, off);       // Width  (0 means 256)
+    dirEntries.writeUInt8(size >= 256 ? 0 : size, off + 1);   // Height (0 means 256)
+    dirEntries.writeUInt8(0, off + 2);                          // Color palette
+    dirEntries.writeUInt8(0, off + 3);                          // Reserved
+    dirEntries.writeUInt16LE(1, off + 4);                       // Color planes
+    dirEntries.writeUInt16LE(32, off + 6);                      // Bits per pixel
+    dirEntries.writeUInt32LE(buffer.length, off + 8);           // Image data size
+    dirEntries.writeUInt32LE(dataOffset, off + 12);             // Offset to image data
+    dataOffset += buffer.length;
+  }
+
+  const imageData = Buffer.concat(pngBuffers.map(p => p.buffer));
+  fs.writeFileSync(icoPath, Buffer.concat([header, dirEntries, imageData]));
+  console.log(`  ✓ ${icoPath}`);
 
   console.log('\nDone! If you see warnings about .icns or .ico, electron-builder will handle them automatically.');
 }
