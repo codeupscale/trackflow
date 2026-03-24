@@ -3,10 +3,11 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
-import { CalendarIcon, CheckCircle, Clock, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { CalendarIcon, CheckCircle, Clock, Info, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import {
   Card,
   CardContent,
@@ -32,7 +33,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import api from '@/lib/api';
-import { formatDuration } from '@/lib/utils';
+import { formatDuration, getActivityColor } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
 
 interface TimeEntry {
@@ -298,7 +299,23 @@ export default function TimePage() {
                     <TableHead className="text-slate-400">Project</TableHead>
                     <TableHead className="text-slate-400">Task</TableHead>
                     <TableHead className="text-slate-400 text-right">Duration</TableHead>
-                    <TableHead className="text-slate-400 text-right">Activity</TableHead>
+                    <TableHead className="text-slate-400 text-right">
+                      <span className="inline-flex items-center gap-1">
+                        Activity
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={<span />}
+                            className="inline-flex"
+                            aria-label="Activity info"
+                          >
+                            <Info className="h-3.5 w-3.5 text-slate-500 hover:text-slate-300 transition-colors" />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            Activity is calculated from keyboard and mouse events during each tracking interval. Higher % means more consistent input activity.
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                    </TableHead>
                     <TableHead className="text-slate-400 text-center">Status</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -334,13 +351,15 @@ export default function TimePage() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline" className={
-                          entry.type === 'idle' ? 'border-amber-500/30 text-amber-400' :
-                          entry.type === 'manual' ? 'border-slate-500/30 text-slate-400' :
-                          'border-emerald-500/30 text-emerald-400'
+                        <span className={
+                          entry.type === 'idle'
+                            ? 'bg-amber-400/10 text-amber-400 border border-amber-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
+                            : entry.type === 'manual'
+                            ? 'bg-slate-400/10 text-slate-400 border border-slate-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
+                            : 'bg-blue-400/10 text-blue-400 border border-blue-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
                         }>
                           {entry.type === 'idle' ? 'Idle' : entry.type === 'manual' ? 'Manual' : 'Tracked'}
-                        </Badge>
+                        </span>
                       </TableCell>
                       <TableCell>
                         {entry.project ? (
@@ -356,42 +375,36 @@ export default function TimePage() {
                         )}
                       </TableCell>
                       <TableCell className="text-sm text-slate-300">
-                        {entry.task?.title || <span className="text-slate-500">--</span>}
+                        {entry.task?.title || <span className="text-muted-foreground text-xs">No task</span>}
                       </TableCell>
-                      <TableCell className="text-right font-mono text-sm text-slate-300">
+                      <TableCell className="text-right font-mono text-sm text-slate-300 tabular-nums">
                         {formatDuration(entry.duration_seconds)}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">
                           <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden">
                             <div
-                              className={`h-full rounded-full ${
-                                entry.activity_score >= 70
-                                  ? 'bg-green-500'
-                                  : entry.activity_score >= 40
-                                  ? 'bg-amber-500'
-                                  : 'bg-red-500'
-                              }`}
+                              className={`h-full rounded-full ${getActivityColor(entry.activity_score).bar}`}
                               style={{ width: `${Math.min(entry.activity_score, 100)}%` }}
                             />
                           </div>
-                          <span className="text-xs text-slate-400 w-8 text-right">
+                          <Badge variant="outline" className={`text-xs tabular-nums ${getActivityColor(entry.activity_score).badge}`}>
                             {entry.activity_score}%
-                          </span>
+                          </Badge>
                         </div>
                       </TableCell>
                       <TableCell className="text-center">
-                        <Badge
+                        <span
                           className={
                             entry.status === 'approved'
-                              ? 'bg-green-500/10 text-green-400 border-green-500/20'
+                              ? 'bg-green-400/10 text-green-400 border border-green-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
                               : entry.status === 'rejected'
-                              ? 'bg-red-500/10 text-red-400 border-red-500/20'
-                              : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                              ? 'bg-red-400/10 text-red-400 border border-red-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
+                              : 'bg-amber-400/10 text-amber-400 border border-amber-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
                           }
                         >
                           {entry.status.charAt(0).toUpperCase() + entry.status.slice(1)}
-                        </Badge>
+                        </span>
                       </TableCell>
                     </TableRow>
                   ))}

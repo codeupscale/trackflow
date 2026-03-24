@@ -127,3 +127,8 @@
     @apply font-sans;
   }
 }
+
+/* Tabular figures for all numeric displays — prevents layout jitter on ticking timers */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}

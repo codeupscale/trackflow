@@ -153,6 +153,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             size="sm"
             onClick={() => setCollapsed(!collapsed)}
             className="h-8 w-8 p-0 text-slate-400 hover:text-white"
+            aria-label="Toggle sidebar"
           >
             <ChevronLeft
               className={cn(
@@ -187,6 +188,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
               <SheetTrigger
                 className="lg:hidden inline-flex items-center justify-center rounded-md h-8 w-8 hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                aria-label="Toggle sidebar"
               >
                 <Menu className="h-5 w-5" />
               </SheetTrigger>
@@ -212,7 +214,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
             {/* User Dropdown */}
             <DropdownMenu>
-              <DropdownMenuTrigger className="flex items-center gap-2 outline-none cursor-pointer">
+              <DropdownMenuTrigger className="flex items-center gap-2 outline-none cursor-pointer" aria-label="User menu">
                 <Avatar className="h-8 w-8 border border-slate-700">
                   <AvatarImage
                     src={user?.avatar_url || undefined}

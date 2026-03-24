@@ -100,7 +100,7 @@ export function TimerWidget() {
         onValueChange={handleProjectChange}
         disabled={isRunning || !projects?.length}
       >
-        <SelectTrigger className="w-[180px] min-w-[140px] h-8 bg-slate-800/50 border-slate-700 text-sm">
+        <SelectTrigger className="w-[180px] min-w-[140px] h-8 bg-slate-800/50 border-slate-700 text-sm" aria-label="Select project">
           {/* Always show project name (never raw ID); fallback when value not in list (e.g. still loading) */}
           {displayProject ? (
             <div className="flex items-center gap-2 truncate">
@@ -161,6 +161,7 @@ export function TimerWidget() {
         onClick={handleToggle}
         disabled={isLoading}
         className={`h-8 px-3 ${!isRunning ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`}
+        aria-label={isRunning ? 'Stop tracking time' : 'Start tracking time'}
       >
         {isRunning ? (
           <>
