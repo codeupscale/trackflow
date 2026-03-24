@@ -61,15 +61,15 @@ npx electron-builder --mac --x64 --arm64
 echo -e "${GREEN}✓ macOS builds complete${NC}"
 
 # Step 4: Build Windows (cross-compile from macOS)
-echo -e "\n${YELLOW}[4/5] Building Windows (x64)...${NC}"
+echo -e "\n${YELLOW}[4/6] Building Windows (x64)...${NC}"
 npx electron-builder --win --x64 || echo -e "${YELLOW}⚠ Windows build skipped (may need Wine for cross-compile)${NC}"
 
 # Step 5: Build Linux
-echo -e "\n${YELLOW}[4/5] Building Linux (x64)...${NC}"
+echo -e "\n${YELLOW}[5/6] Building Linux (x64)...${NC}"
 npx electron-builder --linux --x64 || echo -e "${YELLOW}⚠ Linux build skipped (cross-compile not available)${NC}"
 
-# Step 5: Create GitHub Release with all artifacts
-echo -e "\n${YELLOW}[5/5] Creating GitHub Release...${NC}"
+# Step 6: Create GitHub Release with all artifacts
+echo -e "\n${YELLOW}[6/6] Creating GitHub Release...${NC}"
 
 VERSION_NUM=${NEW_VERSION#v}
 TAG="v${VERSION_NUM}"
@@ -84,9 +84,13 @@ for f in \
   "$DIST_DIR/TrackFlow-${VERSION_NUM}-mac-x64.zip" \
   "$DIST_DIR/TrackFlow-${VERSION_NUM}-mac-arm64.dmg.blockmap" \
   "$DIST_DIR/TrackFlow-${VERSION_NUM}-mac-x64.dmg.blockmap" \
+  "$DIST_DIR/TrackFlow-${VERSION_NUM}-win-x64.exe" \
   "$DIST_DIR/TrackFlow Setup ${VERSION_NUM}.exe" \
-  "$DIST_DIR/TrackFlow-${VERSION_NUM}.exe.blockmap" \
+  "$DIST_DIR/TrackFlow-${VERSION_NUM}-win-x64.exe.blockmap" \
+  "$DIST_DIR/TrackFlow-${VERSION_NUM}-x86_64.AppImage" \
   "$DIST_DIR/TrackFlow-${VERSION_NUM}-x64.AppImage" \
+  "$DIST_DIR/TrackFlow-${VERSION_NUM}-linux-amd64.deb" \
+  "$DIST_DIR/TrackFlow-${VERSION_NUM}-linux-x64.deb" \
   "$DIST_DIR/latest-mac.yml" \
   "$DIST_DIR/latest.yml" \
   "$DIST_DIR/latest-linux.yml" \
@@ -114,14 +118,15 @@ gh release create "$TAG" \
 |---|---|
 | macOS Apple Silicon (M1/M2/M3/M4) | TrackFlow-${VERSION_NUM}-mac-arm64.dmg |
 | macOS Intel | TrackFlow-${VERSION_NUM}-mac-x64.dmg |
-| Windows | TrackFlow Setup ${VERSION_NUM}.exe |
-| Linux | TrackFlow-${VERSION_NUM}-x64.AppImage |
+| Windows | TrackFlow-${VERSION_NUM}-win-x64.exe |
+| Linux (AppImage) | TrackFlow-${VERSION_NUM}-x64.AppImage |
+| Linux (deb) | TrackFlow-${VERSION_NUM}-linux-x64.deb |
 
 ### Installation
 1. Download the file for your platform
 2. macOS: Open the .dmg, drag TrackFlow to Applications
 3. Windows: Run the .exe installer
-4. Linux: Make the .AppImage executable and run it
+4. Linux: Make the .AppImage executable and run it, or install the .deb package
 
 ### Auto-Updates
 Existing users will be automatically updated on next app launch.
