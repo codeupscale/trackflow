@@ -1,4 +1,4 @@
-const { desktopCapturer, Notification, screen, systemPreferences } = require('electron');
+const { desktopCapturer, Notification, screen, systemPreferences, powerMonitor } = require('electron');
 
 // Mock dialog and shell (used for permission prompts)
 jest.mock('electron', () => {
@@ -86,6 +86,9 @@ describe('ScreenshotService', () => {
     // macOS screen permission granted
     systemPreferences.getMediaAccessStatus.mockReturnValue('granted');
 
+    // System is active (not idle)
+    powerMonitor.getSystemIdleTime.mockReturnValue(0);
+
     service = new ScreenshotService(mockApiClient, mockConfig, mockOfflineQueue, mockGetIsAppVisible);
   });
 
@@ -105,7 +108,7 @@ describe('ScreenshotService', () => {
     service.start('entry-1');
     service.stop();
     expect(service.currentEntryId).toBeNull();
-    expect(service.interval).toBeNull();
+    expect(service._intervalTimer).toBeNull();
     expect(service._capturing).toBe(false);
   });
 
@@ -162,6 +165,26 @@ describe('ScreenshotService', () => {
     await service.capture();
     expect(mockApiClient.uploadScreenshot).not.toHaveBeenCalled();
     expect(service._consecutiveFailures).toBe(1);
+  });
+
+  // ── Screen Lock / Idle Detection (SS-7) ──
+
+  test('skips capture when system idle exceeds threshold (screen lock detection)', async () => {
+    service.currentEntryId = 'entry-1';
+    powerMonitor.getSystemIdleTime.mockReturnValue(400); // 400s > 300s threshold
+    await service.capture();
+    expect(desktopCapturer.getSources).not.toHaveBeenCalled();
+    expect(mockApiClient.uploadScreenshot).not.toHaveBeenCalled();
+    // Not a failure — expected skip
+    expect(service._consecutiveFailures).toBe(0);
+  });
+
+  test('captures normally when system idle is below threshold', async () => {
+    service.currentEntryId = 'entry-1';
+    powerMonitor.getSystemIdleTime.mockReturnValue(60); // 60s < 300s threshold
+    await service.capture();
+    expect(desktopCapturer.getSources).toHaveBeenCalled();
+    expect(mockApiClient.uploadScreenshot).toHaveBeenCalled();
   });
 
   // ── macOS Permission ──
@@ -230,7 +253,7 @@ describe('ScreenshotService', () => {
 
     expect(service._consecutiveFailures).toBe(5);
     // After 5 failures, interval should be cleared
-    expect(service.interval).toBeNull();
+    expect(service._intervalTimer).toBeNull();
   });
 
   test('resumes after pause timeout', async () => {
@@ -256,31 +279,70 @@ describe('ScreenshotService', () => {
     expect(service._consecutiveFailures).toBe(0);
   });
 
+  // ── Upload Retry (SS-8) ──
+
+  test('retries upload up to 3 times before queuing offline', async () => {
+    jest.useRealTimers(); // Need real timers for retry delays
+    service.currentEntryId = 'entry-1';
+    mockApiClient.uploadScreenshot
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockRejectedValueOnce(new Error('Timeout'))
+      .mockRejectedValueOnce(new Error('Server error'));
+
+    const buffer = Buffer.alloc(50000, 0x42);
+    await service.upload(buffer);
+
+    expect(mockApiClient.uploadScreenshot).toHaveBeenCalledTimes(3);
+    expect(mockOfflineQueue.add).toHaveBeenCalledWith('screenshot', expect.objectContaining({
+      buffer: expect.any(Buffer),
+      time_entry_id: 'entry-1',
+    }));
+    jest.useFakeTimers(); // Restore for afterEach
+  });
+
+  test('succeeds on second retry without queuing offline', async () => {
+    jest.useRealTimers();
+    service.currentEntryId = 'entry-1';
+    mockApiClient.uploadScreenshot
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockResolvedValueOnce({ screenshot: { id: '1' } });
+
+    const buffer = Buffer.alloc(50000, 0x42);
+    await service.upload(buffer);
+
+    expect(mockApiClient.uploadScreenshot).toHaveBeenCalledTimes(2);
+    expect(mockOfflineQueue.add).not.toHaveBeenCalled();
+    jest.useFakeTimers();
+  });
+
   // ── Upload & Offline Queue ──
 
-  test('queues screenshot offline when upload fails', async () => {
+  test('queues screenshot offline when all upload retries fail', async () => {
+    jest.useRealTimers();
     service.currentEntryId = 'entry-1';
-    mockApiClient.uploadScreenshot.mockRejectedValueOnce(new Error('Network error'));
+    mockApiClient.uploadScreenshot.mockRejectedValue(new Error('Network error'));
 
     await service.capture();
 
     expect(mockOfflineQueue.add).toHaveBeenCalledWith('screenshot', expect.objectContaining({
       time_entry_id: 'entry-1',
       captured_at: expect.any(String),
-      buffer: expect.any(String), // base64
+      buffer: expect.any(Buffer),
     }));
+    jest.useFakeTimers();
   });
 
-  // ── Blur ──
+  // ── Blur (SS-11) ──
 
-  test('applies blur when configured', async () => {
+  test('does NOT apply blur even when configured (server handles it)', async () => {
     const sharp = require('sharp');
     service.config.blur_screenshots = true;
     service.currentEntryId = 'entry-1';
 
     await service.capture();
 
-    expect(sharp._instance.blur).toHaveBeenCalledWith(15);
+    // Blur should NOT be called — server handles it now
+    expect(sharp._instance.blur).not.toHaveBeenCalled();
     expect(mockApiClient.uploadScreenshot).toHaveBeenCalled();
   });
 

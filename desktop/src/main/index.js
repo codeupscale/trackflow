@@ -8,6 +8,7 @@ const ScreenshotService = require('./screenshot-service');
 const IdleDetector = require('./idle-detector');
 const OfflineQueue = require('./offline-queue');
 const { getToken, setToken, getRefreshToken, setRefreshToken, deleteToken } = require('./keychain');
+const posthog = require('./posthog');
 
 const WEB_DASHBOARD_URL = process.env.TRACKFLOW_WEB_URL || 'https://trackflow.codeupscale.com';
 
@@ -78,11 +79,13 @@ let _cachedStartedAtMs = null;
 
 process.on('uncaughtException', (error) => {
   console.error('Uncaught exception:', error);
+  posthog.captureError('unknown', error, { type: 'uncaught_exception' });
   // Don't crash — log and continue. Critical for a background agent.
 });
 
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled rejection:', reason);
+  posthog.captureError('unknown', reason instanceof Error ? reason : new Error(String(reason)), { type: 'unhandled_rejection' });
 });
 
 // ── Single Instance Lock ─────────────────────────────────────────────────────
@@ -122,10 +125,12 @@ app.on('before-quit', async (e) => {
     activityMonitor?.stop();
     screenshotService?.stop();
     idleDetector?.stop();
+    await posthog.shutdown();
     cleanupOnExit();
     app.exit(0);
   } else {
     idleDetector?.stop();
+    await posthog.shutdown();
     cleanupOnExit();
   }
 });
@@ -158,11 +163,19 @@ async function initializeApp() {
     await setRefreshToken(newRefreshToken);
   });
 
+  // Initialize PostHog analytics
+  const posthogKey = process.env.POSTHOG_KEY || '';
+  const posthogHost = process.env.POSTHOG_HOST || 'https://us.i.posthog.com';
+  if (posthogKey) {
+    posthog.init(posthogKey, { host: posthogHost });
+  }
+
   // Test token validity with retry for transient network errors
   let tokenValid = false;
+  let user = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      await apiClient.getMe();
+      user = await apiClient.getMe();
       tokenValid = true;
       break;
     } catch (e) {
@@ -186,6 +199,17 @@ async function initializeApp() {
 
   isAuthenticated = true;
 
+  // Identify user in PostHog
+  if (user) {
+    posthog.identify(user.id, {
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      organization_id: user.organization_id,
+    });
+    posthog.capture(user.id, 'app_launched', { version: app.getVersion() });
+  }
+
   // Fetch org config with fallback to defaults
   try {
     const serverConfig = await apiClient.getConfig();
@@ -198,7 +222,7 @@ async function initializeApp() {
   offlineQueue = new OfflineQueue();
   activityMonitor = new ActivityMonitor(apiClient, offlineQueue);
   const getIsAppVisible = () => popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible();
-  screenshotService = new ScreenshotService(apiClient, config, offlineQueue, getIsAppVisible);
+  screenshotService = new ScreenshotService(apiClient, config, offlineQueue, getIsAppVisible, activityMonitor);
   idleDetector = new IdleDetector(config);
 
   // Wire idle detection events
@@ -690,6 +714,8 @@ function setupIPC() {
   });
 
   ipcMain.handle('logout', async () => {
+    posthog.capture(currentEntry?.user_id || 'unknown', 'user_logged_out', {});
+
     // Force stop timer on server regardless of local state
     if (apiClient) {
       try {
@@ -802,6 +828,7 @@ async function startTimer(projectId = null) {
     _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
     isTimerRunning = true;
     todayTotalCurrentProject = result.today_total ?? 0;
+    posthog.capture(currentEntry?.user_id || 'unknown', 'timer_started', { project_id: projectId });
 
     const todayTotalForPopup = todayTotalCurrentProject;
     notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup });
@@ -840,6 +867,7 @@ function stopTimer() {
     : 0;
   const stoppedProjectId = currentEntry?.project_id || null;
   const localStoppedProjectTotal = todayTotalCurrentProject + sessionElapsed;
+  posthog.capture(currentEntry?.user_id || 'unknown', 'timer_stopped', {});
 
   dismissIdleAlert();
 

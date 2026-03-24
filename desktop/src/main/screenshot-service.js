@@ -15,7 +15,7 @@
 //   2. All failure paths log with console.error AND increment a failure counter.
 //      After 5 consecutive failures, capture pauses for 5 minutes to avoid CPU waste.
 
-const { desktopCapturer, Notification, screen, systemPreferences, shell, dialog, BrowserWindow } = require('electron');
+const { desktopCapturer, Notification, screen, systemPreferences, shell, dialog, BrowserWindow, powerMonitor } = require('electron');
 const FormData = require('form-data');
 
 // Lazy-load sharp
@@ -36,6 +36,10 @@ function getSharp() {
 const MAX_CONSECUTIVE_FAILURES = 5;
 const FAILURE_PAUSE_MS = 5 * 60 * 1000;
 
+// Skip screenshot capture when system has been idle for 5+ minutes.
+// Catches screen lock, sleep/wake recovery, and extended AFK scenarios.
+const IDLE_THRESHOLD_SECONDS = 300;
+
 // Safe capture size — do NOT request native Retina resolution.
 // Electron's desktopCapturer returns empty thumbnails when the
 // requested size exceeds internal GPU buffer limits (~2048px on some GPUs).
@@ -43,12 +47,13 @@ const CAPTURE_WIDTH = 1920;
 const CAPTURE_HEIGHT = 1080;
 
 class ScreenshotService {
-  constructor(apiClient, config, offlineQueue, getIsAppVisible = null) {
+  constructor(apiClient, config, offlineQueue, getIsAppVisible = null, activityMonitor = null) {
     this.apiClient = apiClient;
     this.config = config;
     this.offlineQueue = offlineQueue;
     this.getIsAppVisible = typeof getIsAppVisible === 'function' ? getIsAppVisible : null;
-    this.interval = null;
+    this.activityMonitor = activityMonitor;
+    this._intervalTimer = null;
     this.initialTimeout = null;
     this.currentEntryId = null;
     this._capturing = false;
@@ -92,9 +97,20 @@ class ScreenshotService {
   }
 
   _startInterval() {
-    if (this.interval) clearInterval(this.interval);
-    this.interval = setInterval(() => this.capture(), this._intervalMs);
-    console.log(`[SS] Interval started — every ${this._intervalMs / 1000}s`);
+    if (this._intervalTimer) clearTimeout(this._intervalTimer);
+    const scheduleNext = () => {
+      // Randomize within 60-100% of interval to prevent predictable capture timing
+      const minDelay = Math.floor(this._intervalMs * 0.6);
+      const maxDelay = this._intervalMs;
+      const delay = minDelay + Math.floor(Math.random() * (maxDelay - minDelay));
+      this._intervalTimer = setTimeout(() => {
+        this.capture().finally(() => {
+          if (this.currentEntryId) scheduleNext();
+        });
+      }, delay);
+    };
+    scheduleNext();
+    console.log(`[SS] Randomized interval started — ~${Math.round(this._intervalMs / 1000)}s (\u00b140%)`);
   }
 
   stop() {
@@ -102,9 +118,9 @@ class ScreenshotService {
       clearTimeout(this.initialTimeout);
       this.initialTimeout = null;
     }
-    if (this.interval) {
-      clearInterval(this.interval);
-      this.interval = null;
+    if (this._intervalTimer) {
+      clearTimeout(this._intervalTimer);
+      this._intervalTimer = null;
     }
     if (this._pauseTimeout) {
       clearTimeout(this._pauseTimeout);
@@ -139,11 +155,13 @@ class ScreenshotService {
     }
   }
 
-  _showPermissionDialog() {
-    // Only show once per app session AND only if permission is truly not granted
+  _showPermissionDialog(force = false) {
+    // Only show once per app session
     if (this._permissionDialogShown) return;
-    const status = this._checkScreenPermissionStatus();
-    if (status === 'granted') return; // Permission is fine, don't nag
+    if (!force) {
+      const status = this._checkScreenPermissionStatus();
+      if (status === 'granted') return; // Permission is fine, don't nag
+    }
 
     this._permissionDialogShown = true;
 
@@ -181,6 +199,14 @@ class ScreenshotService {
     if (!this.currentEntryId) return;
     if (this._capturing) return;
     this._capturing = true;
+
+    // Skip capture when system is idle (screen locked, sleep, AFK)
+    const idleSeconds = powerMonitor.getSystemIdleTime();
+    if (idleSeconds > IDLE_THRESHOLD_SECONDS) {
+      console.log(`[SS] Skipping capture — system idle for ${idleSeconds}s (likely locked)`);
+      this._capturing = false;
+      return;
+    }
 
     // Skip if capture_only_when_visible and popup not visible
     if (this.config.capture_only_when_visible === true) {
@@ -260,16 +286,17 @@ class ScreenshotService {
 
       if (!buffer || buffer.length === 0) {
         this._capturing = false;
-        this._handleCaptureFailure('Capture returned empty. Try: System Settings > Privacy > Screen Recording > Remove TrackFlow > Re-add > Restart app.');
-        if (isMac) this._showPermissionDialog();
+        this._handleCaptureFailure('Capture returned empty content despite permission appearing granted. Try: remove TrackFlow from Screen Recording, re-add, and restart.');
+        if (isMac) this._showPermissionDialog(true); // force=true: status may say 'granted' but capture is wallpaper-only
         return;
       }
 
       console.log(`[SS] Captured ${buffer.length} bytes (${Math.round(buffer.length / 1024)}KB)`);
 
-      if (this.config.blur_screenshots) {
-        buffer = await this._applyBlur(buffer);
-      }
+      // NOTE: Client-side blur removed (SS-11). The server's ProcessScreenshotJob
+      // already applies blur when blur_screenshots is enabled. Having both client
+      // and server blur causes double-blurring that makes images unusable.
+      // The _applyBlur() method is kept below for potential future use.
 
       if (this.currentEntryId) {
         await this.upload(buffer);
@@ -321,6 +348,14 @@ class ScreenshotService {
     const activeWindow = validWindows[0];
     const size = activeWindow.thumbnail.getSize();
     const buffer = activeWindow.thumbnail.toJPEG(80);
+
+    // Content validation: blank/wallpaper images compress to < 15KB at this resolution
+    // A real application window at 1920x1080 JPEG quality 80 is typically > 30KB
+    if (buffer.length < 15000) {
+      console.warn(`[SS] Window "${activeWindow.name}" thumbnail too small (${buffer.length} bytes) — likely blank/permission-denied`);
+      return null;
+    }
+
     console.log(`[SS] Captured active window "${activeWindow.name}" (${size.width}x${size.height}, ${Math.round(buffer.length / 1024)}KB)`);
     return buffer;
   }
@@ -411,8 +446,11 @@ class ScreenshotService {
       if (image && !image.isEmpty()) {
         const size = image.getSize();
         if (size.width > 0 && size.height > 0) {
-          console.log(`[SS] Using source "${source.name}" (${size.width}x${size.height})`);
-          return image.toJPEG(80);
+          const jpegBuffer = image.toJPEG(80);
+          if (jpegBuffer.length > 0) {
+            console.log(`[SS] Using source "${source.name}" (${size.width}x${size.height})`);
+            return jpegBuffer;
+          }
         }
       }
     }
@@ -497,9 +535,9 @@ class ScreenshotService {
 
     if (this._consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
       console.error(`[SS] PAUSED after ${MAX_CONSECUTIVE_FAILURES} consecutive failures. Will retry in 5 minutes.`);
-      if (this.interval) {
-        clearInterval(this.interval);
-        this.interval = null;
+      if (this._intervalTimer) {
+        clearTimeout(this._intervalTimer);
+        this._intervalTimer = null;
       }
       this._pauseTimeout = setTimeout(() => {
         this._pauseTimeout = null;
@@ -545,9 +583,39 @@ class ScreenshotService {
     }
   }
 
-  // ── Upload ────────────────────────────────────────────────────────
+  // ── Upload with retry ────────────────────────────────────────────
 
   async upload(buffer) {
+    // Get current app context for this screenshot
+    let appName = null;
+    let windowTitle = null;
+    try {
+      if (this.activityMonitor) {
+        appName = await this.activityMonitor.getActiveApp();
+        windowTitle = await this.activityMonitor.getActiveWindowTitle();
+      }
+    } catch {}
+
+    let formData = this._buildFormData(buffer, appName, windowTitle);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await this.apiClient.uploadScreenshot(formData);
+        console.log(`[SS] Uploaded successfully on attempt ${attempt} (${Math.round(buffer.length / 1024)}KB)`);
+        return;
+      } catch (e) {
+        console.warn(`[SS] Upload attempt ${attempt}/3 failed: ${e.message}`);
+        if (attempt < 3) {
+          await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
+          // Rebuild FormData for retry (streams are consumed)
+          formData = this._buildFormData(buffer, appName, windowTitle);
+        }
+      }
+    }
+    // All retries failed — queue for offline
+    this._queueForOffline(buffer, appName, windowTitle);
+  }
+
+  _buildFormData(buffer, appName = null, windowTitle = null) {
     const formData = new FormData();
     formData.append('file', buffer, {
       filename: `screenshot_${Date.now()}.jpg`,
@@ -555,23 +623,24 @@ class ScreenshotService {
     });
     formData.append('time_entry_id', String(this.currentEntryId));
     formData.append('captured_at', new Date().toISOString());
+    if (appName) formData.append('app_name', appName);
+    if (windowTitle) formData.append('window_title', windowTitle);
+    return formData;
+  }
 
-    try {
-      await this.apiClient.uploadScreenshot(formData);
-      console.log(`[SS] Uploaded successfully (${Math.round(buffer.length / 1024)}KB)`);
-    } catch (e) {
-      console.error(`[SS] Upload failed: ${e.message}`);
-      // Queue for offline sync if small enough
-      if (buffer.length < 375 * 1024) {
-        this.offlineQueue.add('screenshot', {
-          buffer: buffer.toString('base64'),
-          time_entry_id: String(this.currentEntryId),
-          captured_at: new Date().toISOString(),
-        });
-        console.log('[SS] Queued for offline sync');
-      } else {
-        console.warn(`[SS] Too large for offline queue (${Math.round(buffer.length / 1024)}KB), skipping`);
-      }
+  _queueForOffline(buffer, appName = null, windowTitle = null) {
+    if (buffer.length < 1024 * 1024) {
+      const data = {
+        buffer: buffer,
+        time_entry_id: String(this.currentEntryId),
+        captured_at: new Date().toISOString(),
+      };
+      if (appName) data.app_name = appName;
+      if (windowTitle) data.window_title = windowTitle;
+      this.offlineQueue.add('screenshot', data);
+      console.log('[SS] Queued for offline sync');
+    } else {
+      console.warn(`[SS] Too large for offline queue (${Math.round(buffer.length / 1024)}KB), skipping`);
     }
   }
 }

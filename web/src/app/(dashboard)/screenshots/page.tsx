@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useState, useEffect, useCallback } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import {
   Camera,
@@ -11,6 +11,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Info,
+  Download,
+  Trash2,
 } from 'lucide-react';
 
 import Image from 'next/image';
@@ -38,6 +40,7 @@ import {
 import api from '@/lib/api';
 import { getActivityColor } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
+import { toast } from 'sonner';
 
 interface Screenshot {
   id: string;
@@ -71,8 +74,10 @@ interface TeamUser {
 
 export default function ScreenshotsPage() {
   const { user } = useAuthStore();
+  const queryClient = useQueryClient();
   const isManager =
     user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
+  const canDelete = user?.role === 'owner' || user?.role === 'admin';
 
   const [dateFrom, setDateFrom] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [dateTo, setDateTo] = useState(() => format(new Date(), 'yyyy-MM-dd'));
@@ -111,6 +116,20 @@ export default function ScreenshotsPage() {
     },
   });
 
+  const deleteScreenshot = useMutation({
+    mutationFn: async (id: string) => {
+      await api.delete(`/screenshots/${id}`);
+    },
+    onSuccess: () => {
+      toast.success('Screenshot deleted');
+      setSelectedScreenshot(null);
+      queryClient.invalidateQueries({ queryKey: ['screenshots'] });
+    },
+    onError: () => {
+      toast.error('Failed to delete screenshot');
+    },
+  });
+
   const screenshots = screenshotsData?.data || [];
   const meta = screenshotsData?.meta || (screenshotsData?.current_page != null ? {
     current_page: screenshotsData.current_page!,
@@ -119,7 +138,55 @@ export default function ScreenshotsPage() {
     per_page: screenshotsData.per_page!,
   } : undefined);
 
+  // SS-10: Lightbox navigation helpers
+  const currentIndex = selectedScreenshot
+    ? screenshots.findIndex((s) => s.id === selectedScreenshot.id)
+    : -1;
+  const total = screenshots.length;
+
+  const navigateScreenshot = useCallback(
+    (direction: number) => {
+      const nextIndex = currentIndex + direction;
+      if (nextIndex >= 0 && nextIndex < total) {
+        setSelectedScreenshot(screenshots[nextIndex]);
+      }
+    },
+    [currentIndex, total, screenshots],
+  );
+
+  // SS-10: Keyboard navigation for lightbox
+  useEffect(() => {
+    if (!selectedScreenshot) return;
+    const handler = (e: KeyboardEvent) => {
+      const currentData = screenshotsData?.data || [];
+      const idx = currentData.findIndex((s) => s.id === selectedScreenshot.id);
+      if (e.key === 'ArrowRight' && idx < currentData.length - 1) {
+        setSelectedScreenshot(currentData[idx + 1]);
+      } else if (e.key === 'ArrowLeft' && idx > 0) {
+        setSelectedScreenshot(currentData[idx - 1]);
+      } else if (e.key === 'Escape') {
+        setSelectedScreenshot(null);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [selectedScreenshot, screenshotsData]);
+
+  // SS-9: Broken image handler
+  const handleImageError = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const target = e.currentTarget;
+    target.style.display = 'none';
+    const fallback = target.parentElement?.querySelector('[data-fallback]') as HTMLElement | null;
+    if (fallback) fallback.classList.remove('hidden');
+  };
+
   const getActivityBadgeClass = (score: number) => getActivityColor(score).badge;
+
+  const handleDelete = (id: string) => {
+    if (window.confirm('Are you sure you want to delete this screenshot? This action cannot be undone.')) {
+      deleteScreenshot.mutate(id);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -248,13 +315,22 @@ export default function ScreenshotsPage() {
               >
                 <div className="aspect-video bg-slate-800 relative flex items-center justify-center overflow-hidden">
                   {screenshot.thumbnail_url ? (
-                    <Image
-                      src={screenshot.thumbnail_url}
-                      alt={`Screenshot from ${screenshot.project_name || 'unknown project'} at ${format(new Date(screenshot.captured_at), 'HH:mm')}, ${screenshot.activity_score}% activity`}
-                      className="w-full h-full object-cover"
-                      fill
-                      sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
-                    />
+                    <>
+                      <Image
+                        src={screenshot.thumbnail_url}
+                        alt={`Screenshot from ${screenshot.project_name || 'unknown project'} at ${format(new Date(screenshot.captured_at), 'HH:mm')}, ${screenshot.activity_score}% activity`}
+                        className="w-full h-full object-cover"
+                        fill
+                        sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
+                        unoptimized
+                        onError={handleImageError}
+                      />
+                      {/* SS-9: Broken image fallback */}
+                      <div data-fallback className="hidden absolute inset-0 flex flex-col items-center justify-center bg-slate-800/50 gap-2">
+                        <Monitor className="h-8 w-8 text-slate-500" />
+                        <span className="text-xs text-slate-500">Image expired — refresh page</span>
+                      </div>
+                    </>
                   ) : (
                     <div className="flex flex-col items-center gap-2 text-slate-600">
                       <Monitor className="h-8 w-8" />
@@ -278,11 +354,13 @@ export default function ScreenshotsPage() {
                   </div>
                 </div>
                 <CardContent className="p-3 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm font-medium text-white truncate">
-                      {screenshot.user_name}
-                    </p>
-                  </div>
+                  {isManager && (
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium text-white truncate">
+                        {screenshot.user_name}
+                      </p>
+                    </div>
+                  )}
                   <p className="text-xs text-slate-500">
                     {format(new Date(screenshot.captured_at), 'MMM d, yyyy HH:mm')}
                   </p>
@@ -336,10 +414,36 @@ export default function ScreenshotsPage() {
       >
         <DialogContent className="sm:max-w-3xl bg-slate-900 border-slate-800">
           <DialogHeader>
-            <DialogTitle className="text-white">
-              {selectedScreenshot?.user_name} &mdash;{' '}
-              {selectedScreenshot &&
-                format(new Date(selectedScreenshot.captured_at), 'MMM d, yyyy HH:mm:ss')}
+            <DialogTitle className="text-white flex items-center justify-between">
+              <span>
+                {isManager && selectedScreenshot?.user_name ? `${selectedScreenshot.user_name} — ` : ''}
+                {selectedScreenshot &&
+                  format(new Date(selectedScreenshot.captured_at), 'MMM d, yyyy HH:mm:ss')}
+              </span>
+              {/* SS-10: Prev/Next navigation buttons */}
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => navigateScreenshot(-1)}
+                  disabled={currentIndex <= 0}
+                  aria-label="Previous screenshot"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <span className="text-sm text-muted-foreground tabular-nums">
+                  {currentIndex + 1} / {total}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => navigateScreenshot(1)}
+                  disabled={currentIndex >= total - 1}
+                  aria-label="Next screenshot"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
             </DialogTitle>
             <DialogDescription>
               <span className="flex items-center gap-2">
@@ -358,18 +462,55 @@ export default function ScreenshotsPage() {
           </DialogHeader>
           <div className="aspect-video bg-slate-800 rounded-lg relative flex items-center justify-center overflow-hidden">
             {selectedScreenshot?.url ? (
-              <Image
-                src={selectedScreenshot.url}
-                alt={`Screenshot from ${selectedScreenshot.project_name || 'unknown project'} at ${format(new Date(selectedScreenshot.captured_at), 'HH:mm')}, ${selectedScreenshot.activity_score}% activity`}
-                className="w-full h-full object-contain"
-                fill
-                sizes="(max-width: 768px) 100vw, 768px"
-              />
+              <>
+                <Image
+                  src={selectedScreenshot.url}
+                  alt={`Screenshot from ${selectedScreenshot.project_name || 'unknown project'} at ${format(new Date(selectedScreenshot.captured_at), 'HH:mm')}, ${selectedScreenshot.activity_score}% activity`}
+                  className="w-full h-full object-contain"
+                  fill
+                  sizes="(max-width: 768px) 100vw, 768px"
+                  unoptimized
+                  onError={handleImageError}
+                />
+                {/* SS-9: Broken image fallback for lightbox */}
+                <div data-fallback className="hidden absolute inset-0 flex flex-col items-center justify-center bg-slate-800/50 gap-2">
+                  <Monitor className="h-8 w-8 text-slate-500" />
+                  <span className="text-xs text-slate-500">Image expired — refresh page</span>
+                </div>
+              </>
             ) : (
               <div className="flex flex-col items-center gap-3 text-slate-600">
                 <Monitor className="h-16 w-16" />
                 <span className="text-sm">Screenshot preview not available</span>
               </div>
+            )}
+          </div>
+          {/* SS-13: Action buttons (download + delete) */}
+          <div className="flex items-center justify-end gap-2 pt-2">
+            {selectedScreenshot?.url && (
+              <a
+                href={selectedScreenshot.url}
+                download
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex"
+              >
+                <Button variant="outline" size="sm" className="border-slate-700 text-slate-300">
+                  <Download className="h-4 w-4 mr-2" />
+                  Download
+                </Button>
+              </a>
+            )}
+            {canDelete && selectedScreenshot && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => handleDelete(selectedScreenshot.id)}
+                disabled={deleteScreenshot.isPending}
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                {deleteScreenshot.isPending ? 'Deleting...' : 'Delete'}
+              </Button>
             )}
           </div>
         </DialogContent>

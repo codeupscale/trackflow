@@ -1,12 +1,16 @@
 // AGENT-06: Offline queue using better-sqlite3
 // Queues heartbeats + screenshots locally when network unavailable
 // Flushes on reconnect with exponential backoff
+//
+// SS-4: Screenshots are stored as files on disk (not base64 in SQLite).
+// SQLite only stores the file path. This prevents database bloat and
+// keeps SQLite fast even with hundreds of queued screenshots.
 
 const path = require('path');
 const fs = require('fs');
 const { app } = require('electron');
 
-// Max size for screenshot storage in queue (2MB) — prevent DB bloat
+// Max size for screenshot file storage (2MB)
 const MAX_SCREENSHOT_SIZE = 2 * 1024 * 1024;
 // Max total queue size before pruning old entries
 const MAX_QUEUE_ENTRIES = 1000;
@@ -18,6 +22,7 @@ class OfflineQueue {
     this.maxRetryDelay = 300000; // Max 5 min
     this.flushing = false;
     this._flushTimer = null;
+    this._screenshotDir = null;
 
     this.init();
   }
@@ -47,6 +52,12 @@ class OfflineQueue {
       this._stmtCount = this.db.prepare('SELECT COUNT(*) as count FROM queue');
       this._stmtIncAttempt = this.db.prepare('UPDATE queue SET attempts = attempts + 1 WHERE id = ?');
 
+      // Ensure screenshot directory exists
+      this._screenshotDir = path.join(app.getPath('userData'), 'offline-screenshots');
+      if (!fs.existsSync(this._screenshotDir)) {
+        fs.mkdirSync(this._screenshotDir, { recursive: true });
+      }
+
       // Prune old entries on startup to prevent unbounded growth
       this._pruneOldEntries();
     } catch (e) {
@@ -60,14 +71,49 @@ class OfflineQueue {
       const count = this._stmtCount.get().count;
       if (count > MAX_QUEUE_ENTRIES) {
         const excess = count - MAX_QUEUE_ENTRIES;
-        this.db.prepare(`DELETE FROM queue WHERE id IN (SELECT id FROM queue ORDER BY id LIMIT ?)`).run(excess);
+        // Get entries that will be deleted so we can clean up their screenshot files
+        const toDelete = this.db.prepare(
+          'SELECT id, type, data FROM queue ORDER BY id LIMIT ?'
+        ).all(excess);
+        this._deleteEntriesAndFiles(toDelete);
       }
-      // Delete entries older than 7 days
-      this.db.prepare(`DELETE FROM queue WHERE created_at < datetime('now', '-7 days')`).run();
-      // Delete entries with too many attempts
-      this.db.prepare(`DELETE FROM queue WHERE attempts >= 5`).run();
+      // Get old entries (>7 days) so we can clean up their files
+      const oldEntries = this.db.prepare(
+        `SELECT id, type, data FROM queue WHERE created_at < datetime('now', '-7 days')`
+      ).all();
+      this._deleteEntriesAndFiles(oldEntries);
+
+      // Get entries with too many attempts
+      const failedEntries = this.db.prepare(
+        'SELECT id, type, data FROM queue WHERE attempts >= 5'
+      ).all();
+      this._deleteEntriesAndFiles(failedEntries);
     } catch (e) {
       console.error('Failed to prune queue:', e.message);
+    }
+  }
+
+  /**
+   * Delete queue entries from SQLite and clean up associated screenshot files.
+   */
+  _deleteEntriesAndFiles(entries) {
+    if (!entries || entries.length === 0) return;
+    const ids = [];
+    for (const entry of entries) {
+      ids.push(entry.id);
+      // Clean up screenshot file if this is a screenshot entry
+      if (entry.type === 'screenshot') {
+        try {
+          const data = JSON.parse(entry.data);
+          if (data.file_path && fs.existsSync(data.file_path)) {
+            fs.unlinkSync(data.file_path);
+          }
+        } catch {}
+      }
+    }
+    if (ids.length > 0) {
+      const placeholders = ids.map(() => '?').join(',');
+      this.db.prepare(`DELETE FROM queue WHERE id IN (${placeholders})`).run(...ids);
     }
   }
 
@@ -75,16 +121,31 @@ class OfflineQueue {
     if (!this.db) return;
 
     try {
-      // Limit screenshot size to prevent SQLite bloat
       if (type === 'screenshot' && data.buffer) {
-        const bufferSize = Buffer.byteLength(data.buffer, 'base64');
-        if (bufferSize > MAX_SCREENSHOT_SIZE) {
+        // SS-4: Write screenshot buffer to file, store path in SQLite
+        const buffer = Buffer.isBuffer(data.buffer) ? data.buffer : Buffer.from(data.buffer, 'base64');
+        if (buffer.length > MAX_SCREENSHOT_SIZE) {
           console.warn('Screenshot too large for offline queue, skipping');
           return;
         }
-      }
 
-      this._stmtInsert.run(type, JSON.stringify(data));
+        const filename = `ss_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
+        const filePath = path.join(this._screenshotDir, filename);
+        fs.writeFileSync(filePath, buffer);
+
+        // Store file path (not the blob) in SQLite
+        const queueData = {
+          file_path: filePath,
+          time_entry_id: data.time_entry_id,
+          captured_at: data.captured_at,
+        };
+        if (data.app_name) queueData.app_name = data.app_name;
+        if (data.window_title) queueData.window_title = data.window_title;
+        this._stmtInsert.run(type, JSON.stringify(queueData));
+        console.log(`[OfflineQueue] Screenshot saved to file: ${filename} (${Math.round(buffer.length / 1024)}KB)`);
+      } else {
+        this._stmtInsert.run(type, JSON.stringify(data));
+      }
     } catch (e) {
       console.error('Failed to queue item:', e.message);
     }
@@ -112,6 +173,7 @@ class OfflineQueue {
       const heartbeats = [];
       const heartbeatIds = [];  // Track separately — only delete after successful bulk upload
       const deleteIds = [];
+      const screenshotFilesToDelete = []; // Track files to delete after successful upload
 
       for (const item of items) {
         let data;
@@ -127,18 +189,41 @@ class OfflineQueue {
             heartbeats.push(data);
             heartbeatIds.push(item.id);
           } else if (item.type === 'screenshot') {
+            // SS-4: Read screenshot from file, not from base64 in SQLite
+            let buffer;
+            if (data.file_path) {
+              // New file-based format
+              if (!fs.existsSync(data.file_path)) {
+                console.warn(`[OfflineQueue] Screenshot file missing: ${data.file_path}`);
+                deleteIds.push(item.id);
+                continue;
+              }
+              buffer = fs.readFileSync(data.file_path);
+            } else if (data.buffer) {
+              // Legacy base64 format (migration path)
+              buffer = Buffer.from(data.buffer, 'base64');
+            } else {
+              deleteIds.push(item.id);
+              continue;
+            }
+
             const FormData = require('form-data');
             const formData = new FormData();
-            const buffer = Buffer.from(data.buffer, 'base64');
             formData.append('file', buffer, {
               filename: `screenshot_${Date.now()}.jpg`,
               contentType: 'image/jpeg',
             });
             formData.append('time_entry_id', data.time_entry_id);
             formData.append('captured_at', data.captured_at);
+            if (data.app_name) formData.append('app_name', data.app_name);
+            if (data.window_title) formData.append('window_title', data.window_title);
 
             await apiClient.uploadScreenshot(formData);
             deleteIds.push(item.id);
+            // Track file for deletion after successful upload
+            if (data.file_path) {
+              screenshotFilesToDelete.push(data.file_path);
+            }
           }
         } catch (e) {
           // Update attempt count
@@ -147,6 +232,9 @@ class OfflineQueue {
           // Remove items that have failed too many times
           if (item.attempts >= 4) { // Will be 5 after the update above
             deleteIds.push(item.id);
+            if (data.file_path && fs.existsSync(data.file_path)) {
+              screenshotFilesToDelete.push(data.file_path);
+            }
           }
         }
       }
@@ -165,10 +253,21 @@ class OfflineQueue {
         }
       }
 
-      // Delete successfully processed items
+      // Delete successfully processed items from SQLite
       if (deleteIds.length > 0) {
         const placeholders = deleteIds.map(() => '?').join(',');
         this.db.prepare(`DELETE FROM queue WHERE id IN (${placeholders})`).run(...deleteIds);
+      }
+
+      // Delete screenshot files after successful upload
+      for (const filePath of screenshotFilesToDelete) {
+        try {
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        } catch (e) {
+          console.warn(`[OfflineQueue] Failed to delete screenshot file: ${e.message}`);
+        }
       }
 
       this.retryDelay = 5000; // Reset on success
@@ -194,6 +293,47 @@ class OfflineQueue {
       return this._stmtCount.get().count;
     } catch {
       return 0;
+    }
+  }
+
+  /**
+   * Clean up orphaned screenshot files that are not referenced in the queue.
+   */
+  cleanupOrphanedFiles() {
+    if (!this.db || !this._screenshotDir) return;
+    try {
+      if (!fs.existsSync(this._screenshotDir)) return;
+
+      // Get all file paths currently referenced in the queue
+      const rows = this.db.prepare(
+        "SELECT data FROM queue WHERE type = 'screenshot'"
+      ).all();
+      const referencedFiles = new Set();
+      for (const row of rows) {
+        try {
+          const data = JSON.parse(row.data);
+          if (data.file_path) {
+            referencedFiles.add(path.basename(data.file_path));
+          }
+        } catch {}
+      }
+
+      // Delete files not referenced in the queue
+      const files = fs.readdirSync(this._screenshotDir);
+      let cleaned = 0;
+      for (const file of files) {
+        if (!referencedFiles.has(file)) {
+          try {
+            fs.unlinkSync(path.join(this._screenshotDir, file));
+            cleaned++;
+          } catch {}
+        }
+      }
+      if (cleaned > 0) {
+        console.log(`[OfflineQueue] Cleaned up ${cleaned} orphaned screenshot file(s)`);
+      }
+    } catch (e) {
+      console.error('[OfflineQueue] Orphan cleanup failed:', e.message);
     }
   }
 

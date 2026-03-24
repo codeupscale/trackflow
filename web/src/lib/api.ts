@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { captureError } from '@/lib/posthog';
 
 const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || 'https://trackflow.codeupscale.com/api/v1',
@@ -25,6 +26,20 @@ api.interceptors.response.use(
   async (error) => {
     // Extract structured error message from response
     const errorMessage = error.response?.data?.message || error.message || 'An error occurred';
+
+    // Capture server errors and network failures to PostHog
+    const status = error.response?.status;
+    if (!status || status >= 500) {
+      captureError(
+        new Error(errorMessage),
+        {
+          type: 'api_error',
+          status: status ?? 'network_error',
+          url: error.config?.url,
+          method: error.config?.method,
+        }
+      );
+    }
 
     // Handle payment required (402) - redirect to billing
     if (error.response?.status === 402) {
