@@ -212,6 +212,7 @@ export default function ReportsPage() {
     data: reportData,
     isLoading,
     isFetching,
+    isError: isReportError,
   } = useQuery<ReportData>({
     queryKey: ['report', reportType, dateFrom, dateTo, userFilter],
     queryFn: async () => {
@@ -293,7 +294,11 @@ export default function ReportsPage() {
   };
 
   if (isEmployee) {
-    return null; // Redirect in progress
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-8 w-8 animate-spin text-slate-500" />
+      </div>
+    );
   }
 
   return (
@@ -457,7 +462,15 @@ export default function ReportsPage() {
             </div>
           </CardHeader>
           <CardContent>
-            {isLoading || isFetching ? (
+            {isReportError ? (
+              <div className="text-center py-12">
+                <BarChart3 className="h-10 w-10 text-red-500/60 mx-auto mb-3" />
+                <p className="text-slate-400 font-medium">Failed to load report</p>
+                <p className="text-sm text-slate-500 mt-1">
+                  Please try again.
+                </p>
+              </div>
+            ) : isLoading || isFetching ? (
               <div className="space-y-3">
                 {Array.from({ length: 6 }).map((_, i) => (
                   <div key={i} className="h-10 bg-slate-800/50 rounded animate-pulse" />

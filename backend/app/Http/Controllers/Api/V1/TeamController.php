@@ -14,8 +14,8 @@ class TeamController extends Controller
     {
         $teams = $request->user()->organization->teams()
             ->with(['manager', 'members'])
-            ->get();
-        return response()->json(['teams' => $teams]);
+            ->paginate(50);
+        return response()->json($teams);
     }
 
     public function store(Request $request): JsonResponse

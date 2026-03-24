@@ -15,9 +15,9 @@ class UserController extends Controller
 
         $users = User::with('teams')
             ->where('organization_id', $request->user()->organization_id)
-            ->get();
+            ->paginate(50);
 
-        return response()->json(['users' => $users]);
+        return response()->json($users);
     }
 
     public function show(Request $request, string $id): JsonResponse

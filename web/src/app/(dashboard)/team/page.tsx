@@ -235,7 +235,11 @@ export default function TeamPage() {
   };
 
   if (user?.role === 'employee') {
-    return null; // Redirect in progress
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-8 w-8 animate-spin text-slate-500" />
+      </div>
+    );
   }
 
   const activeMembers = members?.filter((m) => m.is_active).length || 0;

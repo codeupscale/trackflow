@@ -15,8 +15,8 @@ class TaskController extends Controller
         if ($request->has('project_id')) {
             $query->where('project_id', $request->project_id);
         }
-        $tasks = $query->where('is_archived', false)->get();
-        return response()->json(['tasks' => $tasks]);
+        $tasks = $query->where('is_archived', false)->paginate(50);
+        return response()->json($tasks);
     }
 
     public function store(Request $request): JsonResponse

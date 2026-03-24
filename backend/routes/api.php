@@ -94,7 +94,7 @@ Route::prefix('v1')->group(function () {
 
         // Agent
         Route::get('agent/config', [\App\Http\Controllers\Api\V1\AgentController::class, 'config']);
-        Route::post('agent/logs', [\App\Http\Controllers\Api\V1\AgentController::class, 'bulkLogs']);
+        Route::post('agent/logs', [\App\Http\Controllers\Api\V1\AgentController::class, 'bulkLogs'])->middleware('throttle:30,1');
 
         // Screenshots
         Route::get('screenshots/signed-cookies', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'signedCookies']);

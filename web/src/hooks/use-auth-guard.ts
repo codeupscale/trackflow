@@ -15,7 +15,13 @@ export function useAuthGuard() {
       return;
     }
     if (!isAuthenticated) {
-      fetchUser().catch(() => router.push('/login'));
+      fetchUser().catch((err) => {
+        const status = err?.response?.status;
+        if (status === 401 || status === 403) {
+          router.push('/login');
+        }
+        // Network errors: do nothing, user stays on page and can retry
+      });
     }
   }, [isAuthenticated, fetchUser, router]);
 

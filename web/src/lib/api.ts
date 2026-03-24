@@ -8,6 +8,10 @@ const api = axios.create({
   },
 });
 
+// Mutex for token refresh: when a refresh is in-flight, all subsequent
+// 401 handlers wait on the same promise instead of issuing duplicate refreshes.
+let refreshPromise: Promise<string> | null = null;
+
 api.interceptors.request.use((config) => {
   const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
   if (token) {
@@ -43,14 +47,27 @@ api.interceptors.response.use(
       if (refreshToken && !error.config._retry) {
         error.config._retry = true;
         try {
-          const res = await axios.post(
-            `${api.defaults.baseURL}/auth/refresh`,
-            {},
-            { headers: { Authorization: `Bearer ${refreshToken}` } }
-          );
-          localStorage.setItem('access_token', res.data.access_token);
-          localStorage.setItem('refresh_token', res.data.refresh_token);
-          error.config.headers.Authorization = `Bearer ${res.data.access_token}`;
+          // If a refresh is already in-flight, wait for it instead of
+          // issuing a second refresh (which would race and likely fail).
+          if (!refreshPromise) {
+            refreshPromise = axios
+              .post(
+                `${api.defaults.baseURL}/auth/refresh`,
+                {},
+                { headers: { Authorization: `Bearer ${refreshToken}` } }
+              )
+              .then((res) => {
+                localStorage.setItem('access_token', res.data.access_token);
+                localStorage.setItem('refresh_token', res.data.refresh_token);
+                return res.data.access_token as string;
+              })
+              .finally(() => {
+                refreshPromise = null;
+              });
+          }
+
+          const newAccessToken = await refreshPromise;
+          error.config.headers.Authorization = `Bearer ${newAccessToken}`;
           return api(error.config);
         } catch {
           localStorage.removeItem('access_token');

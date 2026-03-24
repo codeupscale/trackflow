@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Settings,
@@ -130,8 +130,9 @@ export default function SettingsPage() {
   const [userTimezone, setUserTimezone] = useState(user?.timezone ?? 'UTC');
   const { fetchUser } = useAuthStore();
 
-  // Sync form state from fetched data without using setState in useEffect
-  if (data && !initialized) {
+  // Sync form state from fetched data
+  useEffect(() => {
+    if (!data || initialized) return;
     setOrgName(defaults.orgName);
     setTimezone(defaults.timezone);
     setUserTimezone(user?.timezone ?? defaults.timezone);
@@ -148,7 +149,7 @@ export default function SettingsPage() {
     setCaptureMultiMonitor(defaults.captureMultiMonitor);
     setAllowManualTime(defaults.allowManualTime);
     setInitialized(true);
-  }
+  }, [data, defaults, initialized, user?.timezone]);
 
   const updateMutation = useMutation({
     mutationFn: async (settings: Record<string, unknown>) => {

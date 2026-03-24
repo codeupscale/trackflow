@@ -36,12 +36,28 @@ export function DateFilter({
   useEffect(() => {
     if (!open) return;
     function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      // Native date pickers render their popup outside the component tree,
+      // so clicks on them would incorrectly trigger close. Skip the
+      // outside-click check when the target is a date input.
+      const target = e.target as HTMLElement;
+      if (target instanceof HTMLInputElement && target.type === 'date') return;
+      if (ref.current && !ref.current.contains(target)) {
         setOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
   }, [open]);
 
   return (
