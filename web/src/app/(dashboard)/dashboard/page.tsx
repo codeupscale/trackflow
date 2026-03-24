@@ -10,6 +10,7 @@ import {
   Monitor,
   TrendingUp,
   Timer,
+  ArrowRight,
 } from 'lucide-react';
 
 import {
@@ -30,6 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import Link from 'next/link';
 import api from '@/lib/api';
 import { formatDuration } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
@@ -504,38 +506,51 @@ export default function DashboardPage() {
               </p>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="border-slate-800 hover:bg-transparent">
-                  <TableHead className="text-slate-400">Date / Time</TableHead>
-                  <TableHead className="text-slate-400">Project</TableHead>
-                  <TableHead className="text-slate-400">Task</TableHead>
-                  <TableHead className="text-slate-400 text-right">Duration</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {timeEntries.map((entry) => (
-                  <TableRow key={entry.id} className="border-slate-800">
-                    <TableCell className="text-slate-300 font-mono text-sm">
-                      {format(new Date(entry.started_at), 'MMM d, yyyy HH:mm')}
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-slate-300">
-                        {entry.project?.name ?? '—'}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-slate-400">
-                        {entry.task?.title ?? '—'}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-sm text-slate-300">
-                      {formatDuration(entry.duration_seconds)}
-                    </TableCell>
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-slate-800 hover:bg-transparent">
+                    <TableHead className="text-slate-400">Date / Time</TableHead>
+                    <TableHead className="text-slate-400">Project</TableHead>
+                    <TableHead className="text-slate-400">Task</TableHead>
+                    <TableHead className="text-slate-400 text-right">Duration</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {timeEntries.slice(0, 10).map((entry) => (
+                    <TableRow key={entry.id} className="border-slate-800">
+                      <TableCell className="text-slate-300 font-mono text-sm">
+                        {format(new Date(entry.started_at), 'MMM d, yyyy HH:mm')}
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm text-slate-300">
+                          {entry.project?.name ?? '—'}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm text-slate-400">
+                          {entry.task?.title ?? '—'}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-sm text-slate-300">
+                        {formatDuration(entry.duration_seconds)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {timeEntries.length > 10 && (
+                <div className="mt-4 pt-4 border-t border-slate-800 text-center">
+                  <Link
+                    href="/time"
+                    className="inline-flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300 transition-colors"
+                  >
+                    View all {timeEntries.length} entries
+                    <ArrowRight className="h-4 w-4" />
+                  </Link>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>

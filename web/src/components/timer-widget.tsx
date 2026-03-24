@@ -93,7 +93,7 @@ export function TimerWidget() {
   };
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-3 [&_input[aria-hidden]]:!hidden">
       {/* Project selector */}
       <Select
         value={displayProjectId ?? ''}
