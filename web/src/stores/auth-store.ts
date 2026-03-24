@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import api from '@/lib/api';
+import { identifyUser, resetUser } from '@/lib/posthog';
 
 interface User {
   id: string;
@@ -57,6 +58,7 @@ export const useAuthStore = create<AuthState>()(
             localStorage.setItem('refresh_token', res.data.refresh_token);
           }
           set({ user: res.data.user, isAuthenticated: true, isLoading: false });
+          identifyUser(res.data.user);
         } catch (error) {
           set({ isLoading: false });
           throw error;
@@ -72,6 +74,7 @@ export const useAuthStore = create<AuthState>()(
             localStorage.setItem('refresh_token', res.data.refresh_token);
           }
           set({ user: res.data.user, isAuthenticated: true, isLoading: false });
+          identifyUser(res.data.user);
         } catch (error) {
           set({ isLoading: false });
           throw error;
@@ -84,6 +87,7 @@ export const useAuthStore = create<AuthState>()(
         } catch {
           // Ignore logout API errors
         }
+        resetUser();
         if (typeof window !== 'undefined') {
           localStorage.removeItem('access_token');
           localStorage.removeItem('refresh_token');
@@ -95,6 +99,7 @@ export const useAuthStore = create<AuthState>()(
         try {
           const res = await api.get('/auth/me');
           set({ user: res.data.user, isAuthenticated: true });
+          identifyUser(res.data.user);
         } catch {
           set({ user: null, isAuthenticated: false });
         }

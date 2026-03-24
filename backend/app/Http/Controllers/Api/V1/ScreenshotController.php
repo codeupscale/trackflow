@@ -26,12 +26,26 @@ class ScreenshotController extends Controller
             'file' => 'required|image|mimes:jpeg,jpg,png|max:5120',
             'time_entry_id' => 'required|uuid',
             'captured_at' => 'required|date',
+            'activity_score' => 'sometimes|integer|min:0|max:100',
+            'app_name' => 'sometimes|string|max:255',
+            'window_title' => 'sometimes|string|max:500',
         ]);
 
         $user = $request->user();
 
         // Validate that time_entry_id belongs to the authenticated user
-        $user->timeEntries()->where('id', $request->time_entry_id)->firstOrFail();
+        $timeEntry = $user->timeEntries()->where('id', $request->time_entry_id)->firstOrFail();
+
+        // Validate the time entry is currently active (running or ended less than 5 minutes ago)
+        $isActive = $timeEntry->ended_at === null
+            || $timeEntry->ended_at->greaterThan(now()->subMinutes(5));
+
+        if (!$isActive) {
+            return response()->json([
+                'message' => 'Screenshots can only be uploaded to active time entries.',
+                'errors' => ['time_entry_id' => ['The time entry is no longer active.']],
+            ], 422);
+        }
 
         $org = $user->organization;
         $date = now()->format('Y-m-d');
@@ -58,6 +72,9 @@ class ScreenshotController extends Controller
             'time_entry_id' => $request->time_entry_id,
             's3_key' => $storageKey,
             'captured_at' => $request->captured_at,
+            'activity_score_at_capture' => $request->input('activity_score'),
+            'app_name' => $request->input('app_name'),
+            'window_title' => $request->input('window_title'),
             'is_blurred' => $org->getSetting('blur_screenshots', false),
             'width' => $width,
             'height' => $height,
@@ -104,19 +121,29 @@ class ScreenshotController extends Controller
             $request->validate(['time_type' => 'string|in:tracked,manual,idle']);
             $query->whereHas('timeEntry', fn ($q) => $q->where('type', $request->time_type));
         }
+        if ($request->has('project_id')) {
+            $query->whereHas('timeEntry', fn ($q) => $q->where('project_id', $request->project_id));
+        }
 
         $screenshots = $query->orderBy('captured_at', 'desc')->paginate(
             min((int) $request->input('per_page', 50), 100)
         );
 
-        // Add URLs for viewing
+        // Add URLs for viewing — use processed variants when available, fall back to original
         $screenshots->getCollection()->transform(function ($screenshot) {
-            $screenshot->url = $this->getScreenshotUrl($screenshot->s3_key);
-            $screenshot->thumbnail_url = $screenshot->url; // Same for now
+            $screenshot->thumbnail_url = $this->getScreenshotUrl(
+                $screenshot->thumbnail_key ?? $screenshot->s3_key
+            );
+            $screenshot->url = $this->getScreenshotUrl(
+                $screenshot->display_key ?? $screenshot->s3_key
+            );
+            $screenshot->original_url = $this->getScreenshotUrl($screenshot->s3_key);
             $screenshot->user_name = $screenshot->user?->name ?? 'Unknown';
             // Get activity score from the time entry
             $screenshot->activity_score = $screenshot->timeEntry?->activity_score ?? 0;
             $screenshot->project_name = $screenshot->timeEntry?->project?->name ?? null;
+            $screenshot->app_name = $screenshot->app_name;
+            $screenshot->window_title = $screenshot->window_title;
             return $screenshot;
         });
 
@@ -131,7 +158,14 @@ class ScreenshotController extends Controller
         $this->authorize('delete', $screenshot);
 
         $disk = $this->disk();
-        Storage::disk($disk)->delete("screenshots/{$screenshot->s3_key}");
+        $filesToDelete = ["screenshots/{$screenshot->s3_key}"];
+        if ($screenshot->thumbnail_key) {
+            $filesToDelete[] = "screenshots/{$screenshot->thumbnail_key}";
+        }
+        if ($screenshot->display_key) {
+            $filesToDelete[] = "screenshots/{$screenshot->display_key}";
+        }
+        Storage::disk($disk)->delete($filesToDelete);
 
         $screenshot->delete();
         return response()->json(['message' => 'Screenshot deleted.']);
@@ -154,7 +188,7 @@ class ScreenshotController extends Controller
             try {
                 return Storage::disk('s3')->temporaryUrl(
                     "screenshots/{$storageKey}",
-                    now()->addMinutes(15)
+                    now()->addHours(1)
                 );
             } catch (\Exception $e) {
                 return '';
