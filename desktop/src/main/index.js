@@ -15,17 +15,34 @@ const WEB_DASHBOARD_URL = process.env.TRACKFLOW_WEB_URL || 'https://trackflow.co
 // ── File-based logger for packaged macOS builds ───────────────────
 // macOS .app bundles suppress stdout/stderr. This writes to a log
 // file in userData so we can diagnose issues in production.
-const LOG_FILE = path.join(app.getPath('userData'), 'trackflow.log');
+// NOTE: LOG_FILE is lazy-initialized because app.getPath('userData')
+// may not be available before app.whenReady() on some platforms.
+let _logFile = null;
+function getLogFile() {
+  if (!_logFile) {
+    try {
+      _logFile = path.join(app.getPath('userData'), 'trackflow.log');
+    } catch {
+      _logFile = '/tmp/trackflow.log'; // fallback
+    }
+  }
+  return _logFile;
+}
+// Write a startup marker IMMEDIATELY to verify logging works
+try { fs.appendFileSync('/tmp/trackflow-boot.log', `[${new Date().toISOString()}] TrackFlow main process starting\n`); } catch {}
+
 function logToFile(level, ...args) {
   const ts = new Date().toISOString();
   const msg = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
   const line = `[${ts}] [${level}] ${msg}\n`;
-  try { fs.appendFileSync(LOG_FILE, line); } catch {}
+  try { fs.appendFileSync(getLogFile(), line); } catch {}
+  // Also write to /tmp as a guaranteed fallback
+  try { fs.appendFileSync('/tmp/trackflow-boot.log', line); } catch {}
   // Also write to stdout for terminal/dev mode
   if (level === 'error') {
-    process.stderr.write(line);
+    try { process.stderr.write(line); } catch {}
   } else {
-    process.stdout.write(line);
+    try { process.stdout.write(line); } catch {}
   }
 }
 // Override console for main process so ALL logs go to both file and stdout
@@ -35,6 +52,7 @@ const _origWarn = console.warn;
 console.log = (...args) => { _origLog(...args); logToFile('info', ...args); };
 console.error = (...args) => { _origError(...args); logToFile('error', ...args); };
 console.warn = (...args) => { _origWarn(...args); logToFile('warn', ...args); };
+console.log('Logger initialized — writing to', getLogFile());
 
 // Default configuration values — single source of truth
 const DEFAULT_CONFIG = {
@@ -91,7 +109,9 @@ process.on('unhandledRejection', (reason) => {
 // ── Single Instance Lock ─────────────────────────────────────────────────────
 
 const gotTheLock = app.requestSingleInstanceLock();
+console.log(`Single instance lock: ${gotTheLock ? 'acquired' : 'FAILED (another instance running)'}`);
 if (!gotTheLock) {
+  console.log('Exiting — another instance holds the lock');
   app.quit();
 }
 
@@ -100,7 +120,9 @@ app.on('second-instance', () => {
 });
 
 app.on('ready', async () => {
+  console.log('app.ready fired — initializing...');
   await initializeApp();
+  console.log('initializeApp() complete');
 });
 
 app.on('window-all-closed', () => {
