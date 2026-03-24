@@ -166,7 +166,9 @@ class ApiClient {
 
   async getProjects() {
     const res = await this.client.get('/projects');
-    return res.data.projects;
+    // Backend returns paginated response: { data: [...], current_page, ... }
+    // or legacy format: { projects: [...] }
+    return res.data.data || res.data.projects || res.data || [];
   }
 
   async reportIdleTime(data) {
