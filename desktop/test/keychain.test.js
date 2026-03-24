@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { safeStorage, app } = require('electron');
+const { app } = require('electron');
 
 // Ensure test directory exists
 const testDir = app.getPath('userData');
@@ -8,18 +8,16 @@ if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
 
 const { getToken, setToken, getRefreshToken, setRefreshToken, deleteToken } = require('../src/main/keychain');
 
-describe('Keychain (safeStorage)', () => {
+describe('Keychain (crypto-based)', () => {
   const tokensPath = path.join(testDir, 'tokens.enc');
 
-  beforeEach(() => {
-    jest.clearAllMocks();
-    // Re-enable encryption for each test
-    safeStorage.isEncryptionAvailable.mockReturnValue(true);
-    try { fs.unlinkSync(tokensPath); } catch {}
+  beforeEach(async () => {
+    // Clean up file AND in-memory state
+    await deleteToken();
   });
 
-  afterEach(() => {
-    try { fs.unlinkSync(tokensPath); } catch {}
+  afterEach(async () => {
+    await deleteToken();
   });
 
   test('setToken + getToken round-trip', async () => {
@@ -57,12 +55,21 @@ describe('Keychain (safeStorage)', () => {
     expect(await getRefreshToken()).toBe('refresh-456');
   });
 
-  test('falls back to memory when encryption unavailable', async () => {
-    safeStorage.isEncryptionAvailable.mockReturnValue(false);
-    await setToken('memory-token');
-    // File should NOT be created
-    expect(fs.existsSync(tokensPath)).toBe(false);
-    // safeStorage.encryptString should NOT be called
-    expect(safeStorage.encryptString).not.toHaveBeenCalled();
+  test('encrypted file is not plaintext readable', async () => {
+    await setToken('secret-token-value');
+    const raw = fs.readFileSync(tokensPath);
+    // The file should NOT contain the plaintext token
+    expect(raw.toString('utf8')).not.toContain('secret-token-value');
+    // But we can still decrypt it
+    expect(await getToken()).toBe('secret-token-value');
+  });
+
+  test('corrupted file returns null gracefully', async () => {
+    await setToken('good-token');
+    // Corrupt the file
+    fs.writeFileSync(tokensPath, 'garbage data');
+    // Should not throw, returns null
+    const token = await getToken();
+    expect(token).toBeNull();
   });
 });

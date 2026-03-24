@@ -1,4 +1,19 @@
 const { desktopCapturer, Notification, screen, systemPreferences } = require('electron');
+
+// Mock dialog and shell (used for permission prompts)
+jest.mock('electron', () => {
+  const actual = jest.requireActual('electron');
+  return {
+    ...actual,
+    dialog: {
+      showMessageBox: jest.fn().mockResolvedValue({ response: 1 }),
+    },
+    shell: {
+      ...actual.shell,
+      openExternal: jest.fn().mockResolvedValue(),
+    },
+  };
+});
 const ScreenshotService = require('../src/main/screenshot-service');
 
 // Mock sharp
@@ -22,12 +37,13 @@ describe('ScreenshotService', () => {
   let mockConfig;
   let mockGetIsAppVisible;
 
-  // Create a mock NativeImage
-  function makeMockImage(empty = false) {
+  // Create a mock NativeImage with realistic size
+  function makeMockImage(empty = false, width = 1920, height = 1080) {
     return {
       isEmpty: jest.fn(() => empty),
       toJPEG: jest.fn((quality) => Buffer.from(`jpeg-q${quality}`)),
       toPNG: jest.fn(() => Buffer.from('png-data')),
+      getSize: jest.fn(() => empty ? { width: 0, height: 0 } : { width, height }),
     };
   }
 
@@ -140,7 +156,7 @@ describe('ScreenshotService', () => {
 
   // ── macOS Permission ──
 
-  test('capture fails when macOS screen permission denied', async () => {
+  test('capture always attempts even when macOS reports denied (permission API is unreliable)', async () => {
     const origPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'darwin' });
 
@@ -148,21 +164,23 @@ describe('ScreenshotService', () => {
     service.currentEntryId = 'entry-1';
     await service.capture();
 
-    expect(desktopCapturer.getSources).not.toHaveBeenCalled();
-    expect(service._consecutiveFailures).toBe(1);
+    // Should still attempt capture — permission check is informational only
+    expect(desktopCapturer.getSources).toHaveBeenCalled();
 
     Object.defineProperty(process, 'platform', { value: origPlatform });
   });
 
-  test('capture proceeds when macOS screen permission not-determined', async () => {
+  test('shows permission dialog when sources are empty on macOS', async () => {
     const origPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'darwin' });
+    const { dialog } = require('electron');
 
-    systemPreferences.getMediaAccessStatus.mockReturnValue('not-determined');
+    desktopCapturer.getSources.mockResolvedValue([]);
     service.currentEntryId = 'entry-1';
     await service.capture();
 
-    expect(desktopCapturer.getSources).toHaveBeenCalled();
+    expect(service._consecutiveFailures).toBe(1);
+    expect(dialog.showMessageBox).toHaveBeenCalled();
 
     Object.defineProperty(process, 'platform', { value: origPlatform });
   });

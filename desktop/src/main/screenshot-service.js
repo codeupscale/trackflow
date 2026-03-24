@@ -3,12 +3,22 @@
 // - Multi-monitor: captures all screens and composites them side-by-side
 // - Cross-platform: macOS (permission check), Windows, Linux
 // - Blur support via sharp
-// - Stops when timer stops (no orphan screenshots)
+// - Stops cleanly when timer stops (no orphan screenshots)
+//
+// KEY DESIGN DECISIONS:
+//   1. thumbnailSize is capped at 1920x1080 to prevent Electron's internal
+//      capture timeout on Retina/HiDPI displays. Requesting native resolution
+//      (e.g., 2880x1800) causes desktopCapturer to return empty thumbnails
+//      on macOS — a known Electron bug. 1920x1080 is sufficient for
+//      monitoring purposes and matches what Hubstaff captures.
+//
+//   2. All failure paths log with console.error AND increment a failure counter.
+//      After 5 consecutive failures, capture pauses for 5 minutes to avoid CPU waste.
 
-const { desktopCapturer, Notification, screen, systemPreferences, BrowserWindow } = require('electron');
+const { desktopCapturer, Notification, screen, systemPreferences, shell, dialog, BrowserWindow } = require('electron');
 const FormData = require('form-data');
 
-// Lazy-load sharp — may not be available on all platforms
+// Lazy-load sharp
 let _sharp = null;
 let _sharpChecked = false;
 function getSharp() {
@@ -18,13 +28,19 @@ function getSharp() {
     _sharp = require('sharp');
   } catch {
     _sharp = null;
-    console.warn('sharp not available — multi-monitor composite and blur disabled');
+    console.warn('[SS] sharp not available — multi-monitor composite and blur disabled');
   }
   return _sharp;
 }
 
 const MAX_CONSECUTIVE_FAILURES = 5;
 const FAILURE_PAUSE_MS = 5 * 60 * 1000;
+
+// Safe capture size — do NOT request native Retina resolution.
+// Electron's desktopCapturer returns empty thumbnails when the
+// requested size exceeds internal GPU buffer limits (~2048px on some GPUs).
+const CAPTURE_WIDTH = 1920;
+const CAPTURE_HEIGHT = 1080;
 
 class ScreenshotService {
   constructor(apiClient, config, offlineQueue, getIsAppVisible = null) {
@@ -40,17 +56,21 @@ class ScreenshotService {
     this._pauseTimeout = null;
     this._intervalMs = 0;
     this._lastNotification = null;
+    this._permissionDialogShown = false;
   }
 
   start(entryId, options = {}) {
     this.stop();
     this.currentEntryId = entryId;
     this._consecutiveFailures = 0;
+    this._permissionDialogShown = false;
     const immediateCapture = options.immediateCapture === true;
     this._intervalMs = (this.config.screenshot_interval || 5) * 60 * 1000;
     const firstDelayMin = this.config.screenshot_first_capture_delay_min != null
       ? this.config.screenshot_first_capture_delay_min : 1;
     const firstDelayMs = firstDelayMin * 60 * 1000;
+
+    console.log(`[SS] Started — entry=${entryId}, interval=${this.config.screenshot_interval}min, firstDelay=${firstDelayMin}min, immediate=${immediateCapture}`);
 
     if (immediateCapture || firstDelayMs === 0) {
       setImmediate(() => {
@@ -63,6 +83,7 @@ class ScreenshotService {
       this.initialTimeout = setTimeout(() => {
         this.initialTimeout = null;
         if (!this.currentEntryId) return;
+        console.log('[SS] First capture delay elapsed, taking screenshot');
         this.capture().finally(() => {
           if (this.currentEntryId) this._startInterval();
         });
@@ -73,6 +94,7 @@ class ScreenshotService {
   _startInterval() {
     if (this.interval) clearInterval(this.interval);
     this.interval = setInterval(() => this.capture(), this._intervalMs);
+    console.log(`[SS] Interval started — every ${this._intervalMs / 1000}s`);
   }
 
   stop() {
@@ -88,55 +110,63 @@ class ScreenshotService {
       clearTimeout(this._pauseTimeout);
       this._pauseTimeout = null;
     }
+    if (this.currentEntryId) {
+      console.log(`[SS] Stopped — entry=${this.currentEntryId}`);
+    }
     this.currentEntryId = null;
     this._capturing = false;
     this._closeNotification();
   }
 
   // ── macOS Screen Recording Permission ─────────────────────────────
+  //
+  // IMPORTANT: systemPreferences.getMediaAccessStatus('screen') is UNRELIABLE.
+  //   1. It caches the status at process startup — toggling permission ON
+  //      in System Settings still returns 'denied' until the app is restarted.
+  //   2. For ad-hoc signed apps (no Apple Developer cert), it may ALWAYS
+  //      return 'denied' even when permission is granted.
+  //
+  // Solution: Don't block on the permission check. Always attempt the capture.
+  // If desktopCapturer.getSources() returns empty thumbnails, THEN we know
+  // permission is truly not granted and we show the dialog.
 
-  _hasScreenPermission() {
-    if (process.platform !== 'darwin') return true;
+  _checkScreenPermissionStatus() {
+    if (process.platform !== 'darwin') return 'granted';
     try {
-      const status = systemPreferences.getMediaAccessStatus('screen');
-      // 'granted' = full access, 'not-determined' = never prompted yet (still can capture)
-      // Only 'denied' or 'restricted' should block capture
-      return status !== 'denied' && status !== 'restricted';
+      return systemPreferences.getMediaAccessStatus('screen');
     } catch {
-      return true;
+      return 'unknown';
     }
   }
 
-  // ── Capture Size ──────────────────────────────────────────────────
+  _showPermissionDialog() {
+    if (this._permissionDialogShown) return;
+    this._permissionDialogShown = true;
 
-  _getCaptureSizeForDisplay(display) {
-    const maxWidth = 3840;
-    const maxHeight = 2160;
-    const physicalWidth = Math.round(display.size.width * display.scaleFactor);
-    const physicalHeight = Math.round(display.size.height * display.scaleFactor);
-    return {
-      width: Math.min(physicalWidth, maxWidth),
-      height: Math.min(physicalHeight, maxHeight),
-    };
+    console.log('[SS] Showing screen recording permission dialog');
+    dialog.showMessageBox({
+      type: 'warning',
+      title: 'Screen Recording Permission Required',
+      message: 'TrackFlow needs screen recording access to capture screenshots while tracking time.',
+      detail: 'Steps:\n1. Click "Open Settings" below\n2. Toggle TrackFlow ON\n3. When macOS asks, click "Quit & Reopen"\n\nIf TrackFlow is already toggled ON, quit and reopen the app manually.',
+      buttons: ['Open Settings', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+    }).then(({ response }) => {
+      if (response === 0) {
+        shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+      }
+    }).catch(() => {});
   }
 
-  _getPrimaryDisplaySize() {
-    try {
-      const primary = screen.getPrimaryDisplay();
-      return this._getCaptureSizeForDisplay(primary);
-    } catch {
-      return { width: 1920, height: 1080 };
-    }
-  }
-
-  // ── Core Capture — uses desktopCapturer correctly ─────────────────
+  // ── Core Capture ──────────────────────────────────────────────────
 
   async capture() {
     if (!this.currentEntryId) return;
     if (this._capturing) return;
     this._capturing = true;
 
-    // Skip if capture_only_when_visible is enabled and popup is not visible
+    // Skip if capture_only_when_visible and popup not visible
     if (this.config.capture_only_when_visible === true) {
       if (this.getIsAppVisible && !this.getIsAppVisible()) {
         this._capturing = false;
@@ -144,87 +174,197 @@ class ScreenshotService {
       }
     }
 
-    // macOS: Check screen recording permission
-    if (!this._hasScreenPermission()) {
-      this._capturing = false;
-      this._handleCaptureFailure('Screen recording permission denied on macOS');
-      return;
+    // Log macOS permission status (informational only — we always attempt capture)
+    const permStatus = this._checkScreenPermissionStatus();
+    if (process.platform === 'darwin') {
+      console.log(`[SS] macOS screen permission status: ${permStatus} (attempting capture regardless)`);
     }
 
     try {
-      const captureSize = this._getPrimaryDisplaySize();
+      // Use fixed 1920x1080 — NOT native resolution.
+      const thumbnailSize = { width: CAPTURE_WIDTH, height: CAPTURE_HEIGHT };
 
-      // desktopCapturer.getSources works from main process in Electron 28
-      // but requires proper thumbnail size matching the display
-      const sources = await desktopCapturer.getSources({
-        types: ['screen'],
-        thumbnailSize: captureSize,
-      });
+      console.log(`[SS] Requesting sources with thumbnailSize=${thumbnailSize.width}x${thumbnailSize.height}`);
+
+      // desktopCapturer.getSources() can HANG on macOS if permission was never
+      // prompted. Wrap with timeout to prevent blocking forever.
+      const sources = await Promise.race([
+        desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize,
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('desktopCapturer.getSources() timed out after 10s — screen recording permission likely not granted')), 10000)
+        ),
+      ]);
+
+      console.log(`[SS] Got ${sources.length} source(s): ${sources.map(s => `"${s.name}" (${s.thumbnail?.getSize()?.width}x${s.thumbnail?.getSize()?.height})`).join(', ')}`);
 
       if (!sources || sources.length === 0) {
         this._capturing = false;
-        this._handleCaptureFailure('No screen sources available — check screen recording permission');
+        this._handleCaptureFailure('No screen sources returned — screen recording permission may not be granted');
+        this._showPermissionDialog();
         return;
       }
 
-      const multiMonitor = this.config.capture_multi_monitor === true && sources.length > 1;
       let buffer;
 
-      if (multiMonitor) {
+      if (sources.length > 1 && this.config.capture_multi_monitor === true) {
+        // Multi-monitor: composite ALL screens side-by-side (like Hubstaff)
+        console.log(`[SS] Multi-monitor mode: compositing ${sources.length} screens`);
         buffer = await this._captureMultiMonitor(sources);
+      } else if (sources.length > 1) {
+        // Multiple screens but multi-monitor disabled — capture the ACTIVE screen
+        // (where the cursor is), not always the first/primary
+        console.log(`[SS] Single-monitor mode with ${sources.length} screens — finding active screen`);
+        buffer = this._captureActiveScreen(sources);
       } else {
+        // Single screen — just capture it
         buffer = this._captureSingleMonitor(sources);
       }
 
       if (!buffer || buffer.length === 0) {
         this._capturing = false;
-        this._handleCaptureFailure('Capture returned empty buffer — screen may be locked or permission missing');
+        this._handleCaptureFailure('Capture returned empty buffer. Possible causes: screen locked, permission not yet granted, or GPU limitation.');
+        // Empty buffer on macOS usually means screen recording permission not granted
+        if (process.platform === 'darwin') {
+          this._showPermissionDialog();
+        }
         return;
       }
+
+      console.log(`[SS] Captured ${buffer.length} bytes`);
 
       // Blur if configured
       if (this.config.blur_screenshots) {
         buffer = await this._applyBlur(buffer);
       }
 
-      // Re-check entryId in case timer was stopped during capture
+      // Re-check entryId in case timer was stopped during async capture
       if (this.currentEntryId) {
         await this.upload(buffer);
         this._showNotification();
         this._consecutiveFailures = 0;
       }
     } catch (e) {
-      this._handleCaptureFailure(e.message);
+      this._handleCaptureFailure(`Exception: ${e.message}`);
     } finally {
       this._capturing = false;
     }
   }
 
+  // ── Active Screen Detection ──────────────────────────────────────
+  //
+  // When user has multiple monitors (laptop + LED, dual monitors, etc.),
+  // we need to capture the screen WHERE THE USER IS WORKING, not always
+  // the primary display.
+  //
+  // Strategy: Use cursor position → find which Electron display it's on
+  // → match that display to the correct desktopCapturer source.
+  //
+  // On macOS, source.display_id matches display.id.toString()
+  // On Windows/Linux, source.id contains the display index as ":0:N"
+
+  _captureActiveScreen(sources) {
+    try {
+      // 1. Find which display has the cursor
+      const cursorPoint = screen.getCursorScreenPoint();
+      const activeDisplay = screen.getDisplayNearestPoint(cursorPoint);
+      console.log(`[SS] Cursor at (${cursorPoint.x}, ${cursorPoint.y}) — active display id=${activeDisplay.id} (${activeDisplay.size.width}x${activeDisplay.size.height})`);
+
+      // 2. Try to match the active display to a source
+      let activeSource = null;
+
+      // macOS: source.display_id is a string matching the display ID
+      if (process.platform === 'darwin') {
+        activeSource = sources.find(s => s.display_id === activeDisplay.id.toString());
+        if (activeSource) {
+          console.log(`[SS] Matched source via display_id: "${activeSource.name}"`);
+        }
+      }
+
+      // Windows/Linux: source.id format is "screen:N:0" where N is the display index
+      // Match by comparing index position
+      if (!activeSource) {
+        const allDisplays = screen.getAllDisplays();
+        const displayIndex = allDisplays.findIndex(d => d.id === activeDisplay.id);
+        if (displayIndex >= 0) {
+          // desktopCapturer sources are typically ordered by display index
+          // Try matching by source.id pattern first
+          for (const s of sources) {
+            // Source IDs look like "screen:0:0", "screen:1:0" on Windows
+            // or "screen:XXXXXXXX:0" on macOS
+            const idMatch = s.id.match(/screen:(\d+):/);
+            if (idMatch && parseInt(idMatch[1]) === displayIndex) {
+              activeSource = s;
+              console.log(`[SS] Matched source via display index ${displayIndex}: "${s.name}"`);
+              break;
+            }
+          }
+        }
+
+        // Fallback: if sources are in same order as displays
+        if (!activeSource && displayIndex >= 0 && displayIndex < sources.length) {
+          activeSource = sources[displayIndex];
+          console.log(`[SS] Matched source by position index ${displayIndex}: "${activeSource.name}"`);
+        }
+      }
+
+      // 3. Use matched source, or fall back to first valid source
+      if (activeSource) {
+        const image = activeSource.thumbnail;
+        if (image && !image.isEmpty()) {
+          const size = image.getSize();
+          if (size.width > 0 && size.height > 0) {
+            console.log(`[SS] Capturing active screen "${activeSource.name}" (${size.width}x${size.height})`);
+            return image.toJPEG(80);
+          }
+        }
+      }
+
+      console.warn('[SS] Could not match active display to source — falling back to first valid');
+    } catch (e) {
+      console.warn(`[SS] Active screen detection failed: ${e.message} — falling back`);
+    }
+
+    return this._captureSingleMonitor(sources);
+  }
+
   // ── Single Monitor ────────────────────────────────────────────────
 
   _captureSingleMonitor(sources) {
-    // Pick "Entire Screen" or the first source (index 0 is usually the primary)
-    const source = sources.find(s => s.name === 'Entire Screen') || sources[0];
-    if (!source) return null;
-    const image = source.thumbnail;
-    if (!image || image.isEmpty()) return null;
-    return image.toJPEG(80);
+    // Try to find a valid (non-empty) source
+    for (const source of sources) {
+      const image = source.thumbnail;
+      if (image && !image.isEmpty()) {
+        const size = image.getSize();
+        if (size.width > 0 && size.height > 0) {
+          console.log(`[SS] Using source "${source.name}" (${size.width}x${size.height})`);
+          return image.toJPEG(80);
+        }
+      }
+    }
+    // All sources had empty thumbnails
+    console.error(`[SS] All ${sources.length} source(s) had empty thumbnails`);
+    return null;
   }
 
   // ── Multi-Monitor ─────────────────────────────────────────────────
 
   async _captureMultiMonitor(sources) {
     const sharpLib = getSharp();
-
     if (!sharpLib) {
       return this._captureSingleMonitor(sources);
     }
 
-    // Get all valid thumbnails as PNG buffers
+    // Collect valid thumbnails as PNG buffers
     const pngImages = [];
     for (const s of sources) {
       if (s.thumbnail && !s.thumbnail.isEmpty()) {
-        pngImages.push(s.thumbnail.toPNG());
+        const size = s.thumbnail.getSize();
+        if (size.width > 0 && size.height > 0) {
+          pngImages.push(s.thumbnail.toPNG());
+        }
       }
     }
 
@@ -233,12 +373,7 @@ class ScreenshotService {
       return sharpLib(pngImages[0]).jpeg({ quality: 80 }).toBuffer();
     }
 
-    // Sort by display position (left-to-right) using bounds.x
-    // Since desktopCapturer doesn't reliably map to display IDs,
-    // we sort sources by their index and trust the OS ordering (usually left-to-right).
-    // On macOS, sources are already ordered by display arrangement.
-
-    // Get dimensions
+    // Composite all screens left-to-right
     const metas = [];
     for (const img of pngImages) {
       metas.push(await sharpLib(img).metadata());
@@ -249,8 +384,8 @@ class ScreenshotService {
     const composites = [];
 
     for (let i = 0; i < pngImages.length; i++) {
-      const w = metas[i].width || 1920;
-      const h = metas[i].height || 1080;
+      const w = metas[i].width || CAPTURE_WIDTH;
+      const h = metas[i].height || CAPTURE_HEIGHT;
       maxHeight = Math.max(maxHeight, h);
       composites.push({ input: pngImages[i], left: totalWidth, top: 0 });
       totalWidth += w;
@@ -277,7 +412,7 @@ class ScreenshotService {
     try {
       return await sharpLib(buffer).blur(15).jpeg({ quality: 80 }).toBuffer();
     } catch (e) {
-      console.warn('Blur failed:', e.message);
+      console.warn('[SS] Blur failed:', e.message);
       return buffer;
     }
   }
@@ -286,10 +421,10 @@ class ScreenshotService {
 
   _handleCaptureFailure(reason) {
     this._consecutiveFailures++;
-    console.error(`Screenshot capture failed (${this._consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}):`, reason);
+    console.error(`[SS] FAILED (${this._consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${reason}`);
 
     if (this._consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-      console.warn(`Screenshot capture paused after ${MAX_CONSECUTIVE_FAILURES} failures. Retrying in 5 minutes.`);
+      console.error(`[SS] PAUSED after ${MAX_CONSECUTIVE_FAILURES} consecutive failures. Will retry in 5 minutes.`);
       if (this.interval) {
         clearInterval(this.interval);
         this.interval = null;
@@ -298,7 +433,7 @@ class ScreenshotService {
         this._pauseTimeout = null;
         this._consecutiveFailures = 0;
         if (this.currentEntryId) {
-          console.log('Screenshot capture resumed after pause');
+          console.log('[SS] Resuming after 5-minute pause');
           this._startInterval();
         }
       }, FAILURE_PAUSE_MS);
@@ -327,7 +462,7 @@ class ScreenshotService {
         if (this._lastNotification === ref) this._lastNotification = null;
       }, 3000);
     } catch (e) {
-      console.warn('Could not show screenshot notification:', e.message);
+      console.warn('[SS] Could not show notification:', e.message);
     }
   }
 
@@ -351,18 +486,19 @@ class ScreenshotService {
 
     try {
       await this.apiClient.uploadScreenshot(formData);
+      console.log(`[SS] Uploaded successfully (${Math.round(buffer.length / 1024)}KB)`);
     } catch (e) {
-      console.error('Screenshot upload failed:', e.message);
-      // Queue for offline sync — but only if buffer is small enough
-      // to avoid SQLite bloat (500KB base64 ≈ 375KB raw JPEG)
+      console.error(`[SS] Upload failed: ${e.message}`);
+      // Queue for offline sync if small enough
       if (buffer.length < 375 * 1024) {
         this.offlineQueue.add('screenshot', {
           buffer: buffer.toString('base64'),
           time_entry_id: String(this.currentEntryId),
           captured_at: new Date().toISOString(),
         });
+        console.log('[SS] Queued for offline sync');
       } else {
-        console.warn(`Screenshot too large for offline queue (${Math.round(buffer.length / 1024)}KB), skipping`);
+        console.warn(`[SS] Too large for offline queue (${Math.round(buffer.length / 1024)}KB), skipping`);
       }
     }
   }

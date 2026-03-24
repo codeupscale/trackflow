@@ -1,5 +1,6 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification, screen } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 const ApiClient = require('./api-client');
 const ActivityMonitor = require('./activity-monitor');
@@ -9,6 +10,30 @@ const OfflineQueue = require('./offline-queue');
 const { getToken, setToken, getRefreshToken, setRefreshToken, deleteToken } = require('./keychain');
 
 const WEB_DASHBOARD_URL = process.env.TRACKFLOW_WEB_URL || 'https://trackflow.codeupscale.com';
+
+// ── File-based logger for packaged macOS builds ───────────────────
+// macOS .app bundles suppress stdout/stderr. This writes to a log
+// file in userData so we can diagnose issues in production.
+const LOG_FILE = path.join(app.getPath('userData'), 'trackflow.log');
+function logToFile(level, ...args) {
+  const ts = new Date().toISOString();
+  const msg = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+  const line = `[${ts}] [${level}] ${msg}\n`;
+  try { fs.appendFileSync(LOG_FILE, line); } catch {}
+  // Also write to stdout for terminal/dev mode
+  if (level === 'error') {
+    process.stderr.write(line);
+  } else {
+    process.stdout.write(line);
+  }
+}
+// Override console for main process so ALL logs go to both file and stdout
+const _origLog = console.log;
+const _origError = console.error;
+const _origWarn = console.warn;
+console.log = (...args) => { _origLog(...args); logToFile('info', ...args); };
+console.error = (...args) => { _origError(...args); logToFile('error', ...args); };
+console.warn = (...args) => { _origWarn(...args); logToFile('warn', ...args); };
 
 // Default configuration values — single source of truth
 const DEFAULT_CONFIG = {
@@ -22,7 +47,7 @@ const DEFAULT_CONFIG = {
   screenshot_first_capture_delay_min: 1,
   idle_check_interval_sec: 10,
   capture_only_when_visible: false,
-  capture_multi_monitor: false,
+  capture_multi_monitor: true,
 };
 
 let tray = null;
@@ -642,16 +667,35 @@ function setupIPC() {
 
 // Run after timer has started — tray, sync, screenshot. Keeps startTimer() return fast.
 function afterStartTimer(projectIdForTotal, todayTotalForPopup) {
-  if (!apiClient || !currentEntry) return;
+  if (!apiClient || !currentEntry) {
+    console.error('[afterStartTimer] ABORTED: apiClient or currentEntry is null', { apiClient: !!apiClient, currentEntry: !!currentEntry });
+    return;
+  }
+  console.log(`[afterStartTimer] Running for entry=${currentEntry.id}, project=${projectIdForTotal}`);
   (async () => {
     try {
       todayTotalGlobal = await apiClient.getTodayTotal(null);
     } catch {
       todayTotalGlobal = todayTotalForPopup;
     }
-    activityMonitor.start();
-    screenshotService.start(currentEntry.id);
-    idleDetector?.start();
+    try {
+      activityMonitor.start();
+      console.log('[afterStartTimer] activityMonitor started');
+    } catch (e) {
+      console.error('[afterStartTimer] activityMonitor.start() CRASHED:', e.message);
+    }
+    try {
+      console.log(`[afterStartTimer] Calling screenshotService.start(${currentEntry.id})`);
+      screenshotService.start(currentEntry.id);
+      console.log('[afterStartTimer] screenshotService started');
+    } catch (e) {
+      console.error('[afterStartTimer] screenshotService.start() CRASHED:', e.message, e.stack);
+    }
+    try {
+      idleDetector?.start();
+    } catch (e) {
+      console.error('[afterStartTimer] idleDetector.start() CRASHED:', e.message);
+    }
     startTrayTimer();
     updateTrayIcon(true);
   })();
@@ -1034,7 +1078,41 @@ function checkForUpdates() {
   if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
     return;
   }
-  autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+  try {
+    // For private GitHub repos, electron-updater needs a GH_TOKEN
+    // Set it via environment variable or hardcode for internal distribution
+    if (process.env.GH_TOKEN) {
+      autoUpdater.requestHeaders = { Authorization: `token ${process.env.GH_TOKEN}` };
+    }
+
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+
+    autoUpdater.on('update-available', (info) => {
+      console.log(`[updater] Update available: v${info.version}`);
+    });
+    autoUpdater.on('update-downloaded', (info) => {
+      console.log(`[updater] Update downloaded: v${info.version} — will install on quit`);
+      // Notify user
+      try {
+        const notification = new Notification({
+          title: 'TrackFlow Update Ready',
+          body: `Version ${info.version} will be installed when you quit the app.`,
+          silent: true,
+        });
+        notification.show();
+      } catch {}
+    });
+    autoUpdater.on('error', (err) => {
+      console.warn('[updater] Update check failed:', err.message);
+    });
+
+    autoUpdater.checkForUpdatesAndNotify().catch((e) => {
+      console.warn('[updater] Update check failed:', e.message);
+    });
+  } catch {
+    // autoUpdater not configured — skip silently
+  }
 }
 
 // Auto-start on login — only set if packaged (don't interfere with dev)
