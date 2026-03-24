@@ -322,8 +322,15 @@ export default function TimePage() {
                           {format(new Date(entry.started_at), 'MMM d, yyyy')}
                         </span>
                         <div className="text-xs text-slate-500">
-                          {format(new Date(entry.started_at), 'HH:mm')}
-                          {entry.ended_at && ` - ${format(new Date(entry.ended_at), 'HH:mm')}`}
+                          {(() => {
+                            const start = new Date(entry.started_at);
+                            if (!entry.ended_at) return format(start, 'HH:mm');
+                            const end = new Date(entry.ended_at);
+                            // Ensure chronological order (idle entries can have start > end)
+                            const earlier = start <= end ? start : end;
+                            const later = start <= end ? end : start;
+                            return `${format(earlier, 'HH:mm')} - ${format(later, 'HH:mm')}`;
+                          })()}
                         </div>
                       </TableCell>
                       <TableCell>

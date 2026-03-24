@@ -201,18 +201,13 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             </Sheet>
           </div>
 
-          {/* Center: Timer Widget */}
-          <div className="hidden md:flex items-center">
+          {/* Center: Timer Widget (single instance, responsive via flex order) */}
+          <div className="flex items-center">
             <TimerWidget />
           </div>
 
           {/* Right side */}
           <div className="flex items-center gap-3">
-            {/* Mobile timer */}
-            <div className="md:hidden">
-              <TimerWidget />
-            </div>
-
             <Separator orientation="vertical" className="h-6 bg-slate-800 hidden md:block" />
 
             {/* User Dropdown */}
