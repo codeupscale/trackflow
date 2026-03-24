@@ -340,7 +340,7 @@ export default function DashboardPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm text-slate-400">{stat.label}</p>
-                    <p className="text-2xl font-bold text-white mt-1">
+                    <p className="text-2xl font-bold text-white mt-1 tabular-nums">
                       {isLoading ? (
                         <span className="inline-block h-7 w-16 bg-slate-800 rounded animate-pulse" />
                       ) : (
@@ -449,7 +449,7 @@ export default function DashboardPage() {
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <span className="text-sm font-mono text-slate-300">
+                          <span className="text-sm font-mono text-slate-300 tabular-nums">
                             {formatDuration(member.today_seconds)}
                           </span>
                         </TableCell>
@@ -467,7 +467,7 @@ export default function DashboardPage() {
                                 style={{ width: `${Math.min(member.activity_score, 100)}%` }}
                               />
                             </div>
-                            <span className="text-xs text-slate-400 w-8 text-right">
+                            <span className="text-xs text-slate-400 w-8 text-right tabular-nums">
                               {member.activity_score}%
                             </span>
                           </div>
@@ -528,11 +528,13 @@ export default function DashboardPage() {
                         </span>
                       </TableCell>
                       <TableCell>
-                        <span className="text-sm text-slate-400">
-                          {entry.task?.title ?? '—'}
-                        </span>
+                        {entry.task?.title ? (
+                          <span className="text-sm text-slate-400">{entry.task.title}</span>
+                        ) : (
+                          <span className="text-muted-foreground text-xs">No task</span>
+                        )}
                       </TableCell>
-                      <TableCell className="text-right font-mono text-sm text-slate-300">
+                      <TableCell className="text-right font-mono text-sm text-slate-300 tabular-nums">
                         {formatDuration(entry.duration_seconds)}
                       </TableCell>
                     </TableRow>

@@ -10,6 +10,7 @@ import {
   Monitor,
   ChevronLeft,
   ChevronRight,
+  Info,
 } from 'lucide-react';
 
 import Image from 'next/image';
@@ -35,6 +36,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import api from '@/lib/api';
+import { getActivityColor } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
 
 interface Screenshot {
@@ -117,11 +119,7 @@ export default function ScreenshotsPage() {
     per_page: screenshotsData.per_page!,
   } : undefined);
 
-  const getActivityBadgeClass = (score: number) => {
-    if (score >= 70) return 'bg-green-500/10 text-green-400 border-green-500/20';
-    if (score >= 40) return 'bg-amber-500/10 text-amber-400 border-amber-500/20';
-    return 'bg-red-500/10 text-red-400 border-red-500/20';
-  };
+  const getActivityBadgeClass = (score: number) => getActivityColor(score).badge;
 
   return (
     <div className="space-y-6">
@@ -252,7 +250,7 @@ export default function ScreenshotsPage() {
                   {screenshot.thumbnail_url ? (
                     <Image
                       src={screenshot.thumbnail_url}
-                      alt={`Screenshot by ${screenshot.user_name}`}
+                      alt={`Screenshot from ${screenshot.project_name || 'unknown project'} at ${format(new Date(screenshot.captured_at), 'HH:mm')}, ${screenshot.activity_score}% activity`}
                       className="w-full h-full object-cover"
                       fill
                       sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
@@ -273,7 +271,7 @@ export default function ScreenshotsPage() {
                       <span className="text-xs text-white/80 font-mono">
                         {format(new Date(screenshot.captured_at), 'HH:mm')}
                       </span>
-                      <Badge className={`text-xs ${getActivityBadgeClass(screenshot.activity_score)}`}>
+                      <Badge className={`text-xs tabular-nums ${getActivityBadgeClass(screenshot.activity_score)}`}>
                         {screenshot.activity_score}%
                       </Badge>
                     </div>
@@ -346,7 +344,7 @@ export default function ScreenshotsPage() {
             <DialogDescription>
               <span className="flex items-center gap-2">
                 Activity score:{' '}
-                <Badge className={`text-xs ${getActivityBadgeClass(selectedScreenshot?.activity_score ?? 0)}`}>
+                <Badge className={`text-xs tabular-nums ${getActivityBadgeClass(selectedScreenshot?.activity_score ?? 0)}`}>
                   {selectedScreenshot?.activity_score}%
                 </Badge>
                 {selectedScreenshot?.project_name && (
@@ -362,7 +360,7 @@ export default function ScreenshotsPage() {
             {selectedScreenshot?.url ? (
               <Image
                 src={selectedScreenshot.url}
-                alt={`Screenshot by ${selectedScreenshot.user_name}`}
+                alt={`Screenshot from ${selectedScreenshot.project_name || 'unknown project'} at ${format(new Date(selectedScreenshot.captured_at), 'HH:mm')}, ${selectedScreenshot.activity_score}% activity`}
                 className="w-full h-full object-contain"
                 fill
                 sizes="(max-width: 768px) 100vw, 768px"
