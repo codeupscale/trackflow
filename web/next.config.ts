@@ -37,7 +37,7 @@ const nextConfig: NextConfig = {
               "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://us.i.posthog.com https://us-assets.i.posthog.com",
               "style-src 'self' 'unsafe-inline'",
               // Restrict img-src to known domains instead of blanket https:
-              "img-src 'self' data: blob: https://*.codeupscale.com https://*.s3.amazonaws.com https://*.s3.*.amazonaws.com",
+              "img-src 'self' data: blob: https://*.codeupscale.com https://*.s3.amazonaws.com https://*.s3.*.amazonaws.com https://*.amazonaws.com",
               "font-src 'self' data:",
               "connect-src 'self' https://*.codeupscale.com wss://*.codeupscale.com https://us.i.posthog.com https://us-assets.i.posthog.com https://us.posthog.com",
               // Prevent the page from being embedded in iframes (defense in depth with X-Frame-Options)

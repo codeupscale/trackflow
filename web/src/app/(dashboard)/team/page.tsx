@@ -441,7 +441,7 @@ export default function TeamPage() {
                       placeholder="colleague@company.com"
                       value={inviteEmail}
                       onChange={(e) => setInviteEmail(e.target.value)}
-                      className="pl-10 bg-muted border-border text-white placeholder:text-muted-foreground"
+                      className="pl-10 bg-muted border-border text-foreground placeholder:text-muted-foreground"
                       required
                     />
                   </div>
@@ -714,7 +714,7 @@ export default function TeamPage() {
                               src={member.avatar_url || undefined}
                               alt={member.name}
                             />
-                            <AvatarFallback className="bg-muted text-white text-xs">
+                            <AvatarFallback className="bg-muted text-foreground text-xs">
                               {initials}
                             </AvatarFallback>
                           </Avatar>
@@ -929,7 +929,7 @@ export default function TeamPage() {
                       }
                     }}
                     aria-invalid={!!resetPasswordErrors.password}
-                    className={`bg-muted border-border text-white ${resetPasswordErrors.password ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                    className={`bg-muted border-border text-foreground ${resetPasswordErrors.password ? 'border-destructive focus-visible:ring-destructive' : ''}`}
                   />
                   {resetPasswordErrors.password && (
                     <p className="text-xs text-destructive" role="alert">
@@ -952,7 +952,7 @@ export default function TeamPage() {
                       }
                     }}
                     aria-invalid={!!resetPasswordErrors.password_confirmation}
-                    className={`bg-muted border-border text-white ${resetPasswordErrors.password_confirmation ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                    className={`bg-muted border-border text-foreground ${resetPasswordErrors.password_confirmation ? 'border-destructive focus-visible:ring-destructive' : ''}`}
                   />
                   {resetPasswordErrors.password_confirmation && (
                     <p className="text-xs text-destructive" role="alert">
