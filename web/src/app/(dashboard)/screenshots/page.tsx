@@ -114,6 +114,10 @@ export default function ScreenshotsPage() {
       const res = await api.get('/screenshots', { params });
       return res.data;
     },
+    // S3 signed URLs expire after 1 hour. Refetch before they expire.
+    staleTime: 45 * 60 * 1000, // Consider data stale after 45 min
+    refetchInterval: 50 * 60 * 1000, // Auto-refetch every 50 min (before 1hr expiry)
+    refetchOnWindowFocus: true, // Refetch when user returns to tab (gets fresh URLs)
   });
 
   const deleteScreenshot = useMutation({
@@ -178,6 +182,11 @@ export default function ScreenshotsPage() {
     target.style.display = 'none';
     const fallback = target.parentElement?.querySelector('[data-fallback]') as HTMLElement | null;
     if (fallback) fallback.classList.remove('hidden');
+  };
+
+  // Refetch screenshots to get fresh S3 signed URLs
+  const handleRefreshUrls = () => {
+    queryClient.invalidateQueries({ queryKey: ['screenshots'] });
   };
 
   const getActivityBadgeClass = (score: number) => getActivityColor(score).badge;
@@ -325,10 +334,14 @@ export default function ScreenshotsPage() {
                         unoptimized
                         onError={handleImageError}
                       />
-                      {/* SS-9: Broken image fallback */}
-                      <div data-fallback className="hidden absolute inset-0 flex flex-col items-center justify-center bg-slate-800/50 gap-2">
-                        <Monitor className="h-8 w-8 text-slate-500" />
-                        <span className="text-xs text-slate-500">Image expired — refresh page</span>
+                      {/* SS-9: Broken image fallback — click to refresh */}
+                      <div
+                        data-fallback
+                        className="hidden absolute inset-0 flex flex-col items-center justify-center bg-slate-800/80 gap-2 cursor-pointer hover:bg-slate-700/80 transition-colors"
+                        onClick={(e) => { e.stopPropagation(); handleRefreshUrls(); }}
+                      >
+                        <Monitor className="h-8 w-8 text-slate-400" />
+                        <span className="text-xs text-slate-400">Click to reload images</span>
                       </div>
                     </>
                   ) : (
@@ -473,9 +486,13 @@ export default function ScreenshotsPage() {
                   onError={handleImageError}
                 />
                 {/* SS-9: Broken image fallback for lightbox */}
-                <div data-fallback className="hidden absolute inset-0 flex flex-col items-center justify-center bg-slate-800/50 gap-2">
-                  <Monitor className="h-8 w-8 text-slate-500" />
-                  <span className="text-xs text-slate-500">Image expired — refresh page</span>
+                <div
+                  data-fallback
+                  className="hidden absolute inset-0 flex flex-col items-center justify-center bg-slate-800/80 gap-2 cursor-pointer hover:bg-slate-700/80 transition-colors"
+                  onClick={handleRefreshUrls}
+                >
+                  <Monitor className="h-8 w-8 text-slate-400" />
+                  <span className="text-xs text-slate-400">Click to reload images</span>
                 </div>
               </>
             ) : (
