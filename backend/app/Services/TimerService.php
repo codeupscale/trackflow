@@ -133,6 +133,9 @@ class TimerService
     /**
      * Get timer status. When $projectId is provided, today_total is scoped to that project.
      * "Today" is the user's current calendar day in their timezone (stored as UTC in DB).
+     *
+     * Always returns `project_today_total` — the total for the currently running entry's
+     * project — so the web header timer can show per-project time without a second API call.
      */
     public function status(?string $projectId = null): array
     {
@@ -164,6 +167,7 @@ class TimerService
                 'entry' => null,
                 'elapsed_seconds' => 0,
                 'today_total' => $todayTotal,
+                'project_today_total' => 0,
                 'current_day' => $currentDay,
             ];
         }
@@ -176,6 +180,7 @@ class TimerService
                 'entry' => null,
                 'elapsed_seconds' => 0,
                 'today_total' => $todayTotal,
+                'project_today_total' => 0,
                 'current_day' => $currentDay,
             ];
         }
@@ -192,6 +197,25 @@ class TimerService
             $todayTotal += $currentElapsed;
         }
 
+        // Per-project total for the running entry's project (for web header timer).
+        // If $projectId was already set to this project, reuse $todayTotal to avoid a second query.
+        if ($entryProjectId !== null && $requestedProjectId === $entryProjectId) {
+            $projectTodayTotal = $todayTotal;
+        } elseif ($entryProjectId !== null) {
+            $projectTodayTotal = (int) TimeEntry::withoutGlobalScopes()
+                ->where('user_id', $user->id)
+                ->where('started_at', '>=', $todayStartUtc)
+                ->where('started_at', '<', $todayEndUtc)
+                ->whereNotNull('ended_at')
+                ->where('type', 'tracked')
+                ->where('project_id', $entryProjectId)
+                ->sum('duration_seconds');
+            $projectTodayTotal += $currentElapsed;
+        } else {
+            // No project on the running entry — fall back to global total
+            $projectTodayTotal = $todayTotal;
+        }
+
         // Eager-load project so the web dashboard can display the project name
         $entry->loadMissing('project:id,name,color');
 
@@ -200,6 +224,7 @@ class TimerService
             'entry' => $entry,
             'elapsed_seconds' => $currentElapsed,
             'today_total' => $todayTotal,
+            'project_today_total' => $projectTodayTotal,
             'current_day' => $currentDay,
         ];
     }

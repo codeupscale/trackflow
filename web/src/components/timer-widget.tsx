@@ -19,6 +19,7 @@ export function TimerWidget() {
     isRunning,
     elapsedSeconds,
     todayTotalSeconds,
+    projectTodayTotalSeconds,
     projectName,
     fetchStatus,
     startPolling,
@@ -63,7 +64,8 @@ export function TimerWidget() {
           </span>
         )}
 
-        {/* Timer display — shows today's cumulative total (matching desktop "Today's Total") */}
+        {/* Timer display — when running, shows active project's today total (matching desktop tray behavior);
+            when stopped, shows global today total across all projects */}
         <span
           className={cn(
             'font-mono text-sm font-medium tabular-nums',
@@ -71,7 +73,7 @@ export function TimerWidget() {
           )}
         >
           {isRunning
-            ? formatDuration(todayTotalSeconds)
+            ? formatDuration(projectTodayTotalSeconds)
             : todayTotalSeconds > 0
               ? formatDuration(todayTotalSeconds)
               : 'Not tracking'}
