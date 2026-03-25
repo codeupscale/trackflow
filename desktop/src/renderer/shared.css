@@ -6,35 +6,45 @@
 
 /* ── Theme Variables ───────────────────────────────────────────────────── */
 :root {
-  /* Dark theme (default) */
-  --bg-primary: #0f172a;
-  --bg-secondary: #1e293b;
-  --bg-tertiary: #334155;
-  --text-primary: #e2e8f0;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
-  --text-xs-muted: #475569;
-  --border-color: #1e293b;
-  --border-input: #334155;
+  /* Dark theme (default) — colors match the web portal's .dark theme exactly
+     Web uses oklch achromatic grays; hex equivalents below.
+     oklch(0.145 0 0) = #0a0a0a  (background)
+     oklch(0.205 0 0) = #171717  (card / secondary surface)
+     oklch(0.269 0 0) = #262626  (muted / tertiary surface)
+     oklch(0.985 0 0) = #fafafa  (foreground text)
+     oklch(0.708 0 0) = #a1a1a1  (muted foreground)
+     oklch(0.556 0 0) = #737373  (ring / muted text)
+     oklch(1 0 0 / 10%) = rgba(255,255,255,0.1) (border)
+     oklch(1 0 0 / 15%) = rgba(255,255,255,0.15) (input border)
+  */
+  --bg-primary: #0a0a0a;
+  --bg-secondary: #171717;
+  --bg-tertiary: #262626;
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1a1;
+  --text-muted: #737373;
+  --text-xs-muted: #525252;
+  --border-color: rgba(255, 255, 255, 0.1);
+  --border-input: rgba(255, 255, 255, 0.15);
   --accent-blue: #3b82f6;
   --accent-blue-hover: #2563eb;
   --accent-blue-active: #1d4ed8;
   --accent-blue-ring: rgba(59, 130, 246, 0.15);
-  --accent-red: #ef4444;
-  --accent-red-hover: #dc2626;
-  --accent-red-active: #b91c1c;
+  --accent-red: #ff6467;
+  --accent-red-hover: #ef4444;
+  --accent-red-active: #dc2626;
   --accent-green: #22c55e;
-  --scrollbar-thumb: #334155;
-  --scrollbar-thumb-hover: #475569;
-  --btn-ghost-hover-bg: #1e293b;
-  --btn-ghost-active-bg: #334155;
-  --select-bg: #1e293b;
-  --select-option-bg: #1e293b;
-  --kbd-bg: #1e293b;
-  --kbd-border: #334155;
-  --notification-shadow: rgba(0, 0, 0, 0.3);
-  --focus-ring-outer: #0f172a;
-  --autofill-bg: #0f172a;
+  --scrollbar-thumb: #262626;
+  --scrollbar-thumb-hover: #525252;
+  --btn-ghost-hover-bg: #171717;
+  --btn-ghost-active-bg: #262626;
+  --select-bg: #171717;
+  --select-option-bg: #171717;
+  --kbd-bg: #171717;
+  --kbd-border: #262626;
+  --notification-shadow: rgba(0, 0, 0, 0.4);
+  --focus-ring-outer: #0a0a0a;
+  --autofill-bg: #0a0a0a;
   --accent-amber: #f59e0b;
   --accent-amber-hover: #d97706;
   --accent-amber-active: #b45309;
@@ -45,9 +55,9 @@
   --accent-green-hover: #16a34a;
   --accent-green-active: #15803d;
   --link-primary-hover: #60a5fa;
-  --close-btn-bg: #ef4444;
-  --error-bg: rgba(239, 68, 68, 0.1);
-  --error-border: rgba(239, 68, 68, 0.2);
+  --close-btn-bg: #ff6467;
+  --error-bg: rgba(255, 100, 103, 0.1);
+  --error-border: rgba(255, 100, 103, 0.2);
 }
 
 [data-theme="light"] {
