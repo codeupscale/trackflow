@@ -17,6 +17,10 @@ interface TimerState {
   projectName: string | null;
   startedAt: string | null;
   elapsedSeconds: number;
+  /** Today's cumulative total (all completed entries + current session). Mirrors desktop "Today's Total". */
+  todayTotalSeconds: number;
+  /** Base today total from completed entries (excludes current session). Used for tick calculation. */
+  todayTotalBase: number;
   intervalId: ReturnType<typeof setInterval> | null;
   pollId: ReturnType<typeof setInterval> | null;
 
@@ -36,6 +40,8 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   projectName: null,
   startedAt: null,
   elapsedSeconds: 0,
+  todayTotalSeconds: 0,
+  todayTotalBase: 0,
   intervalId: null,
   pollId: null,
 
@@ -43,11 +49,14 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
     try {
       const res = await api.get('/timer/status');
       const wasRunning = get().isRunning;
+      const todayTotal = res.data.today_total || 0;
 
       if (res.data.running) {
         const currentElapsed = res.data.elapsed_seconds || 0;
         const runningProjectId = res.data.entry?.project_id ?? null;
         const runningProjectName = res.data.entry?.project?.name ?? null;
+        // Base = today_total minus the current running entry's elapsed (same logic as desktop)
+        const base = Math.max(0, todayTotal - currentElapsed);
 
         set({
           isRunning: true,
@@ -56,6 +65,8 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
           projectName: runningProjectName,
           startedAt: res.data.entry?.started_at,
           elapsedSeconds: currentElapsed,
+          todayTotalSeconds: todayTotal,
+          todayTotalBase: base,
         });
         if (!wasRunning || !get().intervalId) {
           get().startTicking();
@@ -71,6 +82,8 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
           projectName: null,
           startedAt: null,
           elapsedSeconds: 0,
+          todayTotalSeconds: todayTotal,
+          todayTotalBase: todayTotal,
         });
       }
     } catch {
@@ -94,10 +107,13 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   },
 
   tick: () => {
-    const { startedAt } = get();
+    const { startedAt, todayTotalBase } = get();
     if (startedAt) {
       const currentElapsed = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
-      set({ elapsedSeconds: currentElapsed });
+      set({
+        elapsedSeconds: currentElapsed,
+        todayTotalSeconds: todayTotalBase + currentElapsed,
+      });
     }
   },
 
@@ -125,6 +141,8 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
       projectName: null,
       startedAt: null,
       elapsedSeconds: 0,
+      todayTotalSeconds: 0,
+      todayTotalBase: 0,
     });
   },
 }));

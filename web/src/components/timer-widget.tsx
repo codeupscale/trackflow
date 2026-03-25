@@ -18,6 +18,7 @@ export function TimerWidget() {
   const {
     isRunning,
     elapsedSeconds,
+    todayTotalSeconds,
     projectName,
     fetchStatus,
     startPolling,
@@ -62,14 +63,18 @@ export function TimerWidget() {
           </span>
         )}
 
-        {/* Timer display */}
+        {/* Timer display — shows today's cumulative total (matching desktop "Today's Total") */}
         <span
           className={cn(
             'font-mono text-sm font-medium tabular-nums',
             isRunning ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'
           )}
         >
-          {isRunning ? formatDuration(elapsedSeconds) : 'Not tracking'}
+          {isRunning
+            ? formatDuration(todayTotalSeconds)
+            : todayTotalSeconds > 0
+              ? formatDuration(todayTotalSeconds)
+              : 'Not tracking'}
         </span>
       </div>
     </div>
