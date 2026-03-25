@@ -340,6 +340,7 @@ class ScreenshotService {
       app.getPath('temp'),
       `trackflow_ss_${Date.now()}.jpg`
     );
+    const resizedFile = tmpFile.replace('.jpg', '_resized.jpg');
 
     return new Promise((resolve) => {
       // Capture the main display as JPEG, no sound, include cursor
@@ -348,7 +349,6 @@ class ScreenshotService {
       }, (err) => {
         if (err) {
           console.error(`[SS] macOS screencapture failed: ${err.message}`);
-          // Clean up temp file if it exists
           try { fs.unlinkSync(tmpFile); } catch {}
           resolve(null);
           return;
@@ -361,37 +361,65 @@ class ScreenshotService {
             return;
           }
 
-          const rawBuffer = fs.readFileSync(tmpFile);
-          fs.unlinkSync(tmpFile); // Clean up immediately
-
-          if (rawBuffer.length < 1000) {
-            console.warn(`[SS] macOS screencapture file too small (${rawBuffer.length} bytes)`);
+          const rawSize = fs.statSync(tmpFile).size;
+          if (rawSize < 1000) {
+            console.warn(`[SS] macOS screencapture file too small (${rawSize} bytes)`);
+            try { fs.unlinkSync(tmpFile); } catch {}
             resolve(null);
             return;
           }
 
-          // Resize to 1920x1080 using sharp if available (Retina displays capture at 2x)
-          const sharpLib = getSharp();
-          if (sharpLib) {
-            sharpLib(rawBuffer)
-              .resize(CAPTURE_WIDTH, CAPTURE_HEIGHT, { fit: 'inside', withoutEnlargement: true })
-              .jpeg({ quality: 80 })
-              .toBuffer()
-              .then((resized) => {
-                console.log(`[SS] macOS native capture: ${rawBuffer.length} bytes raw → ${resized.length} bytes resized`);
-                resolve(resized);
-              })
-              .catch((e) => {
-                console.warn(`[SS] sharp resize failed, using raw: ${e.message}`);
-                resolve(rawBuffer);
-              });
-          } else {
-            // No sharp — return raw JPEG (may be large on Retina)
-            resolve(rawBuffer);
-          }
+          console.log(`[SS] macOS raw capture: ${Math.round(rawSize / 1024)}KB`);
+
+          // Resize using macOS `sips` (ALWAYS available, no native module needed)
+          // sips is Apple's built-in image processing tool — works in every macOS build
+          // Resample to max 1920px wide, output as JPEG quality 80%
+          execFile('/usr/bin/sips', [
+            '--resampleWidth', String(CAPTURE_WIDTH),
+            '--setProperty', 'formatOptions', '80',
+            tmpFile,
+            '--out', resizedFile,
+          ], { timeout: 10000 }, (sipsErr) => {
+            let finalBuffer;
+
+            if (!sipsErr && fs.existsSync(resizedFile)) {
+              finalBuffer = fs.readFileSync(resizedFile);
+              console.log(`[SS] macOS sips resize: ${Math.round(rawSize / 1024)}KB → ${Math.round(finalBuffer.length / 1024)}KB`);
+              try { fs.unlinkSync(resizedFile); } catch {}
+              try { fs.unlinkSync(tmpFile); } catch {}
+            } else {
+              // sips failed — try sharp as fallback
+              if (sipsErr) console.warn(`[SS] sips resize failed: ${sipsErr.message}`);
+              const sharpLib = getSharp();
+              if (sharpLib) {
+                const rawBuffer = fs.readFileSync(tmpFile);
+                try { fs.unlinkSync(tmpFile); } catch {}
+                sharpLib(rawBuffer)
+                  .resize(CAPTURE_WIDTH, CAPTURE_HEIGHT, { fit: 'inside', withoutEnlargement: true })
+                  .jpeg({ quality: 80 })
+                  .toBuffer()
+                  .then((resized) => {
+                    console.log(`[SS] sharp resize: ${Math.round(rawBuffer.length / 1024)}KB → ${Math.round(resized.length / 1024)}KB`);
+                    resolve(resized);
+                  })
+                  .catch(() => {
+                    console.warn('[SS] sharp also failed, using raw');
+                    resolve(rawBuffer);
+                  });
+                return;
+              }
+              // Neither sips nor sharp — return raw (will be large)
+              finalBuffer = fs.readFileSync(tmpFile);
+              try { fs.unlinkSync(tmpFile); } catch {}
+              console.warn(`[SS] No resize available, using raw ${Math.round(finalBuffer.length / 1024)}KB`);
+            }
+
+            resolve(finalBuffer);
+          });
         } catch (e) {
-          console.error(`[SS] Error reading screencapture file: ${e.message}`);
+          console.error(`[SS] Error in native capture: ${e.message}`);
           try { fs.unlinkSync(tmpFile); } catch {}
+          try { fs.unlinkSync(resizedFile); } catch {}
           resolve(null);
         }
       });

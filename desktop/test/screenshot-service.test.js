@@ -155,16 +155,23 @@ describe('ScreenshotService', () => {
   });
 
   test('capture handles empty thumbnail', async () => {
-    service.currentEntryId = 'entry-1';
-    desktopCapturer.getSources.mockResolvedValue([{
-      id: 'screen:0:0',
-      name: 'Entire Screen',
-      thumbnail: makeMockImage(true), // isEmpty = true
-      display_id: '1',
-    }]);
-    await service.capture();
-    expect(mockApiClient.uploadScreenshot).not.toHaveBeenCalled();
-    expect(service._consecutiveFailures).toBe(1);
+    // Force non-macOS path so native screencapture doesn't run
+    const origPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      service.currentEntryId = 'entry-1';
+      desktopCapturer.getSources.mockResolvedValue([{
+        id: 'screen:0:0',
+        name: 'Entire Screen',
+        thumbnail: makeMockImage(true), // isEmpty = true
+        display_id: '1',
+      }]);
+      await service.capture();
+      expect(mockApiClient.uploadScreenshot).not.toHaveBeenCalled();
+      expect(service._consecutiveFailures).toBe(1);
+    } finally {
+      Object.defineProperty(process, 'platform', { value: origPlatform, configurable: true });
+    }
   });
 
   // ── Screen Lock / Idle Detection (SS-7) ──
