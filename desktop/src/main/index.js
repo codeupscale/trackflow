@@ -1353,7 +1353,9 @@ function createLoginWindow() {
 }
 
 function checkForUpdates() {
+  console.log(`[updater] Checking... (packaged=${app.isPackaged}, env=${process.env.NODE_ENV || 'production'})`);
   if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
+    console.log('[updater] Skipped — dev mode or not packaged');
     return;
   }
   try {
@@ -1390,8 +1392,11 @@ function checkForUpdates() {
         notification.show();
       } catch {}
     });
-    // Silently ignore update errors — don't spam logs when no releases exist yet
+    autoUpdater.on('update-not-available', (info) => {
+      console.log(`[updater] Already on latest version (v${info.version})`);
+    });
     autoUpdater.on('error', (err) => {
+      console.warn(`[updater] Error: ${err?.message || err}`);
       posthog.captureError(null, err || new Error('auto_update_error'), { type: 'auto_update' });
     });
 
