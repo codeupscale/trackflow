@@ -112,7 +112,7 @@ class ScreenshotController extends Controller
                 $request->date_to,
                 $tz
             );
-            $query->where('captured_at', '>=', $dateFromUtc)->where('captured_at', '<=', $dateToUtc);
+            $query->where('captured_at', '>=', $dateFromUtc)->where('captured_at', '<', $dateToUtc);
         }
         if ($request->has('time_entry_id')) {
             $query->where('time_entry_id', $request->time_entry_id);

@@ -96,6 +96,10 @@ class Organization extends Model
             'screenshot_interval' => 5,
             'blur_screenshots' => false,
             'idle_timeout' => 5,
+            // Idle alert emails are org-configurable and disabled by default to prevent spam.
+            'idle_alert_email_enabled' => false,
+            // Cooldown (minutes) between repeated idle alert emails for the same employee.
+            'idle_alert_email_cooldown_min' => 60,
             // Idle handling behavior: prompt | always | never
             // Production default: always discard idle time.
             'keep_idle_time' => 'never',

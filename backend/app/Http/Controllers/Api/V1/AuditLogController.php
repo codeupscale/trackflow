@@ -40,7 +40,7 @@ class AuditLogController extends Controller
                 $request->date_to,
                 $tz
             );
-            $query->where('created_at', '>=', $dateFromUtc)->where('created_at', '<=', $dateToUtc);
+            $query->where('created_at', '>=', $dateFromUtc)->where('created_at', '<', $dateToUtc);
         }
 
         $logs = $query->paginate(min((int) $request->input('per_page', 50), 100));

@@ -48,6 +48,8 @@ interface OrgSettings {
       idle_timeout: number | null;
       keep_idle_time?: 'prompt' | 'always' | 'never';
       idle_alert_auto_stop_min?: number;
+      idle_alert_email_enabled?: boolean;
+      idle_alert_email_cooldown_min?: number;
       screenshot_capture_immediate_after_idle?: boolean;
       screenshot_first_capture_delay_min?: number;
       idle_check_interval_sec?: number;
@@ -117,6 +119,8 @@ export default function SettingsPage() {
     idleTimeoutCustom: settings?.idle_timeout != null && settings.idle_timeout > 0 && ![5, 10, 20].includes(settings.idle_timeout) ? String(settings.idle_timeout) : '',
     keepIdleTime: (settings?.keep_idle_time as 'prompt' | 'always' | 'never') ?? 'prompt',
     idleAlertAutoStopMin: settings?.idle_alert_auto_stop_min != null ? String(settings.idle_alert_auto_stop_min) : '10',
+    idleAlertEmailEnabled: settings?.idle_alert_email_enabled ?? false,
+    idleAlertEmailCooldownMin: settings?.idle_alert_email_cooldown_min != null ? String(settings.idle_alert_email_cooldown_min) : '60',
     screenshotImmediateAfterIdle: settings?.screenshot_capture_immediate_after_idle ?? true,
     screenshotFirstCaptureDelayMin: settings?.screenshot_first_capture_delay_min != null ? String(settings.screenshot_first_capture_delay_min) : '1',
     idleCheckIntervalSec: settings?.idle_check_interval_sec != null ? String(settings.idle_check_interval_sec) : '10',
@@ -136,6 +140,8 @@ export default function SettingsPage() {
   const [idleTimeoutCustom, setIdleTimeoutCustom] = useState('');
   const [keepIdleTime, setKeepIdleTime] = useState<'prompt' | 'always' | 'never'>('prompt');
   const [idleAlertAutoStopMin, setIdleAlertAutoStopMin] = useState('10');
+  const [idleAlertEmailEnabled, setIdleAlertEmailEnabled] = useState(false);
+  const [idleAlertEmailCooldownMin, setIdleAlertEmailCooldownMin] = useState('60');
   const [screenshotImmediateAfterIdle, setScreenshotImmediateAfterIdle] = useState(true);
   const [screenshotFirstCaptureDelayMin, setScreenshotFirstCaptureDelayMin] = useState('1');
   const [idleCheckIntervalSec, setIdleCheckIntervalSec] = useState('10');
@@ -162,6 +168,8 @@ export default function SettingsPage() {
     setIdleTimeoutCustom(defaults.idleTimeoutCustom);
     setKeepIdleTime(defaults.keepIdleTime);
     setIdleAlertAutoStopMin(defaults.idleAlertAutoStopMin);
+    setIdleAlertEmailEnabled(defaults.idleAlertEmailEnabled);
+    setIdleAlertEmailCooldownMin(defaults.idleAlertEmailCooldownMin);
     setScreenshotImmediateAfterIdle(defaults.screenshotImmediateAfterIdle);
     setScreenshotFirstCaptureDelayMin(defaults.screenshotFirstCaptureDelayMin);
     setIdleCheckIntervalSec(defaults.idleCheckIntervalSec);
@@ -203,6 +211,10 @@ export default function SettingsPage() {
       60,
       Math.max(1, parseInt(String(idleAlertAutoStopMin), 10) || 10)
     );
+    const idleEmailCooldownMinVal = Math.min(
+      1440,
+      Math.max(5, parseInt(String(idleAlertEmailCooldownMin), 10) || 60)
+    );
     const firstDelayMinVal = Math.min(60, Math.max(0, parseInt(String(screenshotFirstCaptureDelayMin), 10) || 1));
     const idleCheckSecVal = Math.min(60, Math.max(1, parseInt(String(idleCheckIntervalSec), 10) || 10));
     const weeklyVal = parseInt(String(weeklyLimitHours), 10) || 0;
@@ -215,6 +227,8 @@ export default function SettingsPage() {
         idle_timeout: idleVal,
         keep_idle_time: keepIdleTime,
         idle_alert_auto_stop_min: idleAutoStopMinVal,
+        idle_alert_email_enabled: idleAlertEmailEnabled,
+        idle_alert_email_cooldown_min: idleEmailCooldownMinVal,
         screenshot_capture_immediate_after_idle: screenshotImmediateAfterIdle,
         screenshot_first_capture_delay_min: firstDelayMinVal,
         idle_check_interval_sec: idleCheckSecVal,
@@ -453,6 +467,42 @@ export default function SettingsPage() {
                   </SelectContent>
                 </Select>
               </div>
+
+              {isAdmin && (
+                <>
+                  <Separator className="bg-slate-800" />
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label className="text-slate-300">Idle alert emails</Label>
+                      <p className="text-xs text-slate-500">
+                        Sends an email when an employee remains idle. The scheduler runs every 5 minutes; cooldown prevents spam.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={idleAlertEmailEnabled}
+                      onCheckedChange={setIdleAlertEmailEnabled}
+                      aria-label="Idle alert emails"
+                    />
+                  </div>
+                  <div className="grid gap-2 max-w-xs">
+                    <Label htmlFor="idle-alert-email-cooldown" className="text-slate-300">Cooldown (minutes)</Label>
+                    <Input
+                      id="idle-alert-email-cooldown"
+                      type="number"
+                      min={5}
+                      max={1440}
+                      value={idleAlertEmailCooldownMin}
+                      onChange={(e) => setIdleAlertEmailCooldownMin(e.target.value)}
+                      disabled={!idleAlertEmailEnabled}
+                      className="bg-slate-800/50 border-slate-700 text-white w-28"
+                    />
+                    <p className="text-xs text-slate-500">
+                      Minimum time between emails per employee. Recommended: 60+ minutes.
+                    </p>
+                  </div>
+                </>
+              )}
+
               <div className="flex items-center gap-2 text-sm text-slate-400">
                 <span>
                   Plan: <strong className="text-white capitalize">{data?.organization.plan}</strong>

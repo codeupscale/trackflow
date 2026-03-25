@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('trackflow', {
   startTimer: (projectId) => ipcRenderer.invoke('start-timer', projectId),
   stopTimer: () => ipcRenderer.invoke('stop-timer'),
   getProjects: () => ipcRenderer.invoke('get-projects'),
+  getLastProject: () => ipcRenderer.invoke('get-last-project'),
+  setLastProject: (projectId) => ipcRenderer.invoke('set-last-project', projectId),
   logout: () => ipcRenderer.invoke('logout'),
   login: (email, password) => ipcRenderer.invoke('login', email, password),
   openDashboard: () => ipcRenderer.invoke('open-dashboard'),

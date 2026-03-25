@@ -16,6 +16,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "TrackFlow — Workforce Monitoring",
   description: "Real-time workforce monitoring, time tracking, and productivity analytics",
+  icons: {
+    icon: "/favicon.ico",
+  },
 };
 
 export default function RootLayout({

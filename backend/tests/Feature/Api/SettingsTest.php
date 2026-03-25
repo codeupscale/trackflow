@@ -40,6 +40,8 @@ class SettingsTest extends TestCase
             'settings' => [
                 'screenshot_interval' => 10,
                 'blur_screenshots' => true,
+                'idle_alert_email_enabled' => true,
+                'idle_alert_email_cooldown_min' => 60,
             ],
         ]);
 
@@ -47,6 +49,8 @@ class SettingsTest extends TestCase
         $this->assertEquals('Updated Org Name', $response->json('organization.name'));
         $this->assertEquals(10, $response->json('organization.settings.screenshot_interval'));
         $this->assertTrue($response->json('organization.settings.blur_screenshots'));
+        $this->assertTrue($response->json('organization.settings.idle_alert_email_enabled'));
+        $this->assertEquals(60, $response->json('organization.settings.idle_alert_email_cooldown_min'));
     }
 
     public function test_employee_cannot_update_settings(): void

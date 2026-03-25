@@ -15,11 +15,7 @@
 //   2. All failure paths log with console.error AND increment a failure counter.
 //      After 5 consecutive failures, capture pauses for 5 minutes to avoid CPU waste.
 
-const { desktopCapturer, Notification, screen, systemPreferences, shell, dialog, BrowserWindow, powerMonitor, app } = require('electron');
-const { execFile } = require('child_process');
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
+const { desktopCapturer, Notification, screen, systemPreferences, shell, dialog, BrowserWindow, powerMonitor } = require('electron');
 const FormData = require('form-data');
 
 // Lazy-load sharp
@@ -268,33 +264,25 @@ class ScreenshotService {
         //
         // Use desktopCapturer ONLY — never call screencapture CLI.
         //
-        // screencapture CLI triggers a macOS "Screen Recording" permission
-        // popup on EVERY invocation when the app's code signature changes
-        // (which happens on every rebuild for ad-hoc signed apps).
-        //
-        // desktopCapturer may return wallpaper-only for ad-hoc signed apps,
-        // but this only affects development builds. Production installs from
-        // GitHub Releases have a stable signature and get proper screen content.
-        //
-        // With a real Apple Developer certificate ($99/year), both methods
-        // work perfectly without any popups.
-        //
-        // Strategy: screen capture first, window capture fallback.
+        // IMPORTANT: Window capture FIRST, screen capture fallback.
+        // Ad-hoc signed apps (dev builds) get wallpaper-only from screen
+        // capture. Window capture reliably returns the active app content.
+        // Production builds with stable signatures work fine either way.
 
-        // Try screen capture
-        if (screenSources.length > 0) {
-          buffer = this._captureSingleMonitor(screenSources);
-          if (buffer) {
-            console.log(`[SS] macOS screen capture (${Math.round(buffer.length / 1024)}KB)`);
-          }
-        }
-
-        // Fallback: window capture (captures frontmost window)
-        if (!buffer && windowSources.length > 0) {
-          console.log(`[SS] macOS: trying window capture (${windowSources.length} windows)`);
+        // Try window capture first (captures frontmost/active window)
+        if (windowSources.length > 0) {
+          console.log(`[SS] macOS: trying window capture first (${windowSources.length} windows)`);
           buffer = this._captureActiveWindow(windowSources);
           if (buffer) {
             console.log(`[SS] macOS window capture succeeded (${Math.round(buffer.length / 1024)}KB)`);
+          }
+        }
+
+        // Fallback: screen capture (may return wallpaper-only on ad-hoc signed apps)
+        if (!buffer && screenSources.length > 0) {
+          buffer = this._captureSingleMonitor(screenSources);
+          if (buffer) {
+            console.log(`[SS] macOS screen capture fallback (${Math.round(buffer.length / 1024)}KB)`);
           }
         }
       } else {
@@ -336,119 +324,10 @@ class ScreenshotService {
     }
   }
 
-  // ── macOS Native Capture ──────────────────────────────────────────
+  // ── Active Window Capture ──────────────────────────────────────────
   //
-  // Uses the macOS `screencapture` CLI tool instead of Electron's desktopCapturer.
-  // This is the ONLY reliable way to capture actual screen content (including
-  // application windows) on ad-hoc signed apps.
-  //
-  // `desktopCapturer.getSources()` uses CGWindowListCreateImage internally,
-  // which macOS restricts for ad-hoc signed apps — returning only the wallpaper
-  // layer. The `screencapture` binary is Apple-signed and trusted by the OS,
-  // so it captures the real screen content as long as Screen Recording
-  // permission is granted to the HOST app (TrackFlow).
-  //
-  // Options used:
-  //   -x  = no sound
-  //   -t jpg = JPEG format
-  //   -C  = capture cursor
-  //   -D 1 = main display (or -D for all displays)
-
-  async _macNativeCapture() {
-    const tmpFile = path.join(
-      app.getPath('temp'),
-      `trackflow_ss_${Date.now()}.jpg`
-    );
-    const resizedFile = tmpFile.replace('.jpg', '_resized.jpg');
-
-    return new Promise((resolve) => {
-      // Capture the main display as JPEG, no sound, include cursor
-      execFile('/usr/sbin/screencapture', ['-x', '-t', 'jpg', '-C', tmpFile], {
-        timeout: 10000,
-      }, (err) => {
-        if (err) {
-          console.error(`[SS] macOS screencapture failed: ${err.message}`);
-          try { fs.unlinkSync(tmpFile); } catch {}
-          resolve(null);
-          return;
-        }
-
-        try {
-          if (!fs.existsSync(tmpFile)) {
-            console.error('[SS] macOS screencapture produced no file');
-            resolve(null);
-            return;
-          }
-
-          const rawSize = fs.statSync(tmpFile).size;
-          if (rawSize < 1000) {
-            console.warn(`[SS] macOS screencapture file too small (${rawSize} bytes)`);
-            try { fs.unlinkSync(tmpFile); } catch {}
-            resolve(null);
-            return;
-          }
-
-          console.log(`[SS] macOS raw capture: ${Math.round(rawSize / 1024)}KB`);
-
-          // Resize using macOS `sips` (ALWAYS available, no native module needed)
-          // sips is Apple's built-in image processing tool — works in every macOS build
-          // Resample to max 1920px wide, output as JPEG quality 80%
-          execFile('/usr/bin/sips', [
-            '--resampleWidth', String(CAPTURE_WIDTH),
-            '--setProperty', 'formatOptions', '80',
-            tmpFile,
-            '--out', resizedFile,
-          ], { timeout: 10000 }, (sipsErr) => {
-            let finalBuffer;
-
-            if (!sipsErr && fs.existsSync(resizedFile)) {
-              finalBuffer = fs.readFileSync(resizedFile);
-              console.log(`[SS] macOS sips resize: ${Math.round(rawSize / 1024)}KB → ${Math.round(finalBuffer.length / 1024)}KB`);
-              try { fs.unlinkSync(resizedFile); } catch {}
-              try { fs.unlinkSync(tmpFile); } catch {}
-            } else {
-              // sips failed — try sharp as fallback
-              if (sipsErr) console.warn(`[SS] sips resize failed: ${sipsErr.message}`);
-              const sharpLib = getSharp();
-              if (sharpLib) {
-                const rawBuffer = fs.readFileSync(tmpFile);
-                try { fs.unlinkSync(tmpFile); } catch {}
-                sharpLib(rawBuffer)
-                  .resize(CAPTURE_WIDTH, CAPTURE_HEIGHT, { fit: 'inside', withoutEnlargement: true })
-                  .jpeg({ quality: 80 })
-                  .toBuffer()
-                  .then((resized) => {
-                    console.log(`[SS] sharp resize: ${Math.round(rawBuffer.length / 1024)}KB → ${Math.round(resized.length / 1024)}KB`);
-                    resolve(resized);
-                  })
-                  .catch(() => {
-                    console.warn('[SS] sharp also failed, using raw');
-                    resolve(rawBuffer);
-                  });
-                return;
-              }
-              // Neither sips nor sharp — return raw (will be large)
-              finalBuffer = fs.readFileSync(tmpFile);
-              try { fs.unlinkSync(tmpFile); } catch {}
-              console.warn(`[SS] No resize available, using raw ${Math.round(finalBuffer.length / 1024)}KB`);
-            }
-
-            resolve(finalBuffer);
-          });
-        } catch (e) {
-          console.error(`[SS] Error in native capture: ${e.message}`);
-          try { fs.unlinkSync(tmpFile); } catch {}
-          try { fs.unlinkSync(resizedFile); } catch {}
-          resolve(null);
-        }
-      });
-    });
-  }
-
-  // ── Active Window Capture (fallback for desktopCapturer) ──
-  //
-  // Only used as a fallback if macOS native capture fails.
-  // desktopCapturer window capture is unreliable for ad-hoc signed apps.
+  // Primary capture method on macOS (ad-hoc signed apps get wallpaper-only
+  // from screen capture). Falls back to screen capture if no valid windows.
 
   _captureActiveWindow(windowSources) {
     if (!windowSources || windowSources.length === 0) return null;

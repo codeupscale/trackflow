@@ -35,6 +35,9 @@ class SettingsController extends Controller
             'settings.screenshot_interval' => 'sometimes|integer|in:5,10,15',
             'settings.blur_screenshots' => 'sometimes|boolean',
             'settings.idle_timeout' => 'sometimes|nullable|integer|min:0|max:30',
+            'settings.idle_alert_email_enabled' => 'sometimes|boolean',
+            // Clamp via validation; job also defensively clamps.
+            'settings.idle_alert_email_cooldown_min' => 'sometimes|integer|min:5|max:1440',
             'settings.keep_idle_time' => 'sometimes|string|in:prompt,always,never',
             'settings.idle_alert_auto_stop_min' => 'sometimes|integer|min:1|max:60',
             'settings.screenshot_capture_immediate_after_idle' => 'sometimes|boolean',
@@ -62,6 +65,8 @@ class SettingsController extends Controller
                 'screenshot_interval',
                 'blur_screenshots',
                 'idle_timeout',
+                'idle_alert_email_enabled',
+                'idle_alert_email_cooldown_min',
                 'keep_idle_time',
                 'idle_alert_auto_stop_min',
                 'screenshot_capture_immediate_after_idle',

@@ -29,7 +29,7 @@ class TimesheetController extends Controller
 
         $totalSeconds = TimeEntry::where('user_id', $user->id)
             ->where('started_at', '>=', $dateFromUtc)
-            ->where('started_at', '<=', $dateToUtc)
+            ->where('started_at', '<', $dateToUtc)
             ->whereNotNull('ended_at')
             ->sum('duration_seconds');
 

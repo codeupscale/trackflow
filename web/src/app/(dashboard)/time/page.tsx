@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { CalendarIcon, CheckCircle, Clock, Info, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
@@ -99,7 +99,7 @@ export default function TimePage() {
     queryFn: async () => {
       const params: Record<string, string | number> = {
         date_from: dateFrom,
-        date_to: dateTo + ' 23:59:59',
+        date_to: dateTo,
         page,
         per_page: 20,
       };
@@ -124,6 +124,20 @@ export default function TimePage() {
 
   const entries = entriesData?.data || [];
   const meta = entriesData?.meta;
+
+  // Live tick for running entries so duration counts up in real time
+  const [, setTick] = useState(0);
+  const hasRunningEntry = entries.some((e) => !e.ended_at);
+  useEffect(() => {
+    if (!hasRunningEntry) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [hasRunningEntry]);
+
+  function getDisplayDuration(entry: { started_at: string; ended_at: string | null; duration_seconds: number }): number {
+    if (entry.ended_at) return entry.duration_seconds;
+    return Math.max(0, Math.floor((Date.now() - new Date(entry.started_at).getTime()) / 1000));
+  }
 
   const approveMutation = useMutation({
     mutationFn: async (entryIds: string[]) => {
@@ -154,7 +168,7 @@ export default function TimePage() {
     }
   };
 
-  const totalSeconds = entries.reduce((sum, e) => sum + (e.duration_seconds || 0), 0);
+  const totalSeconds = entries.reduce((sum, e) => sum + getDisplayDuration(e), 0);
 
   return (
     <div className="space-y-6">
@@ -377,8 +391,12 @@ export default function TimePage() {
                       <TableCell className="text-sm text-slate-300">
                         {entry.task?.title || <span className="text-muted-foreground text-xs">No task</span>}
                       </TableCell>
-                      <TableCell className="text-right font-mono text-sm text-slate-300 tabular-nums">
-                        {formatDuration(entry.duration_seconds)}
+                      <TableCell className="text-right font-mono text-sm tabular-nums">
+                        {entry.ended_at ? (
+                          <span className="text-slate-300">{formatDuration(entry.duration_seconds)}</span>
+                        ) : (
+                          <span className="text-green-400">{formatDuration(getDisplayDuration(entry))} ●</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">

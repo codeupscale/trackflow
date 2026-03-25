@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { format, startOfWeek, endOfWeek, isToday, isSameDay } from 'date-fns';
 import {
@@ -204,7 +204,7 @@ export default function DashboardPage() {
       const res = await api.get('/time-entries', {
         params: {
           date_from: dateFrom,
-          date_to: `${dateTo} 23:59:59`,
+          date_to: dateTo,
           per_page: 50,
         },
       });
@@ -220,6 +220,22 @@ export default function DashboardPage() {
     project?: { name: string; color?: string };
     task?: { title: string };
   }>;
+
+  // ── Live tick for running entries (so duration counts up in real time) ──
+  const [, setTick] = useState(0);
+  const hasRunningEntry = timeEntries.some((e) => !e.ended_at);
+  useEffect(() => {
+    if (!hasRunningEntry) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [hasRunningEntry]);
+
+  /** Display duration: for running entries, compute elapsed from started_at */
+  function getDisplayDuration(entry: { started_at: string; ended_at: string | null; duration_seconds: number }): number {
+    if (entry.ended_at) return entry.duration_seconds;
+    // Running entry — compute elapsed from started_at
+    return Math.max(0, Math.floor((Date.now() - new Date(entry.started_at).getTime()) / 1000));
+  }
 
   // ── Stat cards (different for employee vs admin) ──
 
@@ -534,8 +550,12 @@ export default function DashboardPage() {
                           <span className="text-muted-foreground text-xs">No task</span>
                         )}
                       </TableCell>
-                      <TableCell className="text-right font-mono text-sm text-slate-300 tabular-nums">
-                        {formatDuration(entry.duration_seconds)}
+                      <TableCell className="text-right font-mono text-sm tabular-nums">
+                        {entry.ended_at ? (
+                          <span className="text-slate-300">{formatDuration(entry.duration_seconds)}</span>
+                        ) : (
+                          <span className="text-green-400">{formatDuration(getDisplayDuration(entry))} ●</span>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}

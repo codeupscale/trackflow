@@ -77,7 +77,7 @@ class DashboardController extends Controller
         $rangeEntries = TimeEntry::withoutGlobalScopes()
             ->where('organization_id', $orgId)
             ->where('started_at', '>=', $dateFrom)
-            ->where('started_at', '<=', $dateTo)
+            ->where('started_at', '<', $dateTo)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked')
             ->selectRaw('
@@ -97,7 +97,7 @@ class DashboardController extends Controller
         $activeProjectsCount = (int) TimeEntry::withoutGlobalScopes()
             ->where('organization_id', $orgId)
             ->where('started_at', '>=', $dateFrom)
-            ->where('started_at', '<=', $dateTo)
+            ->where('started_at', '<', $dateTo)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked')
             ->whereNotNull('project_id')
@@ -105,7 +105,7 @@ class DashboardController extends Controller
             ->value('c');
 
         $now = Carbon::now();
-        $rangeIncludesNow = $now->between($dateFrom, $dateTo);
+        $rangeIncludesNow = $now >= Carbon::parse($dateFrom) && $now < Carbon::parse($dateTo);
         $onlineByUserId = collect($onlineUsers)->keyBy(fn ($o) => $o['user']->id);
 
         $teamSummary = $users->map(function ($u) use ($rangeEntries, $rangeIncludesNow, $onlineByUserId) {
@@ -161,21 +161,37 @@ class DashboardController extends Controller
         $rangeSeconds = TimeEntry::withoutGlobalScopes()
             ->where('user_id', $user->id)
             ->where('started_at', '>=', $dateFrom)
-            ->where('started_at', '<=', $dateTo)
+            ->where('started_at', '<', $dateTo)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked')
             ->sum('duration_seconds');
 
         $now = Carbon::now();
-        if ($now->between($dateFrom, $dateTo) && $timer) {
+        if ($now >= Carbon::parse($dateFrom) && $now < Carbon::parse($dateTo) && $timer) {
             $rangeSeconds += (int) $timer['elapsed_seconds'];
         }
 
+        // Week range uses the user's timezone so the boundaries align with their calendar week
+        $weekStart = Carbon::now($tz)->startOfWeek(); // Monday 00:00 local
+        $weekEnd = Carbon::now($tz)->endOfWeek();     // Sunday 23:59 local
+        [$weekStartUtc, $weekEndUtc] = TimezoneAwareDateRange::toUtcBounds(
+            $weekStart->toDateString(),
+            $weekEnd->toDateString(),
+            $tz
+        );
+
         $weekSeconds = TimeEntry::withoutGlobalScopes()
             ->where('user_id', $user->id)
-            ->where('started_at', '>=', now()->startOfWeek())
+            ->where('started_at', '>=', $weekStartUtc)
+            ->where('started_at', '<', $weekEndUtc)
             ->whereNotNull('ended_at')
+            ->where('type', 'tracked')
             ->sum('duration_seconds');
+
+        // Include current running timer in weekly total (if timer is running within this week)
+        if ($timer) {
+            $weekSeconds += (int) $timer['elapsed_seconds'];
+        }
 
         return response()->json([
             'timer' => $timer,
