@@ -200,51 +200,51 @@ export default function ScreenshotsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-white">Screenshots</h1>
-        <p className="text-slate-400 text-sm mt-1">
+        <h1 className="text-2xl font-bold text-foreground">Screenshots</h1>
+        <p className="text-muted-foreground text-sm mt-1">
           View captured screenshots of your team&apos;s activity
         </p>
       </div>
 
       {/* Filters */}
-      <Card className="border-slate-800 bg-slate-900/50">
+      <Card className="border-border bg-card">
         <CardContent className="pt-6">
           <div className="flex flex-col sm:flex-row gap-4 items-end">
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-slate-300" htmlFor="ss-date-from">
+              <label className="text-sm font-medium text-foreground" htmlFor="ss-date-from">
                 From
               </label>
               <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
                   id="ss-date-from"
                   type="date"
                   value={dateFrom}
                   onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
-                  className="pl-10 w-[160px] bg-slate-800/50 border-slate-700 text-white"
+                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
                 />
               </div>
             </div>
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-slate-300" htmlFor="ss-date-to">
+              <label className="text-sm font-medium text-foreground" htmlFor="ss-date-to">
                 To
               </label>
               <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
                   id="ss-date-to"
                   type="date"
                   value={dateTo}
                   onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
-                  className="pl-10 w-[160px] bg-slate-800/50 border-slate-700 text-white"
+                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
                 />
               </div>
             </div>
             {isManager && (
               <div className="grid gap-1.5">
-                <label className="text-sm font-medium text-slate-300">Team Member</label>
+                <label className="text-sm font-medium text-foreground">Team Member</label>
                 <Select value={userFilter} onValueChange={(val) => { setUserFilter(val ?? 'all'); setPage(1); }}>
-                  <SelectTrigger className="w-[200px] bg-slate-800/50 border-slate-700">
+                  <SelectTrigger className="w-[200px] bg-muted border-border">
                     <SelectValue placeholder="All members" />
                   </SelectTrigger>
                   <SelectContent>
@@ -259,9 +259,9 @@ export default function ScreenshotsPage() {
               </div>
             )}
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-slate-300">Time type</label>
+              <label className="text-sm font-medium text-foreground">Time type</label>
               <Select value={timeTypeFilter} onValueChange={(val) => { setTimeTypeFilter(val ?? 'all'); setPage(1); }}>
-                <SelectTrigger className="w-[160px] bg-slate-800/50 border-slate-700">
+                <SelectTrigger className="w-[160px] bg-muted border-border">
                   <SelectValue placeholder="All types" />
                 </SelectTrigger>
                 <SelectContent>
@@ -278,12 +278,12 @@ export default function ScreenshotsPage() {
 
       {/* Screenshot Grid */}
       {isScreenshotsError ? (
-        <Card className="border-slate-800 bg-slate-900/50">
+        <Card className="border-border bg-card">
           <CardContent className="py-16">
             <div className="text-center">
               <Camera className="h-10 w-10 text-red-500/60 mx-auto mb-3" />
-              <p className="text-slate-400 font-medium">Failed to load screenshots</p>
-              <p className="text-sm text-slate-500 mt-1">
+              <p className="text-muted-foreground font-medium">Failed to load screenshots</p>
+              <p className="text-sm text-muted-foreground mt-1">
                 Please try again.
               </p>
             </div>
@@ -292,22 +292,22 @@ export default function ScreenshotsPage() {
       ) : isLoading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {Array.from({ length: 8 }).map((_, i) => (
-            <Card key={i} className="overflow-hidden border-slate-800 bg-slate-900/50">
-              <div className="aspect-video bg-slate-800/50 animate-pulse" />
+            <Card key={i} className="overflow-hidden border-border bg-card">
+              <div className="aspect-video bg-muted animate-pulse" />
               <CardContent className="p-3 space-y-2">
-                <div className="h-4 w-24 bg-slate-800/50 animate-pulse rounded" />
-                <div className="h-3 w-32 bg-slate-800/50 animate-pulse rounded" />
+                <div className="h-4 w-24 bg-muted animate-pulse rounded" />
+                <div className="h-3 w-32 bg-muted animate-pulse rounded" />
               </CardContent>
             </Card>
           ))}
         </div>
       ) : screenshots.length === 0 ? (
-        <Card className="border-slate-800 bg-slate-900/50">
+        <Card className="border-border bg-card">
           <CardContent className="py-16">
             <div className="text-center">
-              <Camera className="h-10 w-10 text-slate-600 mx-auto mb-3" />
-              <p className="text-slate-400 font-medium">No screenshots found</p>
-              <p className="text-sm text-slate-500 mt-1">
+              <Camera className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+              <p className="text-muted-foreground font-medium">No screenshots found</p>
+              <p className="text-sm text-muted-foreground mt-1">
                 Adjust your date range or filters to view screenshots
               </p>
             </div>
@@ -319,10 +319,10 @@ export default function ScreenshotsPage() {
             {screenshots.map((screenshot) => (
               <Card
                 key={screenshot.id}
-                className="overflow-hidden cursor-pointer group hover:border-slate-600 transition-all border-slate-800 bg-slate-900/50"
+                className="overflow-hidden cursor-pointer group hover:border-border transition-all border-border bg-card"
                 onClick={() => setSelectedScreenshot(screenshot)}
               >
-                <div className="aspect-video bg-slate-800 relative flex items-center justify-center overflow-hidden">
+                <div className="aspect-video bg-muted relative flex items-center justify-center overflow-hidden">
                   {screenshot.thumbnail_url ? (
                     <>
                       <Image
@@ -337,15 +337,15 @@ export default function ScreenshotsPage() {
                       {/* SS-9: Broken image fallback — click to refresh */}
                       <div
                         data-fallback
-                        className="hidden absolute inset-0 flex flex-col items-center justify-center bg-slate-800/80 gap-2 cursor-pointer hover:bg-slate-700/80 transition-colors"
+                        className="hidden absolute inset-0 flex flex-col items-center justify-center bg-muted/80 gap-2 cursor-pointer hover:bg-muted/80 transition-colors"
                         onClick={(e) => { e.stopPropagation(); handleRefreshUrls(); }}
                       >
-                        <Monitor className="h-8 w-8 text-slate-400" />
-                        <span className="text-xs text-slate-400">Click to reload images</span>
+                        <Monitor className="h-8 w-8 text-muted-foreground" />
+                        <span className="text-xs text-muted-foreground">Click to reload images</span>
                       </div>
                     </>
                   ) : (
-                    <div className="flex flex-col items-center gap-2 text-slate-600">
+                    <div className="flex flex-col items-center gap-2 text-muted-foreground">
                       <Monitor className="h-8 w-8" />
                       <span className="text-xs">No preview</span>
                     </div>
@@ -374,11 +374,11 @@ export default function ScreenshotsPage() {
                       </p>
                     </div>
                   )}
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-muted-foreground">
                     {format(new Date(screenshot.captured_at), 'MMM d, yyyy HH:mm')}
                   </p>
                   {screenshot.project_name && (
-                    <p className="text-xs text-slate-500 truncate">
+                    <p className="text-xs text-muted-foreground truncate">
                       {screenshot.project_name}
                     </p>
                   )}
@@ -390,7 +390,7 @@ export default function ScreenshotsPage() {
           {/* Pagination */}
           {meta && meta.last_page > 1 && (
             <div className="flex items-center justify-between pt-2">
-              <p className="text-sm text-slate-400">
+              <p className="text-sm text-muted-foreground">
                 Page {meta.current_page} of {meta.last_page} ({meta.total} total)
               </p>
               <div className="flex items-center gap-2">
@@ -399,7 +399,7 @@ export default function ScreenshotsPage() {
                   size="sm"
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
                   disabled={page <= 1}
-                  className="border-slate-700 text-slate-300"
+                  className="border-border text-foreground"
                 >
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
@@ -408,7 +408,7 @@ export default function ScreenshotsPage() {
                   size="sm"
                   onClick={() => setPage((p) => p + 1)}
                   disabled={page >= (meta.last_page || 1)}
-                  className="border-slate-700 text-slate-300"
+                  className="border-border text-foreground"
                 >
                   <ChevronRight className="h-4 w-4" />
                 </Button>
@@ -425,7 +425,7 @@ export default function ScreenshotsPage() {
           if (!open) setSelectedScreenshot(null);
         }}
       >
-        <DialogContent className="sm:max-w-3xl bg-slate-900 border-slate-800">
+        <DialogContent className="sm:max-w-3xl bg-card border-border">
           <DialogHeader>
             <DialogTitle className="text-white flex items-center justify-between">
               <span>
@@ -466,14 +466,14 @@ export default function ScreenshotsPage() {
                 </Badge>
                 {selectedScreenshot?.project_name && (
                   <>
-                    <span className="text-slate-500">|</span>
+                    <span className="text-muted-foreground">|</span>
                     <span>{selectedScreenshot.project_name}</span>
                   </>
                 )}
               </span>
             </DialogDescription>
           </DialogHeader>
-          <div className="aspect-video bg-slate-800 rounded-lg relative flex items-center justify-center overflow-hidden">
+          <div className="aspect-video bg-muted rounded-lg relative flex items-center justify-center overflow-hidden">
             {selectedScreenshot?.url ? (
               <>
                 <Image
@@ -488,15 +488,15 @@ export default function ScreenshotsPage() {
                 {/* SS-9: Broken image fallback for lightbox */}
                 <div
                   data-fallback
-                  className="hidden absolute inset-0 flex flex-col items-center justify-center bg-slate-800/80 gap-2 cursor-pointer hover:bg-slate-700/80 transition-colors"
+                  className="hidden absolute inset-0 flex flex-col items-center justify-center bg-muted/80 gap-2 cursor-pointer hover:bg-muted/80 transition-colors"
                   onClick={handleRefreshUrls}
                 >
-                  <Monitor className="h-8 w-8 text-slate-400" />
-                  <span className="text-xs text-slate-400">Click to reload images</span>
+                  <Monitor className="h-8 w-8 text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground">Click to reload images</span>
                 </div>
               </>
             ) : (
-              <div className="flex flex-col items-center gap-3 text-slate-600">
+              <div className="flex flex-col items-center gap-3 text-muted-foreground">
                 <Monitor className="h-16 w-16" />
                 <span className="text-sm">Screenshot preview not available</span>
               </div>
@@ -512,7 +512,7 @@ export default function ScreenshotsPage() {
                 rel="noopener noreferrer"
                 className="inline-flex"
               >
-                <Button variant="outline" size="sm" className="border-slate-700 text-slate-300">
+                <Button variant="outline" size="sm" className="border-border text-foreground">
                   <Download className="h-4 w-4 mr-2" />
                   Download
                 </Button>
