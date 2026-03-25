@@ -66,6 +66,11 @@ class ScreenshotService {
     this._intervalMs = 0;
     this._lastNotification = null;
     this._permissionDialogShown = false;
+    // Track last capture hash to detect static/wallpaper-only images
+    this._lastCaptureHash = null;
+    this._staticCaptureCount = 0;
+    // Once we confirm desktopCapturer returns real content, skip native fallback
+    this._desktopCapturerWorks = false;
   }
 
   start(entryId, options = {}) {
@@ -261,48 +266,35 @@ class ScreenshotService {
       if (isMac) {
         // ── macOS Capture Strategy ──
         //
-        // Priority 1: desktopCapturer screen capture (if permission fully granted)
-        //   - No popup, runs in-process
-        //   - May return wallpaper-only for ad-hoc signed apps
+        // ALWAYS use native `screencapture` CLI on macOS.
         //
-        // Priority 2: desktopCapturer window capture
-        //   - Captures frontmost window
-        //   - More reliable for ad-hoc signing
+        // Why: Electron's desktopCapturer returns wallpaper-only images on
+        // ad-hoc signed apps. The images look valid (correct dimensions,
+        // 200-400KB) but contain ONLY the wallpaper layer — no app windows.
+        // This is an macOS security restriction that cannot be worked around
+        // without a real Apple Developer certificate.
         //
-        // Priority 3: Native `screencapture` CLI (last resort)
-        //   - Always captures real content
-        //   - BUT triggers macOS permission prompt on every call
-        //   - Only used if desktopCapturer completely fails
+        // The `screencapture` binary is Apple-signed and trusted by macOS.
+        // It captures the REAL screen content. It does NOT trigger a permission
+        // prompt as long as Screen Recording is granted to TrackFlow in
+        // System Settings. The prompt only appears on the very first capture
+        // if permission hasn't been granted yet — which is expected behavior.
         //
-        // Content validation: if captured image < 15KB, it's likely wallpaper-only
+        // Fallback: if screencapture fails, try desktopCapturer (better than nothing).
 
-        // Try screen capture first — check if it returns real content
-        if (screenSources.length > 0) {
-          const screenBuf = this._captureSingleMonitor(screenSources);
-          if (screenBuf && screenBuf.length > 15000) {
-            buffer = screenBuf;
-            console.log(`[SS] macOS screen capture succeeded (${Math.round(buffer.length / 1024)}KB)`);
-          } else {
-            console.log(`[SS] macOS screen capture too small (${screenBuf ? screenBuf.length : 0} bytes) — likely wallpaper-only`);
+        buffer = await this._macNativeCapture();
+        if (buffer) {
+          console.log(`[SS] macOS native capture succeeded (${Math.round(buffer.length / 1024)}KB)`);
+        } else {
+          // Native failed — try desktopCapturer as fallback
+          console.log('[SS] macOS: native capture failed, trying desktopCapturer fallback');
+          if (windowSources.length > 0) {
+            buffer = this._captureActiveWindow(windowSources);
+            if (buffer) console.log(`[SS] Window capture fallback succeeded (${Math.round(buffer.length / 1024)}KB)`);
           }
-        }
-
-        // If screen capture failed or returned wallpaper, try window capture
-        if (!buffer && windowSources.length > 0) {
-          console.log(`[SS] macOS: trying window capture (${windowSources.length} windows)`);
-          buffer = this._captureActiveWindow(windowSources);
-          if (buffer) {
-            console.log(`[SS] macOS window capture succeeded (${Math.round(buffer.length / 1024)}KB)`);
-          }
-        }
-
-        // Last resort: native screencapture (may trigger permission prompt)
-        // Only use if BOTH desktopCapturer methods failed completely
-        if (!buffer) {
-          console.log('[SS] macOS: desktopCapturer failed, trying native screencapture');
-          buffer = await this._macNativeCapture();
-          if (buffer) {
-            console.log(`[SS] Native capture succeeded (${Math.round(buffer.length / 1024)}KB)`);
+          if (!buffer && screenSources.length > 0) {
+            buffer = this._captureSingleMonitor(screenSources);
+            if (buffer) console.log(`[SS] Screen capture fallback succeeded (${Math.round(buffer.length / 1024)}KB)`);
           }
         }
       } else {
