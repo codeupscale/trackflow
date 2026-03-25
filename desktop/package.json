@@ -1,6 +1,6 @@
 {
   "name": "trackflow-agent",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "TrackFlow Desktop Agent - Workforce Time Tracking & Monitoring",
   "main": "src/main/index.js",
   "author": {
@@ -59,6 +59,12 @@
       "node_modules/better-sqlite3/**",
       "node_modules/sharp/**",
       "node_modules/uiohook-napi/**"
+    ],
+    "extraResources": [
+      {
+        "from": ".env",
+        "to": ".env"
+      }
     ],
     "mac": {
       "category": "public.app-category.productivity",
