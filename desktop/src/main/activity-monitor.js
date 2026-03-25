@@ -198,6 +198,18 @@ class ActivityMonitor {
     });
   }
 
+  /**
+   * Get the current activity score (0-100) based on events accumulated
+   * since the last heartbeat. Called by screenshot-service to attach
+   * a point-in-time activity % to each screenshot — matching Hubstaff's approach.
+   *
+   * Does NOT reset counters (heartbeat does that).
+   */
+  getCurrentScore() {
+    const total = this.keyboardCount + this.mouseCount;
+    return Math.min(100, Math.round((total / MAX_EXPECTED_EVENTS) * 100));
+  }
+
   async getActiveApp() {
     if (os.platform() === 'darwin') {
       return this._execWithTimeout('osascript', [

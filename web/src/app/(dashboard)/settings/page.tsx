@@ -556,7 +556,7 @@ export default function SettingsPage() {
                       value={idleAlertEmailCooldownMin}
                       onChange={(e) => setIdleAlertEmailCooldownMin(e.target.value)}
                       disabled={!idleAlertEmailEnabled}
-                      className="bg-muted border-border text-white w-28"
+                      className="bg-muted border-border text-foreground w-28"
                     />
                     <p className="text-xs text-muted-foreground">
                       Minimum time between emails per employee. Recommended: 60+ minutes.
@@ -567,7 +567,7 @@ export default function SettingsPage() {
 
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <span>
-                  Plan: <strong className="text-white capitalize">{data?.organization.plan}</strong>
+                  Plan: <strong className="text-foreground capitalize">{data?.organization.plan}</strong>
                 </span>
                 {data?.organization.trial_ends_at && (
                   <span>
@@ -640,7 +640,7 @@ export default function SettingsPage() {
                   value={screenshotFirstCaptureDelayMin}
                   onChange={(e) => setScreenshotFirstCaptureDelayMin(e.target.value)}
                   disabled={!isAdmin}
-                  className="bg-muted border-border text-white w-28"
+                  className="bg-muted border-border text-foreground w-28"
                 />
                 <p className="text-xs text-muted-foreground">Minutes before first screenshot when timer starts (0 = immediate)</p>
               </div>
@@ -837,7 +837,7 @@ export default function SettingsPage() {
                   onChange={(e) => setWeeklyLimitHours(e.target.value)}
                   disabled={!isAdmin}
                   placeholder="0 = unlimited"
-                  className="bg-muted border-border text-white w-28"
+                  className="bg-muted border-border text-foreground w-28"
                   aria-label="Weekly hour limit"
                 />
                 <p className="text-xs text-muted-foreground">Maximum hours per week per employee. 0 = unlimited.</p>
