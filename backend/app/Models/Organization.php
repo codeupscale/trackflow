@@ -101,8 +101,8 @@ class Organization extends Model
             // Cooldown (minutes) between repeated idle alert emails for the same employee.
             'idle_alert_email_cooldown_min' => 60,
             // Idle handling behavior: prompt | always | never
-            // Production default: always discard idle time.
-            'keep_idle_time' => 'never',
+            // Production default: prompt user to keep/discard idle time (Hubstaff-like).
+            'keep_idle_time' => 'prompt',
             'timezone' => 'America/New_York',
             'can_add_manual_time' => true,
             'employees_see_all_projects' => false, // if false, employees see only projects they are assigned to
