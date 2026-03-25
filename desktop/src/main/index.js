@@ -59,14 +59,16 @@ const DEFAULT_CONFIG = {
   screenshot_interval: 5,
   idle_timeout: 5,
   idle_detection: true,
-  keep_idle_time: 'never',
+  keep_idle_time: 'prompt',
   blur_screenshots: false,
   idle_alert_auto_stop_min: 10,
   screenshot_capture_immediate_after_idle: true,
   screenshot_first_capture_delay_min: 1,
   idle_check_interval_sec: 10,
   capture_only_when_visible: false,
-  capture_multi_monitor: true,
+  capture_multi_monitor: false,
+  track_urls: true,
+  can_add_manual_time: true,
 };
 
 let tray = null;
@@ -186,11 +188,13 @@ async function initializeApp() {
   });
 
   // Initialize PostHog analytics
-  const posthogKey = process.env.POSTHOG_KEY || '';
-  const posthogHost = process.env.POSTHOG_HOST || 'https://us.i.posthog.com';
-  if (posthogKey) {
-    posthog.init(posthogKey, { host: posthogHost });
-  }
+  // PostHog project API keys are public (same as frontend JS bundles) — safe to hardcode.
+  // Do NOT use process.env here: Electron does not auto-load .env files, and the .env
+  // file is not bundled into the asar, so process.env.POSTHOG_KEY is always undefined
+  // in packaged builds.
+  const posthogKey = 'phc_Nn2GYJdwXB6W7Us0yushtLOvvJ8373wq1jK1XMDjidt';
+  const posthogHost = 'https://us.i.posthog.com';
+  posthog.init(posthogKey, { host: posthogHost });
 
   // Test token validity with retry for transient network errors
   let tokenValid = false;
@@ -253,15 +257,20 @@ async function initializeApp() {
     // This prevents zero-event heartbeats from dragging down the activity score.
     screenshotService?.stop();
     activityMonitor?.stop();
+    stopTrayTimer();
     const policy = config.keep_idle_time || 'prompt';
     if (policy === 'always') {
       idleDetector.resolveIdle();
+      // Restore tray from idle state
+      updateTrayIcon(isTimerRunning);
+      if (isTimerRunning) updateTrayTitle();
       activityMonitor?.start();
       if (isTimerRunning && currentEntry) {
         screenshotService?.start(currentEntry.id, {
           immediateCapture: config.screenshot_capture_immediate_after_idle === true,
         });
       }
+      startTrayTimer();
       return;
     }
     if (policy === 'never') {
@@ -269,6 +278,8 @@ async function initializeApp() {
       dismissIdleAlert();
       return;
     }
+    // Update tray to reflect idle state
+    setTrayText(`Idle (${Math.floor(idleSeconds / 60)}m)`);
     showIdleAlert(idleSeconds, idleStartedAt);
   });
 
@@ -362,6 +373,17 @@ async function initializeApp() {
     const sleepStartedAt = _suspendedAt;
     _suspendedAt = null;
     console.log(`[power] Resumed/unlocked after ${sleepDurationSec}s`);
+
+    // Issue 6: If idleDetector is already in idle state (e.g. idle alert was showing
+    // before sleep), preserve the original idleStartedAt. Just update the idle alert
+    // display with the extended duration and return early.
+    if (idleDetector?.isIdle && idleDetector.idleStartedAt) {
+      const originalIdleStart = idleDetector.idleStartedAt;
+      const totalIdleSec = Math.floor((Date.now() - originalIdleStart) / 1000);
+      console.log(`[power] Already idle since ${new Date(originalIdleStart).toISOString()} — preserving original idle start, total idle: ${totalIdleSec}s`);
+      showIdleAlert(totalIdleSec, originalIdleStart);
+      return;
+    }
 
     const idleThresholdSec = idleDetector?.idleTimeoutSec || (config.idle_timeout || 5) * 60;
 
@@ -930,10 +952,27 @@ function stopTimer() {
 }
 
 // Periodically sync timer state with server to stay in sync with web dashboard
+let _configRefetchCycle = 0;
 function startTimerSync() {
   if (timerSyncInterval) clearInterval(timerSyncInterval);
+  _configRefetchCycle = 0;
   timerSyncInterval = setInterval(async () => {
     if (!apiClient) return;
+
+    // Re-fetch org config every 10th cycle (~5 minutes at 30s interval)
+    _configRefetchCycle++;
+    if (_configRefetchCycle >= 10) {
+      _configRefetchCycle = 0;
+      try {
+        const freshConfig = await apiClient.getConfig();
+        config = { ...DEFAULT_CONFIG, ...freshConfig };
+        idleDetector?.updateConfig(config);
+        console.log('[Config] Re-fetched org config');
+      } catch (e) {
+        // Silent failure — keep using existing config
+      }
+    }
+
     try {
       const status = await apiClient.getTimerStatus();
       const globalTotal = status.today_total ?? 0;
@@ -1135,7 +1174,13 @@ async function handleIdleAction(action, idleDurationOverride = null, reassignPro
   const idleDuration = idleDurationOverride || idleDetector?.getIdleDuration() || 0;
   const idleStartedAt = idleDetector?.idleStartedAt || null;
 
+  posthog.capture(null, 'idle_action', { action, idle_seconds: idleDuration });
+
   idleDetector?.resolveIdle();
+
+  // Restore tray tooltip from idle state back to normal
+  updateTrayIcon(isTimerRunning);
+  if (isTimerRunning) updateTrayTitle();
 
   switch (action) {
     case 'keep':
@@ -1146,6 +1191,8 @@ async function handleIdleAction(action, idleDurationOverride = null, reassignPro
           immediateCapture: config.screenshot_capture_immediate_after_idle === true,
         });
       }
+      idleDetector?.start();
+      startTrayTimer();
       break;
 
     case 'discard':
@@ -1168,6 +1215,15 @@ async function handleIdleAction(action, idleDurationOverride = null, reassignPro
           }
         } catch (e) {
           console.error('Failed to report idle time:', e.message);
+          // Queue for offline retry so idle time is eventually deducted
+          offlineQueue?.add('idle_discard', {
+            time_entry_id: currentEntry?.id,
+            idle_started_at: new Date(idleStartedAt).toISOString(),
+            idle_ended_at: new Date().toISOString(),
+            idle_seconds: idleDuration,
+            action: action,
+            project_id: reassignProjectId || null,
+          });
         }
       }
       // Resume activity monitor and screenshots — idle is over
@@ -1177,6 +1233,8 @@ async function handleIdleAction(action, idleDurationOverride = null, reassignPro
           immediateCapture: config.screenshot_capture_immediate_after_idle === true,
         });
       }
+      idleDetector?.start();
+      startTrayTimer();
       break;
 
     case 'stop':
@@ -1194,6 +1252,14 @@ async function handleIdleAction(action, idleDurationOverride = null, reassignPro
           });
         } catch (e) {
           console.error('Failed to discard idle time before stop:', e.message);
+          // Queue to offline queue so the idle discard is retried on reconnect
+          offlineQueue?.add('idle_discard', {
+            time_entry_id: currentEntry?.id,
+            idle_started_at: new Date(idleStartedAt).toISOString(),
+            idle_ended_at: new Date().toISOString(),
+            idle_seconds: idleDuration,
+            action: 'discard',
+          });
         }
       }
       stopTimer();
@@ -1275,22 +1341,49 @@ function checkForUpdates() {
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.logger = null; // Suppress default electron-updater logging (we do our own)
 
+    // Track whether an update is ready to install
+    let _pendingUpdate = false;
+
     autoUpdater.on('update-available', (info) => {
       console.log(`[updater] Update available: v${info.version}`);
+      posthog.capture(null, 'auto_update_available', { new_version: info.version });
     });
     autoUpdater.on('update-downloaded', (info) => {
       console.log(`[updater] Update downloaded: v${info.version} — will install on quit`);
+      _pendingUpdate = true;
+      posthog.capture(null, 'auto_update_downloaded', { new_version: info.version });
       try {
         const notification = new Notification({
           title: 'TrackFlow Update Ready',
-          body: `Version ${info.version} will be installed when you quit the app.`,
-          silent: true,
+          body: `Version ${info.version} downloaded. Click to restart and update.`,
+          silent: false,
+        });
+        notification.on('click', () => {
+          console.log('[updater] User clicked notification — installing update now');
+          autoUpdater.quitAndInstall(false, true);
         });
         notification.show();
       } catch {}
     });
     // Silently ignore update errors — don't spam logs when no releases exist yet
-    autoUpdater.on('error', () => {});
+    autoUpdater.on('error', (err) => {
+      posthog.captureError(null, err || new Error('auto_update_error'), { type: 'auto_update' });
+    });
+
+    // When app is about to quit, force-install the update if one is pending
+    // This is the belt-and-suspenders fix: autoInstallOnAppQuit should handle it,
+    // but on ad-hoc signed macOS apps it silently fails. This explicit call ensures
+    // the update is actually applied.
+    app.on('before-quit', () => {
+      if (_pendingUpdate) {
+        console.log('[updater] App quitting — installing pending update');
+        try {
+          autoUpdater.quitAndInstall(false, true);
+        } catch (e) {
+          console.error('[updater] quitAndInstall failed:', e.message);
+        }
+      }
+    });
 
     autoUpdater.checkForUpdatesAndNotify().catch(() => {});
   } catch {

@@ -52,9 +52,10 @@ interface OrgSettings {
       idle_check_interval_sec?: number;
       capture_only_when_visible?: boolean;
       capture_multi_monitor?: boolean;
+      track_urls?: boolean;
       require_project?: boolean;
       can_add_manual_time: boolean;
-      weekly_limit_hours?: number;
+      weekly_limit_hours?: number | null;
       timezone: string;
     };
   };
@@ -102,14 +103,17 @@ export default function SettingsPage() {
     screenshotBlur: settings?.blur_screenshots ?? false,
     idleTimeout: settings?.idle_timeout != null && settings.idle_timeout > 0 ? String(settings.idle_timeout) : '0',
     idleTimeoutCustom: settings?.idle_timeout != null && settings.idle_timeout > 0 && ![5, 10, 20].includes(settings.idle_timeout) ? String(settings.idle_timeout) : '',
-    keepIdleTime: (settings?.keep_idle_time as 'prompt' | 'always' | 'never') ?? 'never',
+    keepIdleTime: (settings?.keep_idle_time as 'prompt' | 'always' | 'never') ?? 'prompt',
     idleAlertAutoStopMin: settings?.idle_alert_auto_stop_min != null ? String(settings.idle_alert_auto_stop_min) : '10',
     screenshotImmediateAfterIdle: settings?.screenshot_capture_immediate_after_idle ?? true,
     screenshotFirstCaptureDelayMin: settings?.screenshot_first_capture_delay_min != null ? String(settings.screenshot_first_capture_delay_min) : '1',
     idleCheckIntervalSec: settings?.idle_check_interval_sec != null ? String(settings.idle_check_interval_sec) : '10',
     captureOnlyWhenVisible: settings?.capture_only_when_visible ?? false,
     captureMultiMonitor: settings?.capture_multi_monitor ?? false,
+    trackUrls: settings?.track_urls ?? false,
     allowManualTime: settings?.can_add_manual_time ?? true,
+    requireProject: settings?.require_project ?? false,
+    weeklyLimitHours: settings?.weekly_limit_hours != null && settings.weekly_limit_hours > 0 ? String(settings.weekly_limit_hours) : '0',
   }), [data, settings]);
 
   const [orgName, setOrgName] = useState('');
@@ -125,7 +129,10 @@ export default function SettingsPage() {
   const [idleCheckIntervalSec, setIdleCheckIntervalSec] = useState('10');
   const [captureOnlyWhenVisible, setCaptureOnlyWhenVisible] = useState(false);
   const [captureMultiMonitor, setCaptureMultiMonitor] = useState(false);
+  const [trackUrls, setTrackUrls] = useState(false);
   const [allowManualTime, setAllowManualTime] = useState(true);
+  const [requireProject, setRequireProject] = useState(false);
+  const [weeklyLimitHours, setWeeklyLimitHours] = useState('0');
   const [initialized, setInitialized] = useState(false);
   const [userTimezone, setUserTimezone] = useState(user?.timezone ?? 'UTC');
   const { fetchUser } = useAuthStore();
@@ -147,7 +154,10 @@ export default function SettingsPage() {
     setIdleCheckIntervalSec(defaults.idleCheckIntervalSec);
     setCaptureOnlyWhenVisible(defaults.captureOnlyWhenVisible);
     setCaptureMultiMonitor(defaults.captureMultiMonitor);
+    setTrackUrls(defaults.trackUrls);
     setAllowManualTime(defaults.allowManualTime);
+    setRequireProject(defaults.requireProject);
+    setWeeklyLimitHours(defaults.weeklyLimitHours);
     setInitialized(true);
   }, [data, defaults, initialized, user?.timezone]);
 
@@ -180,8 +190,9 @@ export default function SettingsPage() {
       60,
       Math.max(1, parseInt(String(idleAlertAutoStopMin), 10) || 10)
     );
-    const firstDelayMinVal = Math.min(60, Math.max(0, parseInt(String(screenshotFirstCaptureDelayMin), 10) ?? 1));
-    const idleCheckSecVal = Math.min(60, Math.max(1, parseInt(String(idleCheckIntervalSec), 10) ?? 10));
+    const firstDelayMinVal = Math.min(60, Math.max(0, parseInt(String(screenshotFirstCaptureDelayMin), 10) || 1));
+    const idleCheckSecVal = Math.min(60, Math.max(1, parseInt(String(idleCheckIntervalSec), 10) || 10));
+    const weeklyVal = parseInt(String(weeklyLimitHours), 10) || 0;
     updateMutation.mutate({
       name: orgName,
       settings: {
@@ -196,7 +207,10 @@ export default function SettingsPage() {
         idle_check_interval_sec: idleCheckSecVal,
         capture_only_when_visible: captureOnlyWhenVisible,
         capture_multi_monitor: captureMultiMonitor,
+        track_urls: trackUrls,
         can_add_manual_time: allowManualTime,
+        require_project: requireProject,
+        weekly_limit_hours: weeklyVal > 0 ? weeklyVal : null,
       },
     });
   };
@@ -247,7 +261,7 @@ export default function SettingsPage() {
       <Tabs defaultValue="general">
         <TabsList className="bg-slate-800/50">
           <TabsTrigger value="general">General</TabsTrigger>
-          <TabsTrigger value="tracking">Tracking</TabsTrigger>
+          {isAdmin && <TabsTrigger value="tracking">Tracking</TabsTrigger>}
         </TabsList>
 
         {/* General Tab */}
@@ -367,7 +381,7 @@ export default function SettingsPage() {
         </TabsContent>
 
         {/* Tracking Tab */}
-        <TabsContent value="tracking" className="space-y-6 mt-6">
+        {isAdmin && <TabsContent value="tracking" className="space-y-6 mt-6">
           {/* Screenshot Settings */}
           <Card className="border-slate-800 bg-slate-900/50">
             <CardHeader>
@@ -539,17 +553,76 @@ export default function SettingsPage() {
                   disabled={!isAdmin}
                 />
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Policies */}
+          <Card className="border-slate-800 bg-slate-900/50">
+            <CardHeader>
+              <CardTitle className="text-white">Policies</CardTitle>
+              <CardDescription className="text-slate-400">
+                Rules that apply to all employees in the organization
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-slate-300">Track browser URLs</Label>
+                  <p className="text-xs text-slate-500">Record the active browser URL alongside each screenshot</p>
+                </div>
+                <Switch
+                  checked={trackUrls}
+                  onCheckedChange={setTrackUrls}
+                  disabled={!isAdmin}
+                  aria-label="Track browser URLs"
+                />
+              </div>
               <Separator className="bg-slate-800" />
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-slate-300">Allow Manual Time</Label>
+                  <Label className="text-slate-300">Allow manual time entries</Label>
                   <p className="text-xs text-slate-500">Allow employees to add time entries manually</p>
                 </div>
-                <Switch checked={allowManualTime} onCheckedChange={setAllowManualTime} disabled={!isAdmin} />
+                <Switch
+                  checked={allowManualTime}
+                  onCheckedChange={setAllowManualTime}
+                  disabled={!isAdmin}
+                  aria-label="Allow manual time entries"
+                />
+              </div>
+              <Separator className="bg-slate-800" />
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-slate-300">Require project selection</Label>
+                  <p className="text-xs text-slate-500">Employees must select a project before starting the timer</p>
+                </div>
+                <Switch
+                  checked={requireProject}
+                  onCheckedChange={setRequireProject}
+                  disabled={!isAdmin}
+                  aria-label="Require project selection"
+                />
+              </div>
+              <Separator className="bg-slate-800" />
+              <div className="grid gap-2 max-w-xs">
+                <Label htmlFor="weekly-limit" className="text-slate-300">Weekly hour limit</Label>
+                <Input
+                  id="weekly-limit"
+                  type="number"
+                  min={0}
+                  max={168}
+                  value={weeklyLimitHours}
+                  onChange={(e) => setWeeklyLimitHours(e.target.value)}
+                  disabled={!isAdmin}
+                  placeholder="0 = unlimited"
+                  className="bg-slate-800/50 border-slate-700 text-white w-28"
+                  aria-label="Weekly hour limit"
+                />
+                <p className="text-xs text-slate-500">Maximum hours per week per employee. 0 = unlimited.</p>
               </div>
             </CardContent>
           </Card>
-        </TabsContent>
+        </TabsContent>}
       </Tabs>
     </div>
   );

@@ -224,6 +224,9 @@ class OfflineQueue {
             if (data.file_path) {
               screenshotFilesToDelete.push(data.file_path);
             }
+          } else if (item.type === 'idle_discard') {
+            await apiClient.reportIdleTime(data);
+            deleteIds.push(item.id);
           }
         } catch (e) {
           // Update attempt count
