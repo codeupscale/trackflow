@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 import {
   Card,
   CardContent,
@@ -72,10 +73,10 @@ export default function LoginPage() {
   };
 
   return (
-    <Card className="border-slate-800 bg-slate-900/50 backdrop-blur">
+    <Card className="border-border bg-card/80 backdrop-blur">
       <CardHeader className="space-y-1">
-        <CardTitle className="text-2xl text-center text-white">Sign in</CardTitle>
-        <CardDescription className="text-center text-slate-400">
+        <CardTitle className="text-2xl text-center text-foreground">Sign in</CardTitle>
+        <CardDescription className="text-center text-muted-foreground">
           Enter your credentials to access your account
         </CardDescription>
       </CardHeader>
@@ -83,7 +84,7 @@ export default function LoginPage() {
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             {error && (
-              <div className="bg-red-500/10 text-red-400 text-sm p-3 rounded-md border border-red-500/20">
+              <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-md border border-destructive/20">
                 {error}
               </div>
             )}
@@ -92,13 +93,13 @@ export default function LoginPage() {
               name="email"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-slate-300">Email</FormLabel>
+                  <FormLabel>Email</FormLabel>
                   <FormControl>
                     <Input
                       type="email"
                       placeholder="you@example.com"
                       autoComplete="email"
-                      className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                      className="bg-background"
                       {...field}
                     />
                   </FormControl>
@@ -112,20 +113,19 @@ export default function LoginPage() {
               render={({ field }) => (
                 <FormItem>
                   <div className="flex items-center justify-between">
-                    <FormLabel className="text-slate-300">Password</FormLabel>
+                    <FormLabel>Password</FormLabel>
                     <Link
                       href="/forgot-password"
-                      className="text-xs text-slate-400 hover:text-blue-400 underline-offset-4 hover:underline transition-colors"
+                      className="text-xs text-muted-foreground hover:text-blue-600 underline-offset-4 hover:underline transition-colors"
                     >
                       Forgot password?
                     </Link>
                   </div>
                   <FormControl>
-                    <Input
-                      type="password"
+                    <PasswordInput
                       placeholder="Enter your password"
                       autoComplete="current-password"
-                      className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                      className="bg-background"
                       {...field}
                     />
                   </FormControl>
@@ -135,7 +135,7 @@ export default function LoginPage() {
             />
             <Button
               type="submit"
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+              className="w-full"
               disabled={form.formState.isSubmitting}
             >
               {form.formState.isSubmitting && (
@@ -146,12 +146,12 @@ export default function LoginPage() {
           </form>
         </Form>
       </CardContent>
-      <CardFooter className="flex justify-center border-t border-slate-800 pt-6">
-        <p className="text-sm text-slate-400">
+      <CardFooter className="flex justify-center border-t border-border pt-6">
+        <p className="text-sm text-muted-foreground">
           Don&apos;t have an account?{' '}
           <Link
             href="/register"
-            className="text-blue-400 font-medium hover:underline underline-offset-4"
+            className="text-primary font-medium hover:underline underline-offset-4"
           >
             Sign up
           </Link>

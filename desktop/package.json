@@ -95,8 +95,7 @@
       "identity": null,
       "extendInfo": {
         "NSScreenCaptureUsageDescription": "TrackFlow needs screen capture access to take periodic screenshots for time tracking.",
-        "NSAppleEventsUsageDescription": "TrackFlow needs automation access to detect the active application name.",
-        "LSUIElement": true
+        "NSAppleEventsUsageDescription": "TrackFlow needs automation access to detect the active application name."
       }
     },
     "dmg": {

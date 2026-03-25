@@ -74,6 +74,38 @@
       border-radius: 6px;
       border: 1px solid rgba(239, 68, 68, 0.2);
     }
+
+    /* Password toggle */
+    .password-wrap {
+      position: relative;
+    }
+    .password-wrap input {
+      padding-right: 40px;
+    }
+    .password-toggle {
+      position: absolute;
+      right: 0;
+      top: 0;
+      height: 100%;
+      width: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      color: #64748b;
+      cursor: pointer;
+      transition: color 0.15s;
+      padding: 0;
+    }
+    .password-toggle:hover {
+      color: #e2e8f0;
+    }
+    .password-toggle:focus-visible {
+      outline: 2px solid #3b82f6;
+      outline-offset: -2px;
+      border-radius: 4px;
+    }
   </style>
 </head>
 <body>
@@ -99,7 +131,21 @@
         </div>
         <div class="form-group">
           <label for="password">Password</label>
-          <input type="password" id="password" placeholder="Your password" required autocomplete="current-password">
+          <div class="password-wrap">
+            <input type="password" id="password" placeholder="Your password" required autocomplete="current-password">
+            <button
+              type="button"
+              class="password-toggle"
+              id="passwordToggle"
+              aria-label="Show password"
+              aria-controls="password"
+              aria-pressed="false"
+              title="Show password"
+            >
+              <svg aria-hidden="true" id="eyeIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>
+              <svg aria-hidden="true" id="eyeOffIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/></svg>
+            </button>
+          </div>
         </div>
         <button type="submit" class="btn btn-primary submit-btn" id="submitBtn">Sign In</button>
       </form>
@@ -112,6 +158,38 @@
     const form = document.getElementById('loginForm');
     const errorMsg = document.getElementById('errorMsg');
     const submitBtn = document.getElementById('submitBtn');
+
+    // Password visibility toggle
+    const passwordInput = document.getElementById('password');
+    const passwordToggle = document.getElementById('passwordToggle');
+    const eyeIcon = document.getElementById('eyeIcon');
+    const eyeOffIcon = document.getElementById('eyeOffIcon');
+    passwordToggle.addEventListener('click', () => {
+      const wasPassword = passwordInput.type === 'password';
+      const nextType = wasPassword ? 'text' : 'password';
+
+      const start = passwordInput.selectionStart;
+      const end = passwordInput.selectionEnd;
+
+      passwordInput.type = nextType;
+
+      if (typeof start === 'number' && typeof end === 'number') {
+        try {
+          passwordInput.setSelectionRange(start, end);
+        } catch (_) {
+          // Selection APIs may throw on some platforms; safe to ignore.
+        }
+      }
+
+      const nextIsPassword = nextType === 'password';
+      eyeIcon.style.display = nextIsPassword ? 'block' : 'none';
+      eyeOffIcon.style.display = nextIsPassword ? 'none' : 'block';
+
+      const label = nextIsPassword ? 'Show password' : 'Hide password';
+      passwordToggle.setAttribute('aria-label', label);
+      passwordToggle.setAttribute('title', label);
+      passwordToggle.setAttribute('aria-pressed', String(!nextIsPassword));
+    });
 
     // Close button — works on all platforms (replaces native traffic lights / X button)
     document.getElementById('closeBtn').addEventListener('click', () => {

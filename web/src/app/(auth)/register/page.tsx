@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 import {
   Card,
   CardContent,
@@ -120,10 +121,10 @@ export default function RegisterPage() {
   };
 
   return (
-    <Card className="border-slate-800 bg-slate-900/50 backdrop-blur">
+    <Card className="border-border bg-card/80 backdrop-blur">
       <CardHeader className="space-y-1">
-        <CardTitle className="text-2xl text-center text-white">Create an account</CardTitle>
-        <CardDescription className="text-center text-slate-400">
+        <CardTitle className="text-2xl text-center text-foreground">Create an account</CardTitle>
+        <CardDescription className="text-center text-muted-foreground">
           Start your free trial today. No credit card required.
         </CardDescription>
       </CardHeader>
@@ -131,7 +132,7 @@ export default function RegisterPage() {
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             {error && (
-              <div className="bg-red-500/10 text-red-400 text-sm p-3 rounded-md border border-red-500/20">
+              <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-md border border-destructive/20">
                 {error}
               </div>
             )}
@@ -140,12 +141,12 @@ export default function RegisterPage() {
               name="name"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-slate-300">Full Name</FormLabel>
+                  <FormLabel>Full Name</FormLabel>
                   <FormControl>
                     <Input
                       placeholder="John Doe"
                       autoComplete="name"
-                      className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                      className="bg-background"
                       {...field}
                     />
                   </FormControl>
@@ -158,13 +159,13 @@ export default function RegisterPage() {
               name="email"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-slate-300">Email</FormLabel>
+                  <FormLabel>Email</FormLabel>
                   <FormControl>
                     <Input
                       type="email"
                       placeholder="you@example.com"
                       autoComplete="email"
-                      className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                      className="bg-background"
                       {...field}
                     />
                   </FormControl>
@@ -177,11 +178,11 @@ export default function RegisterPage() {
               name="company_name"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-slate-300">Company Name</FormLabel>
+                  <FormLabel>Company Name</FormLabel>
                   <FormControl>
                     <Input
                       placeholder="Acme Inc."
-                      className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                      className="bg-background"
                       {...field}
                     />
                   </FormControl>
@@ -194,10 +195,10 @@ export default function RegisterPage() {
               name="timezone"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-slate-300">Timezone</FormLabel>
+                  <FormLabel>Timezone</FormLabel>
                   <Select value={field.value} onValueChange={field.onChange}>
                     <FormControl>
-                      <SelectTrigger className="w-full bg-slate-800/50 border-slate-700 text-white">
+                      <SelectTrigger className="w-full bg-background">
                         <SelectValue placeholder="Select timezone" />
                       </SelectTrigger>
                     </FormControl>
@@ -218,13 +219,12 @@ export default function RegisterPage() {
               name="password"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-slate-300">Password</FormLabel>
+                  <FormLabel>Password</FormLabel>
                   <FormControl>
-                    <Input
-                      type="password"
+                    <PasswordInput
                       placeholder="Create a password"
                       autoComplete="new-password"
-                      className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                      className="bg-background"
                       {...field}
                     />
                   </FormControl>
@@ -237,13 +237,12 @@ export default function RegisterPage() {
               name="password_confirmation"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-slate-300">Confirm Password</FormLabel>
+                  <FormLabel>Confirm Password</FormLabel>
                   <FormControl>
-                    <Input
-                      type="password"
+                    <PasswordInput
                       placeholder="Confirm your password"
                       autoComplete="new-password"
-                      className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                      className="bg-background"
                       {...field}
                     />
                   </FormControl>
@@ -253,7 +252,7 @@ export default function RegisterPage() {
             />
             <Button
               type="submit"
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+              className="w-full"
               disabled={form.formState.isSubmitting}
             >
               {form.formState.isSubmitting && (
@@ -264,12 +263,12 @@ export default function RegisterPage() {
           </form>
         </Form>
       </CardContent>
-      <CardFooter className="flex justify-center border-t border-slate-800 pt-6">
-        <p className="text-sm text-slate-400">
+      <CardFooter className="flex justify-center border-t border-border pt-6">
+        <p className="text-sm text-muted-foreground">
           Already have an account?{' '}
           <Link
             href="/login"
-            className="text-blue-400 font-medium hover:underline underline-offset-4"
+            className="text-blue-600 font-medium hover:underline underline-offset-4"
           >
             Sign in
           </Link>

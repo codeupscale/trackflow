@@ -37,6 +37,7 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet';
 import { TimerWidget } from '@/components/timer-widget';
+import { ThemeToggle } from '@/components/theme-toggle';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { OfflineBanner } from '@/components/offline-banner';
 import { useAuthStore } from '@/stores/auth-store';
@@ -83,7 +84,7 @@ function SidebarNav({
               'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
               isActive
                 ? 'bg-blue-600/10 text-blue-400'
-                : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200',
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground',
               collapsed && 'justify-center px-2'
             )}
           >
@@ -133,9 +134,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950">
-        <div className="flex items-center gap-2 text-slate-400">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-600 border-t-blue-500" />
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-muted border-t-blue-500" />
           Loading...
         </div>
       </div>
@@ -143,23 +144,23 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-950">
+    <div className="flex h-screen overflow-hidden bg-background">
       {/* Desktop Sidebar */}
       <aside
         className={cn(
-          'hidden lg:flex flex-col border-r border-slate-800 bg-slate-900/50 transition-all duration-300',
+          'hidden lg:flex flex-col border-r border-border bg-muted/50 transition-all duration-300',
           collapsed ? 'w-16' : 'w-64'
         )}
       >
         {/* Logo */}
         <div
           className={cn(
-            'flex items-center h-14 px-4 border-b border-slate-800',
+            'flex items-center h-14 px-4 border-b border-border',
             collapsed ? 'justify-center' : 'justify-between'
           )}
         >
           {!collapsed && (
-            <Link href="/dashboard" className="text-lg font-bold text-white tracking-tight">
+            <Link href="/dashboard" className="text-lg font-bold text-foreground tracking-tight">
               TrackFlow
             </Link>
           )}
@@ -167,7 +168,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             variant="ghost"
             size="sm"
             onClick={() => setCollapsed(!collapsed)}
-            className="h-8 w-8 p-0 text-slate-400 hover:text-white"
+            className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
             aria-label="Toggle sidebar"
           >
             <ChevronLeft
@@ -186,8 +187,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
         {/* Sidebar footer */}
         {!collapsed && (
-          <div className="p-4 border-t border-slate-800">
-            <p className="text-xs text-slate-500">
+          <div className="p-4 border-t border-border">
+            <p className="text-xs text-muted-foreground">
               {user?.organization?.name || 'Organization'}
             </p>
           </div>
@@ -197,19 +198,19 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       {/* Main Content */}
       <div className="flex flex-col flex-1 overflow-hidden">
         {/* Top Header */}
-        <header className="flex items-center justify-between h-14 px-4 lg:px-6 border-b border-slate-800 bg-slate-900/50">
+        <header className="flex items-center justify-between h-14 px-4 lg:px-6 border-b border-border bg-card/50">
           <div className="flex items-center gap-3">
             {/* Mobile Sidebar Toggle */}
             <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
               <SheetTrigger
-                className="lg:hidden inline-flex items-center justify-center rounded-md h-8 w-8 hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                className="lg:hidden inline-flex items-center justify-center rounded-md h-8 w-8 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
                 aria-label="Toggle sidebar"
               >
                 <Menu className="h-5 w-5" />
               </SheetTrigger>
-              <SheetContent side="left" className="w-64 bg-slate-900 border-slate-800 p-0">
-                <SheetHeader className="px-4 py-4 border-b border-slate-800">
-                  <SheetTitle className="text-white text-lg font-bold">TrackFlow</SheetTitle>
+              <SheetContent side="left" className="w-64 bg-background border-border p-0">
+                <SheetHeader className="px-4 py-4 border-b border-border">
+                  <SheetTitle className="text-foreground text-lg font-bold">TrackFlow</SheetTitle>
                 </SheetHeader>
                 <div className="py-4">
                   <SidebarNav collapsed={false} onNavClick={() => setMobileOpen(false)} role={user?.role} />
@@ -225,12 +226,13 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
           {/* Right side */}
           <div className="flex items-center gap-3">
-            <Separator orientation="vertical" className="h-6 bg-slate-800 hidden md:block" />
+            <ThemeToggle />
+            <Separator orientation="vertical" className="h-6 hidden md:block" />
 
             {/* User Dropdown */}
             <DropdownMenu>
               <DropdownMenuTrigger className="flex items-center gap-2 outline-none cursor-pointer" aria-label="User menu">
-                <Avatar className="h-8 w-8 border border-slate-700">
+                <Avatar className="h-8 w-8 border border-border">
                   <AvatarImage
                     src={user?.avatar_url || undefined}
                     alt={user?.name || 'User'}
@@ -240,8 +242,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                   </AvatarFallback>
                 </Avatar>
                 <div className="hidden md:block text-left">
-                  <p className="text-sm font-medium text-slate-200 leading-none">{user?.name}</p>
-                  <p className="text-xs text-slate-500 mt-0.5 capitalize">{user?.role}</p>
+                  <p className="text-sm font-medium text-foreground leading-none">{user?.name}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5 capitalize">{user?.role}</p>
                 </div>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" side="bottom" sideOffset={8} className="w-56">

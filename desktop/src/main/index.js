@@ -38,6 +38,7 @@ const IdleDetector = require('./idle-detector');
 const OfflineQueue = require('./offline-queue');
 const { getToken, setToken, getRefreshToken, setRefreshToken, deleteToken } = require('./keychain');
 const posthog = require('./posthog');
+const { getTrayIcon } = require('./tray-icons');
 
 const WEB_DASHBOARD_URL = process.env.TRACKFLOW_WEB_URL || 'https://trackflow.codeupscale.com';
 
@@ -285,9 +286,9 @@ async function forceLogout() {
   }
   popupWindow = null;
 
-  if (process.platform === 'darwin') {
-    app.dock.show();
-  }
+  // Update tray icon to idle state
+  updateTrayIcon(false);
+  setTrayText('');
 
   createLoginWindow();
   _forceLogoutInProgress = false;
@@ -426,10 +427,7 @@ async function initializeApp() {
     } catch {}
   });
 
-  // Hide dock icon on macOS once authenticated (tray-only mode)
-  if (process.platform === 'darwin') {
-    app.dock.hide();
-  }
+  // Keep dock icon visible on macOS — the app has both tray and dock presence
 
   createTray();
   setupIPC();
@@ -579,30 +577,24 @@ function createTray() {
     return;
   }
 
-  const iconPath = path.join(__dirname, '..', '..', 'assets', 'tray-icon.png');
-  let icon = nativeImage.createFromPath(iconPath);
-
-  // Fallback: create a tiny 16x16 blue square if tray-icon.png missing
-  if (icon.isEmpty()) {
-    const size = 16;
-    const buf = Buffer.alloc(size * size * 4);
-    for (let i = 0; i < size * size; i++) {
-      buf[i * 4] = 59;      // R (#3b82f6)
-      buf[i * 4 + 1] = 130; // G
-      buf[i * 4 + 2] = 246; // B
-      buf[i * 4 + 3] = 255; // A
-    }
-    icon = nativeImage.createFromBuffer(buf, { width: size, height: size });
-  }
+  const icon = getTrayIcon(false);
 
   tray = new Tray(icon);
   tray.setToolTip('TrackFlow');
 
+  // macOS: left-click toggles popup window visibility
+  // Windows/Linux: left-click also toggles popup
   tray.on('click', () => {
-    if (isAuthenticated) {
-      showPopup();
-    } else {
+    if (!isAuthenticated) {
       createLoginWindow();
+      return;
+    }
+
+    // Toggle popup visibility
+    if (popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible()) {
+      popupWindow.hide();
+    } else {
+      showPopup();
     }
   });
 
@@ -631,51 +623,83 @@ async function openDashboardInBrowser() {
 function buildTrayContextMenu() {
   if (!isAuthenticated) {
     return Menu.buildFromTemplate([
-      { label: 'Open TrackFlow', click: () => createLoginWindow() },
+      { label: 'Sign In to TrackFlow', click: () => createLoginWindow() },
       { type: 'separator' },
-      { label: 'Quit', click: () => app.quit() },
+      { label: 'Quit TrackFlow', click: () => app.quit() },
     ]);
   }
 
-  const projectItems = cachedProjects.map((p) => ({
-    label: p.name,
-    enabled: !isTimerRunning,
-    click: () => startTimer(p.id),
-  }));
+  const template = [];
 
-  const template = [
-    { label: 'Open Dashboard', click: () => openDashboardInBrowser() },
-    { label: 'Open TrackFlow', click: () => showPopup() },
-    { type: 'separator' },
-  ];
-
-  if (projectItems.length > 0) {
-    template.push({
-      label: 'Start Timer',
-      enabled: !isTimerRunning,
-      submenu: [
-        { label: 'No Project', click: () => startTimer() },
-        { type: 'separator' },
-        ...projectItems,
-      ],
-    });
+  // ── Status header ──────────────────────────────────────────────────────
+  if (isTimerRunning && currentEntry) {
+    const elapsed = _cachedStartedAtMs
+      ? Math.floor((Date.now() - _cachedStartedAtMs) / 1000)
+      : 0;
+    const projectName = currentEntry.project?.name || 'No Project';
+    template.push(
+      { label: `Tracking: ${formatTimeShort(todayTotalCurrentProject + elapsed)}`, enabled: false },
+      { label: `Project: ${projectName}`, enabled: false },
+      { type: 'separator' }
+    );
   } else {
-    template.push({
-      label: 'Start Timer',
-      enabled: !isTimerRunning,
-      click: () => startTimer(),
-    });
+    const totalLabel = todayTotalGlobal > 0
+      ? `Today: ${formatTimeShort(todayTotalGlobal)}`
+      : 'Not tracking';
+    template.push(
+      { label: totalLabel, enabled: false },
+      { type: 'separator' }
+    );
   }
 
+  // ── Timer controls ─────────────────────────────────────────────────────
+  if (isTimerRunning) {
+    template.push({
+      label: 'Stop Timer',
+      click: () => stopTimer(),
+    });
+  } else {
+    const projectItems = cachedProjects.map((p) => ({
+      label: p.name,
+      click: () => startTimer(p.id),
+    }));
+
+    if (projectItems.length > 0) {
+      template.push({
+        label: 'Start Timer',
+        submenu: [
+          { label: 'No Project', click: () => startTimer() },
+          { type: 'separator' },
+          ...projectItems,
+        ],
+      });
+    } else {
+      template.push({
+        label: 'Start Timer',
+        click: () => startTimer(),
+      });
+    }
+  }
+
+  template.push({ type: 'separator' });
+
+  // ── Navigation ─────────────────────────────────────────────────────────
+  template.push(
+    { label: 'Open App Window', click: () => showPopup() },
+    { label: 'Open Dashboard', click: () => openDashboardInBrowser() }
+  );
+
+  template.push({ type: 'separator' });
+
+  // ── Account & app ──────────────────────────────────────────────────────
   template.push(
     {
-      label: 'Stop Timer',
-      enabled: isTimerRunning,
-      click: () => stopTimer(),
+      label: 'Sign Out',
+      click: () => performLogout(),
     },
     { type: 'separator' },
     {
-      label: 'Quit',
+      label: 'Quit TrackFlow',
       click: () => app.quit(),
     }
   );
@@ -812,6 +836,60 @@ function validateIdleAction(action) {
   return valid.includes(action) ? action : null;
 }
 
+async function performLogout() {
+  posthog.capture(currentEntry?.user_id || 'unknown', 'user_logged_out', {});
+
+  // Force stop timer on server regardless of local state
+  if (apiClient) {
+    try {
+      await apiClient.stopTimer();
+    } catch {}
+  }
+
+  isTimerRunning = false;
+  currentEntry = null;
+  _cachedStartedAtMs = null;
+  isAuthenticated = false;
+  activityMonitor?.stop();
+  screenshotService?.stop();
+  idleDetector?.stop();
+  dismissIdleAlert();
+
+  if (timerSyncInterval) {
+    clearInterval(timerSyncInterval);
+    timerSyncInterval = null;
+  }
+  stopTrayTimer();
+
+  // CRITICAL: Clear and close offline queue BEFORE deleting tokens.
+  // Prevents queued heartbeats/screenshots from being uploaded under a different user.
+  if (offlineQueue) {
+    offlineQueue.close();
+    offlineQueue = null;
+  }
+
+  await deleteToken();
+  apiClient = null;
+  activityMonitor = null;
+  screenshotService = null;
+  idleDetector = null;
+  cachedProjects = [];
+  todayTotalGlobal = 0;
+  todayTotalCurrentProject = 0;
+  config = {};
+
+  if (popupWindow && !popupWindow.isDestroyed()) {
+    popupWindow.destroy();
+  }
+  popupWindow = null;
+
+  // Update tray icon to idle state
+  updateTrayIcon(false);
+  setTrayText('');
+
+  createLoginWindow();
+}
+
 function setupIPC() {
   // Remove previous handlers to avoid duplicate registration
   ipcMain.removeHandler('get-timer-state');
@@ -895,57 +973,7 @@ function setupIPC() {
   });
 
   ipcMain.handle('logout', async () => {
-    posthog.capture(currentEntry?.user_id || 'unknown', 'user_logged_out', {});
-
-    // Force stop timer on server regardless of local state
-    if (apiClient) {
-      try {
-        await apiClient.stopTimer();
-      } catch {}
-    }
-
-    isTimerRunning = false;
-    currentEntry = null;
-    _cachedStartedAtMs = null;
-    isAuthenticated = false;
-    activityMonitor?.stop();
-    screenshotService?.stop();
-    idleDetector?.stop();
-    dismissIdleAlert();
-
-    if (timerSyncInterval) {
-      clearInterval(timerSyncInterval);
-      timerSyncInterval = null;
-    }
-    stopTrayTimer();
-
-    // CRITICAL: Clear and close offline queue BEFORE deleting tokens.
-    // Prevents queued heartbeats/screenshots from being uploaded under a different user.
-    if (offlineQueue) {
-      offlineQueue.close();
-      offlineQueue = null;
-    }
-
-    await deleteToken();
-    apiClient = null;
-    activityMonitor = null;
-    screenshotService = null;
-    idleDetector = null;
-    cachedProjects = [];
-    todayTotalGlobal = 0;
-    todayTotalCurrentProject = 0;
-    config = {};
-
-    if (popupWindow && !popupWindow.isDestroyed()) {
-      popupWindow.destroy();
-    }
-    popupWindow = null;
-
-    if (process.platform === 'darwin') {
-      app.dock.show();
-    }
-
-    createLoginWindow();
+    return await performLogout();
   });
 
   ipcMain.handle('open-dashboard', async () => {
@@ -1182,6 +1210,12 @@ function formatTimeShort(seconds) {
 
 function updateTrayIcon(running) {
   if (!tray) return;
+  try {
+    const icon = getTrayIcon(running);
+    tray.setImage(icon);
+  } catch (e) {
+    console.warn('[Tray] Failed to update icon:', e.message);
+  }
   tray.setToolTip(running ? 'TrackFlow - Timer Running' : 'TrackFlow');
 }
 
@@ -1304,9 +1338,6 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
     idleAlertWindow = null;
   });
 
-  if (process.platform === 'darwin') {
-    app.dock.show();
-  }
 }
 
 function dismissIdleAlert() {
@@ -1314,10 +1345,6 @@ function dismissIdleAlert() {
     idleAlertWindow.destroy();
   }
   idleAlertWindow = null;
-
-  if (process.platform === 'darwin' && isAuthenticated) {
-    app.dock.hide();
-  }
 }
 
 async function handleIdleAction(action, idleDurationOverride = null, reassignProjectId = null) {
