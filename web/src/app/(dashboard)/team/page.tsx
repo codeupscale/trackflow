@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Users,
@@ -98,18 +98,19 @@ interface Invitation {
   };
 }
 
-type PaginationMeta = {
+type LaravelPaginator<T> = {
+  data: T[];
   current_page: number;
   last_page: number;
   total: number;
   per_page: number;
+  from: number | null;
+  to: number | null;
 };
 
-type PaginatedResponse<T> = {
-  data: T[];
-  meta: PaginationMeta;
-  // Backward-compat key returned by backend for older builds
-  invitations?: T[];
+const parsePositiveInt = (value: string | null, fallback: number) => {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
 const roleBadgeClass: Record<string, string> = {
@@ -128,15 +129,13 @@ const resetPasswordEndpoint = (userId: string) => `/users/${userId}/password-res
 
 export default function TeamPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user } = useAuthStore();
   const queryClient = useQueryClient();
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<string>('employee');
-  const [membersPage, setMembersPage] = useState(1);
-  const [membersPerPage] = useState(20);
-  const [invitesPage, setInvitesPage] = useState(1);
-  const [invitesPerPage] = useState(20);
+  const [inviteErrors, setInviteErrors] = useState<{ email?: string; role?: string }>({});
   const [resetPasswordOpen, setResetPasswordOpen] = useState(false);
   const [resetPasswordMember, setResetPasswordMember] = useState<TeamMember | null>(null);
   const [generateRandomPassword, setGenerateRandomPassword] = useState(true);
@@ -157,10 +156,29 @@ export default function TeamPage() {
     }
   }, [user?.role, router]);
 
-  const { data: membersResponse, isLoading } = useQuery<PaginatedResponse<TeamMember>>({
-    queryKey: ['team-members', membersPage, membersPerPage],
+  const canManageInvites = user?.role === 'owner' || user?.role === 'admin';
+
+  const membersPage = parsePositiveInt(searchParams.get('members_page'), 1);
+  const membersPerPage = parsePositiveInt(searchParams.get('members_per_page'), 50);
+  const invitesPage = parsePositiveInt(searchParams.get('invites_page'), 1);
+  const invitesPerPage = parsePositiveInt(searchParams.get('invites_per_page'), 50);
+
+  const setSearchParam = (key: string, value: string) => {
+    const next = new URLSearchParams(searchParams.toString());
+    next.set(key, value);
+    router.replace(`/team?${next.toString()}`);
+  };
+
+  const {
+    data: membersResponse,
+    isLoading,
+    isError: membersIsError,
+  } = useQuery<LaravelPaginator<TeamMember>>({
+    queryKey: ['team-members', { page: membersPage, per_page: membersPerPage }],
     queryFn: async () => {
-      const res = await api.get('/users', { params: { page: membersPage, per_page: membersPerPage } });
+      const res = await api.get('/users', {
+        params: { page: membersPage, per_page: membersPerPage },
+      });
       return res.data;
     },
     enabled: user?.role !== 'employee',
@@ -175,14 +193,21 @@ export default function TeamPage() {
     enabled: user?.role !== 'employee',
   });
 
-  const { data: invitationsResponse, isLoading: invitesLoading } = useQuery<PaginatedResponse<Invitation>>({
-    queryKey: ['invitations', invitesPage, invitesPerPage],
+  const {
+    data: invitationsResponse,
+    isLoading: invitesLoading,
+    isError: invitesIsError,
+    error: invitesError,
+  } = useQuery<LaravelPaginator<Invitation>>({
+    queryKey: ['invitations', { page: invitesPage, per_page: invitesPerPage }],
     queryFn: async () => {
-      const res = await api.get('/invitations', { params: { page: invitesPage, per_page: invitesPerPage } });
+      const res = await api.get('/invitations', {
+        params: { page: invitesPage, per_page: invitesPerPage },
+      });
       return res.data;
     },
     retry: false,
-    enabled: user?.role !== 'employee',
+    enabled: user?.role !== 'employee' && canManageInvites,
   });
 
   const inviteMutation = useMutation({
@@ -196,11 +221,34 @@ export default function TeamPage() {
       setInviteOpen(false);
       setInviteEmail('');
       setInviteRole('employee');
+      setInviteErrors({});
       toast.success('Invitation sent successfully');
     },
     onError: (err: unknown) => {
-      const axiosError = err as { response?: { data?: { message?: string } } };
-      toast.error(axiosError.response?.data?.message || 'Failed to send invitation');
+      const axiosErr = err as {
+        message?: string;
+        response?: { data?: ApiValidationErrorResponse; status?: number };
+      };
+
+      const status = axiosErr.response?.status;
+      if (status === 403) {
+        toast.error('You don’t have permission to send invitations.');
+        return;
+      }
+
+      const errors = axiosErr.response?.data?.errors;
+      if (errors) {
+        setInviteErrors({
+          email: errors.email?.[0],
+          role: errors.role?.[0],
+        });
+      }
+
+      toast.error(
+        axiosErr.response?.data?.message ||
+          axiosErr.message ||
+          'Failed to send invitation'
+      );
     },
   });
 
@@ -381,20 +429,18 @@ export default function TeamPage() {
   }
 
   const members = membersResponse?.data ?? [];
-  const membersMeta = membersResponse?.meta;
-  const invitations = invitationsResponse?.data ?? invitationsResponse?.invitations ?? [];
-  const invitesMeta = invitationsResponse?.meta;
+  const invitations = invitationsResponse?.data ?? [];
 
   const activeMembers = members.filter((m) => m.is_active).length;
-  const totalMembers = membersMeta?.total ?? members.length;
+  const totalMembers = membersResponse?.total ?? members.length;
 
   const handleInvite = (e: React.FormEvent) => {
     e.preventDefault();
     if (!inviteEmail.trim()) return;
+    setInviteErrors({});
     inviteMutation.mutate({ email: inviteEmail.trim(), role: inviteRole });
   };
 
-  const canInvite = user?.role === 'owner' || user?.role === 'admin';
   const seatLimitReached =
     !!usage &&
     usage.limit !== 'unlimited' &&
@@ -411,9 +457,12 @@ export default function TeamPage() {
             Manage your team members and roles
           </p>
         </div>
-        {canInvite && (
+        {canManageInvites && (
           <Button
-            onClick={() => setInviteOpen(true)}
+            onClick={() => {
+              setInviteErrors({});
+              setInviteOpen(true);
+            }}
             disabled={seatLimitReached}
             className="bg-blue-600 hover:bg-blue-700 text-foreground disabled:opacity-60"
           >
@@ -421,7 +470,13 @@ export default function TeamPage() {
             {seatLimitReached ? 'Seat limit reached' : 'Invite Member'}
           </Button>
         )}
-        <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
+        <Dialog
+          open={inviteOpen}
+          onOpenChange={(open) => {
+            setInviteOpen(open);
+            if (!open) setInviteErrors({});
+          }}
+        >
           <DialogContent className="bg-card border-border">
             <form onSubmit={handleInvite}>
               <DialogHeader>
@@ -440,16 +495,40 @@ export default function TeamPage() {
                       type="email"
                       placeholder="colleague@company.com"
                       value={inviteEmail}
-                      onChange={(e) => setInviteEmail(e.target.value)}
-                      className="pl-10 bg-muted border-border text-white placeholder:text-muted-foreground"
+                      onChange={(e) => {
+                        setInviteEmail(e.target.value);
+                        if (inviteErrors.email) {
+                          setInviteErrors((prev) => ({ ...prev, email: undefined }));
+                        }
+                      }}
+                      aria-invalid={!!inviteErrors.email}
+                      className={`pl-10 bg-muted border-border text-white placeholder:text-muted-foreground ${
+                        inviteErrors.email ? 'border-destructive focus-visible:ring-destructive' : ''
+                      }`}
                       required
                     />
                   </div>
+                  {inviteErrors.email && (
+                    <p className="text-xs text-destructive" role="alert">
+                      {inviteErrors.email}
+                    </p>
+                  )}
                 </div>
                 <div className="grid gap-2">
                   <Label className="text-foreground">Role</Label>
-                  <Select value={inviteRole} onValueChange={(val) => setInviteRole(val ?? 'employee')}>
-                    <SelectTrigger className="w-full bg-muted border-border">
+                  <Select
+                    value={inviteRole}
+                    onValueChange={(val) => {
+                      setInviteRole(val ?? 'employee');
+                      if (inviteErrors.role) {
+                        setInviteErrors((prev) => ({ ...prev, role: undefined }));
+                      }
+                    }}
+                  >
+                    <SelectTrigger
+                      className={`w-full bg-muted border-border ${inviteErrors.role ? 'border-destructive' : ''}`}
+                      aria-invalid={!!inviteErrors.role}
+                    >
                       <SelectValue placeholder="Select role" />
                     </SelectTrigger>
                     <SelectContent>
@@ -458,6 +537,11 @@ export default function TeamPage() {
                       <SelectItem value="admin">Admin</SelectItem>
                     </SelectContent>
                   </Select>
+                  {inviteErrors.role && (
+                    <p className="text-xs text-destructive" role="alert">
+                      {inviteErrors.role}
+                    </p>
+                  )}
                 </div>
               </div>
               <DialogFooter>
@@ -550,117 +634,139 @@ export default function TeamPage() {
 
       {/* Team Table */}
       {/* Pending invitations */}
-      <Card className="border-border bg-card">
-        <CardHeader>
-          <CardTitle className="text-foreground">Pending invitations</CardTitle>
-          <CardDescription className="text-muted-foreground">
-            Invites that haven&apos;t been accepted yet (expire after 7 days)
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {invitesLoading ? (
-            <div className="space-y-3">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <div key={i} className="h-12 bg-muted rounded animate-pulse" />
-              ))}
-            </div>
-          ) : invitations.length === 0 ? (
-            <div className="text-sm text-muted-foreground">
-              No pending invitations.
-            </div>
-          ) : (
-            <>
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-border hover:bg-transparent">
-                    <TableHead className="text-muted-foreground">Email</TableHead>
-                    <TableHead className="text-muted-foreground">Role</TableHead>
-                    <TableHead className="text-muted-foreground">Invited by</TableHead>
-                    <TableHead className="text-muted-foreground">Expires</TableHead>
-                    <TableHead className="text-muted-foreground text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {invitations.map((inv) => (
-                    <TableRow key={inv.id} className="border-border">
-                      <TableCell className="text-sm text-foreground">{inv.email}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={roleBadgeClass[inv.role]}>
-                          {inv.role}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {inv.creator?.name || '--'}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {formatDate(inv.expires_at)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="inline-flex items-center gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="border-border text-foreground"
-                            onClick={() => copyInviteLink(inv.token)}
-                          >
-                            <Copy className="h-4 w-4 mr-1" />
-                            Copy link
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="border-border text-foreground"
-                            disabled={resendInviteMutation.isPending}
-                            onClick={() => resendInviteMutation.mutate(inv.id)}
-                          >
-                            <RefreshCw className="h-4 w-4 mr-1" />
-                            Resend
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-                            disabled={revokeInviteMutation.isPending}
-                            onClick={() => revokeInviteMutation.mutate(inv.id)}
-                          >
-                            <Trash2 className="h-4 w-4 mr-1" />
-                            Revoke
-                          </Button>
-                        </div>
-                      </TableCell>
+      {canManageInvites ? (
+        <Card className="border-border bg-card">
+          <CardHeader>
+            <CardTitle className="text-foreground">Pending invitations</CardTitle>
+            <CardDescription className="text-muted-foreground">
+              Invites that haven&apos;t been accepted yet (expire after 7 days)
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {invitesLoading ? (
+              <div className="space-y-3">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="h-12 bg-muted rounded animate-pulse" />
+                ))}
+              </div>
+            ) : invitesIsError ? (
+              <div className="text-sm text-destructive">
+                {(invitesError as { message?: string })?.message || 'Failed to load invitations.'}
+              </div>
+            ) : invitations.length === 0 ? (
+              <div className="text-sm text-muted-foreground">
+                No pending invitations.
+              </div>
+            ) : (
+              <>
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-border hover:bg-transparent">
+                      <TableHead className="text-muted-foreground">Email</TableHead>
+                      <TableHead className="text-muted-foreground">Role</TableHead>
+                      <TableHead className="text-muted-foreground">Invited by</TableHead>
+                      <TableHead className="text-muted-foreground">Expires</TableHead>
+                      <TableHead className="text-muted-foreground text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              {invitesMeta && invitesMeta.last_page > 1 && (
-                <div className="flex items-center justify-between mt-4">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="border-border text-foreground"
-                    disabled={invitesPage <= 1}
-                    onClick={() => setInvitesPage((p) => Math.max(1, p - 1))}
-                  >
-                    Previous
-                  </Button>
-                  <div className="text-sm text-muted-foreground">
-                    Page {invitesMeta.current_page} of {invitesMeta.last_page}
+                  </TableHeader>
+                  <TableBody>
+                    {invitations.map((inv) => (
+                      <TableRow key={inv.id} className="border-border">
+                        <TableCell className="text-sm text-foreground">{inv.email}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={roleBadgeClass[inv.role]}>
+                            {inv.role}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {inv.creator?.name || '--'}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {formatDate(inv.expires_at)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="inline-flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="border-border text-foreground"
+                              onClick={() => copyInviteLink(inv.token)}
+                            >
+                              <Copy className="h-4 w-4 mr-1" />
+                              Copy link
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="border-border text-foreground"
+                              disabled={resendInviteMutation.isPending}
+                              onClick={() => resendInviteMutation.mutate(inv.id)}
+                            >
+                              <RefreshCw className="h-4 w-4 mr-1" />
+                              Resend
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                              disabled={revokeInviteMutation.isPending}
+                              onClick={() => revokeInviteMutation.mutate(inv.id)}
+                            >
+                              <Trash2 className="h-4 w-4 mr-1" />
+                              Revoke
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                {invitationsResponse && invitationsResponse.last_page > 1 && (
+                  <div className="flex items-center justify-between mt-4">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-border text-foreground"
+                      disabled={invitationsResponse.current_page <= 1}
+                      onClick={() =>
+                        setSearchParam('invites_page', String(Math.max(1, invitesPage - 1)))
+                      }
+                    >
+                      Previous
+                    </Button>
+                    <div className="text-sm text-muted-foreground">
+                      Page {invitationsResponse.current_page} of {invitationsResponse.last_page}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-border text-foreground"
+                      disabled={invitationsResponse.current_page >= invitationsResponse.last_page}
+                      onClick={() => setSearchParam('invites_page', String(invitesPage + 1))}
+                    >
+                      Next
+                    </Button>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="border-border text-foreground"
-                    disabled={invitesPage >= invitesMeta.last_page}
-                    onClick={() => setInvitesPage((p) => p + 1)}
-                  >
-                    Next
-                  </Button>
-                </div>
-              )}
-            </>
-          )}
-        </CardContent>
-      </Card>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="border-border bg-card">
+          <CardHeader>
+            <CardTitle className="text-foreground">Pending invitations</CardTitle>
+            <CardDescription className="text-muted-foreground">
+              Only owners and admins can manage invitations.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-sm text-muted-foreground">
+              You can still manage existing team members below.
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="border-border bg-card">
         <CardHeader>
@@ -675,6 +781,10 @@ export default function TeamPage() {
               {Array.from({ length: 5 }).map((_, i) => (
                 <div key={i} className="h-14 bg-muted rounded animate-pulse" />
               ))}
+            </div>
+          ) : membersIsError ? (
+            <div className="text-sm text-destructive">
+              Failed to load members.
             </div>
           ) : !members || members.length === 0 ? (
             <div className="text-center py-12">
@@ -807,26 +917,28 @@ export default function TeamPage() {
                 })}
                 </TableBody>
               </Table>
-              {membersMeta && membersMeta.last_page > 1 && (
+              {membersResponse && membersResponse.last_page > 1 && (
                 <div className="flex items-center justify-between mt-4">
                   <Button
                     variant="outline"
                     size="sm"
                     className="border-border text-foreground"
-                    disabled={membersPage <= 1}
-                    onClick={() => setMembersPage((p) => Math.max(1, p - 1))}
+                    disabled={membersResponse.current_page <= 1}
+                    onClick={() =>
+                      setSearchParam('members_page', String(Math.max(1, membersPage - 1)))
+                    }
                   >
                     Previous
                   </Button>
                   <div className="text-sm text-muted-foreground">
-                    Page {membersMeta.current_page} of {membersMeta.last_page}
+                    Page {membersResponse.current_page} of {membersResponse.last_page}
                   </div>
                   <Button
                     variant="outline"
                     size="sm"
                     className="border-border text-foreground"
-                    disabled={membersPage >= membersMeta.last_page}
-                    onClick={() => setMembersPage((p) => p + 1)}
+                    disabled={membersResponse.current_page >= membersResponse.last_page}
+                    onClick={() => setSearchParam('members_page', String(membersPage + 1))}
                   >
                     Next
                   </Button>
