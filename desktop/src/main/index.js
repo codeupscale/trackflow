@@ -776,7 +776,7 @@ function showPopup() {
     skipTaskbar: true,
     alwaysOnTop: true,
     show: false,
-    backgroundColor: '#0f172a',   // Prevent white flash on all platforms
+    backgroundColor: '#0a0a0a',   // Prevent white flash on all platforms
     ...(process.platform === 'linux' && { visibleOnAllWorkspaces: true }),
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
@@ -1314,6 +1314,7 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
     idleAlertWindow.webContents.send('idle-data', {
       idleStartedAt,
       idleSeconds,
+      autoStopTotalSec: idleDetector ? (idleDetector.idleTimeoutSec + idleDetector.alertAutoStopSec) : 0,
       projects: cachedProjects || [],
     });
     return;
@@ -1347,7 +1348,7 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
     skipTaskbar: false,
     center: true,
     show: false,
-    backgroundColor: '#0f172a',   // Prevent white flash on all platforms
+    backgroundColor: '#0a0a0a',   // Prevent white flash on all platforms
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
@@ -1364,6 +1365,7 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
     idleAlertWindow.webContents.send('idle-data', {
       idleStartedAt,
       idleSeconds,
+      autoStopTotalSec: idleDetector ? (idleDetector.idleTimeoutSec + idleDetector.alertAutoStopSec) : 0,
       projects: cachedProjects || [],
     });
   });
@@ -1503,7 +1505,7 @@ function createLoginWindow() {
     frame: false,        // Custom titlebar for identical look on macOS/Windows/Linux
     resizable: false,
     center: true,
-    backgroundColor: '#0f172a',
+    backgroundColor: '#0a0a0a',
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
