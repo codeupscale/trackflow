@@ -1,6 +1,53 @@
 # Release Notes
 
-## [Unreleased](https://github.com/laravel/laravel/compare/v12.12.0...12.x)
+## [Unreleased](https://github.com/laravel/laravel/compare/v1.0.13...main)
+
+## [v1.0.13](https://github.com/laravel/laravel/compare/v12.12.0...v1.0.13) - 2026-03-18
+
+### TrackFlow Desktop v1.0.13
+
+#### What's Fixed
+
+- **No more Screen Recording popup** — removed screencapture CLI that triggered macOS permission prompt on every screenshot
+- **Screenshot images auto-refresh** — S3 signed URLs refetch before expiry, click-to-reload on expired images
+- **All idle/settings fixes** from v1.0.10-v1.0.12
+
+#### Downloads
+
+| Platform | File |
+|---|---|
+| macOS Apple Silicon (M1/M2/M3/M4) | TrackFlow-1.0.13-mac-arm64.dmg |
+| macOS Intel | TrackFlow-1.0.13-mac-x64.dmg |
+| Windows 10/11 (64-bit) | TrackFlow-1.0.13-win-x64.exe |
+| Linux (AppImage) | TrackFlow-1.0.13-x86_64.AppImage |
+| Linux (Debian/Ubuntu) | TrackFlow-1.0.13-linux-amd64.deb |
+
+#### macOS Installation
+
+1. Download the `.dmg` for your Mac
+2. Drag TrackFlow to Applications
+3. Run: `xattr -cr /Applications/TrackFlow.app`
+4. Open TrackFlow
+5. Grant Screen Recording permission when prompted (one-time only)
+
+#### Windows
+
+1. Download the `.exe` installer
+2. If SmartScreen warns: **More info** → **Run anyway**
+
+#### Linux
+
+```bash
+chmod +x TrackFlow-1.0.13-x86_64.AppImage
+./TrackFlow-1.0.13-x86_64.AppImage
+
+
+```
+If FUSE error: `sudo apt install libfuse2`
+
+#### Auto-Updates
+
+Existing users will be automatically updated.
 
 ## [v12.12.0](https://github.com/laravel/laravel/compare/v12.11.2...v12.12.0) - 2026-03-09
 
