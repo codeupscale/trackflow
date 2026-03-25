@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Auth\ChangePasswordRequest;
 use App\Http\Requests\Auth\LoginRequest;
 use App\Http\Requests\Auth\RegisterRequest;
 use App\Models\Organization;
@@ -10,7 +11,6 @@ use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
 use App\Services\AuditService;
 use Illuminate\Support\Str;
@@ -209,6 +209,40 @@ class AuthController extends Controller
 
         return response()->json([
             'user' => $this->userResponse($user->fresh()),
+        ]);
+    }
+
+    /** AUTH-08: Change password (requires current password) */
+    public function changePassword(ChangePasswordRequest $request): JsonResponse
+    {
+        $user = $request->user();
+        $user->loadMissing('organization');
+
+        // SSO users should not be able to change local passwords.
+        if (! empty($user->sso_provider) || ! empty($user->sso_provider_id) || (($user->organization->enforce_sso ?? false) && ! empty($user->organization->sso_config))) {
+            throw ValidationException::withMessages([
+                'password' => ['Your organization requires SSO login. Password changes are disabled.'],
+            ]);
+        }
+
+        $user->forceFill([
+            'password' => $request->password,
+            'remember_token' => Str::random(60),
+        ])->save();
+
+        // Revoke all tokens (web + desktop) and return fresh tokens so current session stays logged in.
+        $user->tokens()->delete();
+
+        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
+        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+
+        AuditService::log('auth.password_changed', $user, [], $user);
+
+        return response()->json([
+            'message' => 'Password updated successfully.',
+            'access_token' => $token->plainTextToken,
+            'refresh_token' => $refreshToken->plainTextToken,
+            'token_type' => 'Bearer',
         ]);
     }
 

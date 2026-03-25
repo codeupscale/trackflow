@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
+import type { AxiosError } from 'axios';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -61,6 +62,14 @@ interface OrgSettings {
   };
 }
 
+interface ApiErrorResponse {
+  message?: string;
+  errors?: {
+    current_password?: string[];
+    password?: string[];
+  };
+}
+
 const timezones = [
   'UTC',
   'America/New_York',
@@ -86,6 +95,9 @@ export default function SettingsPage() {
   const { user } = useAuthStore();
   const queryClient = useQueryClient();
   const isAdmin = user?.role === 'owner' || user?.role === 'admin';
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('');
 
   const { data, isLoading } = useQuery<OrgSettings>({
     queryKey: ['org-settings'],
@@ -140,6 +152,7 @@ export default function SettingsPage() {
   // Sync form state from fetched data
   useEffect(() => {
     if (!data || initialized) return;
+    // eslint-disable-next-line
     setOrgName(defaults.orgName);
     setTimezone(defaults.timezone);
     setUserTimezone(user?.timezone ?? defaults.timezone);
@@ -218,6 +231,31 @@ export default function SettingsPage() {
   const handleSaveUserTimezone = () => {
     updateProfileMutation.mutate({ timezone: userTimezone });
   };
+
+  const changePasswordMutation = useMutation({
+    mutationFn: async (payload: { current_password: string; password: string; password_confirmation: string }) => {
+      return api.post('/auth/change-password', payload);
+    },
+    onSuccess: (res) => {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('access_token', res.data.access_token);
+        localStorage.setItem('refresh_token', res.data.refresh_token);
+      }
+      setCurrentPassword('');
+      setNewPassword('');
+      setNewPasswordConfirm('');
+      toast.success('Password updated');
+    },
+    onError: (err: unknown) => {
+      const axiosErr = err as AxiosError<ApiErrorResponse> | undefined;
+      const msg =
+        axiosErr?.response?.data?.errors?.current_password?.[0] ||
+        axiosErr?.response?.data?.errors?.password?.[0] ||
+        axiosErr?.message ||
+        'Failed to update password';
+      toast.error(msg);
+    },
+  });
 
   if (isLoading) {
     return (
@@ -306,6 +344,78 @@ export default function SettingsPage() {
                   </Button>
                 </div>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Password */}
+          <Card className="border-slate-800 bg-slate-900/50">
+            <CardHeader>
+              <CardTitle className="text-white">Security</CardTitle>
+              <CardDescription className="text-slate-400">
+                Change your account password
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-2 max-w-md">
+                <Label htmlFor="current-password" className="text-slate-300">Current password</Label>
+                <Input
+                  id="current-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  className="bg-slate-800/50 border-slate-700 text-white"
+                />
+              </div>
+              <div className="grid gap-2 max-w-md">
+                <Label htmlFor="new-password" className="text-slate-300">New password</Label>
+                <Input
+                  id="new-password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="bg-slate-800/50 border-slate-700 text-white"
+                />
+              </div>
+              <div className="grid gap-2 max-w-md">
+                <Label htmlFor="new-password-confirm" className="text-slate-300">Confirm new password</Label>
+                <Input
+                  id="new-password-confirm"
+                  type="password"
+                  autoComplete="new-password"
+                  value={newPasswordConfirm}
+                  onChange={(e) => setNewPasswordConfirm(e.target.value)}
+                  className="bg-slate-800/50 border-slate-700 text-white"
+                />
+              </div>
+
+              <Button
+                onClick={() => {
+                  changePasswordMutation.mutate({
+                    current_password: currentPassword,
+                    password: newPassword,
+                    password_confirmation: newPasswordConfirm,
+                  });
+                }}
+                disabled={
+                  changePasswordMutation.isPending ||
+                  !currentPassword ||
+                  !newPassword ||
+                  newPassword !== newPasswordConfirm
+                }
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                {changePasswordMutation.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="mr-2 h-4 w-4" />
+                )}
+                Update password
+              </Button>
+              {newPassword && newPasswordConfirm && newPassword !== newPasswordConfirm && (
+                <p className="text-sm text-red-400">New password and confirmation do not match.</p>
+              )}
             </CardContent>
           </Card>
 
