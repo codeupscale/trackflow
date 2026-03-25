@@ -98,6 +98,20 @@ interface Invitation {
   };
 }
 
+type PaginationMeta = {
+  current_page: number;
+  last_page: number;
+  total: number;
+  per_page: number;
+};
+
+type PaginatedResponse<T> = {
+  data: T[];
+  meta: PaginationMeta;
+  // Backward-compat key returned by backend for older builds
+  invitations?: T[];
+};
+
 const roleBadgeClass: Record<string, string> = {
   owner: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
   admin: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
@@ -119,6 +133,10 @@ export default function TeamPage() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<string>('employee');
+  const [membersPage, setMembersPage] = useState(1);
+  const [membersPerPage] = useState(20);
+  const [invitesPage, setInvitesPage] = useState(1);
+  const [invitesPerPage] = useState(20);
   const [resetPasswordOpen, setResetPasswordOpen] = useState(false);
   const [resetPasswordMember, setResetPasswordMember] = useState<TeamMember | null>(null);
   const [generateRandomPassword, setGenerateRandomPassword] = useState(true);
@@ -139,11 +157,11 @@ export default function TeamPage() {
     }
   }, [user?.role, router]);
 
-  const { data: members, isLoading } = useQuery<TeamMember[]>({
-    queryKey: ['team-members'],
+  const { data: membersResponse, isLoading } = useQuery<PaginatedResponse<TeamMember>>({
+    queryKey: ['team-members', membersPage, membersPerPage],
     queryFn: async () => {
-      const res = await api.get('/users');
-      return res.data.users || res.data.data || (Array.isArray(res.data) ? res.data : []);
+      const res = await api.get('/users', { params: { page: membersPage, per_page: membersPerPage } });
+      return res.data;
     },
     enabled: user?.role !== 'employee',
   });
@@ -157,11 +175,11 @@ export default function TeamPage() {
     enabled: user?.role !== 'employee',
   });
 
-  const { data: invitations = [], isLoading: invitesLoading } = useQuery<Invitation[]>({
-    queryKey: ['invitations'],
+  const { data: invitationsResponse, isLoading: invitesLoading } = useQuery<PaginatedResponse<Invitation>>({
+    queryKey: ['invitations', invitesPage, invitesPerPage],
     queryFn: async () => {
-      const res = await api.get('/invitations');
-      return res.data.invitations || [];
+      const res = await api.get('/invitations', { params: { page: invitesPage, per_page: invitesPerPage } });
+      return res.data;
     },
     retry: false,
     enabled: user?.role !== 'employee',
@@ -362,14 +380,26 @@ export default function TeamPage() {
     );
   }
 
-  const activeMembers = members?.filter((m) => m.is_active).length || 0;
-  const totalMembers = members?.length || 0;
+  const members = membersResponse?.data ?? [];
+  const membersMeta = membersResponse?.meta;
+  const invitations = invitationsResponse?.data ?? invitationsResponse?.invitations ?? [];
+  const invitesMeta = invitationsResponse?.meta;
+
+  const activeMembers = members.filter((m) => m.is_active).length;
+  const totalMembers = membersMeta?.total ?? members.length;
 
   const handleInvite = (e: React.FormEvent) => {
     e.preventDefault();
     if (!inviteEmail.trim()) return;
     inviteMutation.mutate({ email: inviteEmail.trim(), role: inviteRole });
   };
+
+  const canInvite = user?.role === 'owner' || user?.role === 'admin';
+  const seatLimitReached =
+    !!usage &&
+    usage.limit !== 'unlimited' &&
+    typeof usage.limit === 'number' &&
+    usage.used >= usage.limit;
 
   return (
     <div className="space-y-6">
@@ -381,13 +411,16 @@ export default function TeamPage() {
             Manage your team members and roles
           </p>
         </div>
-        <Button
-          onClick={() => setInviteOpen(true)}
-          className="bg-blue-600 hover:bg-blue-700 text-foreground"
-        >
-          <UserPlus className="mr-2 h-4 w-4" />
-          Invite Member
-        </Button>
+        {canInvite && (
+          <Button
+            onClick={() => setInviteOpen(true)}
+            disabled={seatLimitReached}
+            className="bg-blue-600 hover:bg-blue-700 text-foreground disabled:opacity-60"
+          >
+            <UserPlus className="mr-2 h-4 w-4" />
+            {seatLimitReached ? 'Seat limit reached' : 'Invite Member'}
+          </Button>
+        )}
         <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
           <DialogContent className="bg-card border-border">
             <form onSubmit={handleInvite}>
@@ -536,68 +569,95 @@ export default function TeamPage() {
               No pending invitations.
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="border-border hover:bg-transparent">
-                  <TableHead className="text-muted-foreground">Email</TableHead>
-                  <TableHead className="text-muted-foreground">Role</TableHead>
-                  <TableHead className="text-muted-foreground">Invited by</TableHead>
-                  <TableHead className="text-muted-foreground">Expires</TableHead>
-                  <TableHead className="text-muted-foreground text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {invitations.map((inv) => (
-                  <TableRow key={inv.id} className="border-border">
-                    <TableCell className="text-sm text-foreground">{inv.email}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className={roleBadgeClass[inv.role]}>
-                        {inv.role}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {inv.creator?.name || '--'}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {formatDate(inv.expires_at)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="inline-flex items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="border-border text-foreground"
-                          onClick={() => copyInviteLink(inv.token)}
-                        >
-                          <Copy className="h-4 w-4 mr-1" />
-                          Copy link
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="border-border text-foreground"
-                          disabled={resendInviteMutation.isPending}
-                          onClick={() => resendInviteMutation.mutate(inv.id)}
-                        >
-                          <RefreshCw className="h-4 w-4 mr-1" />
-                          Resend
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-                          disabled={revokeInviteMutation.isPending}
-                          onClick={() => revokeInviteMutation.mutate(inv.id)}
-                        >
-                          <Trash2 className="h-4 w-4 mr-1" />
-                          Revoke
-                        </Button>
-                      </div>
-                    </TableCell>
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-border hover:bg-transparent">
+                    <TableHead className="text-muted-foreground">Email</TableHead>
+                    <TableHead className="text-muted-foreground">Role</TableHead>
+                    <TableHead className="text-muted-foreground">Invited by</TableHead>
+                    <TableHead className="text-muted-foreground">Expires</TableHead>
+                    <TableHead className="text-muted-foreground text-right">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {invitations.map((inv) => (
+                    <TableRow key={inv.id} className="border-border">
+                      <TableCell className="text-sm text-foreground">{inv.email}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className={roleBadgeClass[inv.role]}>
+                          {inv.role}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {inv.creator?.name || '--'}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {formatDate(inv.expires_at)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="inline-flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="border-border text-foreground"
+                            onClick={() => copyInviteLink(inv.token)}
+                          >
+                            <Copy className="h-4 w-4 mr-1" />
+                            Copy link
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="border-border text-foreground"
+                            disabled={resendInviteMutation.isPending}
+                            onClick={() => resendInviteMutation.mutate(inv.id)}
+                          >
+                            <RefreshCw className="h-4 w-4 mr-1" />
+                            Resend
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                            disabled={revokeInviteMutation.isPending}
+                            onClick={() => revokeInviteMutation.mutate(inv.id)}
+                          >
+                            <Trash2 className="h-4 w-4 mr-1" />
+                            Revoke
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {invitesMeta && invitesMeta.last_page > 1 && (
+                <div className="flex items-center justify-between mt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-border text-foreground"
+                    disabled={invitesPage <= 1}
+                    onClick={() => setInvitesPage((p) => Math.max(1, p - 1))}
+                  >
+                    Previous
+                  </Button>
+                  <div className="text-sm text-muted-foreground">
+                    Page {invitesMeta.current_page} of {invitesMeta.last_page}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-border text-foreground"
+                    disabled={invitesPage >= invitesMeta.last_page}
+                    onClick={() => setInvitesPage((p) => p + 1)}
+                  >
+                    Next
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
@@ -625,18 +685,19 @@ export default function TeamPage() {
               </p>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="border-border hover:bg-transparent">
-                  <TableHead className="text-muted-foreground">Member</TableHead>
-                  <TableHead className="text-muted-foreground">Role</TableHead>
-                  <TableHead className="text-muted-foreground">Status</TableHead>
-                  <TableHead className="text-muted-foreground">Last Active</TableHead>
-                  <TableHead className="text-muted-foreground text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {members.map((member) => {
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-border hover:bg-transparent">
+                    <TableHead className="text-muted-foreground">Member</TableHead>
+                    <TableHead className="text-muted-foreground">Role</TableHead>
+                    <TableHead className="text-muted-foreground">Status</TableHead>
+                    <TableHead className="text-muted-foreground">Last Active</TableHead>
+                    <TableHead className="text-muted-foreground text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {members.map((member) => {
                   const initials = member.name
                     .split(' ')
                     .map((n) => n[0])
@@ -744,8 +805,34 @@ export default function TeamPage() {
                     </TableRow>
                   );
                 })}
-              </TableBody>
-            </Table>
+                </TableBody>
+              </Table>
+              {membersMeta && membersMeta.last_page > 1 && (
+                <div className="flex items-center justify-between mt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-border text-foreground"
+                    disabled={membersPage <= 1}
+                    onClick={() => setMembersPage((p) => Math.max(1, p - 1))}
+                  >
+                    Previous
+                  </Button>
+                  <div className="text-sm text-muted-foreground">
+                    Page {membersMeta.current_page} of {membersMeta.last_page}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-border text-foreground"
+                    disabled={membersPage >= membersMeta.last_page}
+                    onClick={() => setMembersPage((p) => p + 1)}
+                  >
+                    Next
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
