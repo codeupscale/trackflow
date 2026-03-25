@@ -9,11 +9,22 @@ use Stripe\StripeClient;
 
 class BillingService
 {
-    private StripeClient $stripe;
+    private ?StripeClient $stripe = null;
 
     public function __construct()
     {
-        $this->stripe = new StripeClient(config('services.stripe.secret'));
+        $key = config('services.stripe.secret');
+        if ($key) {
+            $this->stripe = new StripeClient($key);
+        }
+    }
+
+    private function ensureStripe(): StripeClient
+    {
+        if (!$this->stripe) {
+            throw new \RuntimeException('Stripe is not configured. Set STRIPE_SECRET_KEY in .env');
+        }
+        return $this->stripe;
     }
 
     /**
@@ -25,7 +36,7 @@ class BillingService
             return $org->stripe_customer_id;
         }
 
-        $customer = $this->stripe->customers->create([
+        $customer = $this->ensureStripe()->customers->create([
             'name' => $org->name,
             'email' => $email,
             'metadata' => ['org_id' => $org->id],
@@ -51,18 +62,18 @@ class BillingService
         $customerId = $this->getOrCreateStripeCustomer($org, $email);
 
         // Attach payment method
-        $this->stripe->paymentMethods->attach($paymentMethodId, [
+        $this->ensureStripe()->paymentMethods->attach($paymentMethodId, [
             'customer' => $customerId,
         ]);
 
-        $this->stripe->customers->update($customerId, [
+        $this->ensureStripe()->customers->update($customerId, [
             'invoice_settings' => ['default_payment_method' => $paymentMethodId],
         ]);
 
         $priceId = $this->getPriceId($plan, $interval);
         $seatCount = $this->countActiveSeats($org);
 
-        $subscription = $this->stripe->subscriptions->create([
+        $subscription = $this->ensureStripe()->subscriptions->create([
             'customer' => $customerId,
             'items' => [['price' => $priceId, 'quantity' => $seatCount]],
             'payment_behavior' => 'default_incomplete',
@@ -93,11 +104,11 @@ class BillingService
             throw new \RuntimeException('No active subscription found.');
         }
 
-        $subscription = $this->stripe->subscriptions->retrieve($org->stripe_subscription_id);
+        $subscription = $this->ensureStripe()->subscriptions->retrieve($org->stripe_subscription_id);
         $priceId = $this->getPriceId($newPlan, $interval);
         $isUpgrade = $this->isUpgrade($org->plan, $newPlan);
 
-        $this->stripe->subscriptions->update($org->stripe_subscription_id, [
+        $this->ensureStripe()->subscriptions->update($org->stripe_subscription_id, [
             'items' => [[
                 'id' => $subscription->items->data[0]->id,
                 'price' => $priceId,
@@ -126,7 +137,7 @@ class BillingService
             throw new \RuntimeException('No active subscription.');
         }
 
-        $subscription = $this->stripe->subscriptions->update($org->stripe_subscription_id, [
+        $subscription = $this->ensureStripe()->subscriptions->update($org->stripe_subscription_id, [
             'cancel_at_period_end' => true,
         ]);
 
@@ -147,7 +158,7 @@ class BillingService
 
         $limit = config('billing.invoice_limit', 24);
 
-        $invoices = $this->stripe->invoices->all([
+        $invoices = $this->ensureStripe()->invoices->all([
             'customer' => $org->stripe_customer_id,
             'limit' => $limit,
         ]);
@@ -176,11 +187,21 @@ class BillingService
 
         return [
             'plan' => $org->plan,
+            'seats_used' => $used,
+            'seats_limit' => $isUnlimited ? 'unlimited' : $seatLimit,
             'used' => $used,
             'limit' => $isUnlimited ? 'unlimited' : $seatLimit,
             'overage' => $overage,
             'trial_ends_at' => $org->trial_ends_at,
         ];
+    }
+
+    /**
+     * Check if Stripe is configured.
+     */
+    public function isConfigured(): bool
+    {
+        return $this->stripe !== null;
     }
 
     /**
@@ -193,9 +214,9 @@ class BillingService
         }
 
         $seatCount = $this->countActiveSeats($org);
-        $subscription = $this->stripe->subscriptions->retrieve($org->stripe_subscription_id);
+        $subscription = $this->ensureStripe()->subscriptions->retrieve($org->stripe_subscription_id);
 
-        $this->stripe->subscriptionItems->update($subscription->items->data[0]->id, [
+        $this->ensureStripe()->subscriptionItems->update($subscription->items->data[0]->id, [
             'quantity' => $seatCount,
         ]);
     }
