@@ -517,9 +517,9 @@ export default function SettingsPage() {
                 />
               </div>
               <div className="grid gap-2 max-w-md">
-                <Label htmlFor="org-tz" className="text-slate-300">Timezone</Label>
+                <Label htmlFor="org-tz" className="text-foreground">Timezone</Label>
                 <Select value={timezone} onValueChange={(v) => v && setTimezone(v)} disabled={!isAdmin}>
-                  <SelectTrigger id="org-tz" className="bg-slate-800/50 border-slate-700">
+                  <SelectTrigger id="org-tz" className="bg-muted border-border">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -532,11 +532,11 @@ export default function SettingsPage() {
 
               {isAdmin && (
                 <>
-                  <Separator className="bg-slate-800" />
+                  <Separator className="bg-muted" />
                   <div className="flex items-center justify-between">
                     <div>
-                      <Label className="text-slate-300">Idle alert emails</Label>
-                      <p className="text-xs text-slate-500">
+                      <Label className="text-foreground">Idle alert emails</Label>
+                      <p className="text-xs text-muted-foreground">
                         Sends an email when an employee remains idle. The scheduler runs every 5 minutes; cooldown prevents spam.
                       </p>
                     </div>
@@ -547,7 +547,7 @@ export default function SettingsPage() {
                     />
                   </div>
                   <div className="grid gap-2 max-w-xs">
-                    <Label htmlFor="idle-alert-email-cooldown" className="text-slate-300">Cooldown (minutes)</Label>
+                    <Label htmlFor="idle-alert-email-cooldown" className="text-foreground">Cooldown (minutes)</Label>
                     <Input
                       id="idle-alert-email-cooldown"
                       type="number"
@@ -556,16 +556,16 @@ export default function SettingsPage() {
                       value={idleAlertEmailCooldownMin}
                       onChange={(e) => setIdleAlertEmailCooldownMin(e.target.value)}
                       disabled={!idleAlertEmailEnabled}
-                      className="bg-slate-800/50 border-slate-700 text-white w-28"
+                      className="bg-muted border-border text-white w-28"
                     />
-                    <p className="text-xs text-slate-500">
+                    <p className="text-xs text-muted-foreground">
                       Minimum time between emails per employee. Recommended: 60+ minutes.
                     </p>
                   </div>
                 </>
               )}
 
-              <div className="flex items-center gap-2 text-sm text-slate-400">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <span>
                   Plan: <strong className="text-white capitalize">{data?.organization.plan}</strong>
                 </span>
@@ -580,19 +580,19 @@ export default function SettingsPage() {
 
           {/* Billing Link */}
           {isAdmin && (
-            <Card className="border-slate-800 bg-slate-900/50">
+            <Card className="border-border bg-card">
               <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-white">
+                <CardTitle className="flex items-center gap-2 text-foreground">
                   <CreditCard className="h-5 w-5" />
                   Billing
                 </CardTitle>
-                <CardDescription className="text-slate-400">
+                <CardDescription className="text-muted-foreground">
                   Manage your subscription and billing
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <Link href="/settings/billing">
-                  <Button variant="outline" className="border-slate-700 text-slate-300">
+                  <Button variant="outline" className="border-border text-foreground">
                     <CreditCard className="mr-2 h-4 w-4" />
                     Manage Billing
                   </Button>
@@ -605,22 +605,22 @@ export default function SettingsPage() {
         {/* Tracking Tab */}
         {isAdmin && <TabsContent value="tracking" className="space-y-6 mt-6">
           {/* Screenshot Settings */}
-          <Card className="border-slate-800 bg-slate-900/50">
+          <Card className="border-border bg-card">
             <CardHeader>
-              <CardTitle className="text-white">Screenshots</CardTitle>
-              <CardDescription className="text-slate-400">
+              <CardTitle className="text-foreground">Screenshots</CardTitle>
+              <CardDescription className="text-muted-foreground">
                 Configure screenshot capture settings
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="grid gap-2 max-w-xs">
-                <Label htmlFor="ss-interval" className="text-slate-300">Capture Interval</Label>
+                <Label htmlFor="ss-interval" className="text-foreground">Capture Interval</Label>
                 <Select
                   value={screenshotInterval}
                   onValueChange={(v) => v && setScreenshotInterval(v)}
                   disabled={!isAdmin}
                 >
-                  <SelectTrigger id="ss-interval" className="bg-slate-800/50 border-slate-700">
+                  <SelectTrigger id="ss-interval" className="bg-muted border-border">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -631,7 +631,7 @@ export default function SettingsPage() {
                 </Select>
               </div>
               <div className="grid gap-2 max-w-xs">
-                <Label htmlFor="ss-first-delay" className="text-slate-300">First capture delay</Label>
+                <Label htmlFor="ss-first-delay" className="text-foreground">First capture delay</Label>
                 <Input
                   id="ss-first-delay"
                   type="number"
@@ -640,29 +640,29 @@ export default function SettingsPage() {
                   value={screenshotFirstCaptureDelayMin}
                   onChange={(e) => setScreenshotFirstCaptureDelayMin(e.target.value)}
                   disabled={!isAdmin}
-                  className="bg-slate-800/50 border-slate-700 text-white w-28"
+                  className="bg-muted border-border text-white w-28"
                 />
-                <p className="text-xs text-slate-500">Minutes before first screenshot when timer starts (0 = immediate)</p>
+                <p className="text-xs text-muted-foreground">Minutes before first screenshot when timer starts (0 = immediate)</p>
               </div>
-              <Separator className="bg-slate-800" />
+              <Separator className="bg-muted" />
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-slate-300">Blur Screenshots</Label>
-                  <p className="text-xs text-slate-500">Apply blur to screenshots for privacy</p>
+                  <Label className="text-foreground">Blur Screenshots</Label>
+                  <p className="text-xs text-muted-foreground">Apply blur to screenshots for privacy</p>
                 </div>
                 <Switch checked={screenshotBlur} onCheckedChange={setScreenshotBlur} disabled={!isAdmin} />
               </div>
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-slate-300">Capture only when app visible</Label>
-                  <p className="text-xs text-slate-500">Skip screenshots when desktop app is minimized (reduces permission prompts)</p>
+                  <Label className="text-foreground">Capture only when app visible</Label>
+                  <p className="text-xs text-muted-foreground">Skip screenshots when desktop app is minimized (reduces permission prompts)</p>
                 </div>
                 <Switch checked={captureOnlyWhenVisible} onCheckedChange={setCaptureOnlyWhenVisible} disabled={!isAdmin} />
               </div>
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-slate-300">Multi-monitor capture</Label>
-                  <p className="text-xs text-slate-500">Capture all monitors and composite into one image</p>
+                  <Label className="text-foreground">Multi-monitor capture</Label>
+                  <p className="text-xs text-muted-foreground">Capture all monitors and composite into one image</p>
                 </div>
                 <Switch checked={captureMultiMonitor} onCheckedChange={setCaptureMultiMonitor} disabled={!isAdmin} />
               </div>
@@ -670,16 +670,16 @@ export default function SettingsPage() {
           </Card>
 
           {/* Tracking Settings */}
-          <Card className="border-slate-800 bg-slate-900/50">
+          <Card className="border-border bg-card">
             <CardHeader>
-              <CardTitle className="text-white">Time Tracking</CardTitle>
-              <CardDescription className="text-slate-400">
+              <CardTitle className="text-foreground">Time Tracking</CardTitle>
+              <CardDescription className="text-muted-foreground">
                 Configure time tracking behavior
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="grid gap-2 max-w-xs">
-                <Label className="text-slate-300">Idle detection</Label>
+                <Label className="text-foreground">Idle detection</Label>
                 <Select
                   value={idleTimeout === '0' ? '0' : [5, 10, 20].includes(parseInt(idleTimeout, 10)) ? idleTimeout : 'custom'}
                   onValueChange={(v) => {
@@ -689,7 +689,7 @@ export default function SettingsPage() {
                   }}
                   disabled={!isAdmin}
                 >
-                  <SelectTrigger className="bg-slate-800/50 border-slate-700">
+                  <SelectTrigger className="bg-muted border-border">
                     <SelectValue placeholder="Idle timeout" />
                   </SelectTrigger>
                   <SelectContent>
@@ -713,17 +713,17 @@ export default function SettingsPage() {
                         setIdleTimeoutCustom(v);
                       }}
                       disabled={!isAdmin}
-                      className="w-24 bg-slate-800/50 border-slate-700 text-white"
+                      className="w-24 bg-muted border-border text-foreground"
                     />
-                    <span className="text-xs text-slate-500">minutes</span>
+                    <span className="text-xs text-muted-foreground">minutes</span>
                   </div>
                 )}
-                <p className="text-xs text-slate-500">Show idle alert after this many minutes of no activity (or disable)</p>
+                <p className="text-xs text-muted-foreground">Show idle alert after this many minutes of no activity (or disable)</p>
               </div>
               <div className="grid gap-2 max-w-xs">
-                <Label className="text-slate-300">When idle is detected</Label>
+                <Label className="text-foreground">When idle is detected</Label>
                 <Select value={keepIdleTime} onValueChange={(v) => { if (v) setKeepIdleTime(v as 'prompt' | 'always' | 'never'); }} disabled={!isAdmin}>
-                  <SelectTrigger className="bg-slate-800/50 border-slate-700">
+                  <SelectTrigger className="bg-muted border-border">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -732,11 +732,11 @@ export default function SettingsPage() {
                     <SelectItem value="never">Always discard idle time</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-slate-500">Whether to show the idle alert or auto-keep / auto-discard</p>
+                <p className="text-xs text-muted-foreground">Whether to show the idle alert or auto-keep / auto-discard</p>
               </div>
               <div className="grid gap-2 max-w-xs">
-                <Label className="text-slate-300">Idle alert auto-stop</Label>
-                <p className="text-xs text-slate-500">
+                <Label className="text-foreground">Idle alert auto-stop</Label>
+                <p className="text-xs text-muted-foreground">
                   If idle alert is shown in <strong>Prompt</strong> mode and user does not respond, auto-stop after this many minutes.
                 </p>
                 <Input
@@ -746,12 +746,12 @@ export default function SettingsPage() {
                   value={idleAlertAutoStopMin}
                   onChange={(e) => setIdleAlertAutoStopMin(e.target.value)}
                   disabled={!isAdmin}
-                  className="w-28 bg-slate-800/50 border-slate-700 text-white"
+                  className="w-28 bg-muted border-border text-foreground"
                 />
-                <span className="text-xs text-slate-500">minutes</span>
+                <span className="text-xs text-muted-foreground">minutes</span>
               </div>
               <div className="grid gap-2 max-w-xs">
-                <Label className="text-slate-300">Idle check interval</Label>
+                <Label className="text-foreground">Idle check interval</Label>
                 <Input
                   type="number"
                   min={1}
@@ -759,15 +759,15 @@ export default function SettingsPage() {
                   value={idleCheckIntervalSec}
                   onChange={(e) => setIdleCheckIntervalSec(e.target.value)}
                   disabled={!isAdmin}
-                  className="w-28 bg-slate-800/50 border-slate-700 text-white"
+                  className="w-28 bg-muted border-border text-foreground"
                 />
-                <p className="text-xs text-slate-500">How often (seconds) the desktop app checks for idle activity</p>
+                <p className="text-xs text-muted-foreground">How often (seconds) the desktop app checks for idle activity</p>
               </div>
-              <Separator className="bg-slate-800" />
+              <Separator className="bg-muted" />
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-slate-300">Screenshot on idle resume</Label>
-                  <p className="text-xs text-slate-500">Capture one screenshot immediately after idle alert is resolved/discarded.</p>
+                  <Label className="text-foreground">Screenshot on idle resume</Label>
+                  <p className="text-xs text-muted-foreground">Capture one screenshot immediately after idle alert is resolved/discarded.</p>
                 </div>
                 <Switch
                   checked={screenshotImmediateAfterIdle}
@@ -779,18 +779,18 @@ export default function SettingsPage() {
           </Card>
 
           {/* Policies */}
-          <Card className="border-slate-800 bg-slate-900/50">
+          <Card className="border-border bg-card">
             <CardHeader>
-              <CardTitle className="text-white">Policies</CardTitle>
-              <CardDescription className="text-slate-400">
+              <CardTitle className="text-foreground">Policies</CardTitle>
+              <CardDescription className="text-muted-foreground">
                 Rules that apply to all employees in the organization
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-slate-300">Track browser URLs</Label>
-                  <p className="text-xs text-slate-500">Record the active browser URL alongside each screenshot</p>
+                  <Label className="text-foreground">Track browser URLs</Label>
+                  <p className="text-xs text-muted-foreground">Record the active browser URL alongside each screenshot</p>
                 </div>
                 <Switch
                   checked={trackUrls}
@@ -799,11 +799,11 @@ export default function SettingsPage() {
                   aria-label="Track browser URLs"
                 />
               </div>
-              <Separator className="bg-slate-800" />
+              <Separator className="bg-muted" />
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-slate-300">Allow manual time entries</Label>
-                  <p className="text-xs text-slate-500">Allow employees to add time entries manually</p>
+                  <Label className="text-foreground">Allow manual time entries</Label>
+                  <p className="text-xs text-muted-foreground">Allow employees to add time entries manually</p>
                 </div>
                 <Switch
                   checked={allowManualTime}
@@ -812,11 +812,11 @@ export default function SettingsPage() {
                   aria-label="Allow manual time entries"
                 />
               </div>
-              <Separator className="bg-slate-800" />
+              <Separator className="bg-muted" />
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-slate-300">Require project selection</Label>
-                  <p className="text-xs text-slate-500">Employees must select a project before starting the timer</p>
+                  <Label className="text-foreground">Require project selection</Label>
+                  <p className="text-xs text-muted-foreground">Employees must select a project before starting the timer</p>
                 </div>
                 <Switch
                   checked={requireProject}
@@ -825,9 +825,9 @@ export default function SettingsPage() {
                   aria-label="Require project selection"
                 />
               </div>
-              <Separator className="bg-slate-800" />
+              <Separator className="bg-muted" />
               <div className="grid gap-2 max-w-xs">
-                <Label htmlFor="weekly-limit" className="text-slate-300">Weekly hour limit</Label>
+                <Label htmlFor="weekly-limit" className="text-foreground">Weekly hour limit</Label>
                 <Input
                   id="weekly-limit"
                   type="number"
@@ -837,10 +837,10 @@ export default function SettingsPage() {
                   onChange={(e) => setWeeklyLimitHours(e.target.value)}
                   disabled={!isAdmin}
                   placeholder="0 = unlimited"
-                  className="bg-slate-800/50 border-slate-700 text-white w-28"
+                  className="bg-muted border-border text-white w-28"
                   aria-label="Weekly hour limit"
                 />
-                <p className="text-xs text-slate-500">Maximum hours per week per employee. 0 = unlimited.</p>
+                <p className="text-xs text-muted-foreground">Maximum hours per week per employee. 0 = unlimited.</p>
               </div>
             </CardContent>
           </Card>

@@ -102,7 +102,7 @@ const roleBadgeClass: Record<string, string> = {
   owner: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
   admin: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
   manager: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-  employee: 'bg-slate-700/50 text-slate-300 border-slate-600',
+  employee: 'bg-muted/50 text-muted-foreground border-border',
 };
 
 type ApiValidationErrorResponse = {
@@ -357,7 +357,7 @@ export default function TeamPage() {
   if (user?.role === 'employee') {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-slate-500" />
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );
   }
@@ -376,47 +376,47 @@ export default function TeamPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white">Team</h1>
-          <p className="text-slate-400 text-sm mt-1">
+          <h1 className="text-2xl font-bold text-foreground">Team</h1>
+          <p className="text-muted-foreground text-sm mt-1">
             Manage your team members and roles
           </p>
         </div>
         <Button
           onClick={() => setInviteOpen(true)}
-          className="bg-blue-600 hover:bg-blue-700 text-white"
+          className="bg-blue-600 hover:bg-blue-700 text-foreground"
         >
           <UserPlus className="mr-2 h-4 w-4" />
           Invite Member
         </Button>
         <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
-          <DialogContent className="bg-slate-900 border-slate-800">
+          <DialogContent className="bg-card border-border">
             <form onSubmit={handleInvite}>
               <DialogHeader>
-                <DialogTitle className="text-white">Invite Team Member</DialogTitle>
-                <DialogDescription className="text-slate-400">
+                <DialogTitle className="text-foreground">Invite Team Member</DialogTitle>
+                <DialogDescription className="text-muted-foreground">
                   Send an invitation email to a new team member.
                 </DialogDescription>
               </DialogHeader>
               <div className="grid gap-4 py-4">
                 <div className="grid gap-2">
-                  <Label htmlFor="invite-email" className="text-slate-300">Email address</Label>
+                  <Label htmlFor="invite-email" className="text-foreground">Email address</Label>
                   <div className="relative">
-                    <Mail className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+                    <Mail className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                     <Input
                       id="invite-email"
                       type="email"
                       placeholder="colleague@company.com"
                       value={inviteEmail}
                       onChange={(e) => setInviteEmail(e.target.value)}
-                      className="pl-10 bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                      className="pl-10 bg-muted border-border text-white placeholder:text-muted-foreground"
                       required
                     />
                   </div>
                 </div>
                 <div className="grid gap-2">
-                  <Label className="text-slate-300">Role</Label>
+                  <Label className="text-foreground">Role</Label>
                   <Select value={inviteRole} onValueChange={(val) => setInviteRole(val ?? 'employee')}>
-                    <SelectTrigger className="w-full bg-slate-800/50 border-slate-700">
+                    <SelectTrigger className="w-full bg-muted border-border">
                       <SelectValue placeholder="Select role" />
                     </SelectTrigger>
                     <SelectContent>
@@ -431,7 +431,7 @@ export default function TeamPage() {
                 <Button
                   type="submit"
                   disabled={inviteMutation.isPending}
-                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  className="bg-blue-600 hover:bg-blue-700 text-foreground"
                 >
                   {inviteMutation.isPending ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -448,63 +448,63 @@ export default function TeamPage() {
 
       {/* Stats */}
       <div className="grid gap-4 sm:grid-cols-3">
-        <Card className="border-slate-800 bg-slate-900/50">
+        <Card className="border-border bg-card">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-slate-400">Total Members</CardTitle>
-            <Users className="h-4 w-4 text-slate-500" />
+            <CardTitle className="text-sm font-medium text-muted-foreground">Total Members</CardTitle>
+            <Users className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-white">
+            <div className="text-2xl font-bold text-foreground">
               {isLoading ? (
-                <div className="h-8 w-12 bg-slate-800/50 animate-pulse rounded" />
+                <div className="h-8 w-12 bg-muted animate-pulse rounded" />
               ) : (
                 totalMembers
               )}
             </div>
           </CardContent>
         </Card>
-        <Card className="border-slate-800 bg-slate-900/50">
+        <Card className="border-border bg-card">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-slate-400">Active</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Active</CardTitle>
             <div className="h-2.5 w-2.5 rounded-full bg-green-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-white">
+            <div className="text-2xl font-bold text-foreground">
               {isLoading ? (
-                <div className="h-8 w-12 bg-slate-800/50 animate-pulse rounded" />
+                <div className="h-8 w-12 bg-muted animate-pulse rounded" />
               ) : (
                 activeMembers
               )}
             </div>
           </CardContent>
         </Card>
-        <Card className="border-slate-800 bg-slate-900/50">
+        <Card className="border-border bg-card">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-slate-400">Seat Usage</CardTitle>
-            <Shield className="h-4 w-4 text-slate-500" />
+            <CardTitle className="text-sm font-medium text-muted-foreground">Seat Usage</CardTitle>
+            <Shield className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-white">
+            <div className="text-2xl font-bold text-foreground">
               {!usage ? (
-                <div className="h-8 w-20 bg-slate-800/50 animate-pulse rounded" />
+                <div className="h-8 w-20 bg-muted animate-pulse rounded" />
               ) : usage.limit === 'unlimited' ? (
                 <span>
                   {usage.used}
-                  <span className="text-sm font-normal text-slate-500 ml-1">
+                  <span className="text-sm font-normal text-muted-foreground ml-1">
                     members (Unlimited)
                   </span>
                 </span>
               ) : (
                 <span>
                   {usage.used}
-                  <span className="text-sm font-normal text-slate-500">
+                  <span className="text-sm font-normal text-muted-foreground">
                     /{usage.limit} seats used
                   </span>
                 </span>
               )}
             </div>
             {usage && usage.limit !== 'unlimited' && typeof usage.limit === 'number' && usage.limit > 0 && (
-              <div className="mt-2 h-1.5 bg-slate-800 rounded-full">
+              <div className="mt-2 h-1.5 bg-muted rounded-full">
                 <div
                   className="h-full bg-blue-500 rounded-full transition-all"
                   style={{ width: `${Math.min((usage.used / usage.limit) * 100, 100)}%` }}
@@ -517,10 +517,10 @@ export default function TeamPage() {
 
       {/* Team Table */}
       {/* Pending invitations */}
-      <Card className="border-slate-800 bg-slate-900/50">
+      <Card className="border-border bg-card">
         <CardHeader>
-          <CardTitle className="text-white">Pending invitations</CardTitle>
-          <CardDescription className="text-slate-400">
+          <CardTitle className="text-foreground">Pending invitations</CardTitle>
+          <CardDescription className="text-muted-foreground">
             Invites that haven&apos;t been accepted yet (expire after 7 days)
           </CardDescription>
         </CardHeader>
@@ -528,37 +528,37 @@ export default function TeamPage() {
           {invitesLoading ? (
             <div className="space-y-3">
               {Array.from({ length: 3 }).map((_, i) => (
-                <div key={i} className="h-12 bg-slate-800/50 rounded animate-pulse" />
+                <div key={i} className="h-12 bg-muted rounded animate-pulse" />
               ))}
             </div>
           ) : invitations.length === 0 ? (
-            <div className="text-sm text-slate-500">
+            <div className="text-sm text-muted-foreground">
               No pending invitations.
             </div>
           ) : (
             <Table>
               <TableHeader>
-                <TableRow className="border-slate-800 hover:bg-transparent">
-                  <TableHead className="text-slate-400">Email</TableHead>
-                  <TableHead className="text-slate-400">Role</TableHead>
-                  <TableHead className="text-slate-400">Invited by</TableHead>
-                  <TableHead className="text-slate-400">Expires</TableHead>
-                  <TableHead className="text-slate-400 text-right">Actions</TableHead>
+                <TableRow className="border-border hover:bg-transparent">
+                  <TableHead className="text-muted-foreground">Email</TableHead>
+                  <TableHead className="text-muted-foreground">Role</TableHead>
+                  <TableHead className="text-muted-foreground">Invited by</TableHead>
+                  <TableHead className="text-muted-foreground">Expires</TableHead>
+                  <TableHead className="text-muted-foreground text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {invitations.map((inv) => (
-                  <TableRow key={inv.id} className="border-slate-800">
-                    <TableCell className="text-sm text-slate-300">{inv.email}</TableCell>
+                  <TableRow key={inv.id} className="border-border">
+                    <TableCell className="text-sm text-foreground">{inv.email}</TableCell>
                     <TableCell>
                       <Badge variant="outline" className={roleBadgeClass[inv.role]}>
                         {inv.role}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-sm text-slate-400">
+                    <TableCell className="text-sm text-muted-foreground">
                       {inv.creator?.name || '--'}
                     </TableCell>
-                    <TableCell className="text-sm text-slate-400">
+                    <TableCell className="text-sm text-muted-foreground">
                       {formatDate(inv.expires_at)}
                     </TableCell>
                     <TableCell className="text-right">
@@ -566,7 +566,7 @@ export default function TeamPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          className="border-slate-700 text-slate-300"
+                          className="border-border text-foreground"
                           onClick={() => copyInviteLink(inv.token)}
                         >
                           <Copy className="h-4 w-4 mr-1" />
@@ -575,7 +575,7 @@ export default function TeamPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          className="border-slate-700 text-slate-300"
+                          className="border-border text-foreground"
                           disabled={resendInviteMutation.isPending}
                           onClick={() => resendInviteMutation.mutate(inv.id)}
                         >
@@ -602,10 +602,10 @@ export default function TeamPage() {
         </CardContent>
       </Card>
 
-      <Card className="border-slate-800 bg-slate-900/50">
+      <Card className="border-border bg-card">
         <CardHeader>
-          <CardTitle className="text-white">Members</CardTitle>
-          <CardDescription className="text-slate-400">
+          <CardTitle className="text-foreground">Members</CardTitle>
+          <CardDescription className="text-muted-foreground">
             All members of your organization
           </CardDescription>
         </CardHeader>
@@ -613,26 +613,26 @@ export default function TeamPage() {
           {isLoading ? (
             <div className="space-y-3">
               {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="h-14 bg-slate-800/50 rounded animate-pulse" />
+                <div key={i} className="h-14 bg-muted rounded animate-pulse" />
               ))}
             </div>
           ) : !members || members.length === 0 ? (
             <div className="text-center py-12">
-              <Users className="h-10 w-10 text-slate-600 mx-auto mb-3" />
-              <p className="text-slate-400 font-medium">No team members</p>
-              <p className="text-sm text-slate-500 mt-1">
+              <Users className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+              <p className="text-muted-foreground font-medium">No team members</p>
+              <p className="text-sm text-muted-foreground mt-1">
                 Invite your first team member to get started
               </p>
             </div>
           ) : (
             <Table>
               <TableHeader>
-                <TableRow className="border-slate-800 hover:bg-transparent">
-                  <TableHead className="text-slate-400">Member</TableHead>
-                  <TableHead className="text-slate-400">Role</TableHead>
-                  <TableHead className="text-slate-400">Status</TableHead>
-                  <TableHead className="text-slate-400">Last Active</TableHead>
-                  <TableHead className="text-slate-400 text-right">Actions</TableHead>
+                <TableRow className="border-border hover:bg-transparent">
+                  <TableHead className="text-muted-foreground">Member</TableHead>
+                  <TableHead className="text-muted-foreground">Role</TableHead>
+                  <TableHead className="text-muted-foreground">Status</TableHead>
+                  <TableHead className="text-muted-foreground">Last Active</TableHead>
+                  <TableHead className="text-muted-foreground text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -645,21 +645,21 @@ export default function TeamPage() {
                     .slice(0, 2);
 
                   return (
-                    <TableRow key={member.id} className="border-slate-800">
+                    <TableRow key={member.id} className="border-border">
                       <TableCell>
                         <div className="flex items-center gap-3">
-                          <Avatar className="h-8 w-8 border border-slate-700">
+                          <Avatar className="h-8 w-8 border border-border">
                             <AvatarImage
                               src={member.avatar_url || undefined}
                               alt={member.name}
                             />
-                            <AvatarFallback className="bg-slate-700 text-white text-xs">
+                            <AvatarFallback className="bg-muted text-white text-xs">
                               {initials}
                             </AvatarFallback>
                           </Avatar>
                           <div>
-                            <p className="text-sm font-medium text-white">{member.name}</p>
-                            <p className="text-xs text-slate-500">{member.email}</p>
+                            <p className="text-sm font-medium text-foreground">{member.name}</p>
+                            <p className="text-xs text-muted-foreground">{member.email}</p>
                           </div>
                         </div>
                       </TableCell>
@@ -673,7 +673,7 @@ export default function TeamPage() {
                           className={
                             member.is_active
                               ? 'bg-green-500/10 text-green-400 border-green-500/20'
-                              : 'bg-slate-800 text-slate-400 border-slate-700'
+                              : 'bg-muted text-muted-foreground border-border'
                           }
                         >
                           <span
@@ -685,7 +685,7 @@ export default function TeamPage() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <span className="text-sm text-slate-400">
+                        <span className="text-sm text-muted-foreground">
                           {member.last_active_at
                             ? formatDate(member.last_active_at)
                             : 'Never'}
@@ -694,7 +694,7 @@ export default function TeamPage() {
                       <TableCell className="text-right">
                         {member.role !== 'owner' && (
                           <DropdownMenu>
-                            <DropdownMenuTrigger className="inline-flex items-center justify-center rounded-md h-8 w-8 hover:bg-slate-800 text-slate-400">
+                            <DropdownMenuTrigger className="inline-flex items-center justify-center rounded-md h-8 w-8 hover:bg-muted text-muted-foreground">
                               <MoreHorizontal className="h-4 w-4" />
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
@@ -764,23 +764,23 @@ export default function TeamPage() {
           }
         }}
       >
-        <DialogContent className="bg-slate-900 border-slate-800">
+        <DialogContent className="bg-card border-border">
           <form onSubmit={submitResetPassword} className="space-y-4">
             <DialogHeader>
-              <DialogTitle className="text-white">Reset password</DialogTitle>
-              <DialogDescription className="text-slate-400">
+              <DialogTitle className="text-foreground">Reset password</DialogTitle>
+              <DialogDescription className="text-muted-foreground">
                 Set a new password for{' '}
-                <span className="text-slate-200 font-medium">
+                <span className="text-foreground font-medium">
                   {resetPasswordMember?.name || 'this member'}
                 </span>
                 {resetPasswordMember?.email ? ` (${resetPasswordMember.email})` : ''}.
               </DialogDescription>
             </DialogHeader>
 
-            <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted p-3">
               <div>
-                <p className="text-sm font-medium text-white">Generate random password</p>
-                <p className="text-xs text-slate-400">
+                <p className="text-sm font-medium text-foreground">Generate random password</p>
+                <p className="text-xs text-muted-foreground">
                   We’ll generate a secure password and show it once.
                 </p>
                 {resetPasswordErrors.generate && (
@@ -802,19 +802,19 @@ export default function TeamPage() {
 
             {generateRandomPassword ? (
               <div className="space-y-2">
-                <Label className="text-slate-200">Generated password</Label>
+                <Label className="text-foreground">Generated password</Label>
                 {generatedPassword ? (
                   <div className="flex gap-2">
                     <Input
                       value={generatedPassword}
                       readOnly
-                      className="bg-slate-950/30 border-slate-800 text-white"
+                      className="bg-muted border-border text-foreground"
                       aria-label="Generated password"
                     />
                     <Button
                       type="button"
                       variant="outline"
-                      className="bg-slate-950/30 border-slate-800"
+                      className="bg-muted border-border"
                       onClick={copyGeneratedPassword}
                       aria-label="Copy generated password"
                     >
@@ -822,7 +822,7 @@ export default function TeamPage() {
                     </Button>
                   </div>
                 ) : (
-                  <p className="text-xs text-slate-400">
+                  <p className="text-xs text-muted-foreground">
                     Click “Reset password” to generate a new password.
                   </p>
                 )}
@@ -830,7 +830,7 @@ export default function TeamPage() {
             ) : (
               <>
                 <div className="grid gap-2">
-                  <Label htmlFor="member-new-password" className="text-slate-200">New password</Label>
+                  <Label htmlFor="member-new-password" className="text-foreground">New password</Label>
                   <PasswordInput
                     id="member-new-password"
                     autoComplete="new-password"
@@ -842,18 +842,18 @@ export default function TeamPage() {
                       }
                     }}
                     aria-invalid={!!resetPasswordErrors.password}
-                    className={`bg-slate-950/30 border-slate-800 text-white ${resetPasswordErrors.password ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                    className={`bg-muted border-border text-white ${resetPasswordErrors.password ? 'border-destructive focus-visible:ring-destructive' : ''}`}
                   />
                   {resetPasswordErrors.password && (
                     <p className="text-xs text-destructive" role="alert">
                       {resetPasswordErrors.password}
                     </p>
                   )}
-                  <p className="text-xs text-slate-400">Minimum 8 characters</p>
+                  <p className="text-xs text-muted-foreground">Minimum 8 characters</p>
                 </div>
 
                 <div className="grid gap-2">
-                  <Label htmlFor="member-new-password-confirm" className="text-slate-200">Confirm new password</Label>
+                  <Label htmlFor="member-new-password-confirm" className="text-foreground">Confirm new password</Label>
                   <PasswordInput
                     id="member-new-password-confirm"
                     autoComplete="new-password"
@@ -865,7 +865,7 @@ export default function TeamPage() {
                       }
                     }}
                     aria-invalid={!!resetPasswordErrors.password_confirmation}
-                    className={`bg-slate-950/30 border-slate-800 text-white ${resetPasswordErrors.password_confirmation ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                    className={`bg-muted border-border text-white ${resetPasswordErrors.password_confirmation ? 'border-destructive focus-visible:ring-destructive' : ''}`}
                   />
                   {resetPasswordErrors.password_confirmation && (
                     <p className="text-xs text-destructive" role="alert">
@@ -880,7 +880,7 @@ export default function TeamPage() {
               <Button
                 type="button"
                 variant="outline"
-                className="bg-slate-950/30 border-slate-800"
+                className="bg-muted border-border"
                 onClick={() => setResetPasswordOpen(false)}
                 disabled={resetPasswordMutation.isPending}
               >

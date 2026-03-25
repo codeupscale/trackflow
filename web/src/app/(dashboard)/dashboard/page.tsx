@@ -244,7 +244,7 @@ export default function DashboardPage() {
           label: 'Status',
           value: data?.timer ? 'Tracking' : 'Idle',
           icon: Timer,
-          color: data?.timer ? 'text-green-400' : 'text-slate-400',
+          color: data?.timer ? 'text-green-400' : 'text-muted-foreground',
           bg: data?.timer ? 'bg-green-500/10' : 'bg-slate-500/10',
         },
         {
@@ -313,7 +313,7 @@ export default function DashboardPage() {
   if (error) {
     return (
       <div className="flex items-center justify-center h-64">
-        <p className="text-slate-400">Failed to load dashboard data. Please try again.</p>
+        <p className="text-muted-foreground">Failed to load dashboard data. Please try again.</p>
       </div>
     );
   }
@@ -323,8 +323,8 @@ export default function DashboardPage() {
       {/* Page header + date filter */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-          <p className="text-slate-400 text-sm mt-1">
+          <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
+          <p className="text-muted-foreground text-sm mt-1">
             {isEmployeeView
               ? filterPreset === 'today' && isSameDay(new Date(dateFrom + 'T00:00:00'), new Date())
                 ? 'Your activity overview for today'
@@ -350,14 +350,14 @@ export default function DashboardPage() {
         {statCards.map((stat) => {
           const Icon = stat.icon;
           return (
-            <Card key={stat.label} className="border-slate-800 bg-slate-900/50">
+            <Card key={stat.label} className="border-border bg-card">
               <CardContent className="p-6">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm text-slate-400">{stat.label}</p>
+                    <p className="text-sm text-muted-foreground">{stat.label}</p>
                     <p className="text-2xl font-bold text-white mt-1 tabular-nums">
                       {isLoading ? (
-                        <span className="inline-block h-7 w-16 bg-slate-800 rounded animate-pulse" />
+                        <span className="inline-block h-7 w-16 bg-muted rounded animate-pulse" />
                       ) : (
                         stat.value
                       )}
@@ -375,10 +375,10 @@ export default function DashboardPage() {
 
       {/* Team activity table — only for admin/manager/owner */}
       {!isEmployeeView && (
-        <Card className="border-slate-800 bg-slate-900/50">
+        <Card className="border-border bg-card">
           <CardHeader>
-            <CardTitle className="text-white">Team Activity</CardTitle>
-            <CardDescription className="text-slate-400">
+            <CardTitle className="text-foreground">Team Activity</CardTitle>
+            <CardDescription className="text-muted-foreground">
               Real-time activity status of your team members
             </CardDescription>
           </CardHeader>
@@ -386,29 +386,29 @@ export default function DashboardPage() {
             {isLoading ? (
               <div className="space-y-3">
                 {Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="h-12 bg-slate-800/50 rounded animate-pulse" />
+                  <div key={i} className="h-12 bg-muted rounded animate-pulse" />
                 ))}
               </div>
             ) : team.length === 0 ? (
               <div className="text-center py-12">
-                <Users className="h-10 w-10 text-slate-600 mx-auto mb-3" />
-                <p className="text-slate-400 font-medium">No team members yet</p>
-                <p className="text-sm text-slate-500 mt-1">
+                <Users className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+                <p className="text-muted-foreground font-medium">No team members yet</p>
+                <p className="text-sm text-muted-foreground mt-1">
                   Invite your team to start tracking time together
                 </p>
               </div>
             ) : (
               <Table>
                 <TableHeader>
-                  <TableRow className="border-slate-800 hover:bg-transparent">
-                    <TableHead className="text-slate-400">Member</TableHead>
-                    <TableHead className="text-slate-400">Status</TableHead>
-                    <TableHead className="text-slate-400">
+                  <TableRow className="border-border hover:bg-transparent">
+                    <TableHead className="text-muted-foreground">Member</TableHead>
+                    <TableHead className="text-muted-foreground">Status</TableHead>
+                    <TableHead className="text-muted-foreground">
                       {filterPreset === 'today' && isSameDay(new Date(dateFrom + 'T00:00:00'), new Date())
                         ? "Today's Hours"
                         : 'Hours'}
                     </TableHead>
-                    <TableHead className="text-slate-400">Activity</TableHead>
+                    <TableHead className="text-muted-foreground">Activity</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -421,28 +421,28 @@ export default function DashboardPage() {
                       .slice(0, 2);
 
                     return (
-                      <TableRow key={member.id} className="border-slate-800">
+                      <TableRow key={member.id} className="border-border">
                         <TableCell>
                           <div className="flex items-center gap-3">
                             <div className="relative">
-                              <Avatar className="h-8 w-8 border border-slate-700">
+                              <Avatar className="h-8 w-8 border border-border">
                                 <AvatarImage
                                   src={member.avatar_url || undefined}
                                   alt={member.name}
                                 />
-                                <AvatarFallback className="bg-slate-700 text-white text-xs">
+                                <AvatarFallback className="bg-muted text-white text-xs">
                                   {initials}
                                 </AvatarFallback>
                               </Avatar>
                               <span
-                                className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-slate-900 ${
+                                className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-background ${
                                   member.is_online ? 'bg-green-500' : 'bg-slate-500'
                                 }`}
                               />
                             </div>
                             <div>
-                              <p className="text-sm font-medium text-white">{member.name}</p>
-                              <p className="text-xs text-slate-500">{member.email}</p>
+                              <p className="text-sm font-medium text-foreground">{member.name}</p>
+                              <p className="text-xs text-muted-foreground">{member.email}</p>
                             </div>
                           </div>
                         </TableCell>
@@ -452,7 +452,7 @@ export default function DashboardPage() {
                             className={
                               member.is_online
                                 ? 'bg-green-500/10 text-green-400 border-green-500/20'
-                                : 'bg-slate-800 text-slate-400 border-slate-700'
+                                : 'bg-muted text-muted-foreground border-border'
                             }
                           >
                             <span
@@ -464,13 +464,13 @@ export default function DashboardPage() {
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <span className="text-sm font-mono text-slate-300 tabular-nums">
+                          <span className="text-sm font-mono text-foreground tabular-nums">
                             {formatDuration(member.today_seconds)}
                           </span>
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-3">
-                            <div className="flex-1 h-2 bg-slate-800 rounded-full max-w-[120px]">
+                            <div className="flex-1 h-2 bg-muted rounded-full max-w-[120px]">
                               <div
                                 className={`h-full rounded-full transition-all ${
                                   member.activity_score >= 70
@@ -482,7 +482,7 @@ export default function DashboardPage() {
                                 style={{ width: `${Math.min(member.activity_score, 100)}%` }}
                               />
                             </div>
-                            <span className="text-xs text-slate-400 w-8 text-right tabular-nums">
+                            <span className="text-xs text-muted-foreground w-8 text-right tabular-nums">
                               {member.activity_score}%
                             </span>
                           </div>
@@ -498,10 +498,10 @@ export default function DashboardPage() {
       )}
 
       {/* Timesheet (both roles see their own entries) */}
-      <Card className="border-slate-800 bg-slate-900/50">
+      <Card className="border-border bg-card">
         <CardHeader>
-          <CardTitle className="text-white">Timesheet</CardTitle>
-          <CardDescription className="text-slate-400">
+          <CardTitle className="text-foreground">Timesheet</CardTitle>
+          <CardDescription className="text-muted-foreground">
             Your time entries for {rangeLabel.toLowerCase()}
           </CardDescription>
         </CardHeader>
@@ -509,14 +509,14 @@ export default function DashboardPage() {
           {timesheetLoading ? (
             <div className="space-y-3">
               {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="h-12 bg-slate-800/50 rounded animate-pulse" />
+                <div key={i} className="h-12 bg-muted rounded animate-pulse" />
               ))}
             </div>
           ) : timeEntries.length === 0 ? (
             <div className="text-center py-12">
-              <Clock className="h-10 w-10 text-slate-600 mx-auto mb-3" />
-              <p className="text-slate-400 font-medium">No time entries in this range</p>
-              <p className="text-sm text-slate-500 mt-1">
+              <Clock className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+              <p className="text-muted-foreground font-medium">No time entries in this range</p>
+              <p className="text-sm text-muted-foreground mt-1">
                 Start the timer or log time on the Time page
               </p>
             </div>
@@ -524,34 +524,34 @@ export default function DashboardPage() {
             <>
               <Table>
                 <TableHeader>
-                  <TableRow className="border-slate-800 hover:bg-transparent">
-                    <TableHead className="text-slate-400">Date / Time</TableHead>
-                    <TableHead className="text-slate-400">Project</TableHead>
-                    <TableHead className="text-slate-400">Task</TableHead>
-                    <TableHead className="text-slate-400 text-right">Duration</TableHead>
+                  <TableRow className="border-border hover:bg-transparent">
+                    <TableHead className="text-muted-foreground">Date / Time</TableHead>
+                    <TableHead className="text-muted-foreground">Project</TableHead>
+                    <TableHead className="text-muted-foreground">Task</TableHead>
+                    <TableHead className="text-muted-foreground text-right">Duration</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {timeEntries.slice(0, 10).map((entry) => (
-                    <TableRow key={entry.id} className="border-slate-800">
-                      <TableCell className="text-slate-300 font-mono text-sm">
+                    <TableRow key={entry.id} className="border-border">
+                      <TableCell className="text-foreground font-mono text-sm">
                         {format(new Date(entry.started_at), 'MMM d, yyyy HH:mm')}
                       </TableCell>
                       <TableCell>
-                        <span className="text-sm text-slate-300">
+                        <span className="text-sm text-foreground">
                           {entry.project?.name ?? '—'}
                         </span>
                       </TableCell>
                       <TableCell>
                         {entry.task?.title ? (
-                          <span className="text-sm text-slate-400">{entry.task.title}</span>
+                          <span className="text-sm text-muted-foreground">{entry.task.title}</span>
                         ) : (
                           <span className="text-muted-foreground text-xs">No task</span>
                         )}
                       </TableCell>
                       <TableCell className="text-right font-mono text-sm tabular-nums">
                         {entry.ended_at ? (
-                          <span className="text-slate-300">{formatDuration(entry.duration_seconds)}</span>
+                          <span className="text-foreground">{formatDuration(entry.duration_seconds)}</span>
                         ) : (
                           <span className="text-green-400">{formatDuration(getDisplayDuration(entry))} ●</span>
                         )}
@@ -561,7 +561,7 @@ export default function DashboardPage() {
                 </TableBody>
               </Table>
               {timeEntries.length > 10 && (
-                <div className="mt-4 pt-4 border-t border-slate-800 text-center">
+                <div className="mt-4 pt-4 border-t border-border text-center">
                   <Link
                     href="/time"
                     className="inline-flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300 transition-colors"

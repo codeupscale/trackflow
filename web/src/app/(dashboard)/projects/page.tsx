@@ -238,11 +238,11 @@ export default function ProjectsPage() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white">Projects</h1>
-          <p className="text-slate-400 text-sm mt-1">Manage your projects and tasks</p>
+          <h1 className="text-2xl font-bold text-foreground">Projects</h1>
+          <p className="text-muted-foreground text-sm mt-1">Manage your projects and tasks</p>
         </div>
         {canCreateProjects && (
-          <Button onClick={openCreate} className="bg-blue-600 hover:bg-blue-700 text-white">
+          <Button onClick={openCreate} className="bg-blue-600 hover:bg-blue-700 text-foreground">
             <Plus className="mr-2 h-4 w-4" />
             New Project
           </Button>
@@ -251,12 +251,12 @@ export default function ProjectsPage() {
 
       {/* Projects Grid */}
       {isProjectsError ? (
-        <Card className="border-slate-800 bg-slate-900/50">
+        <Card className="border-border bg-card">
           <CardContent className="py-16">
             <div className="text-center">
               <FolderOpen className="h-10 w-10 text-red-500/60 mx-auto mb-3" />
-              <p className="text-slate-400 font-medium">Failed to load projects</p>
-              <p className="text-sm text-slate-500 mt-1">
+              <p className="text-muted-foreground font-medium">Failed to load projects</p>
+              <p className="text-sm text-muted-foreground mt-1">
                 Please try again.
               </p>
             </div>
@@ -265,22 +265,22 @@ export default function ProjectsPage() {
       ) : isLoading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
-            <Card key={i} className="border-slate-800 bg-slate-900/50">
+            <Card key={i} className="border-border bg-card">
               <CardContent className="p-6">
-                <div className="h-32 bg-slate-800/50 rounded animate-pulse" />
+                <div className="h-32 bg-muted rounded animate-pulse" />
               </CardContent>
             </Card>
           ))}
         </div>
       ) : !projects || projects.length === 0 ? (
-        <Card className="border-slate-800 bg-slate-900/50">
+        <Card className="border-border bg-card">
           <CardContent className="py-16">
             <div className="text-center">
-              <FolderOpen className="h-10 w-10 text-slate-600 mx-auto mb-3" />
-              <p className="text-slate-400 font-medium">
+              <FolderOpen className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+              <p className="text-muted-foreground font-medium">
                 {user?.role === 'employee' ? 'No projects assigned' : 'No projects yet'}
               </p>
-              <p className="text-sm text-slate-500 mt-1">
+              <p className="text-sm text-muted-foreground mt-1">
                 {user?.role === 'employee'
                   ? 'Ask your manager to assign you to a project.'
                   : 'Create your first project to start tracking time'}
@@ -293,7 +293,7 @@ export default function ProjectsPage() {
           {projects.map((project) => (
             <Card
               key={project.id}
-              className={`border-slate-800 bg-slate-900/50 transition-all hover:border-slate-700 cursor-pointer ${
+              className={`border-border bg-card transition-all hover:border-border cursor-pointer ${
                 project.is_archived ? 'opacity-60' : ''
               }`}
               onClick={() =>
@@ -308,12 +308,12 @@ export default function ProjectsPage() {
                       style={{ backgroundColor: project.color }}
                     />
                     <div>
-                      <CardTitle className="text-base text-white">{project.name}</CardTitle>
+                      <CardTitle className="text-base text-foreground">{project.name}</CardTitle>
                     </div>
                   </div>
                   <DropdownMenu>
                     <DropdownMenuTrigger
-                      className="inline-flex items-center justify-center rounded-md h-8 w-8 hover:bg-slate-800 text-slate-400"
+                      className="inline-flex items-center justify-center rounded-md h-8 w-8 hover:bg-muted text-muted-foreground"
                       onClick={(e) => e.stopPropagation()}
                     >
                       <MoreHorizontal className="h-4 w-4" />
@@ -360,11 +360,11 @@ export default function ProjectsPage() {
               </CardHeader>
               <CardContent className="pt-0">
                 <div className="flex items-center gap-4 text-sm">
-                  <div className="flex items-center gap-1.5 text-slate-400">
+                  <div className="flex items-center gap-1.5 text-muted-foreground">
                     <FolderOpen className="h-3.5 w-3.5" />
                     <span>{project.tasks?.length || 0} tasks</span>
                   </div>
-                  <div className="flex items-center gap-1.5 text-slate-400">
+                  <div className="flex items-center gap-1.5 text-muted-foreground">
                     <Clock className="h-3.5 w-3.5" />
                     <span>{(project.total_hours || 0).toFixed(1)}h</span>
                   </div>
@@ -377,7 +377,7 @@ export default function ProjectsPage() {
                       {project.hourly_rate ? `$${project.hourly_rate}/hr` : 'Billable'}
                     </Badge>
                   ) : (
-                    <Badge className="bg-slate-800 text-slate-400 border-slate-700 text-xs">
+                    <Badge className="bg-muted text-muted-foreground border-border text-xs">
                       Non-billable
                     </Badge>
                   )}
@@ -390,12 +390,12 @@ export default function ProjectsPage() {
 
                 {/* Expanded tasks */}
                 {expandedProject === project.id && project.tasks && project.tasks.length > 0 && (
-                  <div className="mt-4 pt-3 border-t border-slate-800">
-                    <p className="text-xs font-medium text-slate-400 mb-2">Tasks</p>
+                  <div className="mt-4 pt-3 border-t border-border">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">Tasks</p>
                     <div className="space-y-1">
                       {project.tasks.map((task) => (
-                        <div key={task.id} className="text-sm text-slate-300 flex items-center gap-2">
-                          <div className="h-1 w-1 rounded-full bg-slate-600" />
+                        <div key={task.id} className="text-sm text-foreground flex items-center gap-2">
+                          <div className="h-1 w-1 rounded-full bg-muted-foreground" />
                           {task.name}
                         </div>
                       ))}
@@ -410,28 +410,28 @@ export default function ProjectsPage() {
 
       {/* Create/Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) closeDialog(); }}>
-        <DialogContent className="bg-slate-900 border-slate-800">
+        <DialogContent className="bg-card border-border">
           <form onSubmit={handleSubmit}>
             <DialogHeader>
-              <DialogTitle className="text-white">{editingProject ? 'Edit Project' : 'New Project'}</DialogTitle>
-              <DialogDescription className="text-slate-400">
+              <DialogTitle className="text-foreground">{editingProject ? 'Edit Project' : 'New Project'}</DialogTitle>
+              <DialogDescription className="text-muted-foreground">
                 {editingProject ? 'Update project details.' : 'Create a new project to track time against.'}
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
-                <Label htmlFor="project-name" className="text-slate-300">Name</Label>
+                <Label htmlFor="project-name" className="text-foreground">Name</Label>
                 <Input
                   id="project-name"
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
                   placeholder="Project name"
-                  className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                  className="bg-muted border-border text-white placeholder:text-muted-foreground"
                   required
                 />
               </div>
               <div className="grid gap-2">
-                <Label className="text-slate-300">Color</Label>
+                <Label className="text-foreground">Color</Label>
                 <div className="flex gap-2">
                   {COLORS.map((c) => (
                     <button
@@ -440,7 +440,7 @@ export default function ProjectsPage() {
                       onClick={() => setFormColor(c)}
                       className={`h-8 w-8 rounded-full transition-all ${
                         formColor === c
-                          ? 'ring-2 ring-offset-2 ring-offset-slate-900 ring-blue-500 scale-110'
+                          ? 'ring-2 ring-offset-2 ring-offset-background ring-blue-500 scale-110'
                           : 'hover:scale-105'
                       }`}
                       style={{ backgroundColor: c }}
@@ -450,8 +450,8 @@ export default function ProjectsPage() {
               </div>
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-slate-300">Billable</Label>
-                  <p className="text-xs text-slate-500">Track billable hours for this project</p>
+                  <Label className="text-foreground">Billable</Label>
+                  <p className="text-xs text-muted-foreground">Track billable hours for this project</p>
                 </div>
                 <Switch
                   checked={formBillable}
@@ -460,7 +460,7 @@ export default function ProjectsPage() {
               </div>
               {formBillable && (
                 <div className="grid gap-2">
-                  <Label htmlFor="hourly-rate" className="text-slate-300">Hourly Rate ($)</Label>
+                  <Label htmlFor="hourly-rate" className="text-foreground">Hourly Rate ($)</Label>
                   <Input
                     id="hourly-rate"
                     type="number"
@@ -469,16 +469,16 @@ export default function ProjectsPage() {
                     value={formRate}
                     onChange={(e) => setFormRate(e.target.value)}
                     placeholder="0.00"
-                    className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                    className="bg-muted border-border text-white placeholder:text-muted-foreground"
                   />
                 </div>
               )}
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={closeDialog} className="border-slate-700 text-slate-300">
+              <Button type="button" variant="outline" onClick={closeDialog} className="border-border text-foreground">
                 Cancel
               </Button>
-              <Button type="submit" disabled={isPending} className="bg-blue-600 hover:bg-blue-700 text-white">
+              <Button type="submit" disabled={isPending} className="bg-blue-600 hover:bg-blue-700 text-foreground">
                 {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {editingProject ? 'Save Changes' : 'Create Project'}
               </Button>
@@ -498,31 +498,31 @@ export default function ProjectsPage() {
           }
         }}
       >
-        <DialogContent className="bg-slate-900 border-slate-800">
+        <DialogContent className="bg-card border-border">
           <DialogHeader>
-            <DialogTitle className="text-white">Project Members</DialogTitle>
-            <DialogDescription className="text-slate-400">
-              Assign team members to <span className="text-slate-200">{membersProject?.name}</span>.
+            <DialogTitle className="text-foreground">Project Members</DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              Assign team members to <span className="text-foreground">{membersProject?.name}</span>.
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-3 py-2">
-            <div className="text-sm text-slate-400">
+            <div className="text-sm text-muted-foreground">
               {orgUsers ? `${orgUsers.length} users` : 'Loading users...'}
             </div>
 
-            <div className="max-h-[320px] overflow-y-auto rounded-md border border-slate-800 bg-slate-950/40">
+            <div className="max-h-[320px] overflow-y-auto rounded-md border border-border bg-muted">
               <div className="divide-y divide-slate-800">
                 {(orgUsers || []).map((u) => {
                   const checked = memberIds.includes(u.id);
                   return (
                     <label
                       key={u.id}
-                      className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-slate-900/40 cursor-pointer"
+                      className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-muted cursor-pointer"
                     >
                       <div className="min-w-0">
-                        <div className="text-slate-200 truncate">{u.name}</div>
-                        <div className="text-slate-500 truncate">{u.email} • {u.role}</div>
+                        <div className="text-foreground truncate">{u.name}</div>
+                        <div className="text-muted-foreground truncate">{u.email} • {u.role}</div>
                       </div>
                       <input
                         type="checkbox"
@@ -547,13 +547,13 @@ export default function ProjectsPage() {
               type="button"
               variant="outline"
               onClick={() => setMembersDialogOpen(false)}
-              className="border-slate-700 text-slate-300"
+              className="border-border text-foreground"
             >
               Cancel
             </Button>
             <Button
               type="button"
-              className="bg-blue-600 hover:bg-blue-700 text-white"
+              className="bg-blue-600 hover:bg-blue-700 text-foreground"
               disabled={!membersProject?.id || syncMembersMutation.isPending}
               onClick={() => {
                 if (!membersProject?.id) return;

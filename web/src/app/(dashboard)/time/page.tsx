@@ -173,48 +173,48 @@ export default function TimePage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-white">Time Entries</h1>
-        <p className="text-slate-400 text-sm mt-1">Track and manage your work hours</p>
+        <h1 className="text-2xl font-bold text-foreground">Time Entries</h1>
+        <p className="text-muted-foreground text-sm mt-1">Track and manage your work hours</p>
       </div>
 
       {/* Filters */}
-      <Card className="border-slate-800 bg-slate-900/50">
+      <Card className="border-border bg-card">
         <CardContent className="pt-6">
           <div className="flex flex-col sm:flex-row gap-4 items-end">
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-slate-300" htmlFor="date-from">
+              <label className="text-sm font-medium text-foreground" htmlFor="date-from">
                 From
               </label>
               <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
                   id="date-from"
                   type="date"
                   value={dateFrom}
                   onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
-                  className="pl-10 w-[160px] bg-slate-800/50 border-slate-700 text-white"
+                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
                 />
               </div>
             </div>
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-slate-300" htmlFor="date-to">
+              <label className="text-sm font-medium text-foreground" htmlFor="date-to">
                 To
               </label>
               <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
                   id="date-to"
                   type="date"
                   value={dateTo}
                   onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
-                  className="pl-10 w-[160px] bg-slate-800/50 border-slate-700 text-white"
+                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
                 />
               </div>
             </div>
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-slate-300">Project</label>
+              <label className="text-sm font-medium text-foreground">Project</label>
               <Select value={projectFilter} onValueChange={(val) => { setProjectFilter(val ?? 'all'); setPage(1); }}>
-                <SelectTrigger className="w-[200px] bg-slate-800/50 border-slate-700">
+                <SelectTrigger className="w-[200px] bg-muted border-border">
                   <SelectValue placeholder="All projects" />
                 </SelectTrigger>
                 <SelectContent>
@@ -234,9 +234,9 @@ export default function TimePage() {
               </Select>
             </div>
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-slate-300">Time type</label>
+              <label className="text-sm font-medium text-foreground">Time type</label>
               <Select value={typeFilter} onValueChange={(val) => { setTypeFilter(val ?? 'all'); setPage(1); }}>
-                <SelectTrigger className="w-[160px] bg-slate-800/50 border-slate-700">
+                <SelectTrigger className="w-[160px] bg-muted border-border">
                   <SelectValue placeholder="All types" />
                 </SelectTrigger>
                 <SelectContent>
@@ -267,10 +267,10 @@ export default function TimePage() {
       </Card>
 
       {/* Time Entries Table */}
-      <Card className="border-slate-800 bg-slate-900/50">
+      <Card className="border-border bg-card">
         <CardHeader>
-          <CardTitle className="text-white">Entries</CardTitle>
-          <CardDescription className="text-slate-400">
+          <CardTitle className="text-foreground">Entries</CardTitle>
+          <CardDescription className="text-muted-foreground">
             {entries.length} entries | Total: {formatDuration(totalSeconds)}
           </CardDescription>
         </CardHeader>
@@ -278,14 +278,14 @@ export default function TimePage() {
           {isLoading ? (
             <div className="space-y-3">
               {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="h-12 bg-slate-800/50 rounded animate-pulse" />
+                <div key={i} className="h-12 bg-muted rounded animate-pulse" />
               ))}
             </div>
           ) : entries.length === 0 ? (
             <div className="text-center py-12">
-              <Clock className="h-10 w-10 text-slate-600 mx-auto mb-3" />
-              <p className="text-slate-400 font-medium">No time entries found</p>
-              <p className="text-sm text-slate-500 mt-1">
+              <Clock className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+              <p className="text-muted-foreground font-medium">No time entries found</p>
+              <p className="text-sm text-muted-foreground mt-1">
                 Start the timer or adjust your filters to see entries
               </p>
             </div>
@@ -293,7 +293,7 @@ export default function TimePage() {
             <>
               <Table>
                 <TableHeader>
-                  <TableRow className="border-slate-800 hover:bg-transparent">
+                  <TableRow className="border-border hover:bg-transparent">
                     {canApprove && (
                       <TableHead className="w-[40px]">
                         <input
@@ -304,16 +304,16 @@ export default function TimePage() {
                             entries.filter((e) => e.status === 'pending').length > 0
                           }
                           onChange={toggleAll}
-                          className="rounded border-slate-600"
+                          className="rounded border-border"
                         />
                       </TableHead>
                     )}
-                    <TableHead className="text-slate-400">Date</TableHead>
-                    <TableHead className="text-slate-400">Type</TableHead>
-                    <TableHead className="text-slate-400">Project</TableHead>
-                    <TableHead className="text-slate-400">Task</TableHead>
-                    <TableHead className="text-slate-400 text-right">Duration</TableHead>
-                    <TableHead className="text-slate-400 text-right">
+                    <TableHead className="text-muted-foreground">Date</TableHead>
+                    <TableHead className="text-muted-foreground">Type</TableHead>
+                    <TableHead className="text-muted-foreground">Project</TableHead>
+                    <TableHead className="text-muted-foreground">Task</TableHead>
+                    <TableHead className="text-muted-foreground text-right">Duration</TableHead>
+                    <TableHead className="text-muted-foreground text-right">
                       <span className="inline-flex items-center gap-1">
                         Activity
                         <Tooltip>
@@ -322,7 +322,7 @@ export default function TimePage() {
                             className="inline-flex"
                             aria-label="Activity info"
                           >
-                            <Info className="h-3.5 w-3.5 text-slate-500 hover:text-slate-300 transition-colors" />
+                            <Info className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground transition-colors" />
                           </TooltipTrigger>
                           <TooltipContent>
                             Activity is calculated from keyboard and mouse events during each tracking interval. Higher % means more consistent input activity.
@@ -330,12 +330,12 @@ export default function TimePage() {
                         </Tooltip>
                       </span>
                     </TableHead>
-                    <TableHead className="text-slate-400 text-center">Status</TableHead>
+                    <TableHead className="text-muted-foreground text-center">Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {entries.map((entry) => (
-                    <TableRow key={entry.id} className="border-slate-800">
+                    <TableRow key={entry.id} className="border-border">
                       {canApprove && (
                         <TableCell>
                           {entry.status === 'pending' && (
@@ -343,16 +343,16 @@ export default function TimePage() {
                               type="checkbox"
                               checked={selectedEntries.includes(entry.id)}
                               onChange={() => toggleEntry(entry.id)}
-                              className="rounded border-slate-600"
+                              className="rounded border-border"
                             />
                           )}
                         </TableCell>
                       )}
                       <TableCell>
-                        <span className="text-sm text-white">
+                        <span className="text-sm text-foreground">
                           {format(new Date(entry.started_at), 'MMM d, yyyy')}
                         </span>
-                        <div className="text-xs text-slate-500">
+                        <div className="text-xs text-muted-foreground">
                           {(() => {
                             const start = new Date(entry.started_at);
                             if (!entry.ended_at) return format(start, 'HH:mm');
@@ -369,7 +369,7 @@ export default function TimePage() {
                           entry.type === 'idle'
                             ? 'bg-amber-400/10 text-amber-400 border border-amber-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
                             : entry.type === 'manual'
-                            ? 'bg-slate-400/10 text-slate-400 border border-slate-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
+                            ? 'bg-slate-400/10 text-muted-foreground border border-muted-foreground/20 rounded-full px-2 py-0.5 text-xs font-medium'
                             : 'bg-blue-400/10 text-blue-400 border border-blue-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
                         }>
                           {entry.type === 'idle' ? 'Idle' : entry.type === 'manual' ? 'Manual' : 'Tracked'}
@@ -382,25 +382,25 @@ export default function TimePage() {
                               className="h-2 w-2 rounded-full shrink-0"
                               style={{ backgroundColor: entry.project.color || '#6366f1' }}
                             />
-                            <span className="text-sm text-slate-300">{entry.project.name}</span>
+                            <span className="text-sm text-foreground">{entry.project.name}</span>
                           </div>
                         ) : (
-                          <span className="text-sm text-slate-500">No project</span>
+                          <span className="text-sm text-muted-foreground">No project</span>
                         )}
                       </TableCell>
-                      <TableCell className="text-sm text-slate-300">
+                      <TableCell className="text-sm text-foreground">
                         {entry.task?.title || <span className="text-muted-foreground text-xs">No task</span>}
                       </TableCell>
                       <TableCell className="text-right font-mono text-sm tabular-nums">
                         {entry.ended_at ? (
-                          <span className="text-slate-300">{formatDuration(entry.duration_seconds)}</span>
+                          <span className="text-foreground">{formatDuration(entry.duration_seconds)}</span>
                         ) : (
                           <span className="text-green-400">{formatDuration(getDisplayDuration(entry))} ●</span>
                         )}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">
-                          <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                          <div className="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
                             <div
                               className={`h-full rounded-full ${getActivityColor(entry.activity_score).bar}`}
                               style={{ width: `${Math.min(entry.activity_score, 100)}%` }}
@@ -431,8 +431,8 @@ export default function TimePage() {
 
               {/* Pagination */}
               {meta && meta.last_page > 1 && (
-                <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-800">
-                  <p className="text-sm text-slate-400">
+                <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
+                  <p className="text-sm text-muted-foreground">
                     Page {meta.current_page} of {meta.last_page} ({meta.total} total)
                   </p>
                   <div className="flex items-center gap-2">
@@ -441,7 +441,7 @@ export default function TimePage() {
                       size="sm"
                       onClick={() => setPage((p) => Math.max(1, p - 1))}
                       disabled={page <= 1}
-                      className="border-slate-700 text-slate-300"
+                      className="border-border text-foreground"
                     >
                       <ChevronLeft className="h-4 w-4" />
                     </Button>
@@ -450,7 +450,7 @@ export default function TimePage() {
                       size="sm"
                       onClick={() => setPage((p) => p + 1)}
                       disabled={page >= (meta.last_page || 1)}
-                      className="border-slate-700 text-slate-300"
+                      className="border-border text-foreground"
                     >
                       <ChevronRight className="h-4 w-4" />
                     </Button>
