@@ -132,3 +132,14 @@
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
+
+/* Toast notifications — always visible above modals and overlays */
+[data-sonner-toaster] {
+  z-index: 9999 !important;
+  position: fixed !important;
+}
+
+[data-sonner-toast] {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}

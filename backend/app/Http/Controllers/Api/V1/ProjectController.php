@@ -14,6 +14,7 @@ class ProjectController extends Controller
         $user = $request->user();
         $query = $user->organization->projects()
             ->with('tasks')
+            ->withSum('timeEntries as total_duration_seconds', 'duration_seconds')
             ->where('is_archived', false);
 
         // Employees see only projects they are assigned to (unless org setting allows "see all").
@@ -52,6 +53,7 @@ class ProjectController extends Controller
     {
         $project = Project::where('organization_id', $request->user()->organization_id)
             ->with('tasks')
+            ->withSum('timeEntries as total_duration_seconds', 'duration_seconds')
             ->findOrFail($id);
         $this->authorize('view', $project);
         return response()->json(['project' => $project]);

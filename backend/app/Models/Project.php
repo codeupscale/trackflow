@@ -24,6 +24,8 @@ class Project extends Model
         'created_by',
     ];
 
+    protected $appends = ['total_hours'];
+
     protected function casts(): array
     {
         return [
@@ -31,6 +33,15 @@ class Project extends Model
             'is_archived' => 'boolean',
             'hourly_rate' => 'decimal:2',
         ];
+    }
+
+    /**
+     * Total tracked hours for this project (derived from aggregated duration_seconds).
+     * Requires withSum('timeEntries as total_duration_seconds', 'duration_seconds') on the query.
+     */
+    public function getTotalHoursAttribute(): float
+    {
+        return round(($this->total_duration_seconds ?? 0) / 3600, 1);
     }
 
     public function creator(): BelongsTo
