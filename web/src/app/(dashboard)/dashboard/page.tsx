@@ -355,7 +355,7 @@ export default function DashboardPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm text-muted-foreground">{stat.label}</p>
-                    <p className="text-2xl font-bold text-white mt-1 tabular-nums">
+                    <p className="text-2xl font-bold text-foreground mt-1 tabular-nums">
                       {isLoading ? (
                         <span className="inline-block h-7 w-16 bg-muted rounded animate-pulse" />
                       ) : (
@@ -430,7 +430,7 @@ export default function DashboardPage() {
                                   src={member.avatar_url || undefined}
                                   alt={member.name}
                                 />
-                                <AvatarFallback className="bg-muted text-white text-xs">
+                                <AvatarFallback className="bg-muted text-foreground text-xs">
                                   {initials}
                                 </AvatarFallback>
                               </Avatar>

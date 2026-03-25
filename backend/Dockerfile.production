@@ -10,23 +10,7 @@ RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist --ignor
 COPY backend/ .
 RUN composer dump-autoload --optimize --classmap-authoritative
 
-# Stage 2: Frontend build
-FROM node:20-alpine AS frontend
-WORKDIR /app/web
-COPY web/package.json web/package-lock.json* ./
-RUN npm ci --production=false
-COPY web/ .
-ARG NEXT_PUBLIC_API_URL=https://trackflow.codeupscale.com/api/v1
-ARG NEXT_PUBLIC_REVERB_APP_KEY=trackflow-key
-ARG NEXT_PUBLIC_REVERB_HOST=trackflow.codeupscale.com
-ARG NEXT_PUBLIC_REVERB_PORT=8081
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_REVERB_APP_KEY=$NEXT_PUBLIC_REVERB_APP_KEY
-ENV NEXT_PUBLIC_REVERB_HOST=$NEXT_PUBLIC_REVERB_HOST
-ENV NEXT_PUBLIC_REVERB_PORT=$NEXT_PUBLIC_REVERB_PORT
-RUN npm run build
-
-# Stage 3: Production image
+# Stage 2: Production image
 FROM php:8.4-fpm-alpine AS production
 
 # Install system dependencies and PHP extensions
@@ -73,7 +57,6 @@ COPY backend/docker/production/supervisord.conf /etc/supervisor/conf.d/superviso
 # Application code
 WORKDIR /var/www/html
 COPY --from=composer /app /var/www/html
-COPY --from=frontend /app/web/.next /var/www/html/web/.next
 
 # Set permissions (including screenshots directory for local storage fallback)
 RUN mkdir -p /var/www/html/storage/app/public/screenshots \

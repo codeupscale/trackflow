@@ -426,7 +426,7 @@ export default function ProjectsPage() {
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
                   placeholder="Project name"
-                  className="bg-muted border-border text-white placeholder:text-muted-foreground"
+                  className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
                   required
                 />
               </div>
@@ -469,7 +469,7 @@ export default function ProjectsPage() {
                     value={formRate}
                     onChange={(e) => setFormRate(e.target.value)}
                     placeholder="0.00"
-                    className="bg-muted border-border text-white placeholder:text-muted-foreground"
+                    className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
                   />
                 </div>
               )}

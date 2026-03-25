@@ -159,14 +159,14 @@ export default function BillingPage() {
             </div>
           ) : (
             <>
-              <div className="text-xl font-bold text-white capitalize">{currentPlan}</div>
+              <div className="text-xl font-bold text-foreground capitalize">{currentPlan}</div>
 
               {/* Seat usage meter */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-sm">
                   <span className="flex items-center gap-2 text-muted-foreground">
                     <Users className="h-4 w-4" />
-                    Seats: <span className="text-white font-medium">{usage?.seats_used}</span> / {usage?.seats_limit}
+                    Seats: <span className="text-foreground font-medium">{usage?.seats_used}</span> / {usage?.seats_limit}
                   </span>
                   <span className="text-muted-foreground">{seatPercentage}% used</span>
                 </div>
@@ -201,7 +201,7 @@ export default function BillingPage() {
 
       {/* Plans */}
       <div>
-        <h2 className="text-lg font-semibold text-white mb-4">Available Plans</h2>
+        <h2 className="text-lg font-semibold text-foreground mb-4">Available Plans</h2>
         <div className="grid gap-4 md:grid-cols-3">
           {plans.map((plan) => {
             const isCurrent = plan.name.toLowerCase() === currentPlan;
