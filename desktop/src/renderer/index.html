@@ -39,12 +39,12 @@
       letter-spacing: 2px;
       transition: color 0.2s;
     }
-    .time.running { color: #22c55e; }
-    .time.stopped { color: #64748b; }
+    .time.running { color: var(--accent-green); }
+    .time.stopped { color: var(--text-muted); }
 
     .status {
       font-size: 13px;
-      color: #64748b;
+      color: var(--text-muted);
       margin-top: 4px;
       display: flex;
       align-items: center;
@@ -58,8 +58,8 @@
       border-radius: 50%;
       flex-shrink: 0;
     }
-    .dot.green { background: #22c55e; animation: pulse 2s infinite; }
-    .dot.gray { background: #64748b; }
+    .dot.green { background: var(--accent-green); animation: pulse 2s infinite; }
+    .dot.gray { background: var(--text-muted); }
 
     /* ── Project Select ─────────────────────────────────────── */
     .select-wrap {
@@ -85,7 +85,7 @@
       justify-content: space-between;
       align-items: center;
       padding-top: 10px;
-      border-top: 1px solid #1e293b;
+      border-top: 1px solid var(--border-color);
       font-size: 11px;
     }
   </style>
