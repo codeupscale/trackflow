@@ -1,6 +1,35 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification, screen, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
+
+// ── Load .env for both dev and packaged builds ──────────────────
+// In dev: .env is in the project root (desktop/.env)
+// In packaged: .env is bundled via extraResources into the Resources dir
+(function loadEnv() {
+  try {
+    const envPaths = [
+      path.join(process.resourcesPath, '.env'),            // packaged
+      path.join(__dirname, '..', '..', '.env'),             // dev (src/main -> desktop)
+    ];
+    for (const p of envPaths) {
+      if (fs.existsSync(p)) {
+        const lines = fs.readFileSync(p, 'utf8').split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          const eqIdx = trimmed.indexOf('=');
+          if (eqIdx === -1) continue;
+          const key = trimmed.slice(0, eqIdx).trim();
+          const val = trimmed.slice(eqIdx + 1).trim();
+          if (!process.env[key]) process.env[key] = val;
+        }
+        break;
+      }
+    }
+  } catch (_) {
+    // Non-fatal — env vars may already be set by the OS or launcher
+  }
+})();
 const { autoUpdater } = require('electron-updater');
 const ApiClient = require('./api-client');
 const ActivityMonitor = require('./activity-monitor');
@@ -187,13 +216,9 @@ async function initializeApp() {
     await setRefreshToken(newRefreshToken);
   });
 
-  // Initialize PostHog analytics
-  // PostHog project API keys are public (same as frontend JS bundles) — safe to hardcode.
-  // Do NOT use process.env here: Electron does not auto-load .env files, and the .env
-  // file is not bundled into the asar, so process.env.POSTHOG_KEY is always undefined
-  // in packaged builds.
-  const posthogKey = 'phc_Nn2GYJdwXB6W7Us0yushtLOvvJ8373wq1jK1XMDjidt';
-  const posthogHost = 'https://us.i.posthog.com';
+  // Initialize PostHog analytics (key loaded from .env via loadEnv() above)
+  const posthogKey = process.env.POSTHOG_KEY || '';
+  const posthogHost = process.env.POSTHOG_HOST || 'https://us.i.posthog.com';
   posthog.init(posthogKey, { host: posthogHost });
 
   // Test token validity with retry for transient network errors
