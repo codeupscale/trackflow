@@ -83,7 +83,6 @@ module.exports = {
           ...(_platformProps || {}),
           ...properties,
         },
-        $set: _platformProps || {},
       });
     } catch (_) {
       // silent
@@ -123,7 +122,11 @@ module.exports = {
   async shutdown() {
     try {
       if (!client) return;
-      await client.shutdown();
+      // Guard with a timeout so a network-stalled flush never blocks app exit
+      await Promise.race([
+        client.shutdown(),
+        new Promise((resolve) => setTimeout(resolve, 3000)),
+      ]);
       client = null;
     } catch (_) {
       client = null;

@@ -27,9 +27,9 @@ api.interceptors.response.use(
     // Extract structured error message from response
     const errorMessage = error.response?.data?.message || error.message || 'An error occurred';
 
-    // Capture server errors and network failures to PostHog
+    // Capture server errors, rate limits, and network failures to PostHog
     const status = error.response?.status;
-    if (!status || status >= 500) {
+    if (!status || status >= 500 || status === 429) {
       captureError(
         new Error(errorMessage),
         {
@@ -58,7 +58,7 @@ api.interceptors.response.use(
 
     // Handle unauthorized (401) - refresh token or redirect to login
     if (error.response?.status === 401) {
-      const refreshToken = localStorage.getItem('refresh_token');
+      const refreshToken = typeof window !== 'undefined' ? localStorage.getItem('refresh_token') : null;
       if (refreshToken && !error.config._retry) {
         error.config._retry = true;
         try {
