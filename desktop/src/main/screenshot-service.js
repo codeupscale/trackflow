@@ -638,6 +638,13 @@ class ScreenshotService {
     formData.append('captured_at', new Date().toISOString());
     if (appName) formData.append('app_name', appName);
     if (windowTitle) formData.append('window_title', windowTitle);
+
+    // Attach point-in-time activity score (like Hubstaff)
+    if (this.activityMonitor) {
+      const score = this.activityMonitor.getCurrentScore();
+      formData.append('activity_score', String(score));
+    }
+
     return formData;
   }
 

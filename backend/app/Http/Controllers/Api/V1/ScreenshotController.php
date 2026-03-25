@@ -139,8 +139,11 @@ class ScreenshotController extends Controller
             );
             $screenshot->original_url = $this->getScreenshotUrl($screenshot->s3_key);
             $screenshot->user_name = $screenshot->user?->name ?? 'Unknown';
-            // Get activity score from the time entry
-            $screenshot->activity_score = $screenshot->timeEntry?->activity_score ?? 0;
+            // Prefer point-in-time score captured with the screenshot (Hubstaff-style),
+            // fall back to the time entry's overall score for older screenshots
+            $screenshot->activity_score = $screenshot->activity_score_at_capture
+                ?? $screenshot->timeEntry?->activity_score
+                ?? 0;
             $screenshot->project_name = $screenshot->timeEntry?->project?->name ?? null;
             $screenshot->app_name = $screenshot->app_name;
             $screenshot->window_title = $screenshot->window_title;
