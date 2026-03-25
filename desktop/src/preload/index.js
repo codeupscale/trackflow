@@ -28,6 +28,10 @@ contextBridge.exposeInMainWorld('trackflow', {
   // Idle alert actions (action: 'keep'|'discard'|'stop'|'reassign'; projectId only for reassign)
   resolveIdle: (action, projectId) => ipcRenderer.invoke('resolve-idle', action, projectId),
 
+  // OS theme detection
+  getTheme: () => ipcRenderer.invoke('get-theme'),
+  onThemeChange: (callback) => safeOn('theme-changed', (_, theme) => callback(theme)),
+
   // Events from main process — each call replaces the previous listener to prevent leaks
   onTimerStarted: (callback) => safeOn('timer-started', (_, data) => callback(data)),
   onTimerStopped: (callback) => safeOn('timer-stopped', (_, data) => callback(data)),

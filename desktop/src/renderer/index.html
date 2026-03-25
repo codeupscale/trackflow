@@ -134,6 +134,21 @@
   </div>
 
   <script>
+    // ── OS Theme Detection ──
+    // Apply the OS theme (light/dark) to the document root.
+    // Dark is the default in CSS (:root), light requires data-theme="light".
+    function applyTheme(theme) {
+      if (theme === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+      } else {
+        document.documentElement.removeAttribute('data-theme');
+      }
+    }
+    // Get initial theme from main process and apply it
+    window.trackflow.getTheme().then(applyTheme).catch(() => {});
+    // Listen for OS theme changes (e.g., user toggles dark/light mode)
+    window.trackflow.onThemeChange(applyTheme);
+
     // ── Platform detection for shortcut labels ──
     const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
     const modKey = isMac ? 'Cmd' : 'Ctrl';

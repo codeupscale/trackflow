@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification, screen, powerMonitor } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification, screen, powerMonitor, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -890,8 +890,31 @@ async function performLogout() {
   createLoginWindow();
 }
 
+// ── OS Theme Detection ─────────────────────────────────────────────────────
+// Returns 'dark' or 'light' based on the OS preference.
+function getOSTheme() {
+  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+}
+
+// Broadcast theme change to all open renderer windows.
+function broadcastThemeChange() {
+  const theme = getOSTheme();
+  const windows = [popupWindow, loginWindow, idleAlertWindow];
+  for (const win of windows) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('theme-changed', theme);
+    }
+  }
+}
+
+// Listen for OS theme changes — fires when the user toggles dark/light mode
+nativeTheme.on('updated', () => {
+  broadcastThemeChange();
+});
+
 function setupIPC() {
   // Remove previous handlers to avoid duplicate registration
+  ipcMain.removeHandler('get-theme');
   ipcMain.removeHandler('get-timer-state');
   ipcMain.removeHandler('start-timer');
   ipcMain.removeHandler('stop-timer');
@@ -900,6 +923,10 @@ function setupIPC() {
   ipcMain.removeHandler('set-last-project');
   ipcMain.removeHandler('logout');
   ipcMain.removeHandler('open-dashboard');
+
+  ipcMain.handle('get-theme', () => {
+    return getOSTheme();
+  });
 
   ipcMain.handle('get-timer-state', async (_, projectId) => {
     const validProjectId = validateProjectId(projectId);

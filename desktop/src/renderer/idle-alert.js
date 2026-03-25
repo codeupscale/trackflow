@@ -1,4 +1,16 @@
 // idle-alert.js — Idle alert renderer logic (extracted from inline script)
+
+// ── OS Theme Detection ──
+function applyTheme(theme) {
+  if (theme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+  }
+}
+window.trackflow.getTheme().then(applyTheme).catch(() => {});
+window.trackflow.onThemeChange(applyTheme);
+
 const idleTimeEl = document.getElementById('idleTime');
 let idleStartMs = Date.now();
 let tickInterval = null;
