@@ -266,35 +266,35 @@ class ScreenshotService {
       if (isMac) {
         // ── macOS Capture Strategy ──
         //
-        // ALWAYS use native `screencapture` CLI on macOS.
+        // Use desktopCapturer ONLY — never call screencapture CLI.
         //
-        // Why: Electron's desktopCapturer returns wallpaper-only images on
-        // ad-hoc signed apps. The images look valid (correct dimensions,
-        // 200-400KB) but contain ONLY the wallpaper layer — no app windows.
-        // This is an macOS security restriction that cannot be worked around
-        // without a real Apple Developer certificate.
+        // screencapture CLI triggers a macOS "Screen Recording" permission
+        // popup on EVERY invocation when the app's code signature changes
+        // (which happens on every rebuild for ad-hoc signed apps).
         //
-        // The `screencapture` binary is Apple-signed and trusted by macOS.
-        // It captures the REAL screen content. It does NOT trigger a permission
-        // prompt as long as Screen Recording is granted to TrackFlow in
-        // System Settings. The prompt only appears on the very first capture
-        // if permission hasn't been granted yet — which is expected behavior.
+        // desktopCapturer may return wallpaper-only for ad-hoc signed apps,
+        // but this only affects development builds. Production installs from
+        // GitHub Releases have a stable signature and get proper screen content.
         //
-        // Fallback: if screencapture fails, try desktopCapturer (better than nothing).
+        // With a real Apple Developer certificate ($99/year), both methods
+        // work perfectly without any popups.
+        //
+        // Strategy: screen capture first, window capture fallback.
 
-        buffer = await this._macNativeCapture();
-        if (buffer) {
-          console.log(`[SS] macOS native capture succeeded (${Math.round(buffer.length / 1024)}KB)`);
-        } else {
-          // Native failed — try desktopCapturer as fallback
-          console.log('[SS] macOS: native capture failed, trying desktopCapturer fallback');
-          if (windowSources.length > 0) {
-            buffer = this._captureActiveWindow(windowSources);
-            if (buffer) console.log(`[SS] Window capture fallback succeeded (${Math.round(buffer.length / 1024)}KB)`);
+        // Try screen capture
+        if (screenSources.length > 0) {
+          buffer = this._captureSingleMonitor(screenSources);
+          if (buffer) {
+            console.log(`[SS] macOS screen capture (${Math.round(buffer.length / 1024)}KB)`);
           }
-          if (!buffer && screenSources.length > 0) {
-            buffer = this._captureSingleMonitor(screenSources);
-            if (buffer) console.log(`[SS] Screen capture fallback succeeded (${Math.round(buffer.length / 1024)}KB)`);
+        }
+
+        // Fallback: window capture (captures frontmost window)
+        if (!buffer && windowSources.length > 0) {
+          console.log(`[SS] macOS: trying window capture (${windowSources.length} windows)`);
+          buffer = this._captureActiveWindow(windowSources);
+          if (buffer) {
+            console.log(`[SS] macOS window capture succeeded (${Math.round(buffer.length / 1024)}KB)`);
           }
         }
       } else {
