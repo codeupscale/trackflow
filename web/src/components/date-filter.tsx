@@ -29,11 +29,6 @@ export function DateFilter({
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setLocalFrom(dateFrom);
-    setLocalTo(dateTo);
-  }, [dateFrom, dateTo]);
-
-  useEffect(() => {
     if (!open) return;
     function handleClick(e: MouseEvent) {
       // Native date pickers render their popup outside the component tree,
@@ -64,7 +59,17 @@ export function DateFilter({
     <div ref={ref} className="relative">
       <button
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          setOpen((prev) => {
+            const next = !prev;
+            if (next) {
+              // Initialize local inputs when opening (no effect syncing needed).
+              setLocalFrom(dateFrom);
+              setLocalTo(dateTo);
+            }
+            return next;
+          });
+        }}
         className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-700 bg-slate-800/50 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700/50 hover:text-white transition-colors"
       >
         <Calendar className="h-4 w-4" />

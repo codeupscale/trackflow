@@ -21,7 +21,7 @@ export function Providers({ children }: { children: ReactNode }) {
 
   return (
     <PHProvider>
-      <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
+      <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
         <QueryClientProvider client={queryClient}>
           {children}
           <Toaster />

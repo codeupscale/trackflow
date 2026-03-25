@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 import {
   Card,
   CardContent,
@@ -93,8 +94,8 @@ function AcceptInviteContent() {
 
   if (state === 'success') {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950 p-4">
-        <div className="flex items-center gap-2 text-slate-300">
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <div className="flex items-center gap-2 text-foreground">
           <CheckCircle2 className="h-5 w-5 text-emerald-400" />
           Opening dashboard…
         </div>
@@ -103,11 +104,11 @@ function AcceptInviteContent() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-4">
-      <Card className="w-full max-w-md border-slate-800 bg-slate-900/50 backdrop-blur">
+    <div className="min-h-screen flex items-center justify-center bg-background dark:bg-gradient-to-br dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 p-4">
+      <Card className="w-full max-w-md border-border bg-card/80 backdrop-blur">
         <CardHeader className="space-y-1">
-          <CardTitle className="text-2xl text-center text-white">Accept invitation</CardTitle>
-          <CardDescription className="text-center text-slate-400">
+          <CardTitle className="text-2xl text-center text-foreground">Accept invitation</CardTitle>
+          <CardDescription className="text-center text-muted-foreground">
             Create your account to join your team on TrackFlow.
           </CardDescription>
         </CardHeader>
@@ -124,11 +125,11 @@ function AcceptInviteContent() {
                 name="name"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="text-slate-300">Full name</FormLabel>
+                    <FormLabel>Full name</FormLabel>
                     <FormControl>
                       <Input
                         placeholder="Your name"
-                        className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                        className="bg-background"
                         disabled={!token}
                         {...field}
                       />
@@ -143,13 +144,12 @@ function AcceptInviteContent() {
                 name="password"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="text-slate-300">Password</FormLabel>
+                    <FormLabel>Password</FormLabel>
                     <FormControl>
-                      <Input
-                        type="password"
+                      <PasswordInput
                         placeholder="Create a password"
                         autoComplete="new-password"
-                        className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                        className="bg-background"
                         disabled={!token}
                         {...field}
                       />
@@ -164,13 +164,12 @@ function AcceptInviteContent() {
                 name="password_confirmation"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="text-slate-300">Confirm password</FormLabel>
+                    <FormLabel>Confirm password</FormLabel>
                     <FormControl>
-                      <Input
-                        type="password"
+                      <PasswordInput
                         placeholder="Confirm password"
                         autoComplete="new-password"
-                        className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                        className="bg-background"
                         disabled={!token}
                         {...field}
                       />
@@ -183,7 +182,7 @@ function AcceptInviteContent() {
               <Button
                 type="submit"
                 disabled={!token || form.formState.isSubmitting}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+                className="w-full"
               >
                 {form.formState.isSubmitting ? (
                   <>
@@ -197,7 +196,7 @@ function AcceptInviteContent() {
             </form>
           </Form>
         </CardContent>
-        <CardFooter className="justify-center text-xs text-slate-500">
+        <CardFooter className="justify-center text-xs text-muted-foreground">
           If you already have an account, ask your admin to add you to the organization.
         </CardFooter>
       </Card>
@@ -209,9 +208,9 @@ export default function AcceptInvitePage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen flex items-center justify-center bg-slate-950">
-          <div className="flex items-center gap-2 text-slate-400">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-600 border-t-blue-500" />
+        <div className="min-h-screen flex items-center justify-center bg-background">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-muted border-t-blue-500" />
             Loading…
           </div>
         </div>

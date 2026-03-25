@@ -21,6 +21,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
@@ -316,12 +317,12 @@ export default function SettingsPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">Settings</h1>
-          <p className="text-slate-400 text-sm mt-1">Manage your organization settings</p>
+          <h1 className="text-2xl font-bold text-foreground">Settings</h1>
+          <p className="text-muted-foreground text-sm mt-1">Manage your organization settings</p>
         </div>
         <div className="space-y-4">
           {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="h-40 bg-slate-800/50 animate-pulse rounded-lg" />
+            <div key={i} className="h-40 bg-muted/50 animate-pulse rounded-lg" />
           ))}
         </div>
       </div>
@@ -332,14 +333,13 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white">Settings</h1>
-          <p className="text-slate-400 text-sm mt-1">Manage your organization settings</p>
+          <h1 className="text-2xl font-bold text-foreground">Settings</h1>
+          <p className="text-muted-foreground text-sm mt-1">Manage your organization settings</p>
         </div>
         {isAdmin && (
           <Button
             onClick={handleSave}
             disabled={updateMutation.isPending}
-            className="bg-blue-600 hover:bg-blue-700 text-white"
           >
             {updateMutation.isPending ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -352,7 +352,7 @@ export default function SettingsPage() {
       </div>
 
       <Tabs defaultValue="general">
-        <TabsList className="bg-slate-800/50">
+        <TabsList className="bg-muted/50">
           <TabsTrigger value="general">General</TabsTrigger>
           {isAdmin && <TabsTrigger value="tracking">Tracking</TabsTrigger>}
         </TabsList>
@@ -360,22 +360,22 @@ export default function SettingsPage() {
         {/* General Tab */}
         <TabsContent value="general" className="space-y-6 mt-6">
           {/* Your timezone — used for "today", dashboard dates, timer */}
-          <Card className="border-slate-800 bg-slate-900/50">
+          <Card className="border-border bg-card/50">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-white">
+              <CardTitle className="flex items-center gap-2 text-foreground">
                 <UserIcon className="h-5 w-5" />
                 Your timezone
               </CardTitle>
-              <CardDescription className="text-slate-400">
+              <CardDescription className="text-muted-foreground">
                 Used for today’s total, dashboard date filters, and reports
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-2 max-w-md">
-                <Label htmlFor="user-tz" className="text-slate-300">Timezone</Label>
+                <Label htmlFor="user-tz">Timezone</Label>
                 <div className="flex gap-2 items-center">
                   <Select value={userTimezone} onValueChange={(v) => v && setUserTimezone(v)}>
-                    <SelectTrigger id="user-tz" className="bg-slate-800/50 border-slate-700">
+                    <SelectTrigger id="user-tz" className="bg-background/50">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -388,7 +388,7 @@ export default function SettingsPage() {
                     onClick={handleSaveUserTimezone}
                     disabled={updateProfileMutation.isPending || userTimezone === (user?.timezone ?? 'UTC')}
                     variant="outline"
-                    className="border-slate-700 text-slate-300"
+                    className="bg-background/50"
                   >
                     {updateProfileMutation.isPending ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -403,19 +403,18 @@ export default function SettingsPage() {
           </Card>
 
           {/* Password */}
-          <Card className="border-slate-800 bg-slate-900/50">
+          <Card className="border-border bg-card/50">
             <CardHeader>
-              <CardTitle className="text-white">Security</CardTitle>
-              <CardDescription className="text-slate-400">
+              <CardTitle className="text-foreground">Security</CardTitle>
+              <CardDescription className="text-muted-foreground">
                 Change your account password
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-2 max-w-md">
-                <Label htmlFor="current-password" className="text-slate-300">Current password</Label>
-                <Input
+                <Label htmlFor="current-password">Current password</Label>
+                <PasswordInput
                   id="current-password"
-                  type="password"
                   autoComplete="current-password"
                   aria-describedby={passwordErrors.current_password ? 'current-password-error' : undefined}
                   aria-invalid={!!passwordErrors.current_password}
@@ -426,19 +425,18 @@ export default function SettingsPage() {
                       setPasswordErrors((prev) => ({ ...prev, current_password: undefined }));
                     }
                   }}
-                  className={`bg-slate-800/50 border-slate-700 text-white ${passwordErrors.current_password ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
+                  className={`bg-background/50 ${passwordErrors.current_password ? 'border-destructive focus-visible:ring-destructive' : ''}`}
                 />
                 {passwordErrors.current_password && (
-                  <p id="current-password-error" className="text-sm text-red-400" role="alert">
+                  <p id="current-password-error" className="text-sm text-destructive" role="alert">
                     {passwordErrors.current_password}
                   </p>
                 )}
               </div>
               <div className="grid gap-2 max-w-md">
-                <Label htmlFor="new-password" className="text-slate-300">New password</Label>
-                <Input
+                <Label htmlFor="new-password">New password</Label>
+                <PasswordInput
                   id="new-password"
-                  type="password"
                   autoComplete="new-password"
                   aria-describedby={`new-password-hint${passwordErrors.password ? ' new-password-error' : ''}`}
                   aria-invalid={!!passwordErrors.password}
@@ -449,22 +447,21 @@ export default function SettingsPage() {
                       setPasswordErrors((prev) => ({ ...prev, password: undefined }));
                     }
                   }}
-                  className={`bg-slate-800/50 border-slate-700 text-white ${passwordErrors.password ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
+                  className={`bg-background/50 ${passwordErrors.password ? 'border-destructive focus-visible:ring-destructive' : ''}`}
                 />
-                <p id="new-password-hint" className="text-xs text-slate-500">
+                <p id="new-password-hint" className="text-xs text-muted-foreground">
                   Minimum 8 characters
                 </p>
                 {passwordErrors.password && (
-                  <p id="new-password-error" className="text-sm text-red-400" role="alert">
+                  <p id="new-password-error" className="text-sm text-destructive" role="alert">
                     {passwordErrors.password}
                   </p>
                 )}
               </div>
               <div className="grid gap-2 max-w-md">
-                <Label htmlFor="new-password-confirm" className="text-slate-300">Confirm new password</Label>
-                <Input
+                <Label htmlFor="new-password-confirm">Confirm new password</Label>
+                <PasswordInput
                   id="new-password-confirm"
-                  type="password"
                   autoComplete="new-password"
                   aria-describedby={passwordErrors.password_confirmation ? 'confirm-password-error' : undefined}
                   aria-invalid={!!passwordErrors.password_confirmation}
@@ -475,10 +472,10 @@ export default function SettingsPage() {
                       setPasswordErrors((prev) => ({ ...prev, password_confirmation: undefined }));
                     }
                   }}
-                  className={`bg-slate-800/50 border-slate-700 text-white ${passwordErrors.password_confirmation ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
+                  className={`bg-background/50 ${passwordErrors.password_confirmation ? 'border-destructive focus-visible:ring-destructive' : ''}`}
                 />
                 {passwordErrors.password_confirmation && (
-                  <p id="confirm-password-error" className="text-sm text-red-400" role="alert">
+                  <p id="confirm-password-error" className="text-sm text-destructive" role="alert">
                     {passwordErrors.password_confirmation}
                   </p>
                 )}
@@ -487,7 +484,6 @@ export default function SettingsPage() {
               <Button
                 onClick={handleChangePassword}
                 disabled={changePasswordMutation.isPending}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
               >
                 {changePasswordMutation.isPending ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -499,25 +495,25 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
 
-          <Card className="border-slate-800 bg-slate-900/50">
+          <Card className="border-border bg-card/50">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-white">
+              <CardTitle className="flex items-center gap-2 text-foreground">
                 <Settings className="h-5 w-5" />
                 Organization
               </CardTitle>
-              <CardDescription className="text-slate-400">
+              <CardDescription className="text-muted-foreground">
                 General organization settings
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-2 max-w-md">
-                <Label htmlFor="org-name" className="text-slate-300">Organization Name</Label>
+                <Label htmlFor="org-name">Organization Name</Label>
                 <Input
                   id="org-name"
                   value={orgName}
                   onChange={(e) => setOrgName(e.target.value)}
                   disabled={!isAdmin}
-                  className="bg-slate-800/50 border-slate-700 text-white"
+                  className="bg-background/50"
                 />
               </div>
               <div className="grid gap-2 max-w-md">

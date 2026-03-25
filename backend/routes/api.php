@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\DataPrivacyController;
 use App\Http\Controllers\Api\V1\InvitationController;
 use App\Http\Controllers\Api\V1\SsoController;
+use App\Http\Controllers\Api\V1\UserPasswordController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -125,6 +126,8 @@ Route::prefix('v1')->group(function () {
 
         // Users (owner/admin/manager)
         Route::apiResource('users', \App\Http\Controllers\Api\V1\UserController::class)->except(['store'])->middleware('role:owner,admin,manager');
+        Route::post('users/{id}/password-reset', [UserPasswordController::class, 'reset'])
+            ->middleware(['role:owner,admin,manager', 'throttle:5,1']);
 
         // Settings
         Route::get('settings', [\App\Http\Controllers\Api\V1\SettingsController::class, 'show']);

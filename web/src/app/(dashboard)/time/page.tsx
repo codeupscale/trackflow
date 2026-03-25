@@ -136,7 +136,7 @@ export default function TimePage() {
 
   function getDisplayDuration(entry: { started_at: string; ended_at: string | null; duration_seconds: number }): number {
     if (entry.ended_at) return entry.duration_seconds;
-    return Math.max(0, Math.floor((Date.now() - new Date(entry.started_at).getTime()) / 1000));
+    return Math.max(0, Math.floor((new Date().getTime() - new Date(entry.started_at).getTime()) / 1000));
   }
 
   const approveMutation = useMutation({

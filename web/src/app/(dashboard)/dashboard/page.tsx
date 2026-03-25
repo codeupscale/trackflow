@@ -22,7 +22,6 @@ import {
 } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import {
   Table,
   TableBody,
@@ -234,7 +233,7 @@ export default function DashboardPage() {
   function getDisplayDuration(entry: { started_at: string; ended_at: string | null; duration_seconds: number }): number {
     if (entry.ended_at) return entry.duration_seconds;
     // Running entry — compute elapsed from started_at
-    return Math.max(0, Math.floor((Date.now() - new Date(entry.started_at).getTime()) / 1000));
+    return Math.max(0, Math.floor((new Date().getTime() - new Date(entry.started_at).getTime()) / 1000));
   }
 
   // ── Stat cards (different for employee vs admin) ──

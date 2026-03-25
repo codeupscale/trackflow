@@ -28,6 +28,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { PasswordInput } from '@/components/ui/password-input';
+import { Switch } from '@/components/ui/switch';
 import {
   Select,
   SelectContent,
@@ -103,6 +105,13 @@ const roleBadgeClass: Record<string, string> = {
   employee: 'bg-slate-700/50 text-slate-300 border-slate-600',
 };
 
+type ApiValidationErrorResponse = {
+  message?: string;
+  errors?: Record<string, string[]>;
+};
+
+const resetPasswordEndpoint = (userId: string) => `/users/${userId}/password-reset`;
+
 export default function TeamPage() {
   const router = useRouter();
   const { user } = useAuthStore();
@@ -110,6 +119,17 @@ export default function TeamPage() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<string>('employee');
+  const [resetPasswordOpen, setResetPasswordOpen] = useState(false);
+  const [resetPasswordMember, setResetPasswordMember] = useState<TeamMember | null>(null);
+  const [generateRandomPassword, setGenerateRandomPassword] = useState(true);
+  const [newPassword, setNewPassword] = useState('');
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('');
+  const [generatedPassword, setGeneratedPassword] = useState<string | null>(null);
+  const [resetPasswordErrors, setResetPasswordErrors] = useState<{
+    password?: string;
+    password_confirmation?: string;
+    generate?: string;
+  }>({});
 
   // Team is for owner/admin/manager only; redirect employees so they don't hit 403
   useEffect(() => {
@@ -234,6 +254,104 @@ export default function TeamPage() {
     } catch {
       toast.error('Failed to copy link');
     }
+  };
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: async (payload: { userId: string; body: Record<string, unknown> }) => {
+      const res = await api.post(resetPasswordEndpoint(payload.userId), payload.body);
+      return res.data as unknown;
+    },
+    onSuccess: (data) => {
+      const maybeGenerated =
+        (data as { generated_password?: string })?.generated_password ??
+        (data as { password?: string })?.password ??
+        (data as { data?: { generated_password?: string } })?.data?.generated_password ??
+        null;
+
+      queryClient.invalidateQueries({ queryKey: ['team-members'] });
+
+      if (generateRandomPassword) {
+        setGeneratedPassword(maybeGenerated);
+        toast.success('Password reset. Copy the new password.');
+      } else {
+        toast.success('Password updated successfully');
+        setResetPasswordOpen(false);
+      }
+    },
+    onError: (err: unknown) => {
+      const axiosErr = err as {
+        message?: string;
+        response?: { data?: ApiValidationErrorResponse };
+      };
+
+      const message =
+        axiosErr.response?.data?.message ||
+        axiosErr.message ||
+        'Failed to reset password';
+
+      const errors = axiosErr.response?.data?.errors;
+      if (errors) {
+        setResetPasswordErrors({
+          password: errors.password?.[0],
+          password_confirmation: errors.password_confirmation?.[0],
+          generate: errors.generate?.[0],
+        });
+      }
+
+      toast.error(message);
+    },
+  });
+
+  const openResetPassword = (member: TeamMember) => {
+    setResetPasswordMember(member);
+    setResetPasswordErrors({});
+    setGeneratedPassword(null);
+    setNewPassword('');
+    setNewPasswordConfirm('');
+    setGenerateRandomPassword(true);
+    setResetPasswordOpen(true);
+  };
+
+  const copyGeneratedPassword = async () => {
+    if (!generatedPassword) return;
+    try {
+      await navigator.clipboard.writeText(generatedPassword);
+      toast.success('Password copied');
+    } catch {
+      toast.error('Failed to copy password');
+    }
+  };
+
+  const submitResetPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetPasswordMember) return;
+
+    setResetPasswordErrors({});
+    setGeneratedPassword(null);
+
+    if (!generateRandomPassword) {
+      if (!newPassword || newPassword.length < 8) {
+        setResetPasswordErrors((prev) => ({
+          ...prev,
+          password: 'Password must be at least 8 characters.',
+        }));
+        return;
+      }
+      if (newPassword !== newPasswordConfirm) {
+        setResetPasswordErrors((prev) => ({
+          ...prev,
+          password_confirmation: 'Passwords do not match.',
+        }));
+        return;
+      }
+    }
+
+    resetPasswordMutation.mutate({
+      userId: resetPasswordMember.id,
+      body: generateRandomPassword
+        ? { generate: true }
+        : { password: newPassword, password_confirmation: newPasswordConfirm },
+    });
   };
 
   if (user?.role === 'employee') {
@@ -603,6 +721,12 @@ export default function TeamPage() {
                               ))}
                               <DropdownMenuSeparator />
                               <DropdownMenuItem
+                                onClick={() => openResetPassword(member)}
+                              >
+                                Reset password
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
                                 variant={member.is_active ? 'destructive' : 'default'}
                                 onClick={() =>
                                   toggleActiveMutation.mutate({
@@ -625,6 +749,155 @@ export default function TeamPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog
+        open={resetPasswordOpen}
+        onOpenChange={(open) => {
+          setResetPasswordOpen(open);
+          if (!open) {
+            setResetPasswordMember(null);
+            setResetPasswordErrors({});
+            setGeneratedPassword(null);
+            setNewPassword('');
+            setNewPasswordConfirm('');
+            setGenerateRandomPassword(true);
+          }
+        }}
+      >
+        <DialogContent className="bg-slate-900 border-slate-800">
+          <form onSubmit={submitResetPassword} className="space-y-4">
+            <DialogHeader>
+              <DialogTitle className="text-white">Reset password</DialogTitle>
+              <DialogDescription className="text-slate-400">
+                Set a new password for{' '}
+                <span className="text-slate-200 font-medium">
+                  {resetPasswordMember?.name || 'this member'}
+                </span>
+                {resetPasswordMember?.email ? ` (${resetPasswordMember.email})` : ''}.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+              <div>
+                <p className="text-sm font-medium text-white">Generate random password</p>
+                <p className="text-xs text-slate-400">
+                  We’ll generate a secure password and show it once.
+                </p>
+                {resetPasswordErrors.generate && (
+                  <p className="text-xs text-destructive mt-1" role="alert">
+                    {resetPasswordErrors.generate}
+                  </p>
+                )}
+              </div>
+              <Switch
+                checked={generateRandomPassword}
+                onCheckedChange={(v) => {
+                  setGenerateRandomPassword(v);
+                  setResetPasswordErrors({});
+                  setGeneratedPassword(null);
+                }}
+                aria-label="Generate random password"
+              />
+            </div>
+
+            {generateRandomPassword ? (
+              <div className="space-y-2">
+                <Label className="text-slate-200">Generated password</Label>
+                {generatedPassword ? (
+                  <div className="flex gap-2">
+                    <Input
+                      value={generatedPassword}
+                      readOnly
+                      className="bg-slate-950/30 border-slate-800 text-white"
+                      aria-label="Generated password"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="bg-slate-950/30 border-slate-800"
+                      onClick={copyGeneratedPassword}
+                      aria-label="Copy generated password"
+                    >
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400">
+                    Click “Reset password” to generate a new password.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="grid gap-2">
+                  <Label htmlFor="member-new-password" className="text-slate-200">New password</Label>
+                  <PasswordInput
+                    id="member-new-password"
+                    autoComplete="new-password"
+                    value={newPassword}
+                    onChange={(e) => {
+                      setNewPassword(e.target.value);
+                      if (resetPasswordErrors.password) {
+                        setResetPasswordErrors((prev) => ({ ...prev, password: undefined }));
+                      }
+                    }}
+                    aria-invalid={!!resetPasswordErrors.password}
+                    className={`bg-slate-950/30 border-slate-800 text-white ${resetPasswordErrors.password ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                  />
+                  {resetPasswordErrors.password && (
+                    <p className="text-xs text-destructive" role="alert">
+                      {resetPasswordErrors.password}
+                    </p>
+                  )}
+                  <p className="text-xs text-slate-400">Minimum 8 characters</p>
+                </div>
+
+                <div className="grid gap-2">
+                  <Label htmlFor="member-new-password-confirm" className="text-slate-200">Confirm new password</Label>
+                  <PasswordInput
+                    id="member-new-password-confirm"
+                    autoComplete="new-password"
+                    value={newPasswordConfirm}
+                    onChange={(e) => {
+                      setNewPasswordConfirm(e.target.value);
+                      if (resetPasswordErrors.password_confirmation) {
+                        setResetPasswordErrors((prev) => ({ ...prev, password_confirmation: undefined }));
+                      }
+                    }}
+                    aria-invalid={!!resetPasswordErrors.password_confirmation}
+                    className={`bg-slate-950/30 border-slate-800 text-white ${resetPasswordErrors.password_confirmation ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                  />
+                  {resetPasswordErrors.password_confirmation && (
+                    <p className="text-xs text-destructive" role="alert">
+                      {resetPasswordErrors.password_confirmation}
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
+
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button
+                type="button"
+                variant="outline"
+                className="bg-slate-950/30 border-slate-800"
+                onClick={() => setResetPasswordOpen(false)}
+                disabled={resetPasswordMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={resetPasswordMutation.isPending}>
+                {resetPasswordMutation.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                Reset password
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

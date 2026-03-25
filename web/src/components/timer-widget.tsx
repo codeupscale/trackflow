@@ -38,8 +38,8 @@ export function TimerWidget() {
         className={cn(
           'flex items-center gap-2.5 rounded-lg px-3 py-1.5 transition-colors',
           isRunning
-            ? 'bg-green-950/40 border border-green-800/50'
-            : 'bg-slate-800/50 border border-slate-700/50'
+            ? 'bg-emerald-500/10 border border-emerald-500/20'
+            : 'bg-muted/50 border border-border'
         )}
       >
         {/* Icon */}
@@ -52,12 +52,12 @@ export function TimerWidget() {
             <Monitor className="h-3.5 w-3.5 text-green-400" />
           </div>
         ) : (
-          <MonitorOff className="h-3.5 w-3.5 text-slate-500" />
+          <MonitorOff className="h-3.5 w-3.5 text-muted-foreground" />
         )}
 
         {/* Project name when tracking */}
         {isRunning && projectName && (
-          <span className="text-xs text-green-300/80 font-medium truncate max-w-[140px]">
+          <span className="text-xs text-emerald-600 dark:text-emerald-300/90 font-medium truncate max-w-[140px]">
             {projectName}
           </span>
         )}
@@ -66,7 +66,7 @@ export function TimerWidget() {
         <span
           className={cn(
             'font-mono text-sm font-medium tabular-nums',
-            isRunning ? 'text-green-400' : 'text-slate-500'
+            isRunning ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'
           )}
         >
           {isRunning ? formatDuration(elapsedSeconds) : 'Not tracking'}
