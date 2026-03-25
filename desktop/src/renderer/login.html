@@ -155,6 +155,17 @@
   </div>
 
   <script>
+    // ── OS Theme Detection ──
+    function applyTheme(theme) {
+      if (theme === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+      } else {
+        document.documentElement.removeAttribute('data-theme');
+      }
+    }
+    window.trackflow.getTheme().then(applyTheme).catch(() => {});
+    window.trackflow.onThemeChange(applyTheme);
+
     const form = document.getElementById('loginForm');
     const errorMsg = document.getElementById('errorMsg');
     const submitBtn = document.getElementById('submitBtn');
