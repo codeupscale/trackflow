@@ -66,6 +66,10 @@ interface Project {
 
 interface PaginatedResponse {
   data: TimeEntry[];
+  current_page?: number;
+  last_page?: number;
+  per_page?: number;
+  total?: number;
   meta?: {
     current_page: number;
     last_page: number;
@@ -123,7 +127,12 @@ export default function TimePage() {
   });
 
   const entries = entriesData?.data || [];
-  const meta = entriesData?.meta;
+  const meta = entriesData?.meta || (entriesData?.current_page != null ? {
+    current_page: entriesData.current_page!,
+    last_page: entriesData.last_page!,
+    per_page: entriesData.per_page!,
+    total: entriesData.total!,
+  } : undefined);
 
   // Live tick for running entries so duration counts up in real time
   const [, setTick] = useState(0);
