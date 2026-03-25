@@ -83,6 +83,11 @@ console.error = (...args) => { _origError(...args); logToFile('error', ...args);
 console.warn = (...args) => { _origWarn(...args); logToFile('warn', ...args); };
 console.log('Logger initialized — writing to', getLogFile());
 
+// Minimum duration (seconds) for a time entry to be considered valid.
+// Entries shorter than this are treated as artifacts (e.g., the zero-duration
+// entries created by reportIdleTime when the user chooses "stop").
+const MIN_ENTRY_DURATION_SEC = 5;
+
 // Default configuration values — single source of truth
 const DEFAULT_CONFIG = {
   screenshot_interval: 5,
@@ -1042,6 +1047,8 @@ function stopTimer() {
     ? Math.max(0, Math.floor((Date.now() - _cachedStartedAtMs) / 1000))
     : 0;
   const stoppedProjectId = currentEntry?.project_id || null;
+  const stoppedEntryId = currentEntry?.id || null;
+  const isZeroDurationEntry = sessionElapsed < MIN_ENTRY_DURATION_SEC;
   const localStoppedProjectTotal = todayTotalCurrentProject + sessionElapsed;
   posthog.capture(currentEntry?.user_id || 'unknown', 'timer_stopped', {});
 
@@ -1049,7 +1056,8 @@ function stopTimer() {
 
   // Send final heartbeat BEFORE stopping — captures last 0-29s of activity data
   // This is critical: without it, 10-50% of activity in short sessions is lost
-  if (activityMonitor) {
+  // Skip heartbeat for zero-duration entries — there is no meaningful activity data.
+  if (activityMonitor && !isZeroDurationEntry) {
     activityMonitor.sendFinalHeartbeat().catch(() => {});
   }
 
@@ -1067,6 +1075,16 @@ function stopTimer() {
   notifyPopup('timer-stopped', { entry: null, todayTotal: localStoppedProjectTotal });
 
   apiClient.stopTimer().then(async (result) => {
+    // BUG-001: If the entry had near-zero duration (artifact from idle split),
+    // delete it from the server to keep the timesheet clean.
+    if (isZeroDurationEntry && stoppedEntryId) {
+      try {
+        await apiClient.deleteTimeEntry(stoppedEntryId);
+        console.log(`[Timer] Deleted zero-duration entry ${stoppedEntryId} (${sessionElapsed}s)`);
+      } catch (e) {
+        console.warn('[Timer] Failed to delete zero-duration entry:', e.message);
+      }
+    }
     try {
       todayTotalGlobal = await apiClient.getTodayTotal(null);
     } catch {
@@ -1371,20 +1389,27 @@ async function handleIdleAction(action, idleDurationOverride = null, reassignPro
 
     case 'stop':
       // P1-2: Deduct idle time BEFORE stopping the timer.
-      // stopTimer() sets entry end = now(), so we must report idle time first
-      // to ensure the idle period is excluded from the time entry.
+      // reportIdleTime creates a new running entry on the server (started_at = now).
+      // Since we are stopping immediately, that new entry will have zero duration.
+      // We must: (1) report idle to deduct the idle period from the tracked entry,
+      // (2) stop the newly-created entry, (3) delete the zero-duration entry
+      // to avoid polluting the time sheet.
       if (apiClient && currentEntry && idleStartedAt) {
         try {
-          await apiClient.reportIdleTime({
+          const idleResult = await apiClient.reportIdleTime({
             time_entry_id: currentEntry.id,
             idle_started_at: new Date(idleStartedAt).toISOString(),
             idle_ended_at: new Date().toISOString(),
             idle_seconds: idleDuration,
             action: 'discard',
           });
+          // Update local state to the new entry so stopTimer() closes it
+          if (idleResult?.new_entry) {
+            currentEntry = idleResult.new_entry;
+            _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+          }
         } catch (e) {
           console.error('Failed to discard idle time before stop:', e.message);
-          // Queue to offline queue so the idle discard is retried on reconnect
           offlineQueue?.add('idle_discard', {
             time_entry_id: currentEntry?.id,
             idle_started_at: new Date(idleStartedAt).toISOString(),
@@ -1394,6 +1419,8 @@ async function handleIdleAction(action, idleDurationOverride = null, reassignPro
           });
         }
       }
+      // stopTimer() now detects entries shorter than MIN_ENTRY_DURATION_SEC
+      // and auto-deletes them from the server (BUG-001 fix).
       stopTimer();
       break;
   }

@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { useTimerStore } from '@/stores/timer-store';
+import { useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -101,6 +102,20 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  const queryClient = useQueryClient();
+  const isTimerRunning = useTimerStore((s) => s.isRunning);
+  const prevRunningRef = useRef(isTimerRunning);
+
+  // BUG-002: When timer state changes (start/stop detected via polling),
+  // invalidate dashboard queries so the Status card and timesheet update immediately.
+  useEffect(() => {
+    if (prevRunningRef.current !== isTimerRunning) {
+      prevRunningRef.current = isTimerRunning;
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['time-entries-dashboard'] });
+    }
+  }, [isTimerRunning, queryClient]);
 
   const handleLogout = async () => {
     useTimerStore.getState().resetState();

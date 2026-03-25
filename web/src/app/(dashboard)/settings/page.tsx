@@ -100,6 +100,11 @@ export default function SettingsPage() {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newPasswordConfirm, setNewPasswordConfirm] = useState('');
+  const [passwordErrors, setPasswordErrors] = useState<{
+    current_password?: string;
+    password?: string;
+    password_confirmation?: string;
+  }>({});
 
   const { data, isLoading } = useQuery<OrgSettings>({
     queryKey: ['org-settings'],
@@ -246,6 +251,34 @@ export default function SettingsPage() {
     updateProfileMutation.mutate({ timezone: userTimezone });
   };
 
+  const validatePasswordForm = (): boolean => {
+    const errors: typeof passwordErrors = {};
+    if (!currentPassword.trim()) {
+      errors.current_password = 'Current password is required.';
+    }
+    if (!newPassword) {
+      errors.password = 'New password is required.';
+    } else if (newPassword.length < 8) {
+      errors.password = 'Password must be at least 8 characters.';
+    }
+    if (!newPasswordConfirm) {
+      errors.password_confirmation = 'Please confirm your new password.';
+    } else if (newPassword && newPasswordConfirm !== newPassword) {
+      errors.password_confirmation = 'New password and confirmation do not match.';
+    }
+    setPasswordErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleChangePassword = () => {
+    if (!validatePasswordForm()) return;
+    changePasswordMutation.mutate({
+      current_password: currentPassword,
+      password: newPassword,
+      password_confirmation: newPasswordConfirm,
+    });
+  };
+
   const changePasswordMutation = useMutation({
     mutationFn: async (payload: { current_password: string; password: string; password_confirmation: string }) => {
       return api.post('/auth/change-password', payload);
@@ -258,13 +291,21 @@ export default function SettingsPage() {
       setCurrentPassword('');
       setNewPassword('');
       setNewPasswordConfirm('');
+      setPasswordErrors({});
       toast.success('Password updated');
     },
     onError: (err: unknown) => {
       const axiosErr = err as AxiosError<ApiErrorResponse> | undefined;
+      const serverErrors = axiosErr?.response?.data?.errors;
+      if (serverErrors) {
+        setPasswordErrors({
+          current_password: serverErrors.current_password?.[0],
+          password: serverErrors.password?.[0],
+        });
+      }
       const msg =
-        axiosErr?.response?.data?.errors?.current_password?.[0] ||
-        axiosErr?.response?.data?.errors?.password?.[0] ||
+        serverErrors?.current_password?.[0] ||
+        serverErrors?.password?.[0] ||
         axiosErr?.message ||
         'Failed to update password';
       toast.error(msg);
@@ -376,10 +417,22 @@ export default function SettingsPage() {
                   id="current-password"
                   type="password"
                   autoComplete="current-password"
+                  aria-describedby={passwordErrors.current_password ? 'current-password-error' : undefined}
+                  aria-invalid={!!passwordErrors.current_password}
                   value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                  className="bg-slate-800/50 border-slate-700 text-white"
+                  onChange={(e) => {
+                    setCurrentPassword(e.target.value);
+                    if (passwordErrors.current_password) {
+                      setPasswordErrors((prev) => ({ ...prev, current_password: undefined }));
+                    }
+                  }}
+                  className={`bg-slate-800/50 border-slate-700 text-white ${passwordErrors.current_password ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
                 />
+                {passwordErrors.current_password && (
+                  <p id="current-password-error" className="text-sm text-red-400" role="alert">
+                    {passwordErrors.current_password}
+                  </p>
+                )}
               </div>
               <div className="grid gap-2 max-w-md">
                 <Label htmlFor="new-password" className="text-slate-300">New password</Label>
@@ -387,10 +440,25 @@ export default function SettingsPage() {
                   id="new-password"
                   type="password"
                   autoComplete="new-password"
+                  aria-describedby={`new-password-hint${passwordErrors.password ? ' new-password-error' : ''}`}
+                  aria-invalid={!!passwordErrors.password}
                   value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  className="bg-slate-800/50 border-slate-700 text-white"
+                  onChange={(e) => {
+                    setNewPassword(e.target.value);
+                    if (passwordErrors.password) {
+                      setPasswordErrors((prev) => ({ ...prev, password: undefined }));
+                    }
+                  }}
+                  className={`bg-slate-800/50 border-slate-700 text-white ${passwordErrors.password ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
                 />
+                <p id="new-password-hint" className="text-xs text-slate-500">
+                  Minimum 8 characters
+                </p>
+                {passwordErrors.password && (
+                  <p id="new-password-error" className="text-sm text-red-400" role="alert">
+                    {passwordErrors.password}
+                  </p>
+                )}
               </div>
               <div className="grid gap-2 max-w-md">
                 <Label htmlFor="new-password-confirm" className="text-slate-300">Confirm new password</Label>
@@ -398,26 +466,27 @@ export default function SettingsPage() {
                   id="new-password-confirm"
                   type="password"
                   autoComplete="new-password"
+                  aria-describedby={passwordErrors.password_confirmation ? 'confirm-password-error' : undefined}
+                  aria-invalid={!!passwordErrors.password_confirmation}
                   value={newPasswordConfirm}
-                  onChange={(e) => setNewPasswordConfirm(e.target.value)}
-                  className="bg-slate-800/50 border-slate-700 text-white"
+                  onChange={(e) => {
+                    setNewPasswordConfirm(e.target.value);
+                    if (passwordErrors.password_confirmation) {
+                      setPasswordErrors((prev) => ({ ...prev, password_confirmation: undefined }));
+                    }
+                  }}
+                  className={`bg-slate-800/50 border-slate-700 text-white ${passwordErrors.password_confirmation ? 'border-red-500 focus-visible:ring-red-500' : ''}`}
                 />
+                {passwordErrors.password_confirmation && (
+                  <p id="confirm-password-error" className="text-sm text-red-400" role="alert">
+                    {passwordErrors.password_confirmation}
+                  </p>
+                )}
               </div>
 
               <Button
-                onClick={() => {
-                  changePasswordMutation.mutate({
-                    current_password: currentPassword,
-                    password: newPassword,
-                    password_confirmation: newPasswordConfirm,
-                  });
-                }}
-                disabled={
-                  changePasswordMutation.isPending ||
-                  !currentPassword ||
-                  !newPassword ||
-                  newPassword !== newPasswordConfirm
-                }
+                onClick={handleChangePassword}
+                disabled={changePasswordMutation.isPending}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
               >
                 {changePasswordMutation.isPending ? (
@@ -427,9 +496,6 @@ export default function SettingsPage() {
                 )}
                 Update password
               </Button>
-              {newPassword && newPasswordConfirm && newPassword !== newPasswordConfirm && (
-                <p className="text-sm text-red-400">New password and confirmation do not match.</p>
-              )}
             </CardContent>
           </Card>
 

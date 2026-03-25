@@ -75,9 +75,11 @@ interface TeamMember {
 }
 
 interface BillingUsage {
-  seats_used: number;
-  seats_limit: number;
+  used: number;
+  limit: number | 'unlimited';
   plan: string;
+  overage: number;
+  trial_ends_at: string | null;
 }
 
 interface Invitation {
@@ -367,20 +369,27 @@ export default function TeamPage() {
             <div className="text-2xl font-bold text-white">
               {!usage ? (
                 <div className="h-8 w-20 bg-slate-800/50 animate-pulse rounded" />
+              ) : usage.limit === 'unlimited' ? (
+                <span>
+                  {usage.used}
+                  <span className="text-sm font-normal text-slate-500 ml-1">
+                    members (Unlimited)
+                  </span>
+                </span>
               ) : (
                 <span>
-                  {usage.seats_used}
+                  {usage.used}
                   <span className="text-sm font-normal text-slate-500">
-                    /{usage.seats_limit}
+                    /{usage.limit} seats used
                   </span>
                 </span>
               )}
             </div>
-            {usage && (
+            {usage && usage.limit !== 'unlimited' && typeof usage.limit === 'number' && usage.limit > 0 && (
               <div className="mt-2 h-1.5 bg-slate-800 rounded-full">
                 <div
                   className="h-full bg-blue-500 rounded-full transition-all"
-                  style={{ width: `${Math.min((usage.seats_used / usage.seats_limit) * 100, 100)}%` }}
+                  style={{ width: `${Math.min((usage.used / usage.limit) * 100, 100)}%` }}
                 />
               </div>
             )}

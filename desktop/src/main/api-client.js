@@ -185,6 +185,11 @@ class ApiClient {
     return res.data;
   }
 
+  async deleteTimeEntry(entryId) {
+    const res = await this.client.delete(`/time-entries/${entryId}`);
+    return res.data;
+  }
+
   async bulkUploadLogs(logs) {
     const res = await this.client.post('/agent/logs', { logs });
     return res.data;

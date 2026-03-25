@@ -118,6 +118,8 @@ export default function ProjectsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      // BUG-008: Also invalidate 'projects-list' used by time page and other components
+      queryClient.invalidateQueries({ queryKey: ['projects-list'] });
       closeDialog();
       toast.success('Project created');
     },
@@ -139,6 +141,7 @@ export default function ProjectsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['projects-list'] });
       closeDialog();
       toast.success('Project updated');
     },
@@ -151,6 +154,7 @@ export default function ProjectsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['projects-list'] });
       toast.success('Project deleted');
     },
     onError: () => toast.error('Failed to delete project'),

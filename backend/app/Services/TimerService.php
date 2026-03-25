@@ -192,6 +192,9 @@ class TimerService
             $todayTotal += $currentElapsed;
         }
 
+        // Eager-load project so the web dashboard can display the project name
+        $entry->loadMissing('project:id,name,color');
+
         return [
             'running' => true,
             'entry' => $entry,

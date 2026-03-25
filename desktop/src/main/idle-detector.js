@@ -33,6 +33,12 @@ class IdleDetector {
     this.alertShownAt = null;
     this.enabled = config.idle_detection !== false && this.idleTimeoutSec > 0;
 
+    // BUG-001: Cooldown timestamp — after idle is resolved, suppress re-detection
+    // until the user has actually provided new input. This prevents the detector
+    // from immediately re-firing when the system idle time is still high
+    // (e.g., auto-discard policy where no user interaction occurs).
+    this._lastResolvedAt = null;
+
     // Callbacks — set by main process
     this._onIdleDetected = null;   // (idleSeconds, idleStartedAt) => void
     this._onAutoStop = null;       // (totalIdleSeconds) => void
@@ -84,6 +90,9 @@ class IdleDetector {
     this.isIdle = false;
     this.idleStartedAt = null;
     this.alertShownAt = null;
+    // BUG-001: Record when idle was resolved so _check() can require
+    // fresh user input before re-detecting idle.
+    this._lastResolvedAt = Date.now();
   }
 
   // Get current idle duration in seconds (for display in alert)
@@ -96,6 +105,21 @@ class IdleDetector {
     // powerMonitor.getSystemIdleTime() returns seconds since last user input
     // This is the OS-level idle time — works even without uiohook
     const systemIdleSec = powerMonitor.getSystemIdleTime();
+
+    // BUG-001: After idle was resolved (e.g., auto-discard), the system idle time
+    // may still be high because no new user input has occurred. We must wait for
+    // the user to actually provide input (systemIdleSec drops below the threshold)
+    // before we can detect a new idle period. Without this guard, the detector
+    // fires repeatedly creating zero-duration tracked entries between idle entries.
+    if (this._lastResolvedAt) {
+      if (systemIdleSec < this.idleTimeoutSec) {
+        // User provided fresh input — clear the cooldown, resume normal detection
+        this._lastResolvedAt = null;
+      } else {
+        // Still idle since before resolution — skip this check
+        return;
+      }
+    }
 
     if (!this.isIdle && systemIdleSec >= this.idleTimeoutSec) {
       // Just became idle
