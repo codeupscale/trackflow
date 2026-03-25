@@ -9,6 +9,7 @@ class ApiClient {
     this._isRefreshing = false;
     this._refreshPromise = null;
     this._onTokenRefreshed = null; // Callback to persist new tokens
+    this._onAuthFailed = null; // Callback when token refresh fails (force logout)
 
     this.client = axios.create({
       baseURL: API_BASE,
@@ -44,7 +45,10 @@ class ApiClient {
             originalRequest.headers['Authorization'] = `Bearer ${tokens.access_token}`;
             return this.client(originalRequest);
           } catch (refreshErr) {
-            // Refresh failed — token is truly expired
+            // Refresh failed — token is truly expired (e.g. password changed)
+            if (this._onAuthFailed) {
+              this._onAuthFailed(refreshErr);
+            }
             return Promise.reject(refreshErr);
           }
         }
@@ -97,6 +101,11 @@ class ApiClient {
   // Register callback to persist refreshed tokens to keychain
   onTokenRefreshed(callback) {
     this._onTokenRefreshed = callback;
+  }
+
+  // Register callback for when token refresh fails (password changed, tokens revoked)
+  onAuthFailed(callback) {
+    this._onAuthFailed = callback;
   }
 
   setToken(token) {

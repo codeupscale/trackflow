@@ -100,6 +100,43 @@ const DEFAULT_CONFIG = {
   can_add_manual_time: true,
 };
 
+// ── Last Selected Project Persistence ────────────────────────────────────────
+// Persist the last selected project ID to a JSON file in userData so it
+// survives logout/login cycles and app restarts.
+function getPrefsPath() {
+  try {
+    return path.join(app.getPath('userData'), 'user-prefs.json');
+  } catch {
+    return null;
+  }
+}
+
+function loadLastProjectId() {
+  try {
+    const p = getPrefsPath();
+    if (!p || !fs.existsSync(p)) return null;
+    const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return data.lastSelectedProjectId || null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLastProjectId(projectId) {
+  try {
+    const p = getPrefsPath();
+    if (!p) return;
+    let data = {};
+    if (fs.existsSync(p)) {
+      try { data = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { data = {}; }
+    }
+    data.lastSelectedProjectId = projectId || null;
+    fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) {
+    console.error('Failed to save last project ID:', e);
+  }
+}
+
 let tray = null;
 let popupWindow = null;
 let loginWindow = null;
@@ -197,6 +234,60 @@ function cleanupOnExit() {
   offlineQueue?.close();
 }
 
+// Force logout — called when token refresh fails (password changed, tokens revoked).
+// Stops timer locally (does NOT call server since token is invalid), clears state, shows login.
+let _forceLogoutInProgress = false;
+async function forceLogout() {
+  if (_forceLogoutInProgress) return;
+  _forceLogoutInProgress = true;
+
+  console.warn('[Auth] Force logout — stopping all services');
+  posthog.capture(currentEntry?.user_id || 'unknown', 'force_logged_out', { reason: 'token_refresh_failed' });
+
+  isTimerRunning = false;
+  currentEntry = null;
+  _cachedStartedAtMs = null;
+  isAuthenticated = false;
+
+  activityMonitor?.stop();
+  screenshotService?.stop();
+  idleDetector?.stop();
+  dismissIdleAlert();
+
+  if (timerSyncInterval) {
+    clearInterval(timerSyncInterval);
+    timerSyncInterval = null;
+  }
+  stopTrayTimer();
+
+  if (offlineQueue) {
+    offlineQueue.close();
+    offlineQueue = null;
+  }
+
+  await deleteToken();
+  apiClient = null;
+  activityMonitor = null;
+  screenshotService = null;
+  idleDetector = null;
+  cachedProjects = [];
+  todayTotalGlobal = 0;
+  todayTotalCurrentProject = 0;
+  config = {};
+
+  if (popupWindow && !popupWindow.isDestroyed()) {
+    popupWindow.destroy();
+  }
+  popupWindow = null;
+
+  if (process.platform === 'darwin') {
+    app.dock.show();
+  }
+
+  createLoginWindow();
+  _forceLogoutInProgress = false;
+}
+
 async function initializeApp() {
   // Load saved tokens
   const token = await getToken();
@@ -214,6 +305,12 @@ async function initializeApp() {
   apiClient.onTokenRefreshed(async (newAccessToken, newRefreshToken) => {
     await setToken(newAccessToken);
     await setRefreshToken(newRefreshToken);
+  });
+
+  // Force logout when token refresh fails (e.g. password changed on web)
+  apiClient.onAuthFailed(() => {
+    console.warn('[Auth] Token refresh failed — forcing logout (password likely changed)');
+    forceLogout();
   });
 
   // Initialize PostHog analytics (key loaded from .env via loadEnv() above)
@@ -716,6 +813,8 @@ function setupIPC() {
   ipcMain.removeHandler('start-timer');
   ipcMain.removeHandler('stop-timer');
   ipcMain.removeHandler('get-projects');
+  ipcMain.removeHandler('get-last-project');
+  ipcMain.removeHandler('set-last-project');
   ipcMain.removeHandler('logout');
   ipcMain.removeHandler('open-dashboard');
 
@@ -780,6 +879,14 @@ function setupIPC() {
     } catch {
       return [];
     }
+  });
+
+  ipcMain.handle('get-last-project', () => {
+    return loadLastProjectId();
+  });
+
+  ipcMain.handle('set-last-project', (_, projectId) => {
+    saveLastProjectId(projectId);
   });
 
   ipcMain.handle('logout', async () => {
@@ -1346,7 +1453,23 @@ function createLoginWindow() {
         await initializeApp();
         return { success: true };
       } catch (e) {
-        return { error: e.response?.data?.message || e.message };
+        const status = e.response?.status;
+        const serverMsg = e.response?.data?.message;
+
+        // Friendly error messages for common cases
+        if (serverMsg) {
+          return { error: serverMsg };
+        } else if (e.code === 'ENOTFOUND' || e.code === 'ERR_NETWORK') {
+          return { error: 'Cannot reach the server. Please check your internet connection.' };
+        } else if (e.code === 'ECONNREFUSED') {
+          return { error: 'Server is not responding. Please try again later.' };
+        } else if (e.code === 'ETIMEDOUT' || e.code === 'ECONNABORTED') {
+          return { error: 'Connection timed out. Please try again.' };
+        } else if (status === 404) {
+          return { error: 'Server endpoint not found. Please update the app.' };
+        } else {
+          return { error: e.message || 'Login failed. Please try again.' };
+        }
       }
     });
   }

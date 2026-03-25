@@ -278,9 +278,26 @@
 
     async function init() {
       await loadProjects();
+
+      // Restore last selected project from persistent storage
+      try {
+        const lastProjectId = await window.trackflow.getLastProject();
+        if (lastProjectId && !isRunning) {
+          // Check the project still exists in the dropdown
+          const optionExists = Array.from(projectSelect.options).some(o => o.value === lastProjectId);
+          if (optionExists) {
+            projectSelect.value = lastProjectId;
+          }
+        }
+      } catch (e) {
+        console.error('Failed to restore last project:', e);
+      }
+
       await syncTimerState();
       updateStartBtnState();
       projectSelect.addEventListener('change', () => {
+        // Persist the selected project so it survives logout/login and app restarts
+        window.trackflow.setLastProject(projectSelect.value || null);
         updateStartBtnState();
         if (!isRunning) syncTimerState();
       });

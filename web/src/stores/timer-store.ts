@@ -36,7 +36,17 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   intervalId: null,
   pollId: null,
 
-  setSelectedProjectId: (projectId) => set({ selectedProjectId: projectId }),
+  setSelectedProjectId: (projectId) => {
+    set({ selectedProjectId: projectId });
+    // Persist to localStorage so it survives logout/login cycles
+    if (typeof window !== 'undefined') {
+      if (projectId) {
+        localStorage.setItem('trackflow_selected_project_id', projectId);
+      } else {
+        localStorage.removeItem('trackflow_selected_project_id');
+      }
+    }
+  },
 
   startTimer: async (projectId?: string, taskId?: string) => {
     try {
@@ -126,14 +136,32 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
 
       if (res.data.running) {
         const currentElapsed = res.data.elapsed_seconds || 0;
-        const base = Math.max(0, todayTotal - currentElapsed);
         const runningProjectId = res.data.entry?.project_id ?? null;
+
+        // When the timer runs on a different project than the selected one,
+        // today_total won't include the running entry's elapsed time.
+        // Detect this mismatch and compute display values correctly.
+        const timerMatchesScope =
+          scopeProjectId === null ||
+          scopeProjectId === runningProjectId;
+
+        // If the running project matches the scope, today_total already
+        // includes currentElapsed, so base = todayTotal - currentElapsed.
+        // If they don't match, the running timer's elapsed isn't in
+        // todayTotal, so we add it for display and base stays todayTotal.
+        const displayTotal = timerMatchesScope
+          ? todayTotal
+          : todayTotal + currentElapsed;
+        const base = timerMatchesScope
+          ? Math.max(0, todayTotal - currentElapsed)
+          : todayTotal;
+
         set({
           isRunning: true,
           entryId: res.data.entry?.id,
           projectId: runningProjectId,
           startedAt: res.data.entry?.started_at,
-          elapsedSeconds: todayTotal,
+          elapsedSeconds: displayTotal,
           todayTotalBase: base,
           // Keep dropdown in sync when timer was started elsewhere (e.g. desktop)
           selectedProjectId: get().selectedProjectId ?? runningProjectId,
@@ -175,9 +203,10 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   },
 
   tick: () => {
-    const { startedAt, todayTotalBase, projectId, selectedProjectId } = get();
-    // Only tick when showing the running project (or "all" when no project selected)
-    if (selectedProjectId !== null && projectId !== selectedProjectId) return;
+    const { startedAt, todayTotalBase } = get();
+    // Always tick when a timer is running — the header should show the
+    // running total even if the selected project differs from the running one.
+    // todayTotalBase already accounts for project-scope mismatch (see fetchStatus).
     if (startedAt) {
       const currentElapsed = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
       set({ elapsedSeconds: todayTotalBase + currentElapsed });

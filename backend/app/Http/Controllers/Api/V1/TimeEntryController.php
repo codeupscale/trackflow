@@ -35,7 +35,7 @@ class TimeEntryController extends Controller
                 $request->date_to,
                 $tz
             );
-            $query->where('started_at', '>=', $dateFromUtc)->where('started_at', '<=', $dateToUtc);
+            $query->where('started_at', '>=', $dateFromUtc)->where('started_at', '<', $dateToUtc);
         }
         if ($request->has('type')) {
             $request->validate(['type' => 'string|in:tracked,manual,idle']);

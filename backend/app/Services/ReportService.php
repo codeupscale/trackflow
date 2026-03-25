@@ -26,7 +26,8 @@ class ReportService
             // Daily breakdown with duration-weighted activity (single query)
             $query = TimeEntry::withoutGlobalScopes()
                 ->where('organization_id', $orgId)
-                ->whereBetween('started_at', [$dateFrom, $dateTo])
+                ->where('started_at', '>=', $dateFrom)
+                ->where('started_at', '<', $dateTo)
                 ->whereNotNull('ended_at');
 
             if ($userId) {
@@ -59,7 +60,8 @@ class ReportService
             if ($totalTrackedSeconds > 0) {
                 $earningsQuery = DB::table('time_entries')
                     ->where('time_entries.organization_id', $orgId)
-                    ->whereBetween('time_entries.started_at', [$dateFrom, $dateTo])
+                    ->where('time_entries.started_at', '>=', $dateFrom)
+                    ->where('time_entries.started_at', '<', $dateTo)
                     ->whereNotNull('time_entries.ended_at')
                     ->where('time_entries.type', 'tracked')
                     ->join('projects', 'time_entries.project_id', '=', 'projects.id')
@@ -97,7 +99,8 @@ class ReportService
             // Single query: aggregate all metrics per user (fixes N+1: was 3 queries per user)
             $userStats = DB::table('time_entries')
                 ->where('organization_id', $orgId)
-                ->whereBetween('started_at', [$dateFrom, $dateTo])
+                ->where('started_at', '>=', $dateFrom)
+                ->where('started_at', '<', $dateTo)
                 ->whereNotNull('ended_at')
                 ->selectRaw('
                     user_id,
@@ -157,7 +160,8 @@ class ReportService
         return Cache::remember($cacheKey, 900, function () use ($orgId, $dateFrom, $dateTo) {
             return TimeEntry::withoutGlobalScopes()
                 ->where('time_entries.organization_id', $orgId)
-                ->whereBetween('time_entries.started_at', [$dateFrom, $dateTo])
+                ->where('time_entries.started_at', '>=', $dateFrom)
+                ->where('time_entries.started_at', '<', $dateTo)
                 ->whereNotNull('time_entries.ended_at')
                 ->whereNotNull('time_entries.project_id')
                 ->join('projects', 'time_entries.project_id', '=', 'projects.id')
@@ -207,7 +211,8 @@ class ReportService
         return Cache::remember($cacheKey, 900, function () use ($orgId, $userId, $dateFrom, $dateTo) {
             $query = ActivityLog::withoutGlobalScopes()
                 ->where('organization_id', $orgId)
-                ->whereBetween('logged_at', [$dateFrom, $dateTo])
+                ->where('logged_at', '>=', $dateFrom)
+                ->where('logged_at', '<', $dateTo)
                 ->whereNotNull('active_app');
 
             if ($userId) {
@@ -263,7 +268,8 @@ class ReportService
             // Single query: aggregate total, billable, and earnings per user
             $payrollStats = DB::table('time_entries')
                 ->where('time_entries.organization_id', $orgId)
-                ->whereBetween('time_entries.started_at', [$dateFrom, $dateTo])
+                ->where('time_entries.started_at', '>=', $dateFrom)
+                ->where('time_entries.started_at', '<', $dateTo)
                 ->whereNotNull('time_entries.ended_at')
                 ->where('time_entries.is_approved', true)
                 ->leftJoin('projects', 'time_entries.project_id', '=', 'projects.id')
@@ -307,7 +313,8 @@ class ReportService
         return Cache::remember($cacheKey, 900, function () use ($orgId, $dateFrom, $dateTo) {
             return TimeEntry::withoutGlobalScopes()
                 ->where('organization_id', $orgId)
-                ->whereBetween('started_at', [$dateFrom, $dateTo])
+                ->where('started_at', '>=', $dateFrom)
+                ->where('started_at', '<', $dateTo)
                 ->whereNotNull('ended_at')
                 ->selectRaw("
                     user_id,

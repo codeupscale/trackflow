@@ -52,10 +52,19 @@ export function TimerWidget() {
   const displayProjectId = isRunning ? projectId : selectedProjectId;
   const displayProject = projects?.find((p) => p.id === displayProjectId);
 
-  // Default to first project so portal shows per-project time (not global sum) on load
+  // Restore last selected project from localStorage, or default to first project
   useEffect(() => {
     if (projects?.length && selectedProjectId === null && !isRunning) {
-      setSelectedProjectId(projects[0].id);
+      let restored: string | null = null;
+      if (typeof window !== 'undefined') {
+        restored = localStorage.getItem('trackflow_selected_project_id');
+      }
+      // Only restore if the saved project still exists in the user's project list
+      if (restored && projects.some((p) => p.id === restored)) {
+        setSelectedProjectId(restored);
+      } else {
+        setSelectedProjectId(projects[0].id);
+      }
     }
   }, [projects, selectedProjectId, isRunning, setSelectedProjectId]);
 

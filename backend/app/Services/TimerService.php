@@ -147,7 +147,7 @@ class TimerService
         $todayQuery = TimeEntry::withoutGlobalScopes()
             ->where('user_id', $user->id)
             ->where('started_at', '>=', $todayStartUtc)
-            ->where('started_at', '<=', $todayEndUtc)
+            ->where('started_at', '<', $todayEndUtc)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked');
 
@@ -213,7 +213,7 @@ class TimerService
         $query = TimeEntry::withoutGlobalScopes()
             ->where('user_id', $user->id)
             ->where('started_at', '>=', $todayStartUtc)
-            ->where('started_at', '<=', $todayEndUtc)
+            ->where('started_at', '<', $todayEndUtc)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked');
 
