@@ -7,6 +7,7 @@ use App\Jobs\SendEmailNotificationJob;
 use App\Models\Invitation;
 use App\Models\Organization;
 use App\Models\User;
+use App\Services\BillingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -14,6 +15,10 @@ use Illuminate\Support\Str;
 
 class InvitationController extends Controller
 {
+    public function __construct(private readonly BillingService $billingService)
+    {
+    }
+
     private function sendInvitationEmail(Invitation $invitation, User $invitedBy): void
     {
         SendEmailNotificationJob::dispatch(
@@ -35,15 +40,28 @@ class InvitationController extends Controller
     {
         $user = $request->user();
 
+        $perPage = (int) $request->query('per_page', 50);
+        $perPage = max(1, min($perPage, 100));
+
         $invites = Invitation::query()
             ->where('organization_id', $user->organization_id)
             ->whereNull('accepted_at')
             ->where('expires_at', '>', now())
             ->with('creator:id,name,email')
             ->orderByDesc('created_at')
-            ->paginate(50);
+            ->paginate($perPage);
 
-        return response()->json($invites);
+        return response()->json([
+            'data' => $invites->items(),
+            'meta' => [
+                'current_page' => $invites->currentPage(),
+                'last_page' => $invites->lastPage(),
+                'total' => $invites->total(),
+                'per_page' => $invites->perPage(),
+            ],
+            // Backward-compatible key used by older frontend builds
+            'invitations' => $invites->items(),
+        ]);
     }
 
     /** AUTH-09: Create invitation */
@@ -55,11 +73,23 @@ class InvitationController extends Controller
         ]);
 
         $user = $request->user();
+        $email = Str::lower(trim((string) $request->email));
+
+        // Enforce seat limit at invite time to avoid sending invites that can't be accepted.
+        $usage = $this->billingService->getUsage($user->organization);
+        if ($usage['limit'] !== 'unlimited' && $usage['used'] >= (int) $usage['limit']) {
+            return response()->json([
+                'message' => 'Seat limit reached. Please upgrade your plan.',
+                'current_seats' => $usage['used'],
+                'seat_limit' => (int) $usage['limit'],
+                'upgrade_url' => '/settings/billing',
+            ], 402);
+        }
 
         // Check if user already exists in org
         $existing = User::withoutGlobalScopes()
             ->where('organization_id', $user->organization_id)
-            ->where('email', $request->email)
+            ->where('email', $email)
             ->exists();
 
         if ($existing) {
@@ -69,7 +99,9 @@ class InvitationController extends Controller
         }
 
         // Check for pending invitation
-        $pendingInvite = Invitation::where('email', $request->email)
+        $pendingInvite = Invitation::withoutGlobalScopes()
+            ->where('organization_id', $user->organization_id)
+            ->where('email', $email)
             ->whereNull('accepted_at')
             ->where('expires_at', '>', now())
             ->exists();
@@ -82,7 +114,7 @@ class InvitationController extends Controller
 
         $invitation = Invitation::create([
             'organization_id' => $user->organization_id,
-            'email' => $request->email,
+            'email' => $email,
             'role' => $request->role,
             'token' => Str::random(64),
             'expires_at' => now()->addDays(7),
@@ -151,6 +183,17 @@ class InvitationController extends Controller
 
         if ($invitation->isExpired()) {
             return response()->json(['message' => 'This invitation has expired.'], 410);
+        }
+
+        $org = Organization::query()->findOrFail($invitation->organization_id);
+        $usage = $this->billingService->getUsage($org);
+        if ($usage['limit'] !== 'unlimited' && $usage['used'] >= (int) $usage['limit']) {
+            return response()->json([
+                'message' => 'Seat limit reached. Please upgrade your plan.',
+                'current_seats' => $usage['used'],
+                'seat_limit' => (int) $usage['limit'],
+                'upgrade_url' => '/settings/billing',
+            ], 402);
         }
 
         $user = DB::transaction(function () use ($request, $invitation) {

@@ -6,18 +6,38 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
 
 class UserController extends Controller
 {
+    private function paginatedResponse(LengthAwarePaginator $paginator): JsonResponse
+    {
+        return response()->json([
+            'data' => $paginator->items(),
+            'meta' => [
+                'current_page' => $paginator->currentPage(),
+                'last_page' => $paginator->lastPage(),
+                'total' => $paginator->total(),
+                'per_page' => $paginator->perPage(),
+            ],
+            // Backward-compatible key used by older frontend/tests
+            'users' => $paginator->items(),
+        ]);
+    }
+
     public function index(Request $request): JsonResponse
     {
         $this->authorize('viewAny', User::class);
 
+        $perPage = (int) $request->query('per_page', 50);
+        $perPage = max(1, min($perPage, 100));
+
         $users = User::with('teams')
             ->where('organization_id', $request->user()->organization_id)
-            ->paginate(50);
+            ->orderBy('name')
+            ->paginate($perPage);
 
-        return response()->json($users);
+        return $this->paginatedResponse($users);
     }
 
     public function show(Request $request, string $id): JsonResponse
