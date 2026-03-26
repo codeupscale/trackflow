@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import api from '@/lib/api';
+import { getEcho } from '@/lib/echo';
+import { useAuthStore } from '@/stores/auth-store';
 
 /**
  * Read-only timer status store for the web dashboard.
@@ -27,10 +29,14 @@ interface TimerState {
   projectTodayTotalBase: number;
   intervalId: ReturnType<typeof setInterval> | null;
   pollId: ReturnType<typeof setInterval> | null;
+  /** The org ID currently subscribed to via WebSocket (used for cleanup). */
+  echoOrgId: string | null;
 
   fetchStatus: () => Promise<void>;
   startPolling: () => void;
   stopPolling: () => void;
+  setupWebSocket: () => void;
+  teardownWebSocket: () => void;
   tick: () => void;
   startTicking: () => void;
   stopTicking: () => void;
@@ -50,6 +56,7 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   projectTodayTotalBase: 0,
   intervalId: null,
   pollId: null,
+  echoOrgId: null,
 
   fetchStatus: async () => {
     try {
@@ -108,6 +115,9 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
     if (get().pollId) return;
     const id = setInterval(() => get().fetchStatus(), 10000);
     set({ pollId: id });
+
+    // Also subscribe to real-time WebSocket events for instant updates
+    get().setupWebSocket();
   },
 
   stopPolling: () => {
@@ -116,6 +126,49 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
       clearInterval(id);
       set({ pollId: null });
     }
+    get().teardownWebSocket();
+  },
+
+  setupWebSocket: () => {
+    if (typeof window === 'undefined') return;
+    // Don't subscribe twice
+    if (get().echoOrgId) return;
+
+    try {
+      const echo = getEcho();
+      if (!echo) return;
+
+      const orgId = useAuthStore.getState().user?.organization_id;
+      if (!orgId) return;
+
+      echo.private(`org.${orgId}`)
+        .listen('TimerStarted', () => {
+          // Immediately fetch fresh status instead of waiting for next poll
+          get().fetchStatus();
+        })
+        .listen('TimerStopped', () => {
+          get().fetchStatus();
+        });
+
+      set({ echoOrgId: orgId });
+    } catch {
+      // WebSocket connection failures should not break the UI — polling is the fallback
+    }
+  },
+
+  teardownWebSocket: () => {
+    const orgId = get().echoOrgId;
+    if (!orgId) return;
+
+    try {
+      const echo = getEcho();
+      if (echo) {
+        echo.leave(`org.${orgId}`);
+      }
+    } catch {
+      // Ignore cleanup errors
+    }
+    set({ echoOrgId: null });
   },
 
   tick: () => {
@@ -144,7 +197,8 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   },
 
   resetState: () => {
-    // Clean up all intervals on reset (e.g. logout) to prevent leaked timers
+    // Clean up all intervals and WebSocket on reset (e.g. logout) to prevent leaked timers
+    get().teardownWebSocket();
     get().stopPolling();
     get().stopTicking();
     set({
@@ -158,6 +212,7 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
       todayTotalBase: 0,
       projectTodayTotalSeconds: 0,
       projectTodayTotalBase: 0,
+      echoOrgId: null,
     });
   },
 }));

@@ -41,6 +41,39 @@ class TimerService
         }
 
         try {
+            // Duplicate timer guard: if a timer is already running, auto-stop it first.
+            // This prevents orphaned entries when desktop is tracking and user starts from web (or vice versa).
+            $existing = Redis::get($redisKey);
+            if ($existing) {
+                $existingData = json_decode($existing, true);
+                if ($existingData && !empty($existingData['entry_id'])) {
+                    // Auto-stop the existing timer gracefully
+                    $existingEntry = TimeEntry::withoutGlobalScopes()
+                        ->where('id', $existingData['entry_id'])
+                        ->where('user_id', $user->id)
+                        ->whereNull('ended_at')
+                        ->first();
+
+                    if ($existingEntry) {
+                        $now = now();
+                        $duration = (int) abs($now->diffInSeconds($existingEntry->started_at));
+                        $finalScore = $this->computeFinalActivityScore($existingEntry->id);
+
+                        $existingEntry->update([
+                            'ended_at' => $now,
+                            'duration_seconds' => $duration,
+                            'activity_score' => $finalScore ?? $existingEntry->activity_score ?? 0,
+                        ]);
+
+                        Redis::del($redisKey);
+                        TimerStopped::dispatch($existingEntry);
+                    } else {
+                        // Redis key is stale (entry already closed or missing) — clean it up
+                        Redis::del($redisKey);
+                    }
+                }
+            }
+
             // Use DB transaction and set Redis BEFORE committing
             $entry = DB::transaction(function () use ($user, $data, $redisKey) {
                 $entry = TimeEntry::create([

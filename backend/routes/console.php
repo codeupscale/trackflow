@@ -50,5 +50,9 @@ Schedule::call(function () {
         ->delete();
 })->dailyAt('03:00')->name('clean-expired-invitations');
 
+// JOB-07: Cleanup stale time entries — every 5 minutes
+// Auto-closes running entries with no heartbeat for 30+ minutes (orphaned timers)
+Schedule::command('timer:cleanup-stale')->everyFiveMinutes()->name('cleanup-stale-entries');
+
 // Data retention enforcement — Daily 4am UTC
 Schedule::job(new \App\Jobs\EnforceDataRetentionJob)->dailyAt('04:00')->name('enforce-data-retention');
