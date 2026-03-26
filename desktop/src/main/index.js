@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification, screen, powerMonitor, nativeTheme, systemPreferences, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification, screen, powerMonitor, nativeTheme, systemPreferences, dialog, desktopCapturer } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -210,6 +210,17 @@ function checkScreenRecordingPermission() {
     _screenPermissionGranted = true;
     return true;
   }
+
+  // Fast path: if we previously confirmed permission via a real capture probe,
+  // trust the persisted state for this app version (avoids false negatives from
+  // systemPreferences.getMediaAccessStatus on ad-hoc signed apps).
+  const persisted = loadScreenPermissionState();
+  if (persisted && persisted.granted) {
+    _screenPermissionGranted = true;
+    console.log('[Permission] Screen recording: using persisted granted state');
+    return true;
+  }
+
   try {
     const status = systemPreferences.getMediaAccessStatus('screen');
     // 'granted' is reliable when it says granted; 'denied'/'not-determined' may
@@ -223,6 +234,99 @@ function checkScreenRecordingPermission() {
   }
 }
 
+// ── Persisted Screen Permission State ──────────────────────────────────────
+// After confirming permission via a real desktopCapturer probe, save the
+// result to disk so we don't re-prompt on every launch. The state is
+// invalidated when the app version changes (a new binary may need to
+// re-register in System Settings).
+
+function getScreenPermissionStatePath() {
+  try {
+    return path.join(app.getPath('userData'), 'screen-permission.json');
+  } catch {
+    return null;
+  }
+}
+
+function loadScreenPermissionState() {
+  try {
+    const p = getScreenPermissionStatePath();
+    if (!p || !fs.existsSync(p)) return null;
+    const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+    // Invalidate if the app version changed (new binary may need re-registration)
+    if (data.appVersion !== app.getVersion()) {
+      console.log('[Permission] Persisted state is for a different app version — ignoring');
+      return null;
+    }
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function saveScreenPermissionState(granted) {
+  try {
+    const p = getScreenPermissionStatePath();
+    if (!p) return;
+    const data = {
+      granted: !!granted,
+      grantedAt: granted ? new Date().toISOString() : null,
+      appVersion: app.getVersion(),
+    };
+    fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
+    console.log(`[Permission] Saved screen permission state: granted=${granted}`);
+  } catch (e) {
+    console.error('[Permission] Failed to save screen permission state:', e.message);
+  }
+}
+
+// ── Screen Recording Probe ─────────────────────────────────────────────────
+// On macOS, an app only appears in System Settings > Privacy > Screen Recording
+// AFTER it has called desktopCapturer.getSources() at least once. Without this
+// probe, the user opens System Settings and cannot find TrackFlow in the list.
+//
+// This function triggers a lightweight probe (1x1 thumbnail) so macOS registers
+// the app. If the probe returns real content, we also know permission is granted
+// and persist that state.
+
+async function probeScreenRecordingPermission() {
+  if (process.platform !== 'darwin') return true;
+
+  console.log('[Permission] Probing desktopCapturer to register in Screen Recording list...');
+  try {
+    const sources = await Promise.race([
+      desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: 1, height: 1 },
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('probe timed out')), 5000)
+      ),
+    ]);
+
+    console.log(`[Permission] Probe returned ${sources.length} source(s)`);
+
+    // If we got sources with non-empty thumbnails, permission is granted
+    if (sources.length > 0) {
+      const hasContent = sources.some(s => s.thumbnail && !s.thumbnail.isEmpty());
+      if (hasContent) {
+        console.log('[Permission] Probe confirmed: screen recording permission IS granted');
+        _screenPermissionGranted = true;
+        saveScreenPermissionState(true);
+        return true;
+      }
+    }
+
+    // Sources returned but thumbnails empty — app is now registered in the list
+    // but permission is not yet granted
+    console.log('[Permission] Probe complete: app registered, but permission NOT yet granted');
+    return false;
+  } catch (e) {
+    console.warn('[Permission] Probe failed:', e.message);
+    return false;
+  }
+}
+
 async function showScreenPermissionOnboarding(options = {}) {
   const { isPreStart = false, wasTracking = false } = options;
 
@@ -232,7 +336,7 @@ async function showScreenPermissionOnboarding(options = {}) {
     ? 'TrackFlow needs Screen Recording access to capture activity screenshots for your employer.\n\n'
       + 'Steps to enable:\n'
       + '1. Click "Open System Settings" below\n'
-      + '2. Find TrackFlow in the list and toggle it ON\n'
+      + '2. Find "TrackFlow" in the list and toggle it ON\n'
       + '3. macOS will ask you to "Quit & Reopen" — click it\n'
       + (wasTracking
         ? '\nDon\'t worry — your tracking session will resume automatically after restart.'
@@ -240,7 +344,7 @@ async function showScreenPermissionOnboarding(options = {}) {
     : 'Screen Recording permission is required to capture screenshots.\n\n'
       + 'Steps to enable:\n'
       + '1. Click "Open System Settings" below\n'
-      + '2. Find TrackFlow in the list and toggle it ON\n'
+      + '2. Find "TrackFlow" in the list and toggle it ON\n'
       + '3. macOS will ask you to "Quit & Reopen" — click it\n'
       + '\nYour selected project will be remembered after restart.';
 
@@ -563,14 +667,25 @@ async function initializeApp() {
   offlineQueue.flush(apiClient);
 
   // ── Early Screen Recording Permission Check (macOS) ──────────────────────
-  // Check permission at app launch, BEFORE the user starts tracking.
-  // If not granted, show a friendly onboarding dialog immediately.
+  // 1. Probe desktopCapturer to register the app in macOS Screen Recording list.
+  //    Without this, TrackFlow won't appear in System Settings > Privacy.
+  // 2. If permission is not granted, show a friendly onboarding dialog.
   if (process.platform === 'darwin') {
     const permGranted = checkScreenRecordingPermission();
     if (!permGranted) {
-      console.log('[Permission] Screen recording NOT granted at launch — showing onboarding');
-      // Show onboarding but don't block app startup — user can still use the app
-      showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
+      // Probe first so TrackFlow appears in the Screen Recording list,
+      // THEN show the onboarding dialog directing the user to System Settings.
+      probeScreenRecordingPermission().then((probeGranted) => {
+        if (probeGranted) {
+          console.log('[Permission] Probe confirmed permission — no onboarding needed');
+          return;
+        }
+        console.log('[Permission] Screen recording NOT granted at launch — showing onboarding');
+        showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
+      }).catch(() => {
+        // Probe failed — still show onboarding so user knows what to do
+        showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
+      });
     }
   }
 
@@ -1095,14 +1210,21 @@ function setupIPC() {
   ipcMain.removeHandler('check-screen-permission');
   ipcMain.removeHandler('request-screen-permission');
 
-  ipcMain.handle('check-screen-permission', () => {
+  ipcMain.handle('check-screen-permission', async () => {
     if (process.platform !== 'darwin') return { granted: true, platform: process.platform };
     const granted = checkScreenRecordingPermission();
+    if (!granted) {
+      // Probe to both register the app and do a real permission check
+      const probeGranted = await probeScreenRecordingPermission();
+      return { granted: probeGranted, platform: 'darwin' };
+    }
     return { granted, platform: 'darwin' };
   });
 
   ipcMain.handle('request-screen-permission', async () => {
     if (process.platform !== 'darwin') return { granted: true };
+    // Probe first so TrackFlow appears in the Screen Recording list
+    await probeScreenRecordingPermission();
     const result = await showScreenPermissionOnboarding({ isPreStart: true, wasTracking: isTimerRunning });
     return { result, granted: _screenPermissionGranted === true };
   });
@@ -1247,19 +1369,26 @@ async function startTimer(projectId = null) {
   if (process.platform === 'darwin' && _screenPermissionGranted !== true) {
     checkScreenRecordingPermission();
     if (!_screenPermissionGranted) {
-      console.log('[Timer] Screen recording permission not granted — showing onboarding');
-      const permResult = await showScreenPermissionOnboarding({
-        isPreStart: true,
-        wasTracking: false,
-      });
-      if (permResult === 'opened-settings') {
-        // User went to settings — don't start timer yet. They need to restart.
-        return { error: 'Please grant Screen Recording permission and restart the app. Your project selection will be remembered.' };
+      // Probe desktopCapturer so TrackFlow registers in the Screen Recording
+      // list before we direct the user to System Settings.
+      const probeGranted = await probeScreenRecordingPermission();
+      if (probeGranted) {
+        console.log('[Timer] Probe confirmed permission — proceeding with timer start');
+      } else {
+        console.log('[Timer] Screen recording permission not granted — showing onboarding');
+        const permResult = await showScreenPermissionOnboarding({
+          isPreStart: true,
+          wasTracking: false,
+        });
+        if (permResult === 'opened-settings') {
+          // User went to settings — don't start timer yet. They need to restart.
+          return { error: 'Please grant Screen Recording permission and restart the app. Your project selection will be remembered.' };
+        }
+        // User clicked "Skip for Now" — let them track without screenshots
+        console.log('[Timer] User skipped permission — starting timer without screenshot capability');
+        // Notify renderer that permission is not granted so it can show a warning
+        notifyPopup('permission-status', { granted: false });
       }
-      // User clicked "Skip for Now" — let them track without screenshots
-      console.log('[Timer] User skipped permission — starting timer without screenshot capability');
-      // Notify renderer that permission is not granted so it can show a warning
-      notifyPopup('permission-status', { granted: false });
     }
   }
 

@@ -187,6 +187,14 @@ class ScreenshotService {
     this._permissionDialogShown = true;
 
     console.log('[SS] Showing screen recording permission dialog');
+
+    // Trigger a lightweight desktopCapturer probe so macOS registers TrackFlow
+    // in the Screen Recording permission list before directing the user there.
+    desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 1, height: 1 },
+    }).catch(() => {}); // fire-and-forget; errors are non-fatal
+
     dialog.showMessageBox({
       type: 'warning',
       title: 'Screen Recording Permission Required',
@@ -194,7 +202,7 @@ class ScreenshotService {
       detail: 'Your employer requires activity screenshots as part of time tracking.\n\n'
         + 'Steps to enable:\n'
         + '1. Click "Open System Settings" below\n'
-        + '2. Find TrackFlow in the list and toggle it ON\n'
+        + '2. Find "TrackFlow" in the list and toggle it ON\n'
         + '3. macOS will ask you to "Quit & Reopen" — click it\n\n'
         + 'Your time will be saved. After restarting, tracking will resume automatically.',
       buttons: ['Open System Settings', 'Later'],
