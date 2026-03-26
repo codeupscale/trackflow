@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification, screen, powerMonitor, nativeTheme } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification, screen, powerMonitor, nativeTheme, systemPreferences, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -140,6 +140,128 @@ function saveLastProjectId(projectId) {
     fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
   } catch (e) {
     console.error('Failed to save last project ID:', e);
+  }
+}
+
+// ── Restart State Persistence ────────────────────────────────────────────────
+// Saves tracking state before a forced restart (e.g., after granting Screen
+// Recording permission on macOS). On next launch, the app auto-resumes.
+function getRestartStatePath() {
+  try {
+    return path.join(app.getPath('userData'), 'restart-state.json');
+  } catch {
+    return null;
+  }
+}
+
+function saveRestartState() {
+  try {
+    const p = getRestartStatePath();
+    if (!p) return;
+    const state = {
+      wasTracking: isTimerRunning,
+      projectId: currentEntry?.project_id || loadLastProjectId() || null,
+      entryId: currentEntry?.id || null,
+      savedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(p, JSON.stringify(state, null, 2), 'utf8');
+    console.log('[RestartState] Saved:', JSON.stringify(state));
+  } catch (e) {
+    console.error('[RestartState] Failed to save:', e.message);
+  }
+}
+
+function loadRestartState() {
+  try {
+    const p = getRestartStatePath();
+    if (!p || !fs.existsSync(p)) return null;
+    const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+    // Only honour restart state if it was saved within the last 5 minutes
+    const savedAt = new Date(data.savedAt).getTime();
+    if (Date.now() - savedAt > 5 * 60 * 1000) {
+      console.log('[RestartState] Expired (older than 5 minutes), ignoring');
+      clearRestartState();
+      return null;
+    }
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function clearRestartState() {
+  try {
+    const p = getRestartStatePath();
+    if (p && fs.existsSync(p)) {
+      fs.unlinkSync(p);
+      console.log('[RestartState] Cleared');
+    }
+  } catch {}
+}
+
+// ── Screen Recording Permission (macOS) ──────────────────────────────────────
+// Tracks whether the user has declined the permission prompt this session so we
+// don't nag repeatedly. Reset on app restart.
+let _screenPermissionDeclinedThisSession = false;
+let _screenPermissionGranted = null; // null = not checked yet, true/false after check
+
+function checkScreenRecordingPermission() {
+  if (process.platform !== 'darwin') {
+    _screenPermissionGranted = true;
+    return true;
+  }
+  try {
+    const status = systemPreferences.getMediaAccessStatus('screen');
+    // 'granted' is reliable when it says granted; 'denied'/'not-determined' may
+    // be wrong for ad-hoc signed apps, but it's the best pre-capture check we have.
+    _screenPermissionGranted = (status === 'granted');
+    console.log(`[Permission] Screen recording status: ${status} (granted=${_screenPermissionGranted})`);
+    return _screenPermissionGranted;
+  } catch {
+    _screenPermissionGranted = null;
+    return false;
+  }
+}
+
+async function showScreenPermissionOnboarding(options = {}) {
+  const { isPreStart = false, wasTracking = false } = options;
+
+  if (_screenPermissionDeclinedThisSession && !isPreStart) return 'declined';
+
+  const detail = isPreStart
+    ? 'TrackFlow needs Screen Recording access to capture activity screenshots for your employer.\n\n'
+      + 'Steps to enable:\n'
+      + '1. Click "Open System Settings" below\n'
+      + '2. Find TrackFlow in the list and toggle it ON\n'
+      + '3. macOS will ask you to "Quit & Reopen" — click it\n'
+      + (wasTracking
+        ? '\nDon\'t worry — your tracking session will resume automatically after restart.'
+        : '\nAfter restarting, you can start tracking right away.')
+    : 'Screen Recording permission is required to capture screenshots.\n\n'
+      + 'Steps to enable:\n'
+      + '1. Click "Open System Settings" below\n'
+      + '2. Find TrackFlow in the list and toggle it ON\n'
+      + '3. macOS will ask you to "Quit & Reopen" — click it\n'
+      + '\nYour selected project will be remembered after restart.';
+
+  const result = await dialog.showMessageBox({
+    type: 'info',
+    title: 'Screen Recording Permission Required',
+    message: 'TrackFlow needs screen recording access',
+    detail,
+    buttons: ['Open System Settings', 'Skip for Now'],
+    defaultId: 0,
+    cancelId: 1,
+  });
+
+  if (result.response === 0) {
+    // Save state before directing user to settings (they may need to restart)
+    saveRestartState();
+    shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+    return 'opened-settings';
+  } else {
+    _screenPermissionDeclinedThisSession = true;
+    return 'declined';
   }
 }
 
@@ -377,6 +499,7 @@ async function initializeApp() {
   activityMonitor = new ActivityMonitor(apiClient, offlineQueue);
   const getIsAppVisible = () => popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible();
   screenshotService = new ScreenshotService(apiClient, config, offlineQueue, getIsAppVisible, activityMonitor);
+  screenshotService.setRestartStateSaver(() => saveRestartState());
   idleDetector = new IdleDetector(config);
 
   // Wire idle detection events
@@ -438,6 +561,52 @@ async function initializeApp() {
 
   // Flush offline queue
   offlineQueue.flush(apiClient);
+
+  // ── Early Screen Recording Permission Check (macOS) ──────────────────────
+  // Check permission at app launch, BEFORE the user starts tracking.
+  // If not granted, show a friendly onboarding dialog immediately.
+  if (process.platform === 'darwin') {
+    const permGranted = checkScreenRecordingPermission();
+    if (!permGranted) {
+      console.log('[Permission] Screen recording NOT granted at launch — showing onboarding');
+      // Show onboarding but don't block app startup — user can still use the app
+      showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
+    }
+  }
+
+  // ── Restart State Auto-Resume ────────────────────────────────────────────
+  // If the app was restarted after granting Screen Recording permission,
+  // restore the previous project selection and optionally auto-start tracking.
+  const restartState = loadRestartState();
+  if (restartState) {
+    console.log('[RestartState] Found restart state:', JSON.stringify(restartState));
+    clearRestartState();
+    // Restore project selection
+    if (restartState.projectId) {
+      saveLastProjectId(restartState.projectId);
+    }
+    // If the user was actively tracking before the restart, auto-start
+    if (restartState.wasTracking && restartState.projectId) {
+      console.log('[RestartState] Auto-resuming tracking for project:', restartState.projectId);
+      // Delay slightly to ensure popup window has loaded
+      setTimeout(async () => {
+        try {
+          const result = await startTimer(restartState.projectId);
+          if (result.success) {
+            console.log('[RestartState] Auto-resume successful');
+            showPopup();
+          } else {
+            console.warn('[RestartState] Auto-resume failed:', result.error);
+          }
+        } catch (e) {
+          console.error('[RestartState] Auto-resume error:', e.message);
+        }
+      }, 2000);
+    } else {
+      // Just show the popup with the project pre-selected
+      showPopup();
+    }
+  }
 
   // Check timer status on server
   try {
@@ -923,6 +1092,20 @@ function setupIPC() {
   ipcMain.removeHandler('set-last-project');
   ipcMain.removeHandler('logout');
   ipcMain.removeHandler('open-dashboard');
+  ipcMain.removeHandler('check-screen-permission');
+  ipcMain.removeHandler('request-screen-permission');
+
+  ipcMain.handle('check-screen-permission', () => {
+    if (process.platform !== 'darwin') return { granted: true, platform: process.platform };
+    const granted = checkScreenRecordingPermission();
+    return { granted, platform: 'darwin' };
+  });
+
+  ipcMain.handle('request-screen-permission', async () => {
+    if (process.platform !== 'darwin') return { granted: true };
+    const result = await showScreenPermissionOnboarding({ isPreStart: true, wasTracking: isTimerRunning });
+    return { result, granted: _screenPermissionGranted === true };
+  });
 
   ipcMain.handle('get-theme', () => {
     return getOSTheme();
@@ -1057,6 +1240,28 @@ function afterStartTimer(projectIdForTotal, todayTotalForPopup) {
 
 async function startTimer(projectId = null) {
   if (isTimerRunning) return { error: 'Timer already running' };
+
+  // ── Pre-start permission gate (macOS only) ──────────────────────────────
+  // Check screen recording permission BEFORE starting the timer so the user
+  // is not surprised by a permission prompt mid-tracking.
+  if (process.platform === 'darwin' && _screenPermissionGranted !== true) {
+    checkScreenRecordingPermission();
+    if (!_screenPermissionGranted) {
+      console.log('[Timer] Screen recording permission not granted — showing onboarding');
+      const permResult = await showScreenPermissionOnboarding({
+        isPreStart: true,
+        wasTracking: false,
+      });
+      if (permResult === 'opened-settings') {
+        // User went to settings — don't start timer yet. They need to restart.
+        return { error: 'Please grant Screen Recording permission and restart the app. Your project selection will be remembered.' };
+      }
+      // User clicked "Skip for Now" — let them track without screenshots
+      console.log('[Timer] User skipped permission — starting timer without screenshot capability');
+      // Notify renderer that permission is not granted so it can show a warning
+      notifyPopup('permission-status', { granted: false });
+    }
+  }
 
   try {
     const result = await apiClient.startTimer(projectId);
