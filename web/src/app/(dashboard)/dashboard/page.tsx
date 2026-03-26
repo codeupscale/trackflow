@@ -13,7 +13,7 @@ import {
   ArrowRight,
   BarChart3,
 } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+// Bar chart uses pure CSS — no recharts dependency needed for this component
 
 import {
   Card,
@@ -474,76 +474,110 @@ export default function DashboardPage() {
       })()}
 
       {/* Daily Hours Bar Chart — employee view */}
-      {isEmployeeView && (data?.dailyBreakdown?.length ?? 0) > 0 && (
-        <Card className="border-border bg-card">
-          <CardHeader className="pb-2">
-            <div className="flex items-center gap-2">
-              <div className="h-8 w-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
-                <BarChart3 className="h-5 w-5 text-blue-500" />
+      {isEmployeeView && (data?.dailyBreakdown?.length ?? 0) > 0 && (() => {
+        const todayStr = format(new Date(), 'yyyy-MM-dd');
+        const maxHours = Math.max(...(data?.dailyBreakdown || []).map(d => d.hours), 1);
+        const dailyTarget = (data?.weeklyHoursTarget || 0) / 5; // avg target per weekday
+
+        return (
+          <Card className="border-border bg-card">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center">
+                    <BarChart3 className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-foreground text-base">Daily Hours</CardTitle>
+                    <CardDescription className="text-muted-foreground">
+                      This week (Mon – Sun)
+                    </CardDescription>
+                  </div>
+                </div>
+                {dailyTarget > 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    ~{dailyTarget.toFixed(1)}h/day target
+                  </span>
+                )}
               </div>
-              <div>
-                <CardTitle className="text-foreground text-base">Daily Hours</CardTitle>
-                <CardDescription className="text-muted-foreground">
-                  This week (Mon – Sun)
-                </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-0 pb-4">
+              {/* Custom CSS bar chart — works perfectly with both themes */}
+              <div className="flex items-end gap-2 h-44 px-1">
+                {data!.dailyBreakdown.map((entry) => {
+                  const isTodayBar = entry.date === todayStr;
+                  const hasHours = entry.hours > 0;
+                  const heightPct = maxHours > 0 ? Math.max((entry.hours / maxHours) * 100, hasHours ? 4 : 0) : 0;
+                  const isFuture = new Date(entry.date + 'T00:00:00') > new Date();
+
+                  return (
+                    <div key={entry.date} className="flex-1 flex flex-col items-center gap-1.5 group">
+                      {/* Hours label */}
+                      <span className={`text-xs tabular-nums transition-opacity ${
+                        hasHours ? 'text-foreground font-medium' : 'text-muted-foreground/50'
+                      } ${!hasHours && !isTodayBar ? 'opacity-0 group-hover:opacity-100' : ''}`}>
+                        {entry.hours > 0 ? `${entry.hours}h` : '0h'}
+                      </span>
+
+                      {/* Bar */}
+                      <div className="w-full relative" style={{ height: '120px' }}>
+                        <div className="absolute bottom-0 left-1 right-1 rounded-t-md transition-all duration-500 ease-out"
+                          style={{ height: `${heightPct}%`, minHeight: hasHours ? '4px' : '2px' }}
+                        >
+                          <div className={`w-full h-full rounded-t-md ${
+                            isTodayBar
+                              ? 'bg-primary shadow-sm shadow-primary/25'
+                              : hasHours
+                                ? 'bg-primary/40 dark:bg-primary/30'
+                                : isFuture
+                                  ? 'bg-muted/30'
+                                  : 'bg-muted/60'
+                          }`} />
+                        </div>
+
+                        {/* Daily target line */}
+                        {dailyTarget > 0 && !isFuture && (
+                          <div
+                            className="absolute left-0 right-0 border-t border-dashed border-muted-foreground/20"
+                            style={{ bottom: `${Math.min((dailyTarget / maxHours) * 100, 100)}%` }}
+                          />
+                        )}
+                      </div>
+
+                      {/* Day label */}
+                      <span className={`text-xs ${
+                        isTodayBar
+                          ? 'text-primary font-semibold'
+                          : 'text-muted-foreground'
+                      }`}>
+                        {entry.day}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
-            </div>
-          </CardHeader>
-          <CardContent className="pt-2">
-            <div className="h-52">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={data!.dailyBreakdown} barSize={32}>
-                  <XAxis
-                    dataKey="day"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
-                  />
-                  <YAxis
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
-                    tickFormatter={(v: number) => `${v}h`}
-                    width={35}
-                  />
-                  <Tooltip
-                    cursor={{ fill: 'hsl(var(--muted) / 0.5)' }}
-                    contentStyle={{
-                      backgroundColor: 'hsl(var(--card))',
-                      border: '1px solid hsl(var(--border))',
-                      borderRadius: '8px',
-                      fontSize: '13px',
-                      color: 'hsl(var(--foreground))',
-                    }}
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    formatter={(value: any) => [`${value}h`, 'Hours']}
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    labelFormatter={(label: any, payload: any) => {
-                      if (payload?.[0]?.payload?.date) {
-                        return format(new Date(payload[0].payload.date + 'T00:00:00'), 'EEE, MMM d');
-                      }
-                      return label;
-                    }}
-                  />
-                  <Bar dataKey="hours" radius={[6, 6, 0, 0]}>
-                    {data!.dailyBreakdown.map((entry, index) => {
-                      const isToday = entry.date === format(new Date(), 'yyyy-MM-dd');
-                      const hasHours = entry.hours > 0;
-                      return (
-                        <Cell
-                          key={index}
-                          fill={isToday ? 'hsl(217, 91%, 60%)' : hasHours ? 'hsl(215, 20%, 65%)' : 'hsl(215, 15%, 30%)'}
-                          fillOpacity={isToday ? 1 : hasHours ? 0.7 : 0.3}
-                        />
-                      );
-                    })}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+
+              {/* Legend */}
+              {dailyTarget > 0 && (
+                <div className="flex items-center gap-4 mt-3 pt-3 border-t border-border">
+                  <div className="flex items-center gap-1.5">
+                    <div className="h-2.5 w-2.5 rounded-sm bg-primary" />
+                    <span className="text-xs text-muted-foreground">Today</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="h-2.5 w-2.5 rounded-sm bg-primary/40 dark:bg-primary/30" />
+                    <span className="text-xs text-muted-foreground">Other days</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="h-px w-4 border-t border-dashed border-muted-foreground/40" />
+                    <span className="text-xs text-muted-foreground">Daily avg target</span>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Team activity table — only for admin/manager/owner */}
       {!isEmployeeView && (
