@@ -1245,6 +1245,12 @@ function setupIPC() {
     return getOSTheme();
   });
 
+  ipcMain.handle('install-update', () => {
+    console.log('[updater] User clicked Restart Now — installing update');
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.quitAndInstall(false, true);
+  });
+
   ipcMain.handle('get-timer-state', async (_, projectId) => {
     const validProjectId = validateProjectId(projectId);
     if (apiClient) {
@@ -1944,6 +1950,15 @@ function checkForUpdates() {
       console.log(`[updater] Update downloaded: v${info.version} — will install on quit`);
       _pendingUpdate = true;
       posthog.capture(null, 'auto_update_downloaded', { new_version: info.version });
+
+      // Send in-app update dialog to the renderer (prominent, can't be missed)
+      try {
+        if (popupWindow && !popupWindow.isDestroyed()) {
+          popupWindow.webContents.send('update-ready', { version: info.version });
+        }
+      } catch {}
+
+      // Also show a system notification as a fallback
       try {
         const notification = new Notification({
           title: 'TrackFlow Update Ready',
