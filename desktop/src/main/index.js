@@ -1285,7 +1285,13 @@ function startTrayTimer() {
   trayTimerInterval = setInterval(() => {
     if (!isTimerRunning || !_cachedStartedAtMs) return;
     const currentElapsed = Math.floor((Date.now() - _cachedStartedAtMs) / 1000);
-    setTrayText(formatTimeShort(todayTotalCurrentProject + currentElapsed));
+    const totalSeconds = todayTotalCurrentProject + currentElapsed;
+    const formatted = formatTimeShort(totalSeconds);
+    setTrayText(formatted);
+    // Broadcast the same computed time to the renderer so both displays are in perfect sync
+    if (popupWindow && !popupWindow.isDestroyed()) {
+      popupWindow.webContents.send('timer-tick', { totalSeconds, formatted });
+    }
   }, 1000);
 }
 
