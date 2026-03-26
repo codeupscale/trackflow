@@ -211,23 +211,24 @@ function checkScreenRecordingPermission() {
     return true;
   }
 
-  // Fast path: if we previously confirmed permission via a real capture probe,
-  // trust the persisted state for this app version (avoids false negatives from
-  // systemPreferences.getMediaAccessStatus on ad-hoc signed apps).
-  const persisted = loadScreenPermissionState();
-  if (persisted && persisted.granted) {
-    _screenPermissionGranted = true;
-    console.log('[Permission] Screen recording: using persisted granted state');
-    return true;
-  }
-
+  // NOTE: We do NOT trust persisted state alone here, because rebuilding the app
+  // with the same version number changes the code signature and macOS revokes
+  // permission silently. The persisted state is only used as a hint — the real
+  // check happens in probeScreenRecordingPermission() which does a live capture test.
+  //
+  // systemPreferences.getMediaAccessStatus('screen') is also unreliable for
+  // ad-hoc signed apps — it may return 'denied' even when permission IS granted.
+  // So we always return false here to force the probe to run.
   try {
     const status = systemPreferences.getMediaAccessStatus('screen');
-    // 'granted' is reliable when it says granted; 'denied'/'not-determined' may
-    // be wrong for ad-hoc signed apps, but it's the best pre-capture check we have.
-    _screenPermissionGranted = (status === 'granted');
-    console.log(`[Permission] Screen recording status: ${status} (granted=${_screenPermissionGranted})`);
-    return _screenPermissionGranted;
+    console.log(`[Permission] Screen recording API status: ${status}`);
+    if (status === 'granted') {
+      _screenPermissionGranted = true;
+      return true;
+    }
+    // For 'denied' or 'not-determined', don't trust it — force probe
+    _screenPermissionGranted = false;
+    return false;
   } catch {
     _screenPermissionGranted = null;
     return false;
@@ -667,26 +668,27 @@ async function initializeApp() {
   offlineQueue.flush(apiClient);
 
   // ── Early Screen Recording Permission Check (macOS) ──────────────────────
-  // 1. Probe desktopCapturer to register the app in macOS Screen Recording list.
-  //    Without this, TrackFlow won't appear in System Settings > Privacy.
-  // 2. If permission is not granted, show a friendly onboarding dialog.
+  // ALWAYS run the probe at launch to:
+  // 1. Register the app in macOS Screen Recording list (so it appears in Settings)
+  // 2. Verify permission is actually granted (persisted state can be stale after rebuild)
+  // 3. Show onboarding dialog if permission is not granted
   if (process.platform === 'darwin') {
-    const permGranted = checkScreenRecordingPermission();
-    if (!permGranted) {
-      // Probe first so TrackFlow appears in the Screen Recording list,
-      // THEN show the onboarding dialog directing the user to System Settings.
-      probeScreenRecordingPermission().then((probeGranted) => {
-        if (probeGranted) {
-          console.log('[Permission] Probe confirmed permission — no onboarding needed');
-          return;
-        }
-        console.log('[Permission] Screen recording NOT granted at launch — showing onboarding');
-        showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
-      }).catch(() => {
-        // Probe failed — still show onboarding so user knows what to do
-        showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
-      });
-    }
+    // Always probe — even if systemPreferences says 'granted' or persisted state says true,
+    // because rebuilding the app with same version changes the code signature.
+    probeScreenRecordingPermission().then((probeGranted) => {
+      if (probeGranted) {
+        console.log('[Permission] Probe confirmed permission — no onboarding needed');
+        _screenPermissionGranted = true;
+        return;
+      }
+      console.log('[Permission] Screen recording NOT granted at launch — showing onboarding');
+      _screenPermissionGranted = false;
+      showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
+    }).catch(() => {
+      // Probe failed — still show onboarding so user knows what to do
+      _screenPermissionGranted = false;
+      showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
+    });
   }
 
   // ── Restart State Auto-Resume ────────────────────────────────────────────
