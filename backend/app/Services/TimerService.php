@@ -402,7 +402,7 @@ class TimerService
 
         $timerInfo = json_decode($timerData, true);
 
-        $log = ActivityLog::create([
+        $logData = [
             'organization_id' => $user->organization_id,
             'user_id' => $user->id,
             'time_entry_id' => $timerInfo['entry_id'],
@@ -412,16 +412,33 @@ class TimerService
             'active_app' => $data['active_app'] ?? null,
             'active_window_title' => $data['active_window_title'] ?? null,
             'active_url' => $data['active_url'] ?? null,
-        ]);
+        ];
+
+        // Store active_seconds if provided by new desktop versions
+        if (isset($data['active_seconds'])) {
+            $logData['active_seconds'] = (int) $data['active_seconds'];
+        }
+
+        $log = ActivityLog::create($logData);
 
         // Update activity score on entry using exponential moving average (EMA).
-        // EMA gives recent heartbeats more weight but doesn't let a single
-        // heartbeat dominate the entire history. Alpha = 0.3 means ~70% history, ~30% new.
+        // If the desktop sends active_seconds (Hubstaff-standard active-seconds model),
+        // compute score as percentage of seconds with input. Otherwise fall back to
+        // event-count method for backward compatibility with older desktop versions.
         $entry = TimeEntry::find($timerInfo['entry_id']);
         if ($entry) {
-            $maxExpected = 300; // expected max events per 30s interval (calibrated with fallback mode)
-            $total = ($data['keyboard_events'] ?? 0) + ($data['mouse_events'] ?? 0);
-            $instantScore = min(100, (int) round($total / $maxExpected * 100));
+            if (isset($data['active_seconds'])) {
+                // Active-seconds model: score = active_seconds / interval_seconds * 100
+                // Heartbeat interval is 30s, but use actual active_seconds capped at 30
+                $intervalSeconds = 30;
+                $activeSeconds = min((int) $data['active_seconds'], $intervalSeconds);
+                $instantScore = (int) round(($activeSeconds / $intervalSeconds) * 100);
+            } else {
+                // Legacy event-count model (backward compat with old desktop versions)
+                $maxExpected = 300;
+                $total = ($data['keyboard_events'] ?? 0) + ($data['mouse_events'] ?? 0);
+                $instantScore = min(100, (int) round($total / $maxExpected * 100));
+            }
 
             $alpha = 0.3; // smoothing factor
             if ($entry->activity_score !== null && $entry->activity_score > 0) {
@@ -440,24 +457,53 @@ class TimerService
     /**
      * Compute final activity score from ActivityLog records (ground truth).
      *
-     * Instead of relying on the running EMA (which can drift), this reads
-     * all heartbeat logs for the entry and computes an average score.
-     * Each heartbeat represents a 30s interval, so equal-weight average is correct here.
+     * Uses active-seconds model when available (Hubstaff standard):
+     *   total_active_seconds / total_interval_seconds * 100
+     *
+     * Falls back to event-count averaging for entries tracked by older
+     * desktop versions that don't send active_seconds.
      *
      * Returns null if no activity logs exist (entry had no heartbeats).
      */
     private function computeFinalActivityScore(string $entryId): ?int
     {
-        $maxExpected = 300;
-
         $logs = ActivityLog::where('time_entry_id', $entryId)
-            ->select('keyboard_events', 'mouse_events')
+            ->select('keyboard_events', 'mouse_events', 'active_seconds')
             ->get();
 
         if ($logs->isEmpty()) {
             return null;
         }
 
+        // Check if any logs have active_seconds (new desktop version)
+        $hasActiveSeconds = $logs->contains(fn ($log) => $log->active_seconds !== null);
+
+        if ($hasActiveSeconds) {
+            // Active-seconds model: sum all active seconds / total interval seconds
+            $totalActiveSeconds = 0;
+            $totalIntervalSeconds = 0;
+            $intervalLength = 30; // each heartbeat = 30s interval
+
+            foreach ($logs as $log) {
+                if ($log->active_seconds !== null) {
+                    $totalActiveSeconds += min($log->active_seconds, $intervalLength);
+                    $totalIntervalSeconds += $intervalLength;
+                } else {
+                    // Mixed mode: some heartbeats from old version, skip them
+                    // or estimate from events (use event-count as proxy)
+                    $totalIntervalSeconds += $intervalLength;
+                }
+            }
+
+            if ($totalIntervalSeconds === 0) {
+                return 0;
+            }
+
+            return max(0, min(100, (int) round(($totalActiveSeconds / $totalIntervalSeconds) * 100)));
+        }
+
+        // Legacy event-count model (backward compat)
+        $maxExpected = 300;
         $totalScore = 0;
         foreach ($logs as $log) {
             $events = $log->keyboard_events + $log->mouse_events;
