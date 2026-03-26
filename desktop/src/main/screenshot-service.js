@@ -1,7 +1,11 @@
 // Screenshot capture service
 // - Captures at org-configured interval while timer is running
-// - Multi-monitor: captures all screens and composites them side-by-side
-// - Cross-platform: macOS (permission check), Windows, Linux
+// - Multi-monitor: captures each display individually (Hubstaff-style) and
+//   uploads them as separate screenshots with display_index metadata.
+//   Legacy composite mode (stitching all screens into one image) is retained
+//   but no longer the default.
+// - Cross-platform: macOS (permission check + window-first fallback),
+//   Windows, Linux
 // - Blur support via sharp
 // - Stops cleanly when timer stops (no orphan screenshots)
 //
@@ -14,6 +18,11 @@
 //
 //   2. All failure paths log with console.error AND increment a failure counter.
 //      After 5 consecutive failures, capture pauses for 5 minutes to avoid CPU waste.
+//
+//   3. Multi-monitor captures each display individually and uploads them as
+//      separate screenshots tagged with display_index / display_count.
+//      This matches how Hubstaff and Time Doctor handle multi-monitor setups
+//      and allows the web dashboard to show per-display screenshots.
 
 const { desktopCapturer, Notification, screen, systemPreferences, shell, dialog, BrowserWindow, powerMonitor } = require('electron');
 const FormData = require('form-data');
@@ -231,6 +240,7 @@ class ScreenshotService {
       const isMac = process.platform === 'darwin';
 
       // Request sources — always include windows on macOS for reliable capture
+      // (window capture is the primary strategy on macOS for ad-hoc signed apps)
       const sourceTypes = isMac ? ['screen', 'window'] : ['screen'];
       console.log(`[SS] Requesting ${sourceTypes.join('+')} sources at ${thumbnailSize.width}x${thumbnailSize.height}`);
 
@@ -257,65 +267,100 @@ class ScreenshotService {
         return;
       }
 
-      let buffer = null;
+      // Determine how many physical displays are connected
+      const displays = screen.getAllDisplays();
+      const multiMonitorEnabled = this.config.capture_multi_monitor === true;
+      const hasMultipleDisplays = displays.length > 1;
 
-      if (isMac) {
-        // ── macOS Capture Strategy ──
-        //
-        // Use desktopCapturer ONLY — never call screencapture CLI.
-        //
-        // IMPORTANT: Window capture FIRST, screen capture fallback.
-        // Ad-hoc signed apps (dev builds) get wallpaper-only from screen
-        // capture. Window capture reliably returns the active app content.
-        // Production builds with stable signatures work fine either way.
+      // ── Multi-Monitor Path ──
+      // When multi-monitor is enabled AND there are 2+ displays, capture
+      // each display individually and upload as separate screenshots
+      // (Hubstaff-style per-display capture).
+      if (hasMultipleDisplays && multiMonitorEnabled) {
+        console.log(`[SS] Multi-monitor: capturing ${displays.length} displays individually`);
+        const capturedDisplays = await this._captureAllDisplays(screenSources, windowSources, displays);
 
-        // Try window capture first (captures frontmost/active window)
-        if (windowSources.length > 0) {
-          console.log(`[SS] macOS: trying window capture first (${windowSources.length} windows)`);
-          buffer = this._captureActiveWindow(windowSources);
-          if (buffer) {
-            console.log(`[SS] macOS window capture succeeded (${Math.round(buffer.length / 1024)}KB)`);
-          }
+        const successCount = capturedDisplays.filter(d => d !== null).length;
+        if (successCount === 0) {
+          this._capturing = false;
+          this._handleCaptureFailure('Multi-monitor capture returned no valid content from any display');
+          if (isMac) this._showPermissionDialog(true);
+          return;
         }
 
-        // Fallback: screen capture (may return wallpaper-only on ad-hoc signed apps)
-        if (!buffer && screenSources.length > 0) {
-          buffer = this._captureSingleMonitor(screenSources);
-          if (buffer) {
-            console.log(`[SS] macOS screen capture fallback (${Math.round(buffer.length / 1024)}KB)`);
+        console.log(`[SS] Multi-monitor: ${successCount}/${displays.length} displays captured`);
+
+        // Upload each display's screenshot individually with display metadata
+        if (this.currentEntryId) {
+          for (let i = 0; i < capturedDisplays.length; i++) {
+            if (capturedDisplays[i]) {
+              const displayInfo = { display_index: i, display_count: displays.length };
+              await this.upload(capturedDisplays[i], displayInfo);
+            }
           }
+          this._showNotification();
+          this._consecutiveFailures = 0;
         }
       } else {
-        // ── Windows / Linux: Screen capture works perfectly ──
-        if (screenSources.length > 1 && this.config.capture_multi_monitor === true) {
-          console.log(`[SS] Multi-monitor: compositing ${screenSources.length} screens`);
-          buffer = await this._captureMultiMonitor(screenSources);
-        } else if (screenSources.length > 1) {
-          console.log(`[SS] Finding active screen among ${screenSources.length}`);
-          buffer = this._captureActiveScreen(screenSources);
+        // ── Single Monitor / Multi-Monitor Disabled Path ──
+        // Original behavior: capture the active screen/window only
+        let buffer = null;
+
+        if (isMac) {
+          // ── macOS Capture Strategy ──
+          //
+          // Use desktopCapturer ONLY — never call screencapture CLI.
+          //
+          // IMPORTANT: Window capture FIRST, screen capture fallback.
+          // Ad-hoc signed apps (dev builds) get wallpaper-only from screen
+          // capture. Window capture reliably returns the active app content.
+          // Production builds with stable signatures work fine either way.
+
+          // Try window capture first (captures frontmost/active window)
+          if (windowSources.length > 0) {
+            console.log(`[SS] macOS: trying window capture first (${windowSources.length} windows)`);
+            buffer = this._captureActiveWindow(windowSources);
+            if (buffer) {
+              console.log(`[SS] macOS window capture succeeded (${Math.round(buffer.length / 1024)}KB)`);
+            }
+          }
+
+          // Fallback: screen capture (may return wallpaper-only on ad-hoc signed apps)
+          if (!buffer && screenSources.length > 0) {
+            buffer = this._captureSingleMonitor(screenSources);
+            if (buffer) {
+              console.log(`[SS] macOS screen capture fallback (${Math.round(buffer.length / 1024)}KB)`);
+            }
+          }
         } else {
-          buffer = this._captureSingleMonitor(screenSources);
+          // ── Windows / Linux: Screen capture works perfectly ──
+          if (screenSources.length > 1) {
+            console.log(`[SS] Finding active screen among ${screenSources.length}`);
+            buffer = this._captureActiveScreen(screenSources);
+          } else {
+            buffer = this._captureSingleMonitor(screenSources);
+          }
         }
-      }
 
-      if (!buffer || buffer.length === 0) {
-        this._capturing = false;
-        this._handleCaptureFailure('Capture returned empty content despite permission appearing granted. Try: remove TrackFlow from Screen Recording, re-add, and restart.');
-        if (isMac) this._showPermissionDialog(true); // force=true: status may say 'granted' but capture is wallpaper-only
-        return;
-      }
+        if (!buffer || buffer.length === 0) {
+          this._capturing = false;
+          this._handleCaptureFailure('Capture returned empty content despite permission appearing granted. Try: remove TrackFlow from Screen Recording, re-add, and restart.');
+          if (isMac) this._showPermissionDialog(true); // force=true: status may say 'granted' but capture is wallpaper-only
+          return;
+        }
 
-      console.log(`[SS] Captured ${buffer.length} bytes (${Math.round(buffer.length / 1024)}KB)`);
+        console.log(`[SS] Captured ${buffer.length} bytes (${Math.round(buffer.length / 1024)}KB)`);
 
-      // NOTE: Client-side blur removed (SS-11). The server's ProcessScreenshotJob
-      // already applies blur when blur_screenshots is enabled. Having both client
-      // and server blur causes double-blurring that makes images unusable.
-      // The _applyBlur() method is kept below for potential future use.
+        // NOTE: Client-side blur removed (SS-11). The server's ProcessScreenshotJob
+        // already applies blur when blur_screenshots is enabled. Having both client
+        // and server blur causes double-blurring that makes images unusable.
+        // The _applyBlur() method is kept below for potential future use.
 
-      if (this.currentEntryId) {
-        await this.upload(buffer);
-        this._showNotification();
-        this._consecutiveFailures = 0;
+        if (this.currentEntryId) {
+          await this.upload(buffer);
+          this._showNotification();
+          this._consecutiveFailures = 0;
+        }
       }
     } catch (e) {
       this._handleCaptureFailure(`Exception: ${e.message}`);
@@ -371,6 +416,141 @@ class ScreenshotService {
 
     console.log(`[SS] Captured active window "${activeWindow.name}" (${size.width}x${size.height}, ${Math.round(buffer.length / 1024)}KB)`);
     return buffer;
+  }
+
+  // ── Per-Display Multi-Monitor Capture ────────────────────────────
+  //
+  // Hubstaff-style: capture each connected display individually so the
+  // backend receives one screenshot per display per interval.
+  //
+  // On macOS, screen sources may return wallpaper-only (ad-hoc signing bug).
+  // For each display that fails screen capture we attempt to find an
+  // application window positioned on that display as a fallback.
+
+  async _captureAllDisplays(screenSources, windowSources, displays) {
+    const isMac = process.platform === 'darwin';
+    const results = new Array(displays.length).fill(null);
+
+    for (let i = 0; i < displays.length; i++) {
+      const display = displays[i];
+      const matchedSource = this._matchSourceToDisplay(screenSources, display, displays);
+
+      let buffer = null;
+
+      if (matchedSource) {
+        const image = matchedSource.thumbnail;
+        if (image && !image.isEmpty()) {
+          const size = image.getSize();
+          if (size.width > 0 && size.height > 0) {
+            buffer = image.toJPEG(80);
+            // Content validation: wallpaper-only images compress to < 15KB
+            if (buffer.length < 15000) {
+              console.warn(`[SS] Display ${i} ("${matchedSource.name}") thumbnail too small (${buffer.length} bytes) — likely wallpaper-only`);
+              buffer = null;
+            }
+          }
+        }
+      }
+
+      // macOS fallback: if screen source failed, try to find windows on this display
+      if (!buffer && isMac && windowSources.length > 0) {
+        buffer = this._captureWindowsOnDisplay(windowSources, display, i);
+      }
+
+      if (buffer) {
+        console.log(`[SS] Display ${i}: captured ${Math.round(buffer.length / 1024)}KB (${display.size.width}x${display.size.height})`);
+      } else {
+        console.warn(`[SS] Display ${i}: capture failed (${display.size.width}x${display.size.height})`);
+      }
+
+      results[i] = buffer;
+    }
+
+    return results;
+  }
+
+  // Match a desktopCapturer screen source to an Electron display object.
+  //
+  // macOS:         source.display_id === display.id.toString()
+  // Windows/Linux: source.id pattern "screen:N:0" maps to display index
+
+  _matchSourceToDisplay(screenSources, display, allDisplays) {
+    // macOS: match by display_id
+    if (process.platform === 'darwin') {
+      const match = screenSources.find(s => s.display_id === display.id.toString());
+      if (match) return match;
+    }
+
+    // Windows/Linux: match by index in source.id ("screen:N:0")
+    const displayIndex = allDisplays.findIndex(d => d.id === display.id);
+    if (displayIndex >= 0) {
+      for (const s of screenSources) {
+        const idMatch = s.id.match(/screen:(\d+):/);
+        if (idMatch && parseInt(idMatch[1]) === displayIndex) {
+          return s;
+        }
+      }
+      // Fallback: sources ordered same as displays
+      if (displayIndex < screenSources.length) {
+        return screenSources[displayIndex];
+      }
+    }
+
+    return null;
+  }
+
+  // macOS fallback: find application windows positioned on a specific display.
+  // Used when screen capture returns wallpaper-only for that display.
+
+  _captureWindowsOnDisplay(windowSources, display, displayIndex) {
+    const skipPatterns = [
+      'TrackFlow', 'Notification Center', 'Dock', 'WindowServer',
+      'StatusBar', 'Control Center', 'Spotlight', 'Item-0',
+    ];
+
+    // Display bounds — a window is "on" this display if its center falls within
+    const db = display.bounds;
+
+    // Filter windows to those on this display
+    // NOTE: desktopCapturer does not expose window position directly; we cannot
+    // reliably determine which display a window is on from desktopCapturer alone.
+    // On macOS, BrowserWindow.getAllWindows() only lists OUR windows.
+    //
+    // Best-effort: for display 0 (primary / first), use the frontmost window.
+    // For secondary displays, try screen source first (already attempted above).
+    // This is an inherent Electron limitation — full per-display window mapping
+    // would require native macOS APIs (CGWindowListCopyWindowInfo) which are not
+    // exposed through Electron's sandboxed context.
+
+    if (displayIndex === 0) {
+      // Primary display: use the standard active-window capture
+      return this._captureActiveWindow(windowSources);
+    }
+
+    // Secondary displays: try each valid window that hasn't been used.
+    // Since we can't determine position, we return the first valid window
+    // that passes content validation. This is a best-effort fallback;
+    // proper screen capture (production-signed apps) is the reliable path.
+    const validWindows = windowSources.filter(s => {
+      const name = s.name || '';
+      if (skipPatterns.some(skip => name.includes(skip))) return false;
+      if (!s.thumbnail || s.thumbnail.isEmpty()) return false;
+      const size = s.thumbnail.getSize();
+      return size.width > 200 && size.height > 200;
+    });
+
+    // Skip the first window (already used for display 0) and try the rest
+    for (let i = 1; i < validWindows.length; i++) {
+      const win = validWindows[i];
+      const buffer = win.thumbnail.toJPEG(80);
+      if (buffer.length >= 15000) {
+        console.log(`[SS] Display ${displayIndex}: using window fallback "${win.name}" (${Math.round(buffer.length / 1024)}KB)`);
+        return buffer;
+      }
+    }
+
+    console.warn(`[SS] Display ${displayIndex}: no valid window fallback available`);
+    return null;
   }
 
   // ── Active Screen Detection ──────────────────────────────────────
@@ -598,7 +778,7 @@ class ScreenshotService {
 
   // ── Upload with retry ────────────────────────────────────────────
 
-  async upload(buffer) {
+  async upload(buffer, displayInfo = null) {
     // Get current app context for this screenshot
     let appName = null;
     let windowTitle = null;
@@ -609,26 +789,28 @@ class ScreenshotService {
       }
     } catch {}
 
-    let formData = this._buildFormData(buffer, appName, windowTitle);
+    const displayLabel = displayInfo ? ` [display ${displayInfo.display_index}/${displayInfo.display_count}]` : '';
+
+    let formData = this._buildFormData(buffer, appName, windowTitle, displayInfo);
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         await this.apiClient.uploadScreenshot(formData);
-        console.log(`[SS] Uploaded successfully on attempt ${attempt} (${Math.round(buffer.length / 1024)}KB)`);
+        console.log(`[SS] Uploaded successfully${displayLabel} on attempt ${attempt} (${Math.round(buffer.length / 1024)}KB)`);
         return;
       } catch (e) {
-        console.warn(`[SS] Upload attempt ${attempt}/3 failed: ${e.message}`);
+        console.warn(`[SS] Upload attempt ${attempt}/3 failed${displayLabel}: ${e.message}`);
         if (attempt < 3) {
           await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
           // Rebuild FormData for retry (streams are consumed)
-          formData = this._buildFormData(buffer, appName, windowTitle);
+          formData = this._buildFormData(buffer, appName, windowTitle, displayInfo);
         }
       }
     }
     // All retries failed — queue for offline
-    this._queueForOffline(buffer, appName, windowTitle);
+    this._queueForOffline(buffer, appName, windowTitle, displayInfo);
   }
 
-  _buildFormData(buffer, appName = null, windowTitle = null) {
+  _buildFormData(buffer, appName = null, windowTitle = null, displayInfo = null) {
     const formData = new FormData();
     formData.append('file', buffer, {
       filename: `screenshot_${Date.now()}.jpg`,
@@ -645,10 +827,16 @@ class ScreenshotService {
       formData.append('activity_score', String(score));
     }
 
+    // Multi-monitor metadata: display index (0-based) and total display count
+    if (displayInfo) {
+      formData.append('display_index', String(displayInfo.display_index));
+      formData.append('display_count', String(displayInfo.display_count));
+    }
+
     return formData;
   }
 
-  _queueForOffline(buffer, appName = null, windowTitle = null) {
+  _queueForOffline(buffer, appName = null, windowTitle = null, displayInfo = null) {
     if (buffer.length < 1024 * 1024) {
       const data = {
         buffer: buffer,
@@ -657,8 +845,12 @@ class ScreenshotService {
       };
       if (appName) data.app_name = appName;
       if (windowTitle) data.window_title = windowTitle;
+      if (displayInfo) {
+        data.display_index = displayInfo.display_index;
+        data.display_count = displayInfo.display_count;
+      }
       this.offlineQueue.add('screenshot', data);
-      console.log('[SS] Queued for offline sync');
+      console.log(`[SS] Queued for offline sync${displayInfo ? ` [display ${displayInfo.display_index}]` : ''}`);
     } else {
       console.warn(`[SS] Too large for offline queue (${Math.round(buffer.length / 1024)}KB), skipping`);
     }
