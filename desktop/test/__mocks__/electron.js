@@ -69,7 +69,11 @@ const contextBridge = {
 };
 
 const shell = {
-  openExternal: jest.fn(),
+  openExternal: jest.fn().mockResolvedValue(),
+};
+
+const dialog = {
+  showMessageBox: jest.fn().mockResolvedValue({ response: 1 }),
 };
 
 const Notification = jest.fn().mockImplementation(() => ({
@@ -87,8 +91,12 @@ const desktopCapturer = {
 };
 
 const screen = {
+  getCursorScreenPoint: jest.fn(() => ({ x: 500, y: 500 })),
   getDisplayNearestPoint: jest.fn(() => ({
     workArea: { x: 0, y: 0, width: 1920, height: 1080 },
+    size: { width: 1920, height: 1080 },
+    bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+    id: 1,
   })),
   getPrimaryDisplay: jest.fn(() => ({
     size: { width: 1920, height: 1080 },
@@ -126,6 +134,7 @@ module.exports = {
   ipcRenderer,
   contextBridge,
   shell,
+  dialog,
   Notification,
   powerMonitor,
   desktopCapturer,
