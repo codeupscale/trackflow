@@ -156,7 +156,6 @@
     // Apply shortcut hints
     document.getElementById('logoutBtn').title = `Sign out (${modKey}+Q)`;
 
-    let timerInterval = null;
     let elapsedSeconds = 0;
     let todayTotalBase = 0;
     let isRunning = false;
@@ -218,16 +217,25 @@
       startBtn.disabled = isRunning;
     }
 
+    // The main process is the single source of truth for elapsed time.
+    // It computes the total seconds on each tick and broadcasts to both
+    // the tray title and the renderer via IPC, keeping them perfectly in sync.
+    let _tickListenerRegistered = false;
+
     function startTicking() {
-      if (timerInterval) clearInterval(timerInterval);
-      timerInterval = setInterval(() => {
-        elapsedSeconds = todayTotalBase + calcElapsedFromStartedAt();
-        timerDisplay.textContent = formatTime(elapsedSeconds);
-      }, 1000);
+      // Register the tick listener once; main process drives updates via timer-tick IPC
+      if (!_tickListenerRegistered) {
+        _tickListenerRegistered = true;
+        window.trackflow.onTimerTick((data) => {
+          if (!isRunning) return;
+          elapsedSeconds = data.totalSeconds;
+          timerDisplay.textContent = data.formatted;
+        });
+      }
     }
 
     function stopTicking() {
-      if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+      // No interval to clear — main process stops sending ticks when timer stops
     }
 
     async function syncTimerState() {
