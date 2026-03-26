@@ -116,7 +116,7 @@ export const useAuthStore = create<AuthState>()(
         // Fetch user profile after setting tokens
         api.get('/auth/me').then((res) => {
           const user = res.data.user;
-          identifyUser(user.id, user.email, user.name, user.organization?.name);
+          identifyUser(user);
           set({ user, isAuthenticated: true });
         }).catch(() => {});
       },
