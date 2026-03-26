@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   FolderOpen,
@@ -10,8 +10,6 @@ import {
   Archive,
   Pencil,
   Trash2,
-  Clock,
-  DollarSign,
   Users,
   Search,
   ChevronLeft,
@@ -69,7 +67,6 @@ interface Project {
   hourly_rate: number | null;
   is_archived: boolean;
   tasks: Task[];
-  total_hours: number;
   created_at: string;
 }
 
@@ -93,43 +90,42 @@ export default function ProjectsPage() {
   const [formRate, setFormRate] = useState('');
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const PROJECTS_PER_PAGE = 12;
+  const PER_PAGE = 12;
 
   const canCreateProjects = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
   const canUpdateProjects = canCreateProjects;
   const canDeleteProjects = user?.role === 'owner' || user?.role === 'admin';
-  const canManageMembers = canUpdateProjects; // backend uses ProjectPolicy::update
+  const canManageMembers = canUpdateProjects;
 
-  const { data: allProjects, isLoading, isError: isProjectsError } = useQuery<Project[]>({
-    queryKey: ['projects'],
+  // Debounce search to avoid hammering backend
+  const debounceTimer = useState<NodeJS.Timeout | null>(null);
+  const handleSearch = useCallback((value: string) => {
+    setSearchQuery(value);
+    if (debounceTimer[0]) clearTimeout(debounceTimer[0]);
+    debounceTimer[0] = setTimeout(() => {
+      setDebouncedSearch(value);
+      setCurrentPage(1);
+    }, 300);
+  }, [debounceTimer]);
+
+  // Server-side search + pagination
+  const { data: paginatedData, isLoading, isError: isProjectsError } = useQuery({
+    queryKey: ['projects', currentPage, debouncedSearch],
     queryFn: async () => {
-      const res = await api.get('/projects', { params: { per_page: 200 } });
-      return res.data.projects || res.data.data || res.data;
+      const params: Record<string, string | number> = { per_page: PER_PAGE, page: currentPage };
+      if (debouncedSearch.trim()) params.search = debouncedSearch.trim();
+      const res = await api.get('/projects', { params });
+      return res.data;
     },
   });
 
-  // Client-side search + pagination
-  const filteredProjects = useMemo(() => {
-    if (!allProjects) return [];
-    if (!searchQuery.trim()) return allProjects;
-    const q = searchQuery.toLowerCase();
-    return allProjects.filter(
-      (p) => p.name.toLowerCase().includes(q) || (p.billable && 'billable'.includes(q)) || (p.is_archived && 'archived'.includes(q))
-    );
-  }, [allProjects, searchQuery]);
-
-  const totalPages = Math.ceil(filteredProjects.length / PROJECTS_PER_PAGE);
-  const projects = filteredProjects.slice(
-    (currentPage - 1) * PROJECTS_PER_PAGE,
-    currentPage * PROJECTS_PER_PAGE
-  );
-
-  // Reset page when search changes
-  const handleSearch = (value: string) => {
-    setSearchQuery(value);
-    setCurrentPage(1);
-  };
+  const projects: Project[] = paginatedData?.data || [];
+  const totalPages = paginatedData?.last_page || 1;
+  const totalCount = paginatedData?.total || 0;
+  const from = paginatedData?.from || 0;
+  const to = paginatedData?.to || 0;
 
   const { data: orgUsers } = useQuery<MemberUser[]>({
     queryKey: ['org-users'],
@@ -405,8 +401,8 @@ export default function ProjectsPage() {
                     <span>{project.tasks?.length || 0} tasks</span>
                   </div>
                   <div className="flex items-center gap-1.5 text-muted-foreground">
-                    <Clock className="h-3.5 w-3.5" />
-                    <span>{(project.total_hours || 0).toFixed(1)}h</span>
+                    <Users className="h-3.5 w-3.5" />
+                    <span>{(project as Record<string, unknown>).members_count ?? 0} members</span>
                   </div>
                 </div>
 
@@ -452,7 +448,7 @@ export default function ProjectsPage() {
       {totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted-foreground">
-            Showing {(currentPage - 1) * PROJECTS_PER_PAGE + 1}–{Math.min(currentPage * PROJECTS_PER_PAGE, filteredProjects.length)} of {filteredProjects.length} projects
+            Showing {from}–{to} of {totalCount} projects
           </p>
           <div className="flex items-center gap-2">
             <Button

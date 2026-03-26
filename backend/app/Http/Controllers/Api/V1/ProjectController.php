@@ -14,15 +14,30 @@ class ProjectController extends Controller
         $user = $request->user();
         $query = $user->organization->projects()
             ->with('tasks')
-            ->withSum('timeEntries as total_duration_seconds', 'duration_seconds')
-            ->where('is_archived', false);
+            ->withCount('members');
+
+        // Search
+        if ($search = $request->input('search')) {
+            $query->where('name', 'ilike', '%' . $search . '%');
+        }
+
+        // Archive filter (default: hide archived)
+        if ($request->input('include_archived')) {
+            // show all
+        } else {
+            $query->where('is_archived', false);
+        }
 
         // Employees see only projects they are assigned to (unless org setting allows "see all").
         if ($user->isEmployee() && ! $user->organization->getSetting('employees_see_all_projects', false)) {
             $query->whereHas('members', fn ($q) => $q->where('user_id', $user->id));
         }
 
-        $projects = $query->paginate(50);
+        $query->orderBy('name');
+
+        $perPage = min((int) $request->input('per_page', 12), 100);
+        $projects = $query->paginate($perPage);
+
         return response()->json($projects);
     }
 
