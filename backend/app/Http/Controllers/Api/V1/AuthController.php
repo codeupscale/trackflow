@@ -198,6 +198,94 @@ class AuthController extends Controller
         return response()->json(['message' => 'Password has been reset.']);
     }
 
+    /** AUTH-09: Google OAuth — verify ID token and login/register */
+    public function googleAuth(Request $request): JsonResponse
+    {
+        $request->validate([
+            'id_token' => 'required|string',
+        ]);
+
+        $clientId = config('services.google.client_id');
+        if (empty($clientId)) {
+            return response()->json(['message' => 'Google login is not configured.'], 503);
+        }
+
+        // Verify the Google ID token via Google's tokeninfo endpoint
+        $response = \Illuminate\Support\Facades\Http::get('https://oauth2.googleapis.com/tokeninfo', [
+            'id_token' => $request->id_token,
+        ]);
+
+        if ($response->failed()) {
+            return response()->json(['message' => 'Invalid Google token.'], 401);
+        }
+
+        $payload = $response->json();
+
+        // Verify audience matches our client ID
+        if (($payload['aud'] ?? '') !== $clientId) {
+            return response()->json(['message' => 'Token was not issued for this application.'], 401);
+        }
+
+        $email = $payload['email'] ?? null;
+        $name = $payload['name'] ?? ($payload['given_name'] ?? 'User');
+        $googleId = $payload['sub'] ?? null;
+        $avatarUrl = $payload['picture'] ?? null;
+
+        if (!$email || !$googleId) {
+            return response()->json(['message' => 'Could not retrieve email from Google.'], 422);
+        }
+
+        // Strategy:
+        // 1. User exists with same sso_provider_id → login (returning user)
+        // 2. User exists with same email → link Google account + login
+        // 3. No user exists → this is an employee invited via email, or unauthorized
+        //    (only owners can register new orgs — employees must be invited first)
+
+        $user = User::where('sso_provider', 'google')
+            ->where('sso_provider_id', $googleId)
+            ->first();
+
+        if (!$user) {
+            // Check if email exists (invited user or existing account)
+            $user = User::where('email', $email)->first();
+
+            if ($user) {
+                // Link Google to existing account
+                $user->update([
+                    'sso_provider' => 'google',
+                    'sso_provider_id' => $googleId,
+                    'avatar_url' => $user->avatar_url ?: $avatarUrl,
+                    'email_verified_at' => $user->email_verified_at ?: now(),
+                ]);
+            } else {
+                // No account exists — reject (employees must be invited first)
+                return response()->json([
+                    'message' => 'No account found with this email. Ask your admin to invite you first.',
+                ], 404);
+            }
+        }
+
+        if (!$user->is_active) {
+            return response()->json(['message' => 'Your account has been deactivated.'], 403);
+        }
+
+        // Clean expired tokens
+        $user->tokens()->where('expires_at', '<', now())->delete();
+
+        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
+        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+
+        $user->update(['last_active_at' => now()]);
+        AuditService::log('auth.login', $user, ['method' => 'google'], $user);
+
+        return response()->json([
+            'user' => $this->userResponse($user),
+            'access_token' => $token->plainTextToken,
+            'refresh_token' => $refreshToken->plainTextToken,
+            'token_type' => 'Bearer',
+        ]);
+    }
+
     /** AUTH-07: Get current user */
     public function me(Request $request): JsonResponse
     {
