@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   FolderOpen,
@@ -13,6 +13,9 @@ import {
   Clock,
   DollarSign,
   Users,
+  Search,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -89,18 +92,44 @@ export default function ProjectsPage() {
   const [formBillable, setFormBillable] = useState(false);
   const [formRate, setFormRate] = useState('');
 
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const PROJECTS_PER_PAGE = 12;
+
   const canCreateProjects = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
   const canUpdateProjects = canCreateProjects;
   const canDeleteProjects = user?.role === 'owner' || user?.role === 'admin';
   const canManageMembers = canUpdateProjects; // backend uses ProjectPolicy::update
 
-  const { data: projects, isLoading, isError: isProjectsError } = useQuery<Project[]>({
+  const { data: allProjects, isLoading, isError: isProjectsError } = useQuery<Project[]>({
     queryKey: ['projects'],
     queryFn: async () => {
-      const res = await api.get('/projects');
+      const res = await api.get('/projects', { params: { per_page: 200 } });
       return res.data.projects || res.data.data || res.data;
     },
   });
+
+  // Client-side search + pagination
+  const filteredProjects = useMemo(() => {
+    if (!allProjects) return [];
+    if (!searchQuery.trim()) return allProjects;
+    const q = searchQuery.toLowerCase();
+    return allProjects.filter(
+      (p) => p.name.toLowerCase().includes(q) || (p.billable && 'billable'.includes(q)) || (p.is_archived && 'archived'.includes(q))
+    );
+  }, [allProjects, searchQuery]);
+
+  const totalPages = Math.ceil(filteredProjects.length / PROJECTS_PER_PAGE);
+  const projects = filteredProjects.slice(
+    (currentPage - 1) * PROJECTS_PER_PAGE,
+    currentPage * PROJECTS_PER_PAGE
+  );
+
+  // Reset page when search changes
+  const handleSearch = (value: string) => {
+    setSearchQuery(value);
+    setCurrentPage(1);
+  };
 
   const { data: orgUsers } = useQuery<MemberUser[]>({
     queryKey: ['org-users'],
@@ -247,6 +276,17 @@ export default function ProjectsPage() {
             New Project
           </Button>
         )}
+      </div>
+
+      {/* Search */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Input
+          placeholder="Search projects..."
+          value={searchQuery}
+          onChange={(e) => handleSearch(e.target.value)}
+          className="pl-9 bg-card border-border text-foreground placeholder:text-muted-foreground"
+        />
       </div>
 
       {/* Projects Grid */}
@@ -405,6 +445,46 @@ export default function ProjectsPage() {
               </CardContent>
             </Card>
           ))}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">
+            Showing {(currentPage - 1) * PROJECTS_PER_PAGE + 1}–{Math.min(currentPage * PROJECTS_PER_PAGE, filteredProjects.length)} of {filteredProjects.length} projects
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="border-border text-foreground"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+              <Button
+                key={page}
+                variant={page === currentPage ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setCurrentPage(page)}
+                className={page === currentPage ? 'bg-blue-600 text-white' : 'border-border text-foreground'}
+              >
+                {page}
+              </Button>
+            ))}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="border-border text-foreground"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       )}
 
