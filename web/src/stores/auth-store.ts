@@ -40,6 +40,7 @@ interface AuthState {
   logout: () => Promise<void>;
   fetchUser: () => Promise<void>;
   setUser: (user: User) => void;
+  setTokens: (accessToken: string, refreshToken: string) => void;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -106,6 +107,19 @@ export const useAuthStore = create<AuthState>()(
       },
 
       setUser: (user: User) => set({ user, isAuthenticated: true }),
+
+      setTokens: (accessToken: string, refreshToken: string) => {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('access_token', accessToken);
+          localStorage.setItem('refresh_token', refreshToken);
+        }
+        // Fetch user profile after setting tokens
+        api.get('/auth/me').then((res) => {
+          const user = res.data.user;
+          identifyUser(user.id, user.email, user.name, user.organization?.name);
+          set({ user, isAuthenticated: true });
+        }).catch(() => {});
+      },
     }),
     {
       name: 'auth-storage',

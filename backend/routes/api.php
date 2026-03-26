@@ -26,6 +26,7 @@ Route::prefix('v1')->group(function () {
         Route::post('login', [AuthController::class, 'login']);
         Route::post('forgot-password', [AuthController::class, 'forgotPassword']);
         Route::post('reset-password', [AuthController::class, 'resetPassword']);
+        Route::post('google', [AuthController::class, 'googleAuth']);
     });
 
     // SAML2 SSO endpoints (public — IdP-initiated)
