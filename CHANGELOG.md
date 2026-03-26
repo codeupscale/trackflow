@@ -1,6 +1,8 @@
 # Release Notes
 
-## [Unreleased](https://github.com/laravel/laravel/compare/v1.0.13...main)
+## [Unreleased](https://github.com/laravel/laravel/compare/v1.0.16...main)
+
+## [v1.0.16](https://github.com/laravel/laravel/compare/v1.0.13...v1.0.16) - 2026-03-25
 
 ## [v1.0.13](https://github.com/laravel/laravel/compare/v12.12.0...v1.0.13) - 2026-03-18
 
@@ -40,6 +42,7 @@
 ```bash
 chmod +x TrackFlow-1.0.13-x86_64.AppImage
 ./TrackFlow-1.0.13-x86_64.AppImage
+
 
 
 ```
