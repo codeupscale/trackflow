@@ -134,6 +134,118 @@
     .permission-banner-btn:hover {
       background: rgba(234, 179, 8, 0.25);
     }
+
+    /* ── Update Dialog Overlay ────────────────────────────── */
+    .update-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      align-items: center;
+      justify-content: center;
+      animation: updateFadeIn 0.25s ease-out;
+    }
+    .update-overlay.visible {
+      display: flex;
+    }
+    @keyframes updateFadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    @keyframes updateCardIn {
+      from { opacity: 0; transform: scale(0.92) translateY(8px); }
+      to   { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    .update-card {
+      background: var(--bg-secondary, #171717);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 24px;
+      max-width: 340px;
+      width: calc(100% - 32px);
+      text-align: center;
+      animation: updateCardIn 0.3s ease-out;
+    }
+    .update-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: rgba(59, 130, 246, 0.15);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 16px;
+    }
+    .update-icon svg {
+      color: #3b82f6;
+    }
+    .update-title {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text-primary, #fff);
+      margin-bottom: 8px;
+    }
+    .update-body {
+      font-size: 13px;
+      color: var(--text-secondary, #a3a3a3);
+      line-height: 1.5;
+      margin-bottom: 20px;
+    }
+    .update-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .update-btn-primary {
+      width: 100%;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      background: #3b82f6;
+      color: #fff;
+      transition: background 0.15s;
+    }
+    .update-btn-primary:hover {
+      background: #2563eb;
+    }
+    .update-btn-secondary {
+      width: 100%;
+      padding: 10px 16px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      background: transparent;
+      color: var(--text-secondary, #a3a3a3);
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .update-btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+    /* Update badge — shows after dismissing the dialog */
+    .update-badge {
+      display: none;
+      position: absolute;
+      top: 7px;
+      right: 40px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #3b82f6;
+      cursor: pointer;
+      animation: pulse 2s infinite;
+    }
+    .update-badge.visible {
+      display: block;
+    }
   </style>
 </head>
 <body>
@@ -142,6 +254,7 @@
     <div class="titlebar" id="titlebar">
       <span class="titlebar-title">TrackFlow</span>
       <div class="titlebar-controls">
+        <span class="update-badge" id="updateBadge" title="Update available — click to show"></span>
         <button class="titlebar-btn" id="logoutBtn" title="Sign out">
           <!-- Logout icon (SVG) -->
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
@@ -184,6 +297,21 @@
       <div class="footer">
         <a id="dashboardLink" class="link-primary" tabindex="0" role="link">Open Dashboard</a>
         <a id="logoutLink" tabindex="0" role="link" class="text-muted text-xs">Sign out</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Update Available Dialog -->
+  <div class="update-overlay" id="updateOverlay" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+    <div class="update-card">
+      <div class="update-icon" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+      </div>
+      <div class="update-title" id="updateTitle">Update Available</div>
+      <div class="update-body" id="updateBody">A new version is ready to install. Restart now to get the latest features and bug fixes.</div>
+      <div class="update-actions">
+        <button class="update-btn-primary" id="updateRestartBtn">Restart Now</button>
+        <button class="update-btn-secondary" id="updateLaterBtn">Later</button>
       </div>
     </div>
   </div>
@@ -510,6 +638,51 @@
     });
 
     window.trackflow.onSyncTimer(() => syncTimerState());
+
+    // ── Update Dialog Logic ──
+    const updateOverlay = document.getElementById('updateOverlay');
+    const updateBody = document.getElementById('updateBody');
+    const updateRestartBtn = document.getElementById('updateRestartBtn');
+    const updateLaterBtn = document.getElementById('updateLaterBtn');
+    const updateBadge = document.getElementById('updateBadge');
+    let _pendingUpdateVersion = null;
+
+    function showUpdateDialog(version) {
+      _pendingUpdateVersion = version;
+      updateBody.textContent = `TrackFlow v${version} is ready to install. Restart now to get the latest features and bug fixes.`;
+      updateOverlay.classList.add('visible');
+      updateRestartBtn.focus();
+    }
+
+    function hideUpdateDialog() {
+      updateOverlay.classList.remove('visible');
+      // Show the badge so the user can reopen the dialog
+      if (_pendingUpdateVersion) {
+        updateBadge.classList.add('visible');
+        updateBadge.title = `Update v${_pendingUpdateVersion} available \u2014 click to show`;
+      }
+    }
+
+    updateRestartBtn.addEventListener('click', () => {
+      updateRestartBtn.disabled = true;
+      updateRestartBtn.textContent = 'Restarting\u2026';
+      window.trackflow.installUpdate();
+    });
+
+    updateLaterBtn.addEventListener('click', () => {
+      hideUpdateDialog();
+    });
+
+    updateBadge.addEventListener('click', () => {
+      if (_pendingUpdateVersion) showUpdateDialog(_pendingUpdateVersion);
+    });
+
+    // Listen for update-ready IPC from main process
+    window.trackflow.onUpdateReady((data) => {
+      if (data && data.version) {
+        showUpdateDialog(data.version);
+      }
+    });
 
     window.addEventListener('error', (e) => console.error('Renderer error:', e.message));
     window.addEventListener('unhandledrejection', (e) => console.error('Renderer unhandled rejection:', e.reason));

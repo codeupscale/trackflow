@@ -43,4 +43,8 @@ contextBridge.exposeInMainWorld('trackflow', {
   onTimerTick: (callback) => safeOn('timer-tick', (_, data) => callback(data)),
   onSyncTimer: (callback) => safeOn('sync-timer', () => callback()),
   onIdleData: (callback) => safeOn('idle-data', (_, data) => callback(data)),
+
+  // Auto-update
+  onUpdateReady: (callback) => safeOn('update-ready', (_, data) => callback(data)),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
 });
