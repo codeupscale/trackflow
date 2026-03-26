@@ -402,7 +402,7 @@ export default function ProjectsPage() {
                   </div>
                   <div className="flex items-center gap-1.5 text-muted-foreground">
                     <Users className="h-3.5 w-3.5" />
-                    <span>{String((project as Record<string, unknown>).members_count ?? 0)} members</span>
+                    <span>{String((project as unknown as { members_count?: number }).members_count ?? 0)} members</span>
                   </div>
                 </div>
 
