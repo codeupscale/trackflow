@@ -51,6 +51,7 @@ class SettingsController extends Controller
             'settings.require_project' => 'sometimes|boolean',
             'settings.weekly_limit_hours' => 'sometimes|nullable|integer|min:0|max:168',
             'settings.employees_see_all_projects' => 'sometimes|boolean',
+            'settings.weekly_hours_target' => 'sometimes|integer|min:0|max:80',
         ]);
 
         $org = $request->user()->organization;
@@ -80,6 +81,7 @@ class SettingsController extends Controller
                 'require_project',
                 'weekly_limit_hours',
                 'employees_see_all_projects',
+                'weekly_hours_target',
             ]);
             $filteredSettings = array_intersect_key($request->settings, $allowedKeys);
             $org->settings = array_merge($currentSettings, $filteredSettings);

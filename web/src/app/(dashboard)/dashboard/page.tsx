@@ -63,6 +63,7 @@ interface DashboardData {
   isEmployeeView: boolean;
   timer: { elapsed_seconds: number } | null;
   weekSeconds: number;
+  weeklyHoursTarget: number; // 0 = disabled
 }
 
 type FilterPreset = 'today' | 'week' | 'custom';
@@ -147,6 +148,7 @@ export default function DashboardPage() {
           team: [],
           timer: raw.timer,
           weekSeconds: raw.week_seconds || 0,
+          weeklyHoursTarget: raw.weekly_hours_target || 0,
         };
       }
 
@@ -186,6 +188,7 @@ export default function DashboardPage() {
         team,
         timer: null,
         weekSeconds: 0,
+        weeklyHoursTarget: 0,
       };
     },
     refetchInterval: 30000,
@@ -269,8 +272,24 @@ export default function DashboardPage() {
             return `${h}h ${m}m`;
           })(),
           icon: TrendingUp,
-          color: 'text-purple-400',
-          bg: 'bg-purple-500/10',
+          color: (() => {
+            const target = data?.weeklyHoursTarget || 0;
+            if (!target) return 'text-purple-400';
+            const ws = data?.weekSeconds || 0;
+            const pct = ws / (target * 3600);
+            if (pct >= 1) return 'text-green-400';
+            if (pct >= 0.75) return 'text-blue-400';
+            return 'text-purple-400';
+          })(),
+          bg: (() => {
+            const target = data?.weeklyHoursTarget || 0;
+            if (!target) return 'bg-purple-500/10';
+            const ws = data?.weekSeconds || 0;
+            const pct = ws / (target * 3600);
+            if (pct >= 1) return 'bg-green-500/10';
+            if (pct >= 0.75) return 'bg-blue-500/10';
+            return 'bg-purple-500/10';
+          })(),
         },
       ]
     : [
@@ -372,6 +391,75 @@ export default function DashboardPage() {
           );
         })}
       </div>
+
+      {/* Weekly Hours Target — employee view only */}
+      {isEmployeeView && (data?.weeklyHoursTarget ?? 0) > 0 && (() => {
+        const target = data!.weeklyHoursTarget;
+        const targetSec = target * 3600;
+        const ws = data?.weekSeconds || 0;
+        const pct = Math.min(ws / targetSec, 1);
+        const completed = ws >= targetSec;
+        const remainSec = Math.max(0, targetSec - ws);
+        const remainH = Math.floor(remainSec / 3600);
+        const remainM = Math.round((remainSec % 3600) / 60);
+        const workedH = Math.floor(ws / 3600);
+        const workedM = Math.round((ws % 3600) / 60);
+
+        return (
+          <Card className={`border-border bg-card overflow-hidden ${completed ? 'ring-2 ring-green-500/30' : ''}`}>
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${completed ? 'bg-green-500/10' : 'bg-blue-500/10'}`}>
+                    {completed ? (
+                      <svg className="h-5 w-5 text-green-500" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    ) : (
+                      <TrendingUp className="h-5 w-5 text-blue-500" />
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-foreground">
+                      Weekly Target
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {target}h required (Mon – Sun)
+                    </p>
+                  </div>
+                </div>
+                {completed ? (
+                  <Badge className="bg-green-500/10 text-green-500 border-green-500/20 gap-1 px-3 py-1">
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+                    Goal Achieved
+                  </Badge>
+                ) : (
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {remainH}h {remainM}m remaining
+                  </span>
+                )}
+              </div>
+
+              {/* Progress bar */}
+              <div className="relative h-3 rounded-full bg-muted overflow-hidden">
+                <div
+                  className={`absolute inset-y-0 left-0 rounded-full transition-all duration-700 ease-out ${
+                    completed
+                      ? 'bg-gradient-to-r from-green-500 to-emerald-400'
+                      : pct >= 0.75
+                      ? 'bg-gradient-to-r from-blue-500 to-cyan-400'
+                      : 'bg-gradient-to-r from-purple-500 to-blue-500'
+                  }`}
+                  style={{ width: `${Math.round(pct * 100)}%` }}
+                />
+              </div>
+
+              <div className="flex items-center justify-between mt-2 text-xs text-muted-foreground tabular-nums">
+                <span>{workedH}h {workedM}m worked</span>
+                <span className="font-medium">{Math.round(pct * 100)}%</span>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Team activity table — only for admin/manager/owner */}
       {!isEmployeeView && (
