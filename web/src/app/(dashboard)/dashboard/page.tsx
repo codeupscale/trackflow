@@ -515,8 +515,10 @@ export default function DashboardPage() {
                       fontSize: '13px',
                       color: 'hsl(var(--foreground))',
                     }}
-                    formatter={(value: number) => [`${value}h`, 'Hours']}
-                    labelFormatter={(label: string, payload) => {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    formatter={(value: any) => [`${value}h`, 'Hours']}
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    labelFormatter={(label: any, payload: any) => {
                       if (payload?.[0]?.payload?.date) {
                         return format(new Date(payload[0].payload.date + 'T00:00:00'), 'EEE, MMM d');
                       }
