@@ -510,8 +510,20 @@ export default function DashboardPage() {
                   const heightPct = maxHours > 0 ? Math.max((entry.hours / maxHours) * 100, hasHours ? 4 : 0) : 0;
                   const isFuture = new Date(entry.date + 'T00:00:00') > new Date();
 
+                  const dayLabel = format(new Date(entry.date + 'T00:00:00'), 'EEE, MMM d');
+                  const hrs = Math.floor(entry.hours);
+                  const mins = Math.round((entry.hours - hrs) * 60);
+
                   return (
-                    <div key={entry.date} className="flex-1 flex flex-col items-center gap-1.5 group">
+                    <div key={entry.date} className="flex-1 flex flex-col items-center gap-1.5 group relative">
+                      {/* Tooltip on hover */}
+                      <div className="absolute -top-12 left-1/2 -translate-x-1/2 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
+                        <div className="bg-popover text-popover-foreground border border-border rounded-lg shadow-lg px-3 py-1.5 text-xs whitespace-nowrap">
+                          <div className="font-medium">{dayLabel}</div>
+                          <div className="text-muted-foreground">{hrs}h {mins}m worked</div>
+                        </div>
+                      </div>
+
                       {/* Hours label */}
                       <span className={`text-xs tabular-nums transition-opacity ${
                         hasHours ? 'text-foreground font-medium' : 'text-muted-foreground/50'
@@ -520,18 +532,18 @@ export default function DashboardPage() {
                       </span>
 
                       {/* Bar */}
-                      <div className="w-full relative" style={{ height: '120px' }}>
-                        <div className="absolute bottom-0 left-1 right-1 rounded-t-md transition-all duration-500 ease-out"
+                      <div className="w-full relative cursor-pointer" style={{ height: '120px' }}>
+                        <div className="absolute bottom-0 left-1 right-1 rounded-t-md transition-all duration-500 ease-out group-hover:scale-x-110"
                           style={{ height: `${heightPct}%`, minHeight: hasHours ? '4px' : '2px' }}
                         >
-                          <div className={`w-full h-full rounded-t-md ${
+                          <div className={`w-full h-full rounded-t-md transition-colors ${
                             isTodayBar
-                              ? 'bg-primary shadow-sm shadow-primary/25'
+                              ? 'bg-primary shadow-sm shadow-primary/25 group-hover:bg-primary/90'
                               : hasHours
-                                ? 'bg-primary/40 dark:bg-primary/30'
+                                ? 'bg-primary/40 dark:bg-primary/30 group-hover:bg-primary/60 dark:group-hover:bg-primary/50'
                                 : isFuture
                                   ? 'bg-muted/30'
-                                  : 'bg-muted/60'
+                                  : 'bg-muted/60 group-hover:bg-muted/80'
                           }`} />
                         </div>
 
