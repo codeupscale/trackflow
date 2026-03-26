@@ -21,6 +21,7 @@ class ActivityLog extends Model
         'logged_at',
         'keyboard_events',
         'mouse_events',
+        'active_seconds',
         'active_app',
         'active_window_title',
         'active_url',
@@ -32,6 +33,7 @@ class ActivityLog extends Model
             'logged_at' => 'datetime',
             'keyboard_events' => 'integer',
             'mouse_events' => 'integer',
+            'active_seconds' => 'integer',
         ];
     }
 

@@ -847,7 +847,7 @@ class ScreenshotService {
 
     // Attach point-in-time activity score (like Hubstaff)
     if (this.activityMonitor) {
-      const score = this.activityMonitor.getCurrentScore();
+      const score = this.activityMonitor.getScoreForScreenshot();
       formData.append('activity_score', String(score));
     }
 
