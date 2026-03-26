@@ -48,7 +48,10 @@ class ScreenshotController extends Controller
         }
 
         $org = $user->organization;
-        $date = now()->format('Y-m-d');
+        // Use captured_at date for storage path so screenshots are organized by capture date, not upload date
+        $date = $request->captured_at
+            ? \Carbon\Carbon::parse($request->captured_at)->format('Y-m-d')
+            : now()->format('Y-m-d');
         $filename = time() . '_' . Str::random(8) . '.jpg';
         $storageKey = "{$org->id}/{$user->id}/{$date}/{$filename}";
 

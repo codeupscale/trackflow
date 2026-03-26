@@ -46,14 +46,20 @@ api.interceptors.response.use(
       if (typeof window !== 'undefined') {
         window.location.href = '/settings/billing';
       }
-      return Promise.reject({ ...error, message: errorMessage });
+      const err402 = new Error(errorMessage);
+      (err402 as any).status = 402;
+      (err402 as any).data = error.response?.data;
+      return Promise.reject(err402);
     }
 
     // Handle forbidden (403)
     // Do NOT globally redirect on 403 because employees can legitimately hit 403
     // (e.g. trying to start a timer on an unassigned project). Let the caller decide.
     if (error.response?.status === 403) {
-      return Promise.reject({ ...error, message: errorMessage });
+      const err403 = new Error(errorMessage);
+      (err403 as any).status = 403;
+      (err403 as any).data = error.response?.data;
+      return Promise.reject(err403);
     }
 
     // Handle unauthorized (401) - refresh token or redirect to login
@@ -99,7 +105,11 @@ api.interceptors.response.use(
         }
       }
     }
-    return Promise.reject({ ...error, message: errorMessage });
+    // Construct a clean error to avoid circular reference issues with Axios error objects
+    const finalError = new Error(errorMessage);
+    (finalError as any).status = error.response?.status;
+    (finalError as any).data = error.response?.data;
+    return Promise.reject(finalError);
   }
 );
 

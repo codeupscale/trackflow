@@ -1467,6 +1467,10 @@ async function switchProject(projectId) {
     activityMonitor?.stop();
     activityMonitor?.start();
 
+    // Restart idle detector for the new entry (reset idle tracking state)
+    idleDetector?.stop();
+    idleDetector?.start();
+
     notifyPopup('timer-started', { ...newEntry, todayTotal: todayTotalCurrentProject });
     updateTrayTitle();
 
@@ -1552,7 +1556,7 @@ async function startTimer(projectId = null) {
   }
 }
 
-function stopTimer() {
+async function stopTimer() {
   const sessionElapsed = currentEntry && _cachedStartedAtMs
     ? Math.max(0, Math.floor((Date.now() - _cachedStartedAtMs) / 1000))
     : 0;
@@ -1568,9 +1572,34 @@ function stopTimer() {
   // This is critical: without it, 10-50% of activity in short sessions is lost
   // Skip heartbeat for zero-duration entries — there is no meaningful activity data.
   if (activityMonitor && !isZeroDurationEntry) {
-    activityMonitor.sendFinalHeartbeat().catch(() => {});
+    await activityMonitor.sendFinalHeartbeat().catch(() => {});
   }
 
+  // Server-first stop: call API before updating local state.
+  // If API fails, keep local state as running and show error notification.
+  // If API call times out (5s), stop locally anyway and queue for offline sync.
+  let serverResult = null;
+  let serverStopFailed = false;
+  try {
+    const stopPromise = apiClient.stopTimer();
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('API stop timeout')), 5000)
+    );
+    serverResult = await Promise.race([stopPromise, timeoutPromise]);
+  } catch (e) {
+    serverStopFailed = true;
+    if (e.message === 'API stop timeout') {
+      // Timeout: stop locally and let offline sync handle it
+      console.warn('[Timer] API stop timed out — stopping locally');
+    } else {
+      // Non-timeout API error: keep timer running and notify user
+      console.error('[Timer] Server stop failed:', e.message);
+      notifyPopup('error', { message: 'Failed to stop timer on server. Please try again.' });
+      return { error: e.response?.data?.message || e.message };
+    }
+  }
+
+  // Now update local state (server confirmed stop, or we timed out)
   isTimerRunning = false;
   currentEntry = null;
   _cachedStartedAtMs = null;
@@ -1584,10 +1613,12 @@ function stopTimer() {
 
   notifyPopup('timer-stopped', { entry: null, todayTotal: localStoppedProjectTotal });
 
-  apiClient.stopTimer().then(async (result) => {
+  // Post-stop async work (non-blocking)
+  (async () => {
+    const result = serverStopFailed ? null : serverResult;
     // BUG-001: If the entry had near-zero duration (artifact from idle split),
     // delete it from the server to keep the timesheet clean.
-    if (isZeroDurationEntry && stoppedEntryId) {
+    if (isZeroDurationEntry && stoppedEntryId && !serverStopFailed) {
       try {
         await apiClient.deleteTimeEntry(stoppedEntryId);
         console.log(`[Timer] Deleted zero-duration entry ${stoppedEntryId} (${sessionElapsed}s)`);
@@ -1606,7 +1637,7 @@ function stopTimer() {
       todayTotalForPopup = await apiClient.getTodayTotal(stoppedProjectId);
     } catch {}
     notifyPopup('timer-stopped', { entry: result?.entry ?? null, todayTotal: todayTotalForPopup });
-  }).catch(() => {});
+  })().catch(() => {});
 
   return { success: true, entry: null, todayTotal: localStoppedProjectTotal };
 }

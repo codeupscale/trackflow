@@ -35,6 +35,8 @@ class OfflineQueue {
 
       // Enable WAL mode for better concurrent read/write
       this.db.pragma('journal_mode = WAL');
+      // Set busy timeout to handle SQLITE_BUSY errors from concurrent access
+      this.db.pragma('busy_timeout = 5000');
 
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS queue (

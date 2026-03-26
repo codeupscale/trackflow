@@ -147,6 +147,7 @@ class TimerController extends Controller
         $request->validate([
             'keyboard_events' => 'required|integer|min:0',
             'mouse_events' => 'required|integer|min:0',
+            'active_seconds' => 'nullable|integer|min:0|max:30',
             'active_app' => 'nullable|string|max:255',
             'active_window_title' => 'nullable|string|max:512',
             'active_url' => 'nullable|string|max:1024',
