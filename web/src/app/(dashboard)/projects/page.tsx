@@ -85,6 +85,7 @@ export default function ProjectsPage() {
   const [membersDialogOpen, setMembersDialogOpen] = useState(false);
   const [membersProject, setMembersProject] = useState<Project | null>(null);
   const [memberIds, setMemberIds] = useState<string[]>([]);
+  const [memberSearch, setMemberSearch] = useState('');
   const [formName, setFormName] = useState('');
   const [formColor, setFormColor] = useState('#3B82F6');
   const [formBillable, setFormBillable] = useState(false);
@@ -215,6 +216,7 @@ export default function ProjectsPage() {
     setMembersProject(project);
     setMembersDialogOpen(true);
     setMemberIds([]);
+    setMemberSearch('');
     api.get(`/projects/${project.id}/members`)
       .then((res) => {
         const members = (res.data?.members || []) as MemberUser[];
@@ -572,54 +574,151 @@ export default function ProjectsPage() {
           if (!open) {
             setMembersProject(null);
             setMemberIds([]);
+            setMemberSearch('');
           }
         }}
       >
-        <DialogContent className="bg-card border-border">
+        <DialogContent className="bg-card border-border sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="text-foreground">Project Members</DialogTitle>
             <DialogDescription className="text-muted-foreground">
-              Assign team members to <span className="text-foreground">{membersProject?.name}</span>.
+              Assign team members to <span className="font-medium text-foreground">{membersProject?.name}</span>
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-3 py-2">
-            <div className="text-sm text-muted-foreground">
-              {orgUsers ? `${orgUsers.length} users` : 'Loading users...'}
+          <div className="space-y-3">
+            {/* Search */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search members..."
+                value={memberSearch}
+                onChange={(e) => setMemberSearch(e.target.value)}
+                className="pl-9 bg-background border-border text-foreground placeholder:text-muted-foreground"
+              />
             </div>
 
-            <div className="max-h-[320px] overflow-y-auto rounded-md border border-border bg-muted">
-              <div className="divide-y divide-slate-800">
-                {(orgUsers || []).map((u) => {
+            {/* Stats bar */}
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>{memberIds.length} selected of {orgUsers?.length ?? 0} members</span>
+              {orgUsers && orgUsers.length > 0 && (
+                <button
+                  type="button"
+                  className="text-blue-500 hover:text-blue-400 font-medium transition-colors"
+                  onClick={() => {
+                    const filtered = (orgUsers || []).filter((u) => {
+                      if (!memberSearch.trim()) return true;
+                      const q = memberSearch.toLowerCase();
+                      return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+                    });
+                    const allFilteredSelected = filtered.every((u) => memberIds.includes(u.id));
+                    if (allFilteredSelected) {
+                      setMemberIds(memberIds.filter((id) => !filtered.some((u) => u.id === id)));
+                    } else {
+                      const newIds = new Set([...memberIds, ...filtered.map((u) => u.id)]);
+                      setMemberIds([...newIds]);
+                    }
+                  }}
+                >
+                  {(() => {
+                    const filtered = (orgUsers || []).filter((u) => {
+                      if (!memberSearch.trim()) return true;
+                      const q = memberSearch.toLowerCase();
+                      return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+                    });
+                    return filtered.every((u) => memberIds.includes(u.id)) ? 'Deselect all' : 'Select all';
+                  })()}
+                </button>
+              )}
+            </div>
+
+            {/* Members list */}
+            <div className="max-h-[360px] overflow-y-auto rounded-lg border border-border">
+              {!orgUsers ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  <span className="ml-2 text-sm text-muted-foreground">Loading members...</span>
+                </div>
+              ) : (() => {
+                const q = memberSearch.toLowerCase().trim();
+                const filtered = orgUsers.filter((u) =>
+                  !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q) || u.role.includes(q)
+                );
+                // Sort: selected first, then alphabetically
+                const sorted = [...filtered].sort((a, b) => {
+                  const aChecked = memberIds.includes(a.id) ? 0 : 1;
+                  const bChecked = memberIds.includes(b.id) ? 0 : 1;
+                  if (aChecked !== bChecked) return aChecked - bChecked;
+                  return a.name.localeCompare(b.name);
+                });
+
+                if (sorted.length === 0) {
+                  return (
+                    <div className="py-8 text-center text-sm text-muted-foreground">
+                      No members match &ldquo;{memberSearch}&rdquo;
+                    </div>
+                  );
+                }
+
+                return sorted.map((u) => {
                   const checked = memberIds.includes(u.id);
+                  const initials = u.name
+                    .split(' ')
+                    .map((n) => n[0])
+                    .join('')
+                    .toUpperCase()
+                    .slice(0, 2);
                   return (
                     <label
                       key={u.id}
-                      className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-muted cursor-pointer"
+                      className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors border-b border-border last:border-b-0 ${
+                        checked
+                          ? 'bg-blue-500/10 hover:bg-blue-500/15'
+                          : 'hover:bg-muted/50'
+                      }`}
                     >
-                      <div className="min-w-0">
-                        <div className="text-foreground truncate">{u.name}</div>
-                        <div className="text-muted-foreground truncate">{u.email} • {u.role}</div>
-                      </div>
                       <input
                         type="checkbox"
                         checked={checked}
                         onChange={(e) => {
-                          const next = e.target.checked
-                            ? [...memberIds, u.id]
-                            : memberIds.filter((id) => id !== u.id);
-                          setMemberIds(next);
+                          setMemberIds(
+                            e.target.checked
+                              ? [...memberIds, u.id]
+                              : memberIds.filter((id) => id !== u.id)
+                          );
                         }}
-                        className="h-4 w-4 accent-blue-600"
+                        className="h-4 w-4 rounded border-border accent-blue-600 shrink-0"
                       />
+                      <div
+                        className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-medium shrink-0 ${
+                          checked
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-muted text-muted-foreground'
+                        }`}
+                      >
+                        {initials}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-foreground truncate">{u.name}</div>
+                        <div className="text-xs text-muted-foreground truncate">{u.email}</div>
+                      </div>
+                      <Badge
+                        className={`text-[10px] shrink-0 ${
+                          u.role === 'owner'
+                            ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
+                            : 'bg-muted text-muted-foreground border-border'
+                        }`}
+                      >
+                        {u.role}
+                      </Badge>
                     </label>
                   );
-                })}
-              </div>
+                });
+              })()}
             </div>
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="gap-2 sm:gap-0">
             <Button
               type="button"
               variant="outline"
@@ -630,7 +729,7 @@ export default function ProjectsPage() {
             </Button>
             <Button
               type="button"
-              className="bg-blue-600 hover:bg-blue-700 text-foreground"
+              className="bg-blue-600 hover:bg-blue-700 text-white"
               disabled={!membersProject?.id || syncMembersMutation.isPending}
               onClick={() => {
                 if (!membersProject?.id) return;
@@ -638,7 +737,7 @@ export default function ProjectsPage() {
               }}
             >
               {syncMembersMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Save
+              Save ({memberIds.length})
             </Button>
           </DialogFooter>
         </DialogContent>
