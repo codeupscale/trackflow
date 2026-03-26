@@ -88,6 +88,52 @@
       border-top: 1px solid var(--border-color);
       font-size: 11px;
     }
+
+    /* ── Permission Warning Banner ─────────────────────────── */
+    .permission-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      margin-bottom: 8px;
+      border-radius: 8px;
+      background: rgba(234, 179, 8, 0.12);
+      border: 1px solid rgba(234, 179, 8, 0.3);
+      font-size: 12px;
+      color: var(--text-primary);
+    }
+    .permission-banner-text {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .permission-banner-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: rgba(234, 179, 8, 0.3);
+      color: #eab308;
+      font-weight: 700;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    .permission-banner-btn {
+      padding: 3px 10px;
+      border-radius: 4px;
+      border: 1px solid rgba(234, 179, 8, 0.4);
+      background: rgba(234, 179, 8, 0.15);
+      color: #eab308;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .permission-banner-btn:hover {
+      background: rgba(234, 179, 8, 0.25);
+    }
   </style>
 </head>
 <body>
@@ -104,6 +150,15 @@
     </div>
 
     <div class="content">
+      <!-- Permission warning banner — shown when Screen Recording is not granted -->
+      <div class="permission-banner" id="permissionBanner" style="display:none" role="alert">
+        <div class="permission-banner-text">
+          <span class="permission-banner-icon" aria-hidden="true">!</span>
+          <span>Screenshots disabled — permission needed</span>
+        </div>
+        <button class="permission-banner-btn" id="fixPermissionBtn">Fix</button>
+      </div>
+
       <div class="timer-display">
         <div class="time stopped" id="timerDisplay" role="timer" aria-live="polite">00:00:00</div>
         <div class="status">
@@ -181,6 +236,8 @@
     const logoutBtn = document.getElementById('logoutBtn');
     const logoutLink = document.getElementById('logoutLink');
     const dashboardLink = document.getElementById('dashboardLink');
+    const permissionBanner = document.getElementById('permissionBanner');
+    const fixPermissionBtn = document.getElementById('fixPermissionBtn');
 
     function formatTime(seconds) {
       const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
@@ -299,6 +356,41 @@
       }
     }
 
+    // ── Permission Banner Logic ──
+    function showPermissionBanner() {
+      permissionBanner.style.display = 'flex';
+    }
+    function hidePermissionBanner() {
+      permissionBanner.style.display = 'none';
+    }
+
+    // Check permission on load and show banner if needed
+    async function checkPermission() {
+      try {
+        const result = await window.trackflow.checkScreenPermission();
+        if (result && !result.granted && result.platform === 'darwin') {
+          showPermissionBanner();
+        } else {
+          hidePermissionBanner();
+        }
+      } catch {}
+    }
+
+    fixPermissionBtn.addEventListener('click', async () => {
+      try {
+        await window.trackflow.requestScreenPermission();
+      } catch {}
+    });
+
+    // Listen for permission status updates from main process
+    window.trackflow.onPermissionStatus((data) => {
+      if (data && data.granted === false) {
+        showPermissionBanner();
+      } else {
+        hidePermissionBanner();
+      }
+    });
+
     async function init() {
       await loadProjects();
 
@@ -318,6 +410,9 @@
 
       await syncTimerState();
       updateStartBtnState();
+
+      // Check screen recording permission on renderer init
+      checkPermission();
       projectSelect.addEventListener('change', () => {
         // Persist the selected project so it survives logout/login and app restarts
         window.trackflow.setLastProject(projectSelect.value || null);

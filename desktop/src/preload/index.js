@@ -28,6 +28,11 @@ contextBridge.exposeInMainWorld('trackflow', {
   // Idle alert actions (action: 'keep'|'discard'|'stop'|'reassign'; projectId only for reassign)
   resolveIdle: (action, projectId) => ipcRenderer.invoke('resolve-idle', action, projectId),
 
+  // Screen recording permission (macOS)
+  checkScreenPermission: () => ipcRenderer.invoke('check-screen-permission'),
+  requestScreenPermission: () => ipcRenderer.invoke('request-screen-permission'),
+  onPermissionStatus: (callback) => safeOn('permission-status', (_, data) => callback(data)),
+
   // OS theme detection
   getTheme: () => ipcRenderer.invoke('get-theme'),
   onThemeChange: (callback) => safeOn('theme-changed', (_, theme) => callback(theme)),

@@ -76,6 +76,13 @@ class ScreenshotService {
     this._staticCaptureCount = 0;
     // Once we confirm desktopCapturer returns real content, skip native fallback
     this._desktopCapturerWorks = false;
+    // Optional callback for when permission dialog triggers a restart-state save
+    this._onPermissionDialogSave = null;
+  }
+
+  // Set a callback that saves restart state before showing the permission dialog
+  setRestartStateSaver(fn) {
+    this._onPermissionDialogSave = typeof fn === 'function' ? fn : null;
   }
 
   start(entryId, options = {}) {
@@ -183,13 +190,22 @@ class ScreenshotService {
     dialog.showMessageBox({
       type: 'warning',
       title: 'Screen Recording Permission Required',
-      message: 'TrackFlow needs screen recording access to capture screenshots.',
-      detail: 'Steps:\n1. Click "Open Settings" below\n2. Toggle TrackFlow ON\n3. When macOS asks, click "Quit & Reopen"\n\nIf already toggled ON: quit TrackFlow completely (Cmd+Q) and reopen it.',
-      buttons: ['Open Settings', 'Later'],
+      message: 'TrackFlow needs screen recording access to capture activity screenshots.',
+      detail: 'Your employer requires activity screenshots as part of time tracking.\n\n'
+        + 'Steps to enable:\n'
+        + '1. Click "Open System Settings" below\n'
+        + '2. Find TrackFlow in the list and toggle it ON\n'
+        + '3. macOS will ask you to "Quit & Reopen" — click it\n\n'
+        + 'Your time will be saved. After restarting, tracking will resume automatically.',
+      buttons: ['Open System Settings', 'Later'],
       defaultId: 0,
       cancelId: 1,
     }).then(({ response }) => {
       if (response === 0) {
+        // Save restart state so tracking resumes after the forced restart
+        if (this._onPermissionDialogSave) {
+          try { this._onPermissionDialogSave(); } catch {}
+        }
         shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
       }
     }).catch(() => {});
