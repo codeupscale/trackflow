@@ -668,27 +668,34 @@ async function initializeApp() {
   offlineQueue.flush(apiClient);
 
   // ── Early Screen Recording Permission Check (macOS) ──────────────────────
-  // ALWAYS run the probe at launch to:
-  // 1. Register the app in macOS Screen Recording list (so it appears in Settings)
-  // 2. Verify permission is actually granted (persisted state can be stale after rebuild)
-  // 3. Show onboarding dialog if permission is not granted
+  // Check if permission is granted using systemPreferences API first.
+  // Only probe desktopCapturer when permission is NOT granted (to register
+  // the app in the macOS Screen Recording list). Probing when permission IS
+  // granted triggers an unnecessary native macOS popup dialog.
   if (process.platform === 'darwin') {
-    // Always probe — even if systemPreferences says 'granted' or persisted state says true,
-    // because rebuilding the app with same version changes the code signature.
-    probeScreenRecordingPermission().then((probeGranted) => {
-      if (probeGranted) {
-        console.log('[Permission] Probe confirmed permission — no onboarding needed');
-        _screenPermissionGranted = true;
-        return;
-      }
-      console.log('[Permission] Screen recording NOT granted at launch — showing onboarding');
-      _screenPermissionGranted = false;
-      showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
-    }).catch(() => {
-      // Probe failed — still show onboarding so user knows what to do
-      _screenPermissionGranted = false;
-      showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
-    });
+    const apiStatus = checkScreenRecordingPermission();
+    if (apiStatus) {
+      // systemPreferences says granted — trust it, no probe needed.
+      // This avoids the native macOS "TrackFlow would like to record" popup.
+      console.log('[Permission] Screen recording granted (API) — skipping probe');
+      _screenPermissionGranted = true;
+    } else {
+      // Not granted — probe to register app in System Settings list,
+      // then show onboarding dialog.
+      probeScreenRecordingPermission().then((probeGranted) => {
+        if (probeGranted) {
+          console.log('[Permission] Probe confirmed permission — no onboarding needed');
+          _screenPermissionGranted = true;
+          return;
+        }
+        console.log('[Permission] Screen recording NOT granted at launch — showing onboarding');
+        _screenPermissionGranted = false;
+        showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
+      }).catch(() => {
+        _screenPermissionGranted = false;
+        showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
+      });
+    }
   }
 
   // ── Restart State Auto-Resume ────────────────────────────────────────────
@@ -1216,17 +1223,20 @@ function setupIPC() {
     if (process.platform !== 'darwin') return { granted: true, platform: process.platform };
     const granted = checkScreenRecordingPermission();
     if (!granted) {
-      // Probe to both register the app and do a real permission check
+      // Only probe when NOT granted — to register app in the list.
+      // Probing when granted triggers the native macOS popup unnecessarily.
       const probeGranted = await probeScreenRecordingPermission();
       return { granted: probeGranted, platform: 'darwin' };
     }
-    return { granted, platform: 'darwin' };
+    return { granted: true, platform: 'darwin' };
   });
 
   ipcMain.handle('request-screen-permission', async () => {
     if (process.platform !== 'darwin') return { granted: true };
-    // Probe first so TrackFlow appears in the Screen Recording list
-    await probeScreenRecordingPermission();
+    // Only probe if not already granted — avoids native popup
+    if (_screenPermissionGranted !== true) {
+      await probeScreenRecordingPermission();
+    }
     const result = await showScreenPermissionOnboarding({ isPreStart: true, wasTracking: isTimerRunning });
     return { result, granted: _screenPermissionGranted === true };
   });
