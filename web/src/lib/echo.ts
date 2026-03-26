@@ -13,17 +13,9 @@ let echo: Echo<'reverb'> | null = null;
 /**
  * Singleton Echo instance for real-time broadcasting.
  *
- * Usage: Import getEcho() in components that need real-time updates:
- *
- * const echo = getEcho();
- * echo.channel(`user.${userId}`).listen('TimerStarted', (data) => {
- *   // handle real-time timer updates
- * });
- *
- * TODO: Integrate this into:
- * - Timer dashboard for live timer status updates
- * - Activity dashboard for real-time activity logs
- * - Timesheet review components for live submission notifications
+ * Auth headers are resolved dynamically on every request so that
+ * token refreshes (handled by the axios interceptor in api.ts) are
+ * picked up automatically without needing to recreate the Echo instance.
  */
 export function getEcho(): Echo<'reverb'> {
   if (echo) return echo;
@@ -43,10 +35,30 @@ export function getEcho(): Echo<'reverb'> {
     authEndpoint: `${process.env.NEXT_PUBLIC_API_URL || 'https://trackflow.codeupscale.com/api/v1'}/broadcasting/auth`,
     auth: {
       headers: {
-        Authorization: `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('access_token') : ''}`,
+        // Dynamic getter: reads the current token on every auth request
+        // so refreshed tokens are picked up automatically.
+        get Authorization() {
+          const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : '';
+          return `Bearer ${token || ''}`;
+        },
       },
     },
   });
 
   return echo;
+}
+
+/**
+ * Destroy the Echo instance (e.g. on logout) so a fresh one is
+ * created with new credentials on next login.
+ */
+export function destroyEcho(): void {
+  if (echo) {
+    try {
+      echo.disconnect();
+    } catch {
+      // Ignore cleanup errors
+    }
+    echo = null;
+  }
 }

@@ -861,6 +861,61 @@ async function initializeApp() {
   powerMonitor.on('lock-screen', handleSuspend);
   powerMonitor.on('unlock-screen', handleResume);
 
+  // ── Instant sync on focus / unlock ──────────────────────────────────────
+  // When the user returns to the app (unlock, focus), trigger an immediate
+  // sync so the UI updates within ~1s instead of waiting up to 10s for the
+  // next polling cycle.
+  const triggerImmediateSync = () => {
+    if (!apiClient) return;
+    // Re-use the same sync logic as startTimerSync but fire once immediately
+    (async () => {
+      try {
+        const status = await apiClient.getTimerStatus();
+        const globalTotal = status.today_total ?? 0;
+        const elapsed = status.elapsed_seconds ?? 0;
+        if (status.running) {
+          todayTotalGlobal = Math.max(0, globalTotal - elapsed);
+          try {
+            const withElapsed = await apiClient.getTodayTotal(status.entry?.project_id ?? null);
+            todayTotalCurrentProject = Math.max(0, withElapsed - elapsed);
+          } catch {
+            todayTotalCurrentProject = todayTotalGlobal;
+          }
+        } else {
+          todayTotalGlobal = globalTotal;
+          todayTotalCurrentProject = 0;
+        }
+
+        if (status.running && !isTimerRunning) {
+          isTimerRunning = true;
+          currentEntry = status.entry;
+          _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+          activityMonitor?.start();
+          screenshotService?.start(currentEntry.id);
+          idleDetector?.start();
+          startTrayTimer();
+          updateTrayIcon(true);
+          notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
+        } else if (!status.running && isTimerRunning) {
+          isTimerRunning = false;
+          currentEntry = null;
+          _cachedStartedAtMs = null;
+          todayTotalCurrentProject = 0;
+          activityMonitor?.stop();
+          screenshotService?.stop();
+          idleDetector?.stop();
+          dismissIdleAlert();
+          stopTrayTimer();
+          updateTrayTitle();
+          updateTrayIcon(false);
+          notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal });
+        }
+      } catch {}
+    })();
+  };
+
+  app.on('browser-window-focus', triggerImmediateSync);
+
   // Start periodic sync between desktop and server
   startTimerSync();
 }
@@ -1378,7 +1433,55 @@ function afterStartTimer(projectIdForTotal, todayTotalForPopup) {
   })();
 }
 
+/**
+ * Atomically switch the running timer to a different project via a single
+ * server-side transaction (zero gap between projects).
+ */
+async function switchProject(projectId) {
+  if (!isTimerRunning || !apiClient) return { error: 'No timer running' };
+
+  try {
+    // Send final heartbeat for the old entry before switching
+    if (activityMonitor) {
+      await activityMonitor.sendFinalHeartbeat().catch(() => {});
+    }
+
+    const result = await apiClient.switchProject(projectId);
+    const newEntry = result.entry;
+
+    // Update local state to the new entry
+    currentEntry = newEntry;
+    _cachedStartedAtMs = newEntry?.started_at ? new Date(newEntry.started_at).getTime() : null;
+    todayTotalCurrentProject = result.today_total ?? 0;
+
+    posthog.capture(newEntry?.user_id || 'unknown', 'timer_switched', {
+      project_id: projectId,
+      stopped_entry_id: result.stopped_entry?.id,
+    });
+
+    // Restart screenshot service with new entry ID
+    screenshotService?.stop();
+    screenshotService?.start(newEntry.id);
+
+    // Restart activity monitor for the new entry
+    activityMonitor?.stop();
+    activityMonitor?.start();
+
+    notifyPopup('timer-started', { ...newEntry, todayTotal: todayTotalCurrentProject });
+    updateTrayTitle();
+
+    return { success: true, entry: newEntry, todayTotal: todayTotalCurrentProject };
+  } catch (e) {
+    console.error('[switchProject] Failed:', e.message);
+    return { error: e.response?.data?.message || e.message };
+  }
+}
+
 async function startTimer(projectId = null) {
+  // If timer is already running on a different project, use atomic switch
+  if (isTimerRunning && projectId && currentEntry?.project_id !== projectId) {
+    return await switchProject(projectId);
+  }
   if (isTimerRunning) return { error: 'Timer already running' };
 
   // ── Pre-start permission gate (macOS only) ──────────────────────────────
@@ -1516,9 +1619,9 @@ function startTimerSync() {
   timerSyncInterval = setInterval(async () => {
     if (!apiClient) return;
 
-    // Re-fetch org config every 10th cycle (~5 minutes at 30s interval)
+    // Re-fetch org config every 30th cycle (~5 minutes at 10s interval)
     _configRefetchCycle++;
-    if (_configRefetchCycle >= 10) {
+    if (_configRefetchCycle >= 30) {
       _configRefetchCycle = 0;
       try {
         const freshConfig = await apiClient.getConfig();
@@ -1577,7 +1680,7 @@ function startTimerSync() {
         notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal });
       }
     } catch {}
-  }, 30000);
+  }, 10000);
 }
 
 function formatTimeShort(seconds) {
