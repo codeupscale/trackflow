@@ -21,6 +21,7 @@ const { powerMonitor, systemPreferences } = require('electron');
 const os = require('os');
 
 // Backend maxExpected is 300 events per 30s for 100% score.
+const MAX_EXPECTED_EVENTS = 300;
 const HEARTBEAT_INTERVAL_MS = 30000;
 
 // Fallback polls 10 times per 30s (every 3s). Each active poll = 30 events (300/10).
