@@ -193,7 +193,9 @@ class DashboardController extends Controller
             $weekSeconds += (int) $timer['elapsed_seconds'];
         }
 
-        $weeklyTarget = (int) $user->organization->getSetting('weekly_hours_target', 0);
+        // Use weekly_limit_hours (set via Settings UI) — fall back to weekly_hours_target for backwards compat
+        $weeklyTarget = (int) ($user->organization->getSetting('weekly_limit_hours', null)
+            ?? $user->organization->getSetting('weekly_hours_target', 0));
 
         return response()->json([
             'timer' => $timer,
