@@ -42,23 +42,24 @@ class DashboardController extends Controller
         }
 
         // Managers/admins/owners see the full team dashboard
-        $users = User::withoutGlobalScopes()
+        $users = User::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('organization_id', $orgId)
             ->where('is_active', true)
             ->get(['id', 'name', 'email', 'role', 'last_active_at', 'avatar_url']);
 
         // Batch Redis fetch: 1 call instead of N (one per user)
-        $redisKeys = $users->map(fn ($u) => "timer:{$u->id}")->values()->all();
+        // Build keys from user IDs to avoid fragile string parsing
+        $userIds = $users->pluck('id')->values()->all();
+        $redisKeys = array_map(fn ($id) => "timer:{$id}", $userIds);
         $redisValues = count($redisKeys) > 0 ? Redis::mget($redisKeys) : [];
         $userById = $users->keyBy('id');
         $now = now();
 
         $onlineUsers = [];
-        foreach ($redisKeys as $i => $key) {
+        foreach ($userIds as $i => $userId) {
             $timerData = $redisValues[$i] ?? null;
             if ($timerData) {
                 $data = json_decode($timerData, true);
-                $userId = str_replace('timer:', '', $key);
                 $u = $userById->get($userId);
                 if ($u) {
                     $onlineUsers[] = [
@@ -74,7 +75,7 @@ class DashboardController extends Controller
         // Duration-weighted average: longer entries contribute more to the score.
         // This matches Hubstaff's approach: a 1-min entry at 10% shouldn't drag down
         // an 8-hour entry at 90%. COALESCE handles NULL activity_score (short entries with no heartbeats).
-        $rangeEntries = TimeEntry::withoutGlobalScopes()
+        $rangeEntries = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('organization_id', $orgId)
             ->where('started_at', '>=', $dateFrom)
             ->where('started_at', '<', $dateTo)
@@ -94,7 +95,7 @@ class DashboardController extends Controller
             ->keyBy('user_id');
 
         // Active projects in range: distinct project_id (exclude null)
-        $activeProjectsCount = (int) TimeEntry::withoutGlobalScopes()
+        $activeProjectsCount = (int) TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('organization_id', $orgId)
             ->where('started_at', '>=', $dateFrom)
             ->where('started_at', '<', $dateTo)
@@ -158,7 +159,7 @@ class DashboardController extends Controller
             $responseDateTo = $responseDateFrom;
         }
 
-        $rangeSeconds = TimeEntry::withoutGlobalScopes()
+        $rangeSeconds = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('user_id', $user->id)
             ->where('started_at', '>=', $dateFrom)
             ->where('started_at', '<', $dateTo)
@@ -180,7 +181,7 @@ class DashboardController extends Controller
             $tz
         );
 
-        $weekSeconds = TimeEntry::withoutGlobalScopes()
+        $weekSeconds = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('user_id', $user->id)
             ->where('started_at', '>=', $weekStartUtc)
             ->where('started_at', '<', $weekEndUtc)
@@ -205,7 +206,7 @@ class DashboardController extends Controller
             $dayStr = $dayLocal->toDateString();
             [$dayStartUtc, $dayEndUtc] = TimezoneAwareDateRange::toUtcBounds($dayStr, $dayStr, $tz);
 
-            $daySecs = (int) TimeEntry::withoutGlobalScopes()
+            $daySecs = (int) TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
                 ->where('user_id', $user->id)
                 ->where('started_at', '>=', $dayStartUtc)
                 ->where('started_at', '<', $dayEndUtc)

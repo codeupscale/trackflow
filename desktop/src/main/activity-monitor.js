@@ -157,7 +157,14 @@ class ActivityMonitor {
     if (!this._intervalStartTime) return 0;
     const elapsedMs = Date.now() - this._intervalStartTime;
     const totalSeconds = Math.max(1, Math.floor(elapsedMs / 1000));
-    const activeCount = this._activeSeconds.size;
+    // Guard: only count timestamps that fall within the current interval
+    const intervalStartSeconds = Math.floor(this._intervalStartTime / 1000);
+    let activeCount = 0;
+    for (const ts of this._activeSeconds) {
+      if (ts >= intervalStartSeconds) activeCount++;
+    }
+    // Clamp activeCount to totalSeconds to prevent score > 100%
+    activeCount = Math.min(activeCount, totalSeconds);
     return Math.min(100, Math.round((activeCount / totalSeconds) * 100));
   }
 
@@ -286,14 +293,20 @@ class ActivityMonitor {
     }
     return new Promise((resolve) => {
       let resolved = false;
-      const done = (val) => { if (!resolved) { resolved = true; resolve(val); } };
-      const timer = setTimeout(() => done(null), 3000);
+      let outerTimer = null;
+      const done = (val) => {
+        if (!resolved) {
+          resolved = true;
+          if (outerTimer) { clearTimeout(outerTimer); outerTimer = null; }
+          resolve(val);
+        }
+      };
+      outerTimer = setTimeout(() => done(null), 3000);
       execFile('xdotool', ['getactivewindow', 'getwindowpid'], { timeout: 2500 }, (err, stdout) => {
-        if (err) { clearTimeout(timer); done(null); return; }
+        if (err) { done(null); return; }
         const pid = (stdout || '').trim();
-        if (!pid) { clearTimeout(timer); done(null); return; }
+        if (!pid) { done(null); return; }
         execFile('ps', ['-p', pid, '-o', 'comm='], { timeout: 2000 }, (err2, stdout2) => {
-          clearTimeout(timer);
           done(err2 ? null : (stdout2 || '').trim());
         });
       });

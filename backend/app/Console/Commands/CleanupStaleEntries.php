@@ -31,15 +31,20 @@ class CleanupStaleEntries extends Command
         $closed = 0;
 
         // Find all running entries (ended_at IS NULL, type = tracked)
-        TimeEntry::withoutGlobalScopes()
+        TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->whereNull('ended_at')
             ->where('type', 'tracked')
             ->chunkById(200, function ($entries) use ($threshold, &$closed) {
+                // Batch-fetch last heartbeat for all entries in this chunk (avoid N+1)
+                $entryIds = $entries->pluck('id');
+                $lastHeartbeats = ActivityLog::whereIn('time_entry_id', $entryIds)
+                    ->selectRaw('time_entry_id, MAX(logged_at) as last_heartbeat')
+                    ->groupBy('time_entry_id')
+                    ->pluck('last_heartbeat', 'time_entry_id');
+
                 foreach ($entries as $entry) {
                     // Determine last activity: use the latest heartbeat (ActivityLog.logged_at)
-                    $lastHeartbeat = ActivityLog::where('time_entry_id', $entry->id)
-                        ->orderByDesc('logged_at')
-                        ->value('logged_at');
+                    $lastHeartbeat = $lastHeartbeats->get($entry->id);
 
                     $lastActive = $lastHeartbeat
                         ? Carbon::parse($lastHeartbeat)

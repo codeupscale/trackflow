@@ -96,7 +96,8 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
 
         // Broadcast state to other tabs
         get()._broadcastChannel?.postMessage({
-          type: 'timer-update',
+          type: 'trackflow-timer-update',
+          nonce: 'trackflow-v1',
           state: newState,
         });
 
@@ -125,7 +126,8 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
 
         // Broadcast state to other tabs
         get()._broadcastChannel?.postMessage({
-          type: 'timer-update',
+          type: 'trackflow-timer-update',
+          nonce: 'trackflow-v1',
           state: newState,
         });
       }
@@ -148,7 +150,7 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
       try {
         const channel = new BroadcastChannel('trackflow-timer');
         channel.onmessage = (event: MessageEvent) => {
-          if (event.data?.type === 'timer-update' && event.data.state) {
+          if (event.data?.type === 'trackflow-timer-update' && event.data?.nonce === 'trackflow-v1' && event.data.state) {
             const state = event.data.state;
             const wasRunning = get().isRunning;
 

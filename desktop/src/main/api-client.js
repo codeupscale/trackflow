@@ -11,12 +11,24 @@ class ApiClient {
     this._onTokenRefreshed = null; // Callback to persist new tokens
     this._onAuthFailed = null; // Callback when token refresh fails (force logout)
 
+    // Dynamically resolve agent version from Electron app or package.json
+    let agentVersion = '1.0.0';
+    try {
+      const { app } = require('electron');
+      agentVersion = app.getVersion();
+    } catch {
+      // Fallback: read from package.json if Electron app not available
+      try {
+        agentVersion = require('../../package.json').version;
+      } catch {}
+    }
+
     this.client = axios.create({
       baseURL: API_BASE,
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'X-Agent-Version': '1.0.0',
+        'X-Agent-Version': agentVersion,
       },
       timeout: 30000,
     });

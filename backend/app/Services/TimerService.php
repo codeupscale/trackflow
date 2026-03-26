@@ -48,7 +48,7 @@ class TimerService
                 $existingData = json_decode($existing, true);
                 if ($existingData && !empty($existingData['entry_id'])) {
                     // Auto-stop the existing timer gracefully
-                    $existingEntry = TimeEntry::withoutGlobalScopes()
+                    $existingEntry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
                         ->where('id', $existingData['entry_id'])
                         ->where('user_id', $user->id)
                         ->whereNull('ended_at')
@@ -109,6 +109,7 @@ class TimerService
     {
         $user = Auth::user();
         $redisKey = "timer:{$user->id}";
+        $lockKey = "timer:lock:{$user->id}";
 
         $timerData = Redis::get($redisKey);
         if (!$timerData) {
@@ -117,32 +118,41 @@ class TimerService
 
         $timerData = json_decode($timerData, true);
 
-        $entry = DB::transaction(function () use ($user, $timerData, $redisKey) {
-            $entry = TimeEntry::withoutGlobalScopes()
-                ->where('id', $timerData['entry_id'])
-                ->where('user_id', $user->id)
-                ->firstOrFail();
+        // Atomically acquire lock to prevent race condition (same pattern as start())
+        if (!Redis::set($lockKey, 1, 'EX', 5, 'NX')) {
+            throw new \RuntimeException('Timer operation in progress');
+        }
 
-            $now = now();
-            $duration = (int) abs($now->diffInSeconds($entry->started_at));
+        try {
+            $entry = DB::transaction(function () use ($user, $timerData, $redisKey) {
+                $entry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                    ->where('id', $timerData['entry_id'])
+                    ->where('user_id', $user->id)
+                    ->firstOrFail();
 
-            // Finalize activity_score from actual ActivityLog records (ground truth).
-            // This replaces the running EMA with a proper weighted calculation.
-            $finalScore = $this->computeFinalActivityScore($entry->id);
+                $now = now();
+                $duration = (int) abs($now->diffInSeconds($entry->started_at));
 
-            $entry->update([
-                'ended_at' => $now,
-                'duration_seconds' => $duration,
-                'activity_score' => $finalScore ?? $entry->activity_score ?? 0,
-            ]);
+                // Finalize activity_score from actual ActivityLog records (ground truth).
+                // This replaces the running EMA with a proper weighted calculation.
+                $finalScore = $this->computeFinalActivityScore($entry->id);
 
-            Redis::del($redisKey);
-            return $entry->fresh();
-        });
+                $entry->update([
+                    'ended_at' => $now,
+                    'duration_seconds' => $duration,
+                    'activity_score' => $finalScore ?? $entry->activity_score ?? 0,
+                ]);
 
-        TimerStopped::dispatch($entry);
+                Redis::del($redisKey);
+                return $entry->fresh();
+            });
 
-        return $entry;
+            TimerStopped::dispatch($entry);
+
+            return $entry;
+        } finally {
+            Redis::del($lockKey);
+        }
     }
 
     /**
@@ -184,7 +194,7 @@ class TimerService
         try {
             $result = DB::transaction(function () use ($user, $data, $timerInfo, $redisKey) {
                 // 1. Stop current entry
-                $currentEntry = TimeEntry::withoutGlobalScopes()
+                $currentEntry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
                     ->where('id', $timerInfo['entry_id'])
                     ->where('user_id', $user->id)
                     ->firstOrFail();
@@ -233,14 +243,17 @@ class TimerService
     {
         $stoppedEntry = $this->stop();
 
-        // Create idle entry
+        // Create idle entry (point-in-time record, zero duration)
         $user = Auth::user();
+        $idleNow = now();
         TimeEntry::create([
             'organization_id' => $user->organization_id,
             'user_id' => $user->id,
             'project_id' => $stoppedEntry->project_id,
             'task_id' => $stoppedEntry->task_id,
-            'started_at' => now(),
+            'started_at' => $idleNow,
+            'ended_at' => $idleNow,
+            'duration_seconds' => 0,
             'type' => 'idle',
         ]);
 
@@ -264,7 +277,7 @@ class TimerService
         [$todayStartUtc, $todayEndUtc] = TimezoneAwareDateRange::userTodayUtcBounds($tz);
         $currentDay = Carbon::now($tz)->toDateString();
 
-        $todayQuery = TimeEntry::withoutGlobalScopes()
+        $todayQuery = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('user_id', $user->id)
             ->where('started_at', '>=', $todayStartUtc)
             ->where('started_at', '<', $todayEndUtc)
@@ -319,7 +332,7 @@ class TimerService
         if ($entryProjectId !== null && $requestedProjectId === $entryProjectId) {
             $projectTodayTotal = $todayTotal;
         } elseif ($entryProjectId !== null) {
-            $projectTodayTotal = (int) TimeEntry::withoutGlobalScopes()
+            $projectTodayTotal = (int) TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
                 ->where('user_id', $user->id)
                 ->where('started_at', '>=', $todayStartUtc)
                 ->where('started_at', '<', $todayEndUtc)
@@ -355,7 +368,7 @@ class TimerService
         $user = Auth::user();
         [$todayStartUtc, $todayEndUtc] = TimezoneAwareDateRange::userTodayUtcBounds($user->getTimezoneForDates());
 
-        $query = TimeEntry::withoutGlobalScopes()
+        $query = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('user_id', $user->id)
             ->where('started_at', '>=', $todayStartUtc)
             ->where('started_at', '<', $todayEndUtc)
@@ -374,7 +387,7 @@ class TimerService
         if ($timerData) {
             $data = json_decode($timerData, true);
             $entry = TimeEntry::find($data['entry_id'] ?? null);
-            if ($entry && ($projectId === null || $projectId === '' || $entry->project_id === $projectId)) {
+            if ($entry && ($projectId === null || $projectId === '' || (string) $entry->project_id === (string) $projectId)) {
                 $total += (int) abs(now()->diffInSeconds($entry->started_at));
             }
         }
@@ -415,7 +428,7 @@ class TimerService
                 return ['idle_entry' => null, 'new_entry' => null];
             }
 
-            $currentEntry = TimeEntry::withoutGlobalScopes()
+            $currentEntry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
                 ->where('id', $entryId)
                 ->where('user_id', $user->id)
                 ->first();
