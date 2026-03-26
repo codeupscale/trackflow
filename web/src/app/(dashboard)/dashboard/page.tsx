@@ -11,7 +11,9 @@ import {
   TrendingUp,
   Timer,
   ArrowRight,
+  BarChart3,
 } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 
 import {
   Card,
@@ -56,6 +58,13 @@ interface TeamMember {
   activity_score: number;
 }
 
+interface DailyBreakdown {
+  date: string;
+  day: string; // Mon, Tue, etc.
+  seconds: number;
+  hours: number;
+}
+
 interface DashboardData {
   stats: DashboardStats;
   team: TeamMember[];
@@ -64,6 +73,7 @@ interface DashboardData {
   timer: { elapsed_seconds: number } | null;
   weekSeconds: number;
   weeklyHoursTarget: number; // 0 = disabled
+  dailyBreakdown: DailyBreakdown[];
 }
 
 type FilterPreset = 'today' | 'week' | 'custom';
@@ -149,6 +159,7 @@ export default function DashboardPage() {
           timer: raw.timer,
           weekSeconds: raw.week_seconds || 0,
           weeklyHoursTarget: raw.weekly_hours_target || 0,
+          dailyBreakdown: raw.daily_breakdown || [],
         };
       }
 
@@ -189,6 +200,7 @@ export default function DashboardPage() {
         timer: null,
         weekSeconds: 0,
         weeklyHoursTarget: 0,
+        dailyBreakdown: [],
       };
     },
     refetchInterval: 30000,
@@ -460,6 +472,76 @@ export default function DashboardPage() {
           </Card>
         );
       })()}
+
+      {/* Daily Hours Bar Chart — employee view */}
+      {isEmployeeView && (data?.dailyBreakdown?.length ?? 0) > 0 && (
+        <Card className="border-border bg-card">
+          <CardHeader className="pb-2">
+            <div className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                <BarChart3 className="h-5 w-5 text-blue-500" />
+              </div>
+              <div>
+                <CardTitle className="text-foreground text-base">Daily Hours</CardTitle>
+                <CardDescription className="text-muted-foreground">
+                  This week (Mon – Sun)
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-2">
+            <div className="h-52">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={data!.dailyBreakdown} barSize={32}>
+                  <XAxis
+                    dataKey="day"
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
+                  />
+                  <YAxis
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
+                    tickFormatter={(v: number) => `${v}h`}
+                    width={35}
+                  />
+                  <Tooltip
+                    cursor={{ fill: 'hsl(var(--muted) / 0.5)' }}
+                    contentStyle={{
+                      backgroundColor: 'hsl(var(--card))',
+                      border: '1px solid hsl(var(--border))',
+                      borderRadius: '8px',
+                      fontSize: '13px',
+                      color: 'hsl(var(--foreground))',
+                    }}
+                    formatter={(value: number) => [`${value}h`, 'Hours']}
+                    labelFormatter={(label: string, payload) => {
+                      if (payload?.[0]?.payload?.date) {
+                        return format(new Date(payload[0].payload.date + 'T00:00:00'), 'EEE, MMM d');
+                      }
+                      return label;
+                    }}
+                  />
+                  <Bar dataKey="hours" radius={[6, 6, 0, 0]}>
+                    {data!.dailyBreakdown.map((entry, index) => {
+                      const isToday = entry.date === format(new Date(), 'yyyy-MM-dd');
+                      const hasHours = entry.hours > 0;
+                      return (
+                        <Cell
+                          key={index}
+                          fill={isToday ? 'hsl(217, 91%, 60%)' : hasHours ? 'hsl(215, 20%, 65%)' : 'hsl(215, 15%, 30%)'}
+                          fillOpacity={isToday ? 1 : hasHours ? 0.7 : 0.3}
+                        />
+                      );
+                    })}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Team activity table — only for admin/manager/owner */}
       {!isEmployeeView && (

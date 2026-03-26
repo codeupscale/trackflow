@@ -197,11 +197,41 @@ class DashboardController extends Controller
         $weeklyTarget = (int) ($user->organization->getSetting('weekly_limit_hours', null)
             ?? $user->organization->getSetting('weekly_hours_target', 0));
 
+        // Daily breakdown for the current week (Mon–Sun) for bar chart
+        $dailyBreakdown = [];
+        $todayLocal = Carbon::now($tz)->toDateString();
+        for ($d = 0; $d < 7; $d++) {
+            $dayLocal = $weekStart->copy()->addDays($d);
+            $dayStr = $dayLocal->toDateString();
+            [$dayStartUtc, $dayEndUtc] = TimezoneAwareDateRange::toUtcBounds($dayStr, $dayStr, $tz);
+
+            $daySecs = (int) TimeEntry::withoutGlobalScopes()
+                ->where('user_id', $user->id)
+                ->where('started_at', '>=', $dayStartUtc)
+                ->where('started_at', '<', $dayEndUtc)
+                ->whereNotNull('ended_at')
+                ->where('type', 'tracked')
+                ->sum('duration_seconds');
+
+            // Add running timer elapsed to today's bar
+            if ($dayStr === $todayLocal && $timer) {
+                $daySecs += (int) $timer['elapsed_seconds'];
+            }
+
+            $dailyBreakdown[] = [
+                'date' => $dayStr,
+                'day' => $dayLocal->format('D'),  // Mon, Tue, etc.
+                'seconds' => $daySecs,
+                'hours' => round($daySecs / self::SECONDS_PER_HOUR, 1),
+            ];
+        }
+
         return response()->json([
             'timer' => $timer,
             'today_seconds' => (int) $rangeSeconds,
             'week_seconds' => (int) $weekSeconds,
             'weekly_hours_target' => $weeklyTarget,
+            'daily_breakdown' => $dailyBreakdown,
             'date_from' => $responseDateFrom,
             'date_to' => $responseDateTo,
         ]);
