@@ -145,6 +145,90 @@ class TimerService
         return $entry;
     }
 
+    /**
+     * Atomically switch the running timer to a different project.
+     *
+     * In a single DB transaction: stop the current timer (with final activity
+     * score) and immediately start a new one on the target project. This
+     * ensures zero gap between projects.
+     *
+     * @return array{stopped: TimeEntry, started: TimeEntry}
+     */
+    public function switchProject(array $data): array
+    {
+        $user = Auth::user();
+        $redisKey = "timer:{$user->id}";
+        $lockKey = "timer:lock:{$user->id}";
+
+        $timerData = Redis::get($redisKey);
+        if (!$timerData) {
+            throw new \RuntimeException('No timer is currently running.');
+        }
+
+        $timerInfo = json_decode($timerData, true);
+
+        // Validate target project assignment
+        if (! empty($data['project_id'])) {
+            $project = Project::where('organization_id', $user->organization_id)
+                ->findOrFail($data['project_id']);
+            if (! $project->isAssignedTo($user)) {
+                throw new AuthorizationException('You are not assigned to this project.');
+            }
+        }
+
+        // Atomically acquire lock
+        if (!Redis::set($lockKey, 1, 'EX', 5, 'NX')) {
+            throw new \RuntimeException('Timer operation in progress');
+        }
+
+        try {
+            $result = DB::transaction(function () use ($user, $data, $timerInfo, $redisKey) {
+                // 1. Stop current entry
+                $currentEntry = TimeEntry::withoutGlobalScopes()
+                    ->where('id', $timerInfo['entry_id'])
+                    ->where('user_id', $user->id)
+                    ->firstOrFail();
+
+                $now = now();
+                $duration = (int) abs($now->diffInSeconds($currentEntry->started_at));
+                $finalScore = $this->computeFinalActivityScore($currentEntry->id);
+
+                $currentEntry->update([
+                    'ended_at' => $now,
+                    'duration_seconds' => $duration,
+                    'activity_score' => $finalScore ?? $currentEntry->activity_score ?? 0,
+                ]);
+
+                // 2. Start new entry on target project
+                $newEntry = TimeEntry::create([
+                    'organization_id' => $user->organization_id,
+                    'user_id' => $user->id,
+                    'project_id' => $data['project_id'] ?? null,
+                    'task_id' => $data['task_id'] ?? null,
+                    'started_at' => $now,
+                    'type' => 'tracked',
+                ]);
+
+                // 3. Update Redis to point to new entry
+                Redis::setex($redisKey, 2592000, json_encode([
+                    'entry_id' => $newEntry->id,
+                    'started_at' => $newEntry->started_at->toISOString(),
+                    'project_id' => $newEntry->project_id,
+                    'task_id' => $newEntry->task_id,
+                ]));
+
+                return ['stopped' => $currentEntry->fresh(), 'started' => $newEntry];
+            });
+
+            TimerStopped::dispatch($result['stopped']);
+            TimerStarted::dispatch($result['started']);
+
+            return $result;
+        } finally {
+            Redis::del($lockKey);
+        }
+    }
+
     public function pause(): TimeEntry
     {
         $stoppedEntry = $this->stop();

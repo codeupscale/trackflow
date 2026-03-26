@@ -64,6 +64,7 @@ Route::prefix('v1')->group(function () {
         // Timer
         Route::post('timer/start', [\App\Http\Controllers\Api\V1\TimerController::class, 'start']);
         Route::post('timer/stop', [\App\Http\Controllers\Api\V1\TimerController::class, 'stop']);
+        Route::post('timer/switch', [\App\Http\Controllers\Api\V1\TimerController::class, 'switch']);
         Route::post('timer/pause', [\App\Http\Controllers\Api\V1\TimerController::class, 'pause']);
         Route::get('timer/status', [\App\Http\Controllers\Api\V1\TimerController::class, 'status']);
         Route::get('timer/today-total', [\App\Http\Controllers\Api\V1\TimerController::class, 'todayTotal']);

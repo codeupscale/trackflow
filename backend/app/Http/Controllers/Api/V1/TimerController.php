@@ -47,6 +47,28 @@ class TimerController extends Controller
         }
     }
 
+    // TIME-02b: Switch project atomically (stop current + start new in one transaction)
+    public function switch(Request $request): JsonResponse
+    {
+        $request->validate([
+            'project_id' => 'required|uuid',
+            'task_id' => 'nullable|uuid',
+        ]);
+
+        try {
+            $result = $this->timerService->switchProject($request->only('project_id', 'task_id'));
+            $todayTotal = $this->timerService->todayTotal($result['started']->project_id);
+
+            return response()->json([
+                'stopped_entry' => $result['stopped'],
+                'entry' => $result['started'],
+                'today_total' => $todayTotal,
+            ]);
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 409);
+        }
+    }
+
     // TIME-03: Pause timer
     public function pause(): JsonResponse
     {

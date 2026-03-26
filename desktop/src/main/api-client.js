@@ -141,6 +141,17 @@ class ApiClient {
     return res.data;
   }
 
+  /**
+   * Atomically switch the running timer to a different project.
+   * Stops the current entry and starts a new one in a single server transaction.
+   */
+  async switchProject(projectId, taskId = null) {
+    const payload = { project_id: projectId };
+    if (taskId) payload.task_id = taskId;
+    const res = await this.client.post('/timer/switch', payload);
+    return res.data;
+  }
+
   /** Get timer status. Optional projectId scopes today_total to that project (for per-project display). */
   async getTimerStatus(projectId = null) {
     const params = projectId ? { project_id: projectId } : {};
