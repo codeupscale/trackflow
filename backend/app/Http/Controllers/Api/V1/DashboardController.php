@@ -193,10 +193,13 @@ class DashboardController extends Controller
             $weekSeconds += (int) $timer['elapsed_seconds'];
         }
 
+        $weeklyTarget = (int) $user->organization->getSetting('weekly_hours_target', 0);
+
         return response()->json([
             'timer' => $timer,
             'today_seconds' => (int) $rangeSeconds,
             'week_seconds' => (int) $weekSeconds,
+            'weekly_hours_target' => $weeklyTarget,
             'date_from' => $responseDateFrom,
             'date_to' => $responseDateTo,
         ]);

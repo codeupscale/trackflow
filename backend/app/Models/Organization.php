@@ -118,6 +118,7 @@ class Organization extends Model
             'capture_only_when_visible' => false,
             // Capture all monitors and composite into one image.
             'capture_multi_monitor' => false,
+            'weekly_hours_target' => 0, // 0 = disabled, >0 = minimum hours per week (Mon-Sun)
         ];
     }
 
