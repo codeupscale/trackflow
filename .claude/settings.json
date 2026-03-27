@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SubagentStop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/muhammadjamil/Desktop/projects/trackflow/.claude/hooks/subagent-stop.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
