@@ -16,19 +16,28 @@
 
 const { powerMonitor } = require('electron');
 
-const IDLE_CHECK_INTERVAL_MS = 10000; // Check every 10 seconds
-const DEFAULT_IDLE_TIMEOUT_MIN = 5;   // Default idle threshold
-const ALERT_AUTO_STOP_MIN = 10;       // Auto-stop if alert not dismissed
+const DEFAULT_IDLE_TIMEOUT_MIN = 5;
+const DEFAULT_IDLE_CHECK_INTERVAL_SEC = 10;
 
 class IdleDetector {
   constructor(config = {}) {
-    this.idleTimeoutSec = (config.idle_timeout || DEFAULT_IDLE_TIMEOUT_MIN) * 60;
-    this.alertAutoStopSec = ALERT_AUTO_STOP_MIN * 60;
+    const timeout = config.idle_timeout != null ? config.idle_timeout : DEFAULT_IDLE_TIMEOUT_MIN;
+    this.idleTimeoutSec = timeout > 0 ? timeout * 60 : 0;
+    const autoStopMin = config.idle_alert_auto_stop_min != null ? config.idle_alert_auto_stop_min : 10;
+    this.alertAutoStopSec = autoStopMin > 0 ? autoStopMin * 60 : 0;
+    const checkSec = config.idle_check_interval_sec != null ? config.idle_check_interval_sec : DEFAULT_IDLE_CHECK_INTERVAL_SEC;
+    this.checkIntervalMs = Math.min(60, Math.max(1, checkSec)) * 1000;
     this.checkInterval = null;
     this.isIdle = false;
     this.idleStartedAt = null;
     this.alertShownAt = null;
-    this.enabled = config.idle_detection !== false; // Enabled by default
+    this.enabled = config.idle_detection !== false && this.idleTimeoutSec > 0;
+
+    // BUG-001: Cooldown timestamp — after idle is resolved, suppress re-detection
+    // until the user has actually provided new input. This prevents the detector
+    // from immediately re-firing when the system idle time is still high
+    // (e.g., auto-discard policy where no user interaction occurs).
+    this._lastResolvedAt = null;
 
     // Callbacks — set by main process
     this._onIdleDetected = null;   // (idleSeconds, idleStartedAt) => void
@@ -46,10 +55,13 @@ class IdleDetector {
 
   // Update config (e.g., after fetching from server)
   updateConfig(config) {
-    if (config.idle_timeout) {
-      this.idleTimeoutSec = config.idle_timeout * 60;
-    }
-    this.enabled = config.idle_detection !== false;
+    const timeout = config.idle_timeout != null ? config.idle_timeout : DEFAULT_IDLE_TIMEOUT_MIN;
+    this.idleTimeoutSec = timeout > 0 ? timeout * 60 : 0;
+    const autoStopMin = config.idle_alert_auto_stop_min != null ? config.idle_alert_auto_stop_min : 10;
+    this.alertAutoStopSec = autoStopMin > 0 ? autoStopMin * 60 : 0;
+    const checkSec = config.idle_check_interval_sec != null ? config.idle_check_interval_sec : DEFAULT_IDLE_CHECK_INTERVAL_SEC;
+    this.checkIntervalMs = Math.min(60, Math.max(1, checkSec)) * 1000;
+    this.enabled = config.idle_detection !== false && this.idleTimeoutSec > 0;
   }
 
   start() {
@@ -60,7 +72,7 @@ class IdleDetector {
     this.idleStartedAt = null;
     this.alertShownAt = null;
 
-    this.checkInterval = setInterval(() => this._check(), IDLE_CHECK_INTERVAL_MS);
+    this.checkInterval = setInterval(() => this._check(), this.checkIntervalMs);
   }
 
   stop() {
@@ -78,6 +90,9 @@ class IdleDetector {
     this.isIdle = false;
     this.idleStartedAt = null;
     this.alertShownAt = null;
+    // BUG-001: Record when idle was resolved so _check() can require
+    // fresh user input before re-detecting idle.
+    this._lastResolvedAt = Date.now();
   }
 
   // Get current idle duration in seconds (for display in alert)
@@ -90,6 +105,21 @@ class IdleDetector {
     // powerMonitor.getSystemIdleTime() returns seconds since last user input
     // This is the OS-level idle time — works even without uiohook
     const systemIdleSec = powerMonitor.getSystemIdleTime();
+
+    // BUG-001: After idle was resolved (e.g., auto-discard), the system idle time
+    // may still be high because no new user input has occurred. We must wait for
+    // the user to actually provide input (systemIdleSec drops below the threshold)
+    // before we can detect a new idle period. Without this guard, the detector
+    // fires repeatedly creating zero-duration tracked entries between idle entries.
+    if (this._lastResolvedAt) {
+      if (systemIdleSec < this.idleTimeoutSec) {
+        // User provided fresh input — clear the cooldown, resume normal detection
+        this._lastResolvedAt = null;
+      } else {
+        // Still idle since before resolution — skip this check
+        return;
+      }
+    }
 
     if (!this.isIdle && systemIdleSec >= this.idleTimeoutSec) {
       // Just became idle
@@ -109,10 +139,14 @@ class IdleDetector {
         return;
       }
 
-      // Check auto-stop timeout (alert has been shown too long)
-      if (this.alertShownAt) {
-        const alertDuration = (Date.now() - this.alertShownAt) / 1000;
-        if (alertDuration >= this.alertAutoStopSec) {
+      // Check auto-stop timeout measured from when user actually went idle,
+      // not from when the alert was shown. This ensures auto-stop fires at
+      // the configured total idle time (idle_threshold + auto_stop_threshold
+      // from the user's perspective), not idle_threshold + auto_stop_threshold
+      // stacked on top of each other.
+      if (this.idleStartedAt) {
+        const totalIdleDuration = (Date.now() - this.idleStartedAt) / 1000;
+        if (totalIdleDuration >= this.idleTimeoutSec + this.alertAutoStopSec) {
           // Auto-stop timer — user has been idle way too long
           if (this._onAutoStop) {
             this._onAutoStop(this.getIdleDuration());

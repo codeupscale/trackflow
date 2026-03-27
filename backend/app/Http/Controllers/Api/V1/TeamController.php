@@ -14,8 +14,8 @@ class TeamController extends Controller
     {
         $teams = $request->user()->organization->teams()
             ->with(['manager', 'members'])
-            ->get();
-        return response()->json(['teams' => $teams]);
+            ->paginate(50);
+        return response()->json($teams);
     }
 
     public function store(Request $request): JsonResponse
@@ -61,7 +61,7 @@ class TeamController extends Controller
         }
 
         $team->update($request->only(['name', 'manager_id']));
-        return response()->json(['team' => $team->fresh()->load('manager')]);
+        return response()->json(['team' => $team->load('manager')]);
     }
 
     public function destroy(Request $request, string $id): JsonResponse
@@ -77,7 +77,7 @@ class TeamController extends Controller
         $team = $request->user()->organization->teams()->findOrFail($id);
         $request->user()->organization->users()->findOrFail($request->user_id);
         $team->members()->syncWithoutDetaching([$request->user_id]);
-        return response()->json(['team' => $team->fresh()->load('members')]);
+        return response()->json(['team' => $team->load('members')]);
     }
 
     public function removeMember(Request $request, string $id): JsonResponse
@@ -86,6 +86,6 @@ class TeamController extends Controller
         $team = $request->user()->organization->teams()->findOrFail($id);
         $request->user()->organization->users()->findOrFail($request->user_id);
         $team->members()->detach($request->user_id);
-        return response()->json(['team' => $team->fresh()->load('members')]);
+        return response()->json(['team' => $team->load('members')]);
     }
 }

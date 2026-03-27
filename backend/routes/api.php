@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\DataPrivacyController;
 use App\Http\Controllers\Api\V1\InvitationController;
 use App\Http\Controllers\Api\V1\SsoController;
+use App\Http\Controllers\Api\V1\UserPasswordController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -25,6 +26,7 @@ Route::prefix('v1')->group(function () {
         Route::post('login', [AuthController::class, 'login']);
         Route::post('forgot-password', [AuthController::class, 'forgotPassword']);
         Route::post('reset-password', [AuthController::class, 'resetPassword']);
+        Route::post('google', [AuthController::class, 'googleAuth']);
     });
 
     // SAML2 SSO endpoints (public — IdP-initiated)
@@ -44,9 +46,16 @@ Route::prefix('v1')->group(function () {
         Route::post('auth/logout', [AuthController::class, 'logout']);
         Route::get('auth/me', [AuthController::class, 'me']);
         Route::patch('auth/me', [AuthController::class, 'updateProfile']);
+        Route::post('auth/change-password', [AuthController::class, 'changePassword'])->middleware('throttle:10,1');
 
         // Invitations (owner/admin only)
+        Route::get('invitations', [InvitationController::class, 'index'])
+            ->middleware('role:owner,admin');
         Route::post('invitations', [InvitationController::class, 'store'])
+            ->middleware('role:owner,admin');
+        Route::post('invitations/{id}/resend', [InvitationController::class, 'resend'])
+            ->middleware('role:owner,admin');
+        Route::delete('invitations/{id}', [InvitationController::class, 'destroy'])
             ->middleware('role:owner,admin');
         // Backward-compatible alias used by older frontend builds
         Route::post('users/invite', [InvitationController::class, 'store'])
@@ -55,6 +64,7 @@ Route::prefix('v1')->group(function () {
         // Timer
         Route::post('timer/start', [\App\Http\Controllers\Api\V1\TimerController::class, 'start']);
         Route::post('timer/stop', [\App\Http\Controllers\Api\V1\TimerController::class, 'stop']);
+        Route::post('timer/switch', [\App\Http\Controllers\Api\V1\TimerController::class, 'switch']);
         Route::post('timer/pause', [\App\Http\Controllers\Api\V1\TimerController::class, 'pause']);
         Route::get('timer/status', [\App\Http\Controllers\Api\V1\TimerController::class, 'status']);
         Route::get('timer/today-total', [\App\Http\Controllers\Api\V1\TimerController::class, 'todayTotal']);
@@ -72,6 +82,13 @@ Route::prefix('v1')->group(function () {
 
         // Projects
         Route::apiResource('projects', \App\Http\Controllers\Api\V1\ProjectController::class);
+        Route::get('projects/{project}/members', [\App\Http\Controllers\Api\V1\ProjectController::class, 'members'])
+            ->middleware('role:owner,admin,manager');
+        Route::put('projects/{project}/members', [\App\Http\Controllers\Api\V1\ProjectController::class, 'syncMembers'])
+            ->middleware('role:owner,admin,manager');
+        Route::delete('projects/{project}/members/{user}', [\App\Http\Controllers\Api\V1\ProjectController::class, 'removeMember'])
+            ->middleware('role:owner,admin,manager')
+            ->name('projects.members.remove');
 
         // Tasks
         Route::apiResource('tasks', \App\Http\Controllers\Api\V1\TaskController::class);
@@ -81,7 +98,7 @@ Route::prefix('v1')->group(function () {
 
         // Agent
         Route::get('agent/config', [\App\Http\Controllers\Api\V1\AgentController::class, 'config']);
-        Route::post('agent/logs', [\App\Http\Controllers\Api\V1\AgentController::class, 'bulkLogs']);
+        Route::post('agent/logs', [\App\Http\Controllers\Api\V1\AgentController::class, 'bulkLogs'])->middleware('throttle:30,1');
 
         // Screenshots
         Route::get('screenshots/signed-cookies', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'signedCookies']);
@@ -111,6 +128,8 @@ Route::prefix('v1')->group(function () {
 
         // Users (owner/admin/manager)
         Route::apiResource('users', \App\Http\Controllers\Api\V1\UserController::class)->except(['store'])->middleware('role:owner,admin,manager');
+        Route::post('users/{id}/password-reset', [UserPasswordController::class, 'reset'])
+            ->middleware(['role:owner,admin,manager', 'throttle:5,1']);
 
         // Settings
         Route::get('settings', [\App\Http\Controllers\Api\V1\SettingsController::class, 'show']);

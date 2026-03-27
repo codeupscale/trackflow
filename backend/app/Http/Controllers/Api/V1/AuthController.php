@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Auth\ChangePasswordRequest;
 use App\Http\Requests\Auth\LoginRequest;
 use App\Http\Requests\Auth\RegisterRequest;
 use App\Models\Organization;
@@ -28,13 +29,10 @@ class AuthController extends Controller
                 'slug' => Str::slug($request->company_name) . '-' . Str::random(6),
                 'plan' => 'trial',
                 'trial_ends_at' => now()->addDays(14),
-                'settings' => [
-                    'screenshot_interval' => 5,
-                    'blur_screenshots' => false,
-                    'idle_timeout' => 5,
-                    'timezone' => $request->timezone ?? 'America/New_York',
-                    'can_add_manual_time' => true,
-                ],
+                'settings' => array_merge(
+                    (new \App\Models\Organization)->getDefaultSettings(),
+                    ['timezone' => $request->timezone ?? 'America/New_York']
+                ),
             ]);
 
             return User::create([
@@ -150,7 +148,18 @@ class AuthController extends Controller
     {
         $request->validate(['email' => 'required|email']);
 
-        $status = Password::sendResetLink($request->only('email'));
+        try {
+            $status = Password::sendResetLink($request->only('email'));
+        } catch (\Exception $e) {
+            \Log::error('Password reset email failed', [
+                'email' => $request->email,
+                'error' => $e->getMessage(),
+            ]);
+
+            throw ValidationException::withMessages([
+                'email' => ['Unable to send reset link. Please try again later.'],
+            ]);
+        }
 
         if ($status !== Password::RESET_LINK_SENT) {
             throw ValidationException::withMessages([
@@ -189,6 +198,94 @@ class AuthController extends Controller
         return response()->json(['message' => 'Password has been reset.']);
     }
 
+    /** AUTH-09: Google OAuth — verify ID token and login/register */
+    public function googleAuth(Request $request): JsonResponse
+    {
+        $request->validate([
+            'id_token' => 'required|string',
+        ]);
+
+        $clientId = config('services.google.client_id');
+        if (empty($clientId)) {
+            return response()->json(['message' => 'Google login is not configured.'], 503);
+        }
+
+        // Verify the Google ID token via Google's tokeninfo endpoint
+        $response = \Illuminate\Support\Facades\Http::get('https://oauth2.googleapis.com/tokeninfo', [
+            'id_token' => $request->id_token,
+        ]);
+
+        if ($response->failed()) {
+            return response()->json(['message' => 'Invalid Google token.'], 401);
+        }
+
+        $payload = $response->json();
+
+        // Verify audience matches our client ID
+        if (($payload['aud'] ?? '') !== $clientId) {
+            return response()->json(['message' => 'Token was not issued for this application.'], 401);
+        }
+
+        $email = $payload['email'] ?? null;
+        $name = $payload['name'] ?? ($payload['given_name'] ?? 'User');
+        $googleId = $payload['sub'] ?? null;
+        $avatarUrl = $payload['picture'] ?? null;
+
+        if (!$email || !$googleId) {
+            return response()->json(['message' => 'Could not retrieve email from Google.'], 422);
+        }
+
+        // Strategy:
+        // 1. User exists with same sso_provider_id → login (returning user)
+        // 2. User exists with same email → link Google account + login
+        // 3. No user exists → this is an employee invited via email, or unauthorized
+        //    (only owners can register new orgs — employees must be invited first)
+
+        $user = User::where('sso_provider', 'google')
+            ->where('sso_provider_id', $googleId)
+            ->first();
+
+        if (!$user) {
+            // Check if email exists (invited user or existing account)
+            $user = User::where('email', $email)->first();
+
+            if ($user) {
+                // Link Google to existing account
+                $user->update([
+                    'sso_provider' => 'google',
+                    'sso_provider_id' => $googleId,
+                    'avatar_url' => $user->avatar_url ?: $avatarUrl,
+                    'email_verified_at' => $user->email_verified_at ?: now(),
+                ]);
+            } else {
+                // No account exists — reject (employees must be invited first)
+                return response()->json([
+                    'message' => 'No account found with this email. Ask your admin to invite you first.',
+                ], 404);
+            }
+        }
+
+        if (!$user->is_active) {
+            return response()->json(['message' => 'Your account has been deactivated.'], 403);
+        }
+
+        // Clean expired tokens
+        $user->tokens()->where('expires_at', '<', now())->delete();
+
+        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
+        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+
+        $user->update(['last_active_at' => now()]);
+        AuditService::log('auth.login', $user, ['method' => 'google'], $user);
+
+        return response()->json([
+            'user' => $this->userResponse($user),
+            'access_token' => $token->plainTextToken,
+            'refresh_token' => $refreshToken->plainTextToken,
+            'token_type' => 'Bearer',
+        ]);
+    }
+
     /** AUTH-07: Get current user */
     public function me(Request $request): JsonResponse
     {
@@ -212,6 +309,40 @@ class AuthController extends Controller
 
         return response()->json([
             'user' => $this->userResponse($user->fresh()),
+        ]);
+    }
+
+    /** AUTH-08: Change password (requires current password) */
+    public function changePassword(ChangePasswordRequest $request): JsonResponse
+    {
+        $user = $request->user();
+        $user->loadMissing('organization');
+
+        // SSO users should not be able to change local passwords.
+        if (! empty($user->sso_provider) || ! empty($user->sso_provider_id) || (($user->organization->enforce_sso ?? false) && ! empty($user->organization->sso_config))) {
+            throw ValidationException::withMessages([
+                'password' => ['Your organization requires SSO login. Password changes are disabled.'],
+            ]);
+        }
+
+        $user->forceFill([
+            'password' => $request->password,
+            'remember_token' => Str::random(60),
+        ])->save();
+
+        // Revoke all tokens (web + desktop) and return fresh tokens so current session stays logged in.
+        $user->tokens()->delete();
+
+        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
+        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+
+        AuditService::log('auth.password_changed', $user, [], $user);
+
+        return response()->json([
+            'message' => 'Password updated successfully.',
+            'access_token' => $token->plainTextToken,
+            'refresh_token' => $refreshToken->plainTextToken,
+            'token_type' => 'Bearer',
         ]);
     }
 

@@ -8,26 +8,38 @@ use Illuminate\Support\Facades\Schedule;
 
 // JOB-02: Check for idle employees — every 5 minutes
 Schedule::call(function () {
-    Organization::all()->each(function ($org) {
-        SendTimerIdleAlertJob::dispatch($org->id);
-    });
+    Organization::query()
+        ->select('id')
+        ->chunkById(500, function ($orgs) {
+            foreach ($orgs as $org) {
+                SendTimerIdleAlertJob::dispatch($org->id);
+            }
+        });
 })->everyFiveMinutes()->name('idle-detection');
 
 // JOB-04: Timesheet reminders — Friday 4pm
 Schedule::call(function () {
-    Organization::all()->each(function ($org) {
-        SendTimesheetReminderJob::dispatch(
-            $org->id,
-            now()->startOfWeek()->toDateString()
-        );
-    });
+    Organization::query()
+        ->select('id')
+        ->chunkById(500, function ($orgs) {
+            foreach ($orgs as $org) {
+                SendTimesheetReminderJob::dispatch(
+                    $org->id,
+                    now()->startOfWeek()->toDateString()
+                );
+            }
+        });
 })->weeklyOn(5, '16:00')->name('timesheet-reminders');
 
 // JOB-06: Prune old activity logs — Daily 2am UTC
 Schedule::call(function () {
-    Organization::all()->each(function ($org) {
-        PruneOldActivityLogsJob::dispatch($org->id);
-    });
+    Organization::query()
+        ->select('id')
+        ->chunkById(500, function ($orgs) {
+            foreach ($orgs as $org) {
+                PruneOldActivityLogsJob::dispatch($org->id);
+            }
+        });
 })->dailyAt('02:00')->name('prune-activity-logs');
 
 // Clean up expired invitations — Daily 3am UTC
@@ -37,6 +49,10 @@ Schedule::call(function () {
         ->where('expires_at', '<', now())
         ->delete();
 })->dailyAt('03:00')->name('clean-expired-invitations');
+
+// JOB-07: Cleanup stale time entries — every 5 minutes
+// Auto-closes running entries with no heartbeat for 30+ minutes (orphaned timers)
+Schedule::command('timer:cleanup-stale')->everyFiveMinutes()->name('cleanup-stale-entries');
 
 // Data retention enforcement — Daily 4am UTC
 Schedule::job(new \App\Jobs\EnforceDataRetentionJob)->dailyAt('04:00')->name('enforce-data-retention');

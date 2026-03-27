@@ -3,131 +3,353 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
   <title>TrackFlow</title>
+  <link rel="stylesheet" href="shared.css">
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f172a;
-      color: #e2e8f0;
-      height: 100vh;
-      overflow: hidden;
-      user-select: none;
-      -webkit-app-region: drag;
-    }
-    .container { padding: 16px; height: 100%; display: flex; flex-direction: column; }
-    .header {
-      display: flex; justify-content: space-between; align-items: center;
-      padding-bottom: 12px; border-bottom: 1px solid #1e293b;
-    }
-    .logo { font-size: 16px; font-weight: 700; color: #3b82f6; }
-    .btn {
-      -webkit-app-region: no-drag;
-      padding: 6px 14px; border: none; border-radius: 6px;
-      font-size: 13px; font-weight: 600; cursor: pointer;
-      transition: all 0.15s;
-    }
-    .btn-primary { background: #3b82f6; color: white; }
-    .btn-primary:hover { background: #2563eb; }
-    .btn-danger { background: #ef4444; color: white; }
-    .btn-danger:hover { background: #dc2626; }
-    .btn-ghost { background: transparent; color: #94a3b8; }
-    .btn-ghost:hover { color: #e2e8f0; }
+    body { height: 100vh; }
 
+    .container {
+      padding: 0;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .content {
+      padding: 12px 16px 16px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Timer Display ──────────────────────────────────────── */
     .timer-display {
-      text-align: center; padding: 24px 0;
-      flex: 1; display: flex; flex-direction: column; justify-content: center;
+      text-align: center;
+      padding: 20px 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
     }
     .time {
-      font-size: 42px; font-weight: 700; font-variant-numeric: tabular-nums;
+      font-size: 42px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
       letter-spacing: 2px;
+      transition: color 0.2s;
     }
-    .time.running { color: #22c55e; }
-    .time.stopped { color: #64748b; }
-    .status { font-size: 13px; color: #64748b; margin-top: 4px; }
-    .status .dot {
-      display: inline-block; width: 8px; height: 8px;
-      border-radius: 50%; margin-right: 4px; vertical-align: middle;
-    }
-    .dot.green { background: #22c55e; animation: pulse 2s infinite; }
-    .dot.gray { background: #64748b; }
+    .time.running { color: var(--accent-green); }
+    .time.stopped { color: var(--text-muted); }
 
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.4; }
+    .status {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dot.green { background: var(--accent-green); animation: pulse 2s infinite; }
+    .dot.gray { background: var(--text-muted); }
+
+    /* ── Project Select ─────────────────────────────────────── */
+    .select-wrap {
+      margin: 8px 0;
     }
 
-    .project-select {
-      -webkit-app-region: no-drag;
-      width: 100%; padding: 8px 12px; margin: 12px 0;
-      background: #1e293b; border: 1px solid #334155;
-      border-radius: 6px; color: #e2e8f0; font-size: 13px;
-      outline: none;
-    }
-    .project-select:focus { border-color: #3b82f6; }
-    .project-select:disabled { opacity: 0.5; cursor: not-allowed; }
-
+    /* ── Action Buttons ─────────────────────────────────────── */
     .actions {
-      display: flex; gap: 8px; justify-content: center; padding: 12px 0;
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      padding: 8px 0;
     }
-    .actions .btn { flex: 1; padding: 10px; font-size: 14px; }
-    .actions .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .actions .btn {
+      flex: 1;
+      padding: 10px;
+      font-size: 14px;
+    }
 
+    /* ── Footer ─────────────────────────────────────────────── */
     .footer {
-      display: flex; justify-content: space-between; align-items: center;
-      padding-top: 12px;
-      border-top: 1px solid #1e293b; font-size: 11px; color: #475569;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 10px;
+      border-top: 1px solid var(--border-color);
+      font-size: 11px;
     }
-    .footer a {
-      -webkit-app-region: no-drag;
-      color: #64748b; cursor: pointer; text-decoration: none;
+
+    /* ── Permission Warning Banner ─────────────────────────── */
+    .permission-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      margin-bottom: 8px;
+      border-radius: 8px;
+      background: rgba(234, 179, 8, 0.12);
+      border: 1px solid rgba(234, 179, 8, 0.3);
+      font-size: 12px;
+      color: var(--text-primary);
     }
-    .footer a:hover { color: #94a3b8; }
-    .footer .dashboard-link { color: #3b82f6; }
-    .footer .dashboard-link:hover { color: #60a5fa; }
+    .permission-banner-text {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .permission-banner-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: rgba(234, 179, 8, 0.3);
+      color: #eab308;
+      font-weight: 700;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    .permission-banner-btn {
+      padding: 3px 10px;
+      border-radius: 4px;
+      border: 1px solid rgba(234, 179, 8, 0.4);
+      background: rgba(234, 179, 8, 0.15);
+      color: #eab308;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .permission-banner-btn:hover {
+      background: rgba(234, 179, 8, 0.25);
+    }
+
+    /* ── Update Dialog Overlay ────────────────────────────── */
+    .update-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      align-items: center;
+      justify-content: center;
+      animation: updateFadeIn 0.25s ease-out;
+    }
+    .update-overlay.visible {
+      display: flex;
+    }
+    @keyframes updateFadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    @keyframes updateCardIn {
+      from { opacity: 0; transform: scale(0.92) translateY(8px); }
+      to   { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    .update-card {
+      background: var(--bg-secondary, #171717);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 24px;
+      max-width: 340px;
+      width: calc(100% - 32px);
+      text-align: center;
+      animation: updateCardIn 0.3s ease-out;
+    }
+    .update-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: rgba(59, 130, 246, 0.15);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 16px;
+    }
+    .update-icon svg {
+      color: #3b82f6;
+    }
+    .update-title {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text-primary, #fff);
+      margin-bottom: 8px;
+    }
+    .update-body {
+      font-size: 13px;
+      color: var(--text-secondary, #a3a3a3);
+      line-height: 1.5;
+      margin-bottom: 20px;
+    }
+    .update-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .update-btn-primary {
+      width: 100%;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      background: #3b82f6;
+      color: #fff;
+      transition: background 0.15s;
+    }
+    .update-btn-primary:hover {
+      background: #2563eb;
+    }
+    .update-btn-secondary {
+      width: 100%;
+      padding: 10px 16px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      background: transparent;
+      color: var(--text-secondary, #a3a3a3);
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .update-btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+    /* Update badge — shows after dismissing the dialog */
+    .update-badge {
+      display: none;
+      position: absolute;
+      top: 7px;
+      right: 40px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #3b82f6;
+      cursor: pointer;
+      animation: pulse 2s infinite;
+    }
+    .update-badge.visible {
+      display: block;
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="header">
-      <span class="logo">TrackFlow</span>
-      <button class="btn btn-ghost" id="logoutBtn">Logout</button>
-    </div>
-
-    <div class="timer-display">
-      <div class="time stopped" id="timerDisplay">00:00:00</div>
-      <div class="status">
-        <span class="dot gray" id="statusDot"></span>
-        <span id="statusText">Stopped</span>
+    <!-- Custom titlebar — identical on all platforms -->
+    <div class="titlebar" id="titlebar">
+      <span class="titlebar-title">TrackFlow</span>
+      <div class="titlebar-controls">
+        <span class="update-badge" id="updateBadge" title="Update available — click to show"></span>
+        <button class="titlebar-btn" id="logoutBtn" title="Sign out">
+          <!-- Logout icon (SVG) -->
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        </button>
       </div>
     </div>
 
-    <select class="project-select" id="projectSelect">
-      <option value="">No Project</option>
-    </select>
+    <div class="content">
+      <!-- Permission warning banner — shown when Screen Recording is not granted -->
+      <div class="permission-banner" id="permissionBanner" style="display:none" role="alert">
+        <div class="permission-banner-text">
+          <span class="permission-banner-icon" aria-hidden="true">!</span>
+          <span>Screenshots disabled — permission needed</span>
+        </div>
+        <button class="permission-banner-btn" id="fixPermissionBtn">Fix</button>
+      </div>
 
-    <div class="actions">
-      <button class="btn btn-primary" id="startBtn">Start</button>
-      <button class="btn btn-danger" id="stopBtn" style="display:none">Stop</button>
+      <div class="timer-display">
+        <div class="time stopped" id="timerDisplay" role="timer" aria-live="polite">00:00:00</div>
+        <div class="status">
+          <span class="dot gray" id="statusDot" aria-hidden="true"></span>
+          <span id="statusText">Stopped</span>
+        </div>
+      </div>
+
+      <!-- Custom-styled select — identical on all platforms -->
+      <div class="select-wrap">
+        <select id="projectSelect" aria-label="Select project">
+          <option value="">No Project</option>
+        </select>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-primary" id="startBtn">
+          <span id="startBtnText">Start</span>
+        </button>
+        <button class="btn btn-danger" id="stopBtn" style="display:none">Stop</button>
+      </div>
+
+      <div class="footer">
+        <a id="dashboardLink" class="link-primary" tabindex="0" role="link">Open Dashboard</a>
+        <a id="logoutLink" tabindex="0" role="link" class="text-muted text-xs">Sign out</a>
+      </div>
     </div>
+  </div>
 
-    <div class="footer">
-      <a id="dashboardLink" class="dashboard-link">Open Dashboard</a>
-      <a id="logoutLink">Sign out</a>
+  <!-- Update Available Dialog -->
+  <div class="update-overlay" id="updateOverlay" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+    <div class="update-card">
+      <div class="update-icon" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+      </div>
+      <div class="update-title" id="updateTitle">Update Available</div>
+      <div class="update-body" id="updateBody">A new version is ready to install. Restart now to get the latest features and bug fixes.</div>
+      <div class="update-actions">
+        <button class="update-btn-primary" id="updateRestartBtn">Restart Now</button>
+        <button class="update-btn-secondary" id="updateLaterBtn">Later</button>
+      </div>
     </div>
   </div>
 
   <script>
-    let timerInterval = null;
+    // ── OS Theme Detection ──
+    // Apply the OS theme (light/dark) to the document root.
+    // Dark is the default in CSS (:root), light requires data-theme="light".
+    function applyTheme(theme) {
+      if (theme === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+      } else {
+        document.documentElement.removeAttribute('data-theme');
+      }
+    }
+    // Get initial theme from main process and apply it
+    window.trackflow.getTheme().then(applyTheme).catch(() => {});
+    // Listen for OS theme changes (e.g., user toggles dark/light mode)
+    window.trackflow.onThemeChange(applyTheme);
+
+    // ── Platform detection for shortcut labels ──
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    const modKey = isMac ? 'Cmd' : 'Ctrl';
+
+    // Apply shortcut hints
+    document.getElementById('logoutBtn').title = `Sign out (${modKey}+Q)`;
+
     let elapsedSeconds = 0;
-    let todayTotalBase = 0; // Current day total (00:00–23:59 server time), per selected project
+    let todayTotalBase = 0;
     let isRunning = false;
     let currentStartedAt = null;
+    let _startedAtMs = null;
 
     function showNotification(msg) {
       const el = document.createElement('div');
-      el.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;padding:6px 16px;border-radius:6px;font-size:12px;z-index:999;opacity:1;transition:opacity 0.3s;';
+      el.className = 'notification';
       el.textContent = msg;
+      el.setAttribute('role', 'alert');
       document.body.appendChild(el);
       setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 3000);
     }
@@ -136,11 +358,14 @@
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     const startBtn = document.getElementById('startBtn');
+    const startBtnText = document.getElementById('startBtnText');
     const stopBtn = document.getElementById('stopBtn');
     const projectSelect = document.getElementById('projectSelect');
     const logoutBtn = document.getElementById('logoutBtn');
     const logoutLink = document.getElementById('logoutLink');
     const dashboardLink = document.getElementById('dashboardLink');
+    const permissionBanner = document.getElementById('permissionBanner');
+    const fixPermissionBtn = document.getElementById('fixPermissionBtn');
 
     function formatTime(seconds) {
       const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
@@ -149,10 +374,20 @@
       return `${h}:${m}:${s}`;
     }
 
-    // Calculate elapsed time from server's started_at timestamp
     function calcElapsedFromStartedAt() {
-      if (!currentStartedAt) return 0;
-      return Math.max(0, Math.floor((Date.now() - new Date(currentStartedAt).getTime()) / 1000));
+      if (!_startedAtMs) return 0;
+      return Math.max(0, Math.floor((Date.now() - _startedAtMs) / 1000));
+    }
+
+    function setStartedAt(isoOrMs) {
+      if (!isoOrMs) { currentStartedAt = null; _startedAtMs = null; return; }
+      if (typeof isoOrMs === 'number') {
+        _startedAtMs = isoOrMs;
+        currentStartedAt = new Date(isoOrMs).toISOString();
+      } else {
+        currentStartedAt = isoOrMs;
+        _startedAtMs = new Date(isoOrMs).getTime();
+      }
     }
 
     function updateDisplay(running) {
@@ -160,115 +395,174 @@
       timerDisplay.textContent = formatTime(elapsedSeconds);
       timerDisplay.className = `time ${running ? 'running' : 'stopped'}`;
       statusDot.className = `dot ${running ? 'green' : 'gray'}`;
-      statusText.textContent = running ? 'Tracking' : (todayTotalBase > 0 ? 'Today\'s Total' : 'Stopped');
-      startBtn.style.display = running ? 'none' : 'block';
-      stopBtn.style.display = running ? 'block' : 'none';
-      projectSelect.disabled = running;
-      updateStartButtonState();
+      statusText.textContent = running ? 'Tracking' : (todayTotalBase > 0 ? 'Today\u2019s Total' : 'Stopped');
+      startBtn.style.display = running ? 'none' : 'flex';
+      stopBtn.style.display = running ? 'flex' : 'none';
+      projectSelect.disabled = running || projectSelect.options.length <= 1;
+      startBtn.disabled = isRunning;
     }
 
-    // Start is only allowed when a project is selected (required for tracking)
-    function updateStartButtonState() {
-      const noProject = !projectSelect.value || projectSelect.value === '';
-      startBtn.disabled = !isRunning && noProject;
-    }
+    // The main process is the single source of truth for elapsed time.
+    // It computes the total seconds on each tick and broadcasts to both
+    // the tray title and the renderer via IPC, keeping them perfectly in sync.
+    let _tickListenerRegistered = false;
 
     function startTicking() {
-      if (timerInterval) clearInterval(timerInterval);
-      timerInterval = setInterval(() => {
-        // Show today's total (completed + current running)
-        elapsedSeconds = todayTotalBase + calcElapsedFromStartedAt();
-        timerDisplay.textContent = formatTime(elapsedSeconds);
-      }, 1000);
-    }
-
-    function stopTicking() {
-      if (timerInterval) {
-        clearInterval(timerInterval);
-        timerInterval = null;
+      // Register the tick listener once; main process drives updates via timer-tick IPC
+      if (!_tickListenerRegistered) {
+        _tickListenerRegistered = true;
+        window.trackflow.onTimerTick((data) => {
+          if (!isRunning) return;
+          elapsedSeconds = data.totalSeconds;
+          timerDisplay.textContent = data.formatted;
+        });
       }
     }
 
-    // Sync timer state from main process — current day total (00:00–23:59) for selected project
+    function stopTicking() {
+      // No interval to clear — main process stops sending ticks when timer stops
+    }
+
     async function syncTimerState() {
       try {
         await loadProjects();
         const selectedProjectId = projectSelect.value || null;
         const state = await window.trackflow.getTimerState(selectedProjectId);
         todayTotalBase = state.todayTotal ?? 0;
-
         if (state.isRunning) {
-          currentStartedAt = state.entry?.started_at || null;
+          setStartedAt(state.entry?.started_at || null);
           const currentElapsed = state.elapsed || calcElapsedFromStartedAt();
-          // When running, todayTotal from server includes current elapsed
-          // Base = todayTotal - currentElapsed (completed entries only)
           todayTotalBase = Math.max(0, todayTotalBase - currentElapsed);
           elapsedSeconds = todayTotalBase + currentElapsed;
           updateDisplay(true);
           startTicking();
         } else {
-          currentStartedAt = null;
+          setStartedAt(null);
           stopTicking();
-          // Show today's total when stopped (not 00:00:00)
           elapsedSeconds = todayTotalBase;
           updateDisplay(false);
         }
-
-        // Select current project if timer is running
         if (state.entry && state.entry.project_id) {
           projectSelect.value = state.entry.project_id;
         }
-        updateStartButtonState();
       } catch (e) {
         console.error('Failed to sync timer state:', e);
       }
     }
 
-    // Fetch projects and refresh dropdown (called on init and every time popup opens so newly assigned projects appear)
     async function loadProjects() {
       try {
         const projects = await window.trackflow.getProjects();
         const list = Array.isArray(projects) ? projects
-          : (projects?.data && Array.isArray(projects.data)) ? projects.data
-          : [];
-
+          : (projects?.data && Array.isArray(projects.data)) ? projects.data : [];
         const currentValue = projectSelect.value || '';
-        projectSelect.innerHTML = '<option value="">No Project</option>';
+        projectSelect.innerHTML = '<option value="">Select a project</option>';
         list.forEach(p => {
           const option = document.createElement('option');
           option.value = p.id;
           option.textContent = p.name;
           projectSelect.appendChild(option);
         });
-        if (currentValue && list.some(p => p.id === currentValue)) {
+        if (currentValue && list.some(p => String(p.id) === currentValue)) {
           projectSelect.value = currentValue;
+        }
+        updateStartBtnState();
+      } catch {}
+    }
+
+    // Disable Start button when no project selected
+    function updateStartBtnState() {
+      if (isRunning) return; // Don't touch button state while running
+      const hasProject = projectSelect.value && projectSelect.value !== '';
+      startBtn.disabled = !hasProject;
+      startBtn.style.opacity = hasProject ? '1' : '0.5';
+      startBtn.style.cursor = hasProject ? 'pointer' : 'not-allowed';
+      if (!hasProject) {
+        startBtn.title = 'Select a project to start tracking';
+      } else {
+        startBtn.title = '';
+      }
+    }
+
+    // ── Permission Banner Logic ──
+    function showPermissionBanner() {
+      permissionBanner.style.display = 'flex';
+    }
+    function hidePermissionBanner() {
+      permissionBanner.style.display = 'none';
+    }
+
+    // Check permission on load and show banner if needed
+    async function checkPermission() {
+      try {
+        const result = await window.trackflow.checkScreenPermission();
+        if (result && !result.granted && result.platform === 'darwin') {
+          showPermissionBanner();
+        } else {
+          hidePermissionBanner();
         }
       } catch {}
     }
 
-    // Load initial state
+    fixPermissionBtn.addEventListener('click', async () => {
+      try {
+        await window.trackflow.requestScreenPermission();
+      } catch {}
+    });
+
+    // Listen for permission status updates from main process
+    window.trackflow.onPermissionStatus((data) => {
+      if (data && data.granted === false) {
+        showPermissionBanner();
+      } else {
+        hidePermissionBanner();
+      }
+    });
+
     async function init() {
       await loadProjects();
+
+      // Restore last selected project from persistent storage
+      try {
+        const lastProjectId = await window.trackflow.getLastProject();
+        if (lastProjectId && !isRunning) {
+          // Check the project still exists in the dropdown
+          const optionExists = Array.from(projectSelect.options).some(o => o.value === lastProjectId);
+          if (optionExists) {
+            projectSelect.value = lastProjectId;
+          }
+        }
+      } catch (e) {
+        console.error('Failed to restore last project:', e);
+      }
+
       await syncTimerState();
-      updateStartButtonState();
+      updateStartBtnState();
+
+      // Check screen recording permission on renderer init
+      checkPermission();
       projectSelect.addEventListener('change', () => {
-        updateStartButtonState();
+        // Persist the selected project so it survives logout/login and app restarts
+        window.trackflow.setLastProject(projectSelect.value || null);
+        updateStartBtnState();
         if (!isRunning) syncTimerState();
       });
     }
 
     startBtn.addEventListener('click', async () => {
-      startBtn.disabled = true;
-      startBtn.textContent = 'Starting...';
       const projectId = projectSelect.value || null;
+      if (!projectId) {
+        // Safety check — button should already be disabled
+        projectSelect.focus();
+        return;
+      }
+      startBtn.disabled = true;
+      startBtnText.textContent = 'Starting\u2026';
       try {
         const result = await window.trackflow.startTimer(projectId);
         if (result.success) {
-          currentStartedAt = result.entry?.started_at || new Date().toISOString();
-          // todayTotalBase keeps accumulated completed time
-          if (result.todayTotal > 0) {
-            todayTotalBase = result.todayTotal;
-          }
+          setStartedAt(result.entry?.started_at || new Date().toISOString());
+          if (result.todayTotal > 0) todayTotalBase = result.todayTotal;
           elapsedSeconds = todayTotalBase;
           updateDisplay(true);
           startTicking();
@@ -278,20 +572,18 @@
       } catch (e) {
         showNotification('Failed to start timer');
       }
-      startBtn.disabled = false;
-      startBtn.textContent = 'Start';
+      startBtnText.textContent = 'Start';
+      updateStartBtnState();
     });
 
     stopBtn.addEventListener('click', () => {
-      // Update UI IMMEDIATELY — don't wait for network
       stopTicking();
-      const stoppedTotal = elapsedSeconds; // Capture current displayed time
-      currentStartedAt = null;
+      const stoppedTotal = elapsedSeconds;
+      setStartedAt(null);
       todayTotalBase = stoppedTotal;
       elapsedSeconds = stoppedTotal;
       updateDisplay(false);
-
-      // Fire-and-forget — don't await, so the UI never blocks
+      updateStartBtnState();
       window.trackflow.stopTimer().then((result) => {
         if (result && result.todayTotal > 0 && result.todayTotal !== stoppedTotal) {
           todayTotalBase = result.todayTotal;
@@ -301,7 +593,6 @@
       }).catch(() => {});
     });
 
-    // Both logout buttons do the same thing
     async function handleLogout() {
       logoutBtn.disabled = true;
       stopTicking();
@@ -309,19 +600,25 @@
     }
     logoutBtn.addEventListener('click', handleLogout);
     logoutLink.addEventListener('click', handleLogout);
+    dashboardLink.addEventListener('click', () => window.trackflow.openDashboard());
 
-    // Open web dashboard in browser
-    dashboardLink.addEventListener('click', () => {
-      window.trackflow.openDashboard();
+    // Keyboard shortcuts — platform-aware
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.repeat) {
+        e.preventDefault();
+        if (isRunning) stopBtn.click(); else startBtn.click();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'q') {
+        e.preventDefault();
+        handleLogout();
+      }
+      if (e.key === 'Escape') window.blur();
     });
 
-    // Events from main process (timer sync, background state changes)
+    // Events from main process
     window.trackflow.onTimerStarted((data) => {
-      currentStartedAt = data?.started_at || new Date().toISOString();
-      // Use todayTotal from server if available
-      if (data?.todayTotal > 0) {
-        todayTotalBase = data.todayTotal;
-      }
+      setStartedAt(data?.started_at || new Date().toISOString());
+      if (data?.todayTotal > 0) todayTotalBase = data.todayTotal;
       elapsedSeconds = todayTotalBase + calcElapsedFromStartedAt();
       updateDisplay(true);
       startTicking();
@@ -329,24 +626,66 @@
 
     window.trackflow.onTimerStopped((data) => {
       stopTicking();
-      currentStartedAt = null;
+      setStartedAt(null);
       if (data?.entry?.project_id) {
         projectSelect.value = data.entry.project_id;
         todayTotalBase = data.todayTotal ?? 0;
       } else if (data?.todayTotal !== undefined) {
         todayTotalBase = data.todayTotal;
-      } else {
-        syncTimerState();
-        return;
-      }
+      } else { syncTimerState(); return; }
       elapsedSeconds = todayTotalBase;
       updateDisplay(false);
     });
 
-    // Re-sync when popup window becomes visible again (user clicked tray icon)
-    window.trackflow.onSyncTimer(() => {
-      syncTimerState();
+    window.trackflow.onSyncTimer(() => syncTimerState());
+
+    // ── Update Dialog Logic ──
+    const updateOverlay = document.getElementById('updateOverlay');
+    const updateBody = document.getElementById('updateBody');
+    const updateRestartBtn = document.getElementById('updateRestartBtn');
+    const updateLaterBtn = document.getElementById('updateLaterBtn');
+    const updateBadge = document.getElementById('updateBadge');
+    let _pendingUpdateVersion = null;
+
+    function showUpdateDialog(version) {
+      _pendingUpdateVersion = version;
+      updateBody.textContent = `TrackFlow v${version} is ready to install. Restart now to get the latest features and bug fixes.`;
+      updateOverlay.classList.add('visible');
+      updateRestartBtn.focus();
+    }
+
+    function hideUpdateDialog() {
+      updateOverlay.classList.remove('visible');
+      // Show the badge so the user can reopen the dialog
+      if (_pendingUpdateVersion) {
+        updateBadge.classList.add('visible');
+        updateBadge.title = `Update v${_pendingUpdateVersion} available \u2014 click to show`;
+      }
+    }
+
+    updateRestartBtn.addEventListener('click', () => {
+      updateRestartBtn.disabled = true;
+      updateRestartBtn.textContent = 'Restarting\u2026';
+      window.trackflow.installUpdate();
     });
+
+    updateLaterBtn.addEventListener('click', () => {
+      hideUpdateDialog();
+    });
+
+    updateBadge.addEventListener('click', () => {
+      if (_pendingUpdateVersion) showUpdateDialog(_pendingUpdateVersion);
+    });
+
+    // Listen for update-ready IPC from main process
+    window.trackflow.onUpdateReady((data) => {
+      if (data && data.version) {
+        showUpdateDialog(data.version);
+      }
+    });
+
+    window.addEventListener('error', (e) => console.error('Renderer error:', e.message));
+    window.addEventListener('unhandledrejection', (e) => console.error('Renderer unhandled rejection:', e.reason));
 
     init();
   </script>

@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
-import { CalendarIcon, CheckCircle, Clock, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { CalendarIcon, CheckCircle, Clock, Info, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import {
   Card,
   CardContent,
@@ -32,7 +33,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import api from '@/lib/api';
-import { formatDuration } from '@/lib/utils';
+import { formatDuration, getActivityColor } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
 
 interface TimeEntry {
@@ -43,6 +44,7 @@ interface TimeEntry {
   started_at: string;
   ended_at: string | null;
   duration_seconds: number;
+  type?: 'tracked' | 'manual' | 'idle';
   activity_score: number;
   status: 'pending' | 'approved' | 'rejected';
   project?: {
@@ -64,6 +66,10 @@ interface Project {
 
 interface PaginatedResponse {
   data: TimeEntry[];
+  current_page?: number;
+  last_page?: number;
+  per_page?: number;
+  total?: number;
   meta?: {
     current_page: number;
     last_page: number;
@@ -80,6 +86,7 @@ export default function TimePage() {
   const [dateFrom, setDateFrom] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [dateTo, setDateTo] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [projectFilter, setProjectFilter] = useState<string>('all');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
   const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
   const [page, setPage] = useState(1);
 
@@ -92,16 +99,19 @@ export default function TimePage() {
   });
 
   const { data: entriesData, isLoading } = useQuery<PaginatedResponse>({
-    queryKey: ['time-entries', dateFrom, dateTo, projectFilter, page],
+    queryKey: ['time-entries', dateFrom, dateTo, projectFilter, typeFilter, page],
     queryFn: async () => {
       const params: Record<string, string | number> = {
         date_from: dateFrom,
-        date_to: dateTo + ' 23:59:59',
+        date_to: dateTo,
         page,
         per_page: 20,
       };
       if (projectFilter && projectFilter !== 'all') {
         params.project_id = projectFilter;
+      }
+      if (typeFilter && typeFilter !== 'all') {
+        params.type = typeFilter;
       }
       const res = await api.get('/time-entries', { params });
       // Backend returns is_approved boolean, map to status string for UI
@@ -117,7 +127,26 @@ export default function TimePage() {
   });
 
   const entries = entriesData?.data || [];
-  const meta = entriesData?.meta;
+  const meta = entriesData?.meta || (entriesData?.current_page != null ? {
+    current_page: entriesData.current_page!,
+    last_page: entriesData.last_page!,
+    per_page: entriesData.per_page!,
+    total: entriesData.total!,
+  } : undefined);
+
+  // Live tick for running entries so duration counts up in real time
+  const [, setTick] = useState(0);
+  const hasRunningEntry = entries.some((e) => !e.ended_at);
+  useEffect(() => {
+    if (!hasRunningEntry) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [hasRunningEntry]);
+
+  function getDisplayDuration(entry: { started_at: string; ended_at: string | null; duration_seconds: number }): number {
+    if (entry.ended_at) return entry.duration_seconds;
+    return Math.max(0, Math.floor((new Date().getTime() - new Date(entry.started_at).getTime()) / 1000));
+  }
 
   const approveMutation = useMutation({
     mutationFn: async (entryIds: string[]) => {
@@ -148,53 +177,53 @@ export default function TimePage() {
     }
   };
 
-  const totalSeconds = entries.reduce((sum, e) => sum + (e.duration_seconds || 0), 0);
+  const totalSeconds = entries.reduce((sum, e) => sum + getDisplayDuration(e), 0);
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-white">Time Entries</h1>
-        <p className="text-slate-400 text-sm mt-1">Track and manage your work hours</p>
+        <h1 className="text-2xl font-bold text-foreground">Time Entries</h1>
+        <p className="text-muted-foreground text-sm mt-1">Track and manage your work hours</p>
       </div>
 
       {/* Filters */}
-      <Card className="border-slate-800 bg-slate-900/50">
+      <Card className="border-border bg-card">
         <CardContent className="pt-6">
           <div className="flex flex-col sm:flex-row gap-4 items-end">
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-slate-300" htmlFor="date-from">
+              <label className="text-sm font-medium text-foreground" htmlFor="date-from">
                 From
               </label>
               <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
                   id="date-from"
                   type="date"
                   value={dateFrom}
                   onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
-                  className="pl-10 w-[160px] bg-slate-800/50 border-slate-700 text-white"
+                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
                 />
               </div>
             </div>
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-slate-300" htmlFor="date-to">
+              <label className="text-sm font-medium text-foreground" htmlFor="date-to">
                 To
               </label>
               <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
                   id="date-to"
                   type="date"
                   value={dateTo}
                   onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
-                  className="pl-10 w-[160px] bg-slate-800/50 border-slate-700 text-white"
+                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
                 />
               </div>
             </div>
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-slate-300">Project</label>
+              <label className="text-sm font-medium text-foreground">Project</label>
               <Select value={projectFilter} onValueChange={(val) => { setProjectFilter(val ?? 'all'); setPage(1); }}>
-                <SelectTrigger className="w-[200px] bg-slate-800/50 border-slate-700">
+                <SelectTrigger className="w-[200px] bg-muted border-border">
                   <SelectValue placeholder="All projects" />
                 </SelectTrigger>
                 <SelectContent>
@@ -210,6 +239,20 @@ export default function TimePage() {
                       </div>
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium text-foreground">Time type</label>
+              <Select value={typeFilter} onValueChange={(val) => { setTypeFilter(val ?? 'all'); setPage(1); }}>
+                <SelectTrigger className="w-[160px] bg-muted border-border">
+                  <SelectValue placeholder="All types" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="tracked">Tracked</SelectItem>
+                  <SelectItem value="manual">Manual</SelectItem>
+                  <SelectItem value="idle">Idle</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -233,10 +276,10 @@ export default function TimePage() {
       </Card>
 
       {/* Time Entries Table */}
-      <Card className="border-slate-800 bg-slate-900/50">
+      <Card className="border-border bg-card">
         <CardHeader>
-          <CardTitle className="text-white">Entries</CardTitle>
-          <CardDescription className="text-slate-400">
+          <CardTitle className="text-foreground">Entries</CardTitle>
+          <CardDescription className="text-muted-foreground">
             {entries.length} entries | Total: {formatDuration(totalSeconds)}
           </CardDescription>
         </CardHeader>
@@ -244,14 +287,14 @@ export default function TimePage() {
           {isLoading ? (
             <div className="space-y-3">
               {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="h-12 bg-slate-800/50 rounded animate-pulse" />
+                <div key={i} className="h-12 bg-muted rounded animate-pulse" />
               ))}
             </div>
           ) : entries.length === 0 ? (
             <div className="text-center py-12">
-              <Clock className="h-10 w-10 text-slate-600 mx-auto mb-3" />
-              <p className="text-slate-400 font-medium">No time entries found</p>
-              <p className="text-sm text-slate-500 mt-1">
+              <Clock className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+              <p className="text-muted-foreground font-medium">No time entries found</p>
+              <p className="text-sm text-muted-foreground mt-1">
                 Start the timer or adjust your filters to see entries
               </p>
             </div>
@@ -259,7 +302,7 @@ export default function TimePage() {
             <>
               <Table>
                 <TableHeader>
-                  <TableRow className="border-slate-800 hover:bg-transparent">
+                  <TableRow className="border-border hover:bg-transparent">
                     {canApprove && (
                       <TableHead className="w-[40px]">
                         <input
@@ -270,21 +313,38 @@ export default function TimePage() {
                             entries.filter((e) => e.status === 'pending').length > 0
                           }
                           onChange={toggleAll}
-                          className="rounded border-slate-600"
+                          className="rounded border-border"
                         />
                       </TableHead>
                     )}
-                    <TableHead className="text-slate-400">Date</TableHead>
-                    <TableHead className="text-slate-400">Project</TableHead>
-                    <TableHead className="text-slate-400">Task</TableHead>
-                    <TableHead className="text-slate-400 text-right">Duration</TableHead>
-                    <TableHead className="text-slate-400 text-right">Activity</TableHead>
-                    <TableHead className="text-slate-400 text-center">Status</TableHead>
+                    <TableHead className="text-muted-foreground">Date</TableHead>
+                    <TableHead className="text-muted-foreground">Type</TableHead>
+                    <TableHead className="text-muted-foreground">Project</TableHead>
+                    <TableHead className="text-muted-foreground">Task</TableHead>
+                    <TableHead className="text-muted-foreground text-right">Duration</TableHead>
+                    <TableHead className="text-muted-foreground text-right">
+                      <span className="inline-flex items-center gap-1">
+                        Activity
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={<span />}
+                            className="inline-flex"
+                            aria-label="Activity info"
+                          >
+                            <Info className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground transition-colors" />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            Activity is calculated from keyboard and mouse events during each tracking interval. Higher % means more consistent input activity.
+                          </TooltipContent>
+                        </Tooltip>
+                      </span>
+                    </TableHead>
+                    <TableHead className="text-muted-foreground text-center">Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {entries.map((entry) => (
-                    <TableRow key={entry.id} className="border-slate-800">
+                    <TableRow key={entry.id} className="border-border">
                       {canApprove && (
                         <TableCell>
                           {entry.status === 'pending' && (
@@ -292,19 +352,37 @@ export default function TimePage() {
                               type="checkbox"
                               checked={selectedEntries.includes(entry.id)}
                               onChange={() => toggleEntry(entry.id)}
-                              className="rounded border-slate-600"
+                              className="rounded border-border"
                             />
                           )}
                         </TableCell>
                       )}
                       <TableCell>
-                        <span className="text-sm text-white">
+                        <span className="text-sm text-foreground">
                           {format(new Date(entry.started_at), 'MMM d, yyyy')}
                         </span>
-                        <div className="text-xs text-slate-500">
-                          {format(new Date(entry.started_at), 'HH:mm')}
-                          {entry.ended_at && ` - ${format(new Date(entry.ended_at), 'HH:mm')}`}
+                        <div className="text-xs text-muted-foreground">
+                          {(() => {
+                            const start = new Date(entry.started_at);
+                            if (!entry.ended_at) return format(start, 'HH:mm');
+                            const end = new Date(entry.ended_at);
+                            // Ensure chronological order (idle entries can have start > end)
+                            const earlier = start <= end ? start : end;
+                            const later = start <= end ? end : start;
+                            return `${format(earlier, 'HH:mm')} - ${format(later, 'HH:mm')}`;
+                          })()}
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        <span className={
+                          entry.type === 'idle'
+                            ? 'bg-amber-400/10 text-amber-400 border border-amber-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
+                            : entry.type === 'manual'
+                            ? 'bg-slate-400/10 text-muted-foreground border border-muted-foreground/20 rounded-full px-2 py-0.5 text-xs font-medium'
+                            : 'bg-blue-400/10 text-blue-400 border border-blue-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
+                        }>
+                          {entry.type === 'idle' ? 'Idle' : entry.type === 'manual' ? 'Manual' : 'Tracked'}
+                        </span>
                       </TableCell>
                       <TableCell>
                         {entry.project ? (
@@ -313,49 +391,47 @@ export default function TimePage() {
                               className="h-2 w-2 rounded-full shrink-0"
                               style={{ backgroundColor: entry.project.color || '#6366f1' }}
                             />
-                            <span className="text-sm text-slate-300">{entry.project.name}</span>
+                            <span className="text-sm text-foreground">{entry.project.name}</span>
                           </div>
                         ) : (
-                          <span className="text-sm text-slate-500">No project</span>
+                          <span className="text-sm text-muted-foreground">No project</span>
                         )}
                       </TableCell>
-                      <TableCell className="text-sm text-slate-300">
-                        {entry.task?.title || <span className="text-slate-500">--</span>}
+                      <TableCell className="text-sm text-foreground">
+                        {entry.task?.title || <span className="text-muted-foreground text-xs">No task</span>}
                       </TableCell>
-                      <TableCell className="text-right font-mono text-sm text-slate-300">
-                        {formatDuration(entry.duration_seconds)}
+                      <TableCell className="text-right font-mono text-sm tabular-nums">
+                        {entry.ended_at ? (
+                          <span className="text-foreground">{formatDuration(entry.duration_seconds)}</span>
+                        ) : (
+                          <span className="text-green-400">{formatDuration(getDisplayDuration(entry))} ●</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">
-                          <div className="w-12 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                          <div className="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
                             <div
-                              className={`h-full rounded-full ${
-                                entry.activity_score >= 70
-                                  ? 'bg-green-500'
-                                  : entry.activity_score >= 40
-                                  ? 'bg-amber-500'
-                                  : 'bg-red-500'
-                              }`}
+                              className={`h-full rounded-full ${getActivityColor(entry.activity_score).bar}`}
                               style={{ width: `${Math.min(entry.activity_score, 100)}%` }}
                             />
                           </div>
-                          <span className="text-xs text-slate-400 w-8 text-right">
+                          <Badge variant="outline" className={`text-xs tabular-nums ${getActivityColor(entry.activity_score).badge}`}>
                             {entry.activity_score}%
-                          </span>
+                          </Badge>
                         </div>
                       </TableCell>
                       <TableCell className="text-center">
-                        <Badge
+                        <span
                           className={
                             entry.status === 'approved'
-                              ? 'bg-green-500/10 text-green-400 border-green-500/20'
+                              ? 'bg-green-400/10 text-green-400 border border-green-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
                               : entry.status === 'rejected'
-                              ? 'bg-red-500/10 text-red-400 border-red-500/20'
-                              : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                              ? 'bg-red-400/10 text-red-400 border border-red-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
+                              : 'bg-amber-400/10 text-amber-400 border border-amber-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
                           }
                         >
                           {entry.status.charAt(0).toUpperCase() + entry.status.slice(1)}
-                        </Badge>
+                        </span>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -364,8 +440,8 @@ export default function TimePage() {
 
               {/* Pagination */}
               {meta && meta.last_page > 1 && (
-                <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-800">
-                  <p className="text-sm text-slate-400">
+                <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
+                  <p className="text-sm text-muted-foreground">
                     Page {meta.current_page} of {meta.last_page} ({meta.total} total)
                   </p>
                   <div className="flex items-center gap-2">
@@ -374,7 +450,7 @@ export default function TimePage() {
                       size="sm"
                       onClick={() => setPage((p) => Math.max(1, p - 1))}
                       disabled={page <= 1}
-                      className="border-slate-700 text-slate-300"
+                      className="border-border text-foreground"
                     >
                       <ChevronLeft className="h-4 w-4" />
                     </Button>
@@ -383,7 +459,7 @@ export default function TimePage() {
                       size="sm"
                       onClick={() => setPage((p) => p + 1)}
                       disabled={page >= (meta.last_page || 1)}
-                      className="border-slate-700 text-slate-300"
+                      className="border-border text-foreground"
                     >
                       <ChevronRight className="h-4 w-4" />
                     </Button>

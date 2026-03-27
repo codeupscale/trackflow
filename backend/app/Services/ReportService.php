@@ -23,9 +23,11 @@ class ReportService
         $cacheKey = $this->cacheKey($orgId, 'summary', "{$dateFrom}_{$dateTo}", $userId);
 
         return Cache::remember($cacheKey, 900, function () use ($orgId, $userId, $dateFrom, $dateTo) {
+            // Daily breakdown with duration-weighted activity (single query)
             $query = TimeEntry::withoutGlobalScopes()
                 ->where('organization_id', $orgId)
-                ->whereBetween('started_at', [$dateFrom, $dateTo])
+                ->where('started_at', '>=', $dateFrom)
+                ->where('started_at', '<', $dateTo)
                 ->whereNotNull('ended_at');
 
             if ($userId) {
@@ -35,32 +37,52 @@ class ReportService
             $daily = $query->selectRaw("
                 DATE(started_at) as date,
                 SUM(duration_seconds) as total_seconds,
-                AVG(activity_score) as activity_score_avg,
-                COUNT(*) as entry_count
+                CASE
+                    WHEN SUM(CASE WHEN activity_score IS NOT NULL THEN duration_seconds ELSE 0 END) > 0
+                    THEN SUM(COALESCE(activity_score, 0) * duration_seconds) / SUM(CASE WHEN activity_score IS NOT NULL THEN duration_seconds ELSE 0 END)
+                    ELSE 0
+                END as activity_score_avg,
+                COUNT(*) as entry_count,
+                COALESCE(SUM(CASE WHEN type = 'tracked' THEN duration_seconds ELSE 0 END), 0) as tracked_seconds,
+                COALESCE(SUM(CASE WHEN type = 'idle' THEN duration_seconds ELSE 0 END), 0) as idle_seconds
             ")
             ->groupBy(DB::raw('DATE(started_at)'))
             ->orderBy('date')
             ->get();
 
-            // Calculate earnings for billable entries
-            $billableQuery = TimeEntry::withoutGlobalScopes()
-                ->where('time_entries.organization_id', $orgId)
-                ->whereBetween('time_entries.started_at', [$dateFrom, $dateTo])
-                ->whereNotNull('time_entries.ended_at')
-                ->join('projects', 'time_entries.project_id', '=', 'projects.id')
-                ->where('projects.billable', true);
+            $totalTrackedSeconds = (int) $daily->sum('tracked_seconds');
+            $totalIdleSeconds = (int) $daily->sum('idle_seconds');
+            $totalWithIdle = $totalTrackedSeconds + $totalIdleSeconds;
+            $idlePercent = $totalWithIdle > 0 ? round($totalIdleSeconds / $totalWithIdle * 100, 1) : 0;
 
-            if ($userId) {
-                $billableQuery->where('time_entries.user_id', $userId);
+            // Earnings: single query with join (only if there are tracked entries)
+            $totalEarnings = 0;
+            if ($totalTrackedSeconds > 0) {
+                $earningsQuery = DB::table('time_entries')
+                    ->where('time_entries.organization_id', $orgId)
+                    ->where('time_entries.started_at', '>=', $dateFrom)
+                    ->where('time_entries.started_at', '<', $dateTo)
+                    ->whereNotNull('time_entries.ended_at')
+                    ->where('time_entries.type', 'tracked')
+                    ->join('projects', 'time_entries.project_id', '=', 'projects.id')
+                    ->where('projects.billable', true);
+
+                if ($userId) {
+                    $earningsQuery->where('time_entries.user_id', $userId);
+                }
+
+                $totalEarnings = $earningsQuery
+                    ->selectRaw('COALESCE(SUM(time_entries.duration_seconds / 3600.0 * projects.hourly_rate), 0) as total_earnings')
+                    ->value('total_earnings') ?? 0;
             }
-
-            $totalEarnings = $billableQuery
-                ->selectRaw('SUM(time_entries.duration_seconds / 3600.0 * projects.hourly_rate) as total_earnings')
-                ->value('total_earnings') ?? 0;
 
             return [
                 'daily' => $daily,
                 'total_seconds' => $daily->sum('total_seconds'),
+                'total_seconds_tracked' => $totalTrackedSeconds,
+                'total_seconds_idle' => $totalIdleSeconds,
+                'idle_hours' => round($totalIdleSeconds / 3600, 2),
+                'idle_percent' => $idlePercent,
                 'avg_activity' => $daily->avg('activity_score_avg'),
                 'total_entries' => $daily->sum('entry_count'),
                 'total_earnings' => round($totalEarnings, 2),
@@ -68,41 +90,45 @@ class ReportService
         });
     }
 
-    // REPT-02: Team report
+    // REPT-02: Team report — single aggregation query (no N+1)
     public function team(string $orgId, string $dateFrom, string $dateTo): array
     {
         $cacheKey = $this->cacheKey($orgId, 'team', "{$dateFrom}_{$dateTo}");
 
         return Cache::remember($cacheKey, 900, function () use ($orgId, $dateFrom, $dateTo) {
-            // Use aggregation query instead of N+1
-            $userStats = TimeEntry::withoutGlobalScopes()
+            // Single query: aggregate all metrics per user (fixes N+1: was 3 queries per user)
+            $userStats = DB::table('time_entries')
                 ->where('organization_id', $orgId)
-                ->whereBetween('started_at', [$dateFrom, $dateTo])
+                ->where('started_at', '>=', $dateFrom)
+                ->where('started_at', '<', $dateTo)
                 ->whereNotNull('ended_at')
                 ->selectRaw('
                     user_id,
-                    SUM(duration_seconds) as total_seconds,
-                    AVG(activity_score) as avg_activity,
-                    COUNT(*) as entry_count
+                    COALESCE(SUM(duration_seconds), 0) as total_seconds,
+                    COUNT(*) as entry_count,
+                    COALESCE(SUM(CASE WHEN type = \'tracked\' THEN duration_seconds ELSE 0 END), 0) as tracked_seconds,
+                    COALESCE(SUM(CASE WHEN type = \'idle\' THEN duration_seconds ELSE 0 END), 0) as idle_seconds,
+                    CASE
+                        WHEN SUM(CASE WHEN activity_score IS NOT NULL THEN duration_seconds ELSE 0 END) > 0
+                        THEN SUM(COALESCE(activity_score, 0) * duration_seconds) / SUM(CASE WHEN activity_score IS NOT NULL THEN duration_seconds ELSE 0 END)
+                        ELSE 0
+                    END as avg_activity
                 ')
                 ->groupBy('user_id')
-                ->pluck(DB::raw('SUM(duration_seconds), AVG(activity_score), COUNT(*), user_id'), 'user_id');
+                ->get()
+                ->keyBy('user_id');
 
             return User::withoutGlobalScopes()
                 ->where('organization_id', $orgId)
                 ->where('is_active', true)
                 ->get()
                 ->map(function ($user) use ($userStats) {
-                    // Get stats from pre-aggregated data
-                    $result = DB::table('time_entries')
-                        ->where('user_id', $user->id)
-                        ->selectRaw('
-                            COALESCE(SUM(duration_seconds), 0) as total_seconds,
-                            COALESCE(AVG(activity_score), 0) as avg_activity,
-                            COALESCE(COUNT(*), 0) as entry_count
-                        ')
-                        ->whereNotNull('ended_at')
-                        ->first();
+                    $stats = $userStats->get($user->id);
+                    $totalSeconds = $stats ? (int) $stats->total_seconds : 0;
+                    $trackedSeconds = $stats ? (int) $stats->tracked_seconds : 0;
+                    $idleSeconds = $stats ? (int) $stats->idle_seconds : 0;
+                    $totalWithIdle = $trackedSeconds + $idleSeconds;
+                    $idlePercent = $totalWithIdle > 0 ? round($idleSeconds / $totalWithIdle * 100, 1) : 0;
 
                     return [
                         'user' => [
@@ -112,9 +138,12 @@ class ReportService
                             'role' => $user->role,
                             'avatar_url' => $user->avatar_url,
                         ],
-                        'total_seconds' => (int) $result->total_seconds,
-                        'avg_activity' => (int) $result->avg_activity,
-                        'entry_count' => (int) $result->entry_count,
+                        'total_seconds' => $totalSeconds,
+                        'avg_activity' => $stats ? (int) round($stats->avg_activity) : 0,
+                        'entry_count' => $stats ? (int) $stats->entry_count : 0,
+                        'seconds_idle' => $idleSeconds,
+                        'idle_hours' => round($idleSeconds / 3600, 2),
+                        'idle_percent' => $idlePercent,
                     ];
                 })
                 ->sortByDesc('total_seconds')
@@ -131,7 +160,8 @@ class ReportService
         return Cache::remember($cacheKey, 900, function () use ($orgId, $dateFrom, $dateTo) {
             return TimeEntry::withoutGlobalScopes()
                 ->where('time_entries.organization_id', $orgId)
-                ->whereBetween('time_entries.started_at', [$dateFrom, $dateTo])
+                ->where('time_entries.started_at', '>=', $dateFrom)
+                ->where('time_entries.started_at', '<', $dateTo)
                 ->whereNotNull('time_entries.ended_at')
                 ->whereNotNull('time_entries.project_id')
                 ->join('projects', 'time_entries.project_id', '=', 'projects.id')
@@ -181,7 +211,8 @@ class ReportService
         return Cache::remember($cacheKey, 900, function () use ($orgId, $userId, $dateFrom, $dateTo) {
             $query = ActivityLog::withoutGlobalScopes()
                 ->where('organization_id', $orgId)
-                ->whereBetween('logged_at', [$dateFrom, $dateTo])
+                ->where('logged_at', '>=', $dateFrom)
+                ->where('logged_at', '<', $dateTo)
                 ->whereNotNull('active_app');
 
             if ($userId) {
@@ -228,55 +259,45 @@ class ReportService
         });
     }
 
-    // REPT-07: Payroll report
+    // REPT-07: Payroll report — single aggregation query (was 3 queries per user)
     public function payroll(string $orgId, string $dateFrom, string $dateTo): array
     {
         $cacheKey = $this->cacheKey($orgId, 'payroll', "{$dateFrom}_{$dateTo}");
 
         return Cache::remember($cacheKey, 900, function () use ($orgId, $dateFrom, $dateTo) {
+            // Single query: aggregate total, billable, and earnings per user
+            $payrollStats = DB::table('time_entries')
+                ->where('time_entries.organization_id', $orgId)
+                ->where('time_entries.started_at', '>=', $dateFrom)
+                ->where('time_entries.started_at', '<', $dateTo)
+                ->whereNotNull('time_entries.ended_at')
+                ->where('time_entries.is_approved', true)
+                ->leftJoin('projects', 'time_entries.project_id', '=', 'projects.id')
+                ->selectRaw('
+                    time_entries.user_id,
+                    COALESCE(SUM(time_entries.duration_seconds), 0) as total_seconds,
+                    COALESCE(SUM(CASE WHEN projects.billable = true THEN time_entries.duration_seconds ELSE 0 END), 0) as billable_seconds,
+                    COALESCE(SUM(CASE WHEN projects.billable = true THEN time_entries.duration_seconds / 3600.0 * projects.hourly_rate ELSE 0 END), 0) as earnings
+                ')
+                ->groupBy('time_entries.user_id')
+                ->get()
+                ->keyBy('user_id');
+
             return User::withoutGlobalScopes()
                 ->where('organization_id', $orgId)
                 ->where('is_active', true)
                 ->get()
-                ->map(function ($user) use ($dateFrom, $dateTo) {
-                    // Single aggregation query for total hours
-                    $totalSeconds = (int) TimeEntry::withoutGlobalScopes()
-                        ->where('user_id', $user->id)
-                        ->whereBetween('started_at', [$dateFrom, $dateTo])
-                        ->whereNotNull('ended_at')
-                        ->where('is_approved', true)
-                        ->sum('duration_seconds');
-
-                    // Single aggregation query for billable hours using join
-                    $billableSeconds = (int) TimeEntry::withoutGlobalScopes()
-                        ->where('time_entries.user_id', $user->id)
-                        ->whereBetween('time_entries.started_at', [$dateFrom, $dateTo])
-                        ->whereNotNull('time_entries.ended_at')
-                        ->where('time_entries.is_approved', true)
-                        ->join('projects', 'time_entries.project_id', '=', 'projects.id')
-                        ->where('projects.billable', true)
-                        ->sum('time_entries.duration_seconds');
-
-                    // Single aggregation query for earnings
-                    $earnings = TimeEntry::withoutGlobalScopes()
-                        ->where('time_entries.user_id', $user->id)
-                        ->whereBetween('time_entries.started_at', [$dateFrom, $dateTo])
-                        ->whereNotNull('time_entries.ended_at')
-                        ->where('time_entries.is_approved', true)
-                        ->join('projects', 'time_entries.project_id', '=', 'projects.id')
-                        ->where('projects.billable', true)
-                        ->selectRaw('SUM(time_entries.duration_seconds / 3600.0 * projects.hourly_rate) as total')
-                        ->value('total') ?? 0;
-
+                ->map(function ($user) use ($payrollStats) {
+                    $stats = $payrollStats->get($user->id);
                     return [
                         'user' => [
                             'id' => $user->id,
                             'name' => $user->name,
                             'email' => $user->email,
                         ],
-                        'total_hours' => round($totalSeconds / 3600, 2),
-                        'billable_hours' => round($billableSeconds / 3600, 2),
-                        'earnings' => round($earnings, 2),
+                        'total_hours' => round(($stats->total_seconds ?? 0) / 3600, 2),
+                        'billable_hours' => round(($stats->billable_seconds ?? 0) / 3600, 2),
+                        'earnings' => round($stats->earnings ?? 0, 2),
                     ];
                 })
                 ->values()
@@ -292,7 +313,8 @@ class ReportService
         return Cache::remember($cacheKey, 900, function () use ($orgId, $dateFrom, $dateTo) {
             return TimeEntry::withoutGlobalScopes()
                 ->where('organization_id', $orgId)
-                ->whereBetween('started_at', [$dateFrom, $dateTo])
+                ->where('started_at', '>=', $dateFrom)
+                ->where('started_at', '<', $dateTo)
                 ->whereNotNull('ended_at')
                 ->selectRaw("
                     user_id,

@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import Script from 'next/script';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod/v4';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -11,6 +12,7 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { PasswordInput } from '@/components/ui/password-input';
 import {
   Card,
   CardContent,
@@ -28,6 +30,7 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { useAuthStore } from '@/stores/auth-store';
+import api from '@/lib/api';
 
 const loginSchema = z.object({
   email: z.string().min(1, 'Email is required').email('Invalid email address'),
@@ -36,9 +39,12 @@ const loginSchema = z.object({
 
 type LoginFormValues = z.infer<typeof loginSchema>;
 
+const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
+
 export default function LoginPage() {
   const router = useRouter();
-  const { login } = useAuthStore();
+  const { login, setTokens } = useAuthStore();
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   // If already logged in, redirect to dashboard
   useEffect(() => {
@@ -48,6 +54,52 @@ export default function LoginPage() {
     }
   }, [router]);
   const [error, setError] = useState<string | null>(null);
+
+  // Google Sign-In callback
+  const handleGoogleResponse = useCallback(async (response: { credential: string }) => {
+    setError(null);
+    setGoogleLoading(true);
+    try {
+      const res = await api.post('/auth/google', { id_token: response.credential });
+      const { access_token, refresh_token } = res.data;
+      setTokens(access_token, refresh_token);
+      toast.success('Welcome!');
+      router.push('/dashboard');
+    } catch (err: unknown) {
+      const axiosError = err as { response?: { data?: { message?: string }; status?: number } };
+      const message = axiosError.response?.data?.message || 'Google sign-in failed.';
+      setError(message);
+      toast.error(message);
+    } finally {
+      setGoogleLoading(false);
+    }
+  }, [router, setTokens]);
+
+  // Initialize Google Sign-In
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID) return;
+
+    const initGoogle = () => {
+      if (typeof window !== 'undefined' && (window as unknown as Record<string, unknown>).google) {
+        const google = (window as unknown as { google: { accounts: { id: { initialize: (config: Record<string, unknown>) => void; renderButton: (el: HTMLElement | null, config: Record<string, unknown>) => void } } } }).google;
+        google.accounts.id.initialize({
+          client_id: GOOGLE_CLIENT_ID,
+          callback: handleGoogleResponse,
+        });
+        google.accounts.id.renderButton(
+          document.getElementById('google-signin-btn'),
+          { theme: 'outline', size: 'large', width: 360, text: 'signin_with', shape: 'rectangular' }
+        );
+      }
+    };
+
+    // If script already loaded
+    initGoogle();
+
+    // Also listen for script load
+    window.addEventListener('google-loaded', initGoogle);
+    return () => window.removeEventListener('google-loaded', initGoogle);
+  }, [handleGoogleResponse]);
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -72,18 +124,50 @@ export default function LoginPage() {
   };
 
   return (
-    <Card className="border-slate-800 bg-slate-900/50 backdrop-blur">
+    <>
+      {GOOGLE_CLIENT_ID && (
+        <Script
+          src="https://accounts.google.com/gsi/client"
+          strategy="afterInteractive"
+          onLoad={() => window.dispatchEvent(new Event('google-loaded'))}
+        />
+      )}
+    <Card className="border-border bg-card/80 backdrop-blur">
       <CardHeader className="space-y-1">
-        <CardTitle className="text-2xl text-center text-white">Sign in</CardTitle>
-        <CardDescription className="text-center text-slate-400">
+        <CardTitle className="text-2xl text-center text-foreground">Sign in</CardTitle>
+        <CardDescription className="text-center text-muted-foreground">
           Enter your credentials to access your account
         </CardDescription>
       </CardHeader>
       <CardContent>
+        {/* Google Sign-In */}
+        {GOOGLE_CLIENT_ID && (
+          <>
+            <div className="flex justify-center mb-4">
+              {googleLoading ? (
+                <Button variant="outline" className="w-full border-border" disabled>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Signing in with Google...
+                </Button>
+              ) : (
+                <div id="google-signin-btn" className="flex justify-center w-full" />
+              )}
+            </div>
+            <div className="relative mb-4">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-border" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-card px-2 text-muted-foreground">or continue with email</span>
+              </div>
+            </div>
+          </>
+        )}
+
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             {error && (
-              <div className="bg-red-500/10 text-red-400 text-sm p-3 rounded-md border border-red-500/20">
+              <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-md border border-destructive/20">
                 {error}
               </div>
             )}
@@ -92,13 +176,13 @@ export default function LoginPage() {
               name="email"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-slate-300">Email</FormLabel>
+                  <FormLabel>Email</FormLabel>
                   <FormControl>
                     <Input
                       type="email"
                       placeholder="you@example.com"
                       autoComplete="email"
-                      className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                      className="bg-background"
                       {...field}
                     />
                   </FormControl>
@@ -112,20 +196,19 @@ export default function LoginPage() {
               render={({ field }) => (
                 <FormItem>
                   <div className="flex items-center justify-between">
-                    <FormLabel className="text-slate-300">Password</FormLabel>
+                    <FormLabel>Password</FormLabel>
                     <Link
                       href="/forgot-password"
-                      className="text-xs text-slate-400 hover:text-blue-400 underline-offset-4 hover:underline transition-colors"
+                      className="text-xs text-muted-foreground hover:text-blue-600 underline-offset-4 hover:underline transition-colors"
                     >
                       Forgot password?
                     </Link>
                   </div>
                   <FormControl>
-                    <Input
-                      type="password"
+                    <PasswordInput
                       placeholder="Enter your password"
                       autoComplete="current-password"
-                      className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                      className="bg-background"
                       {...field}
                     />
                   </FormControl>
@@ -135,7 +218,7 @@ export default function LoginPage() {
             />
             <Button
               type="submit"
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+              className="w-full"
               disabled={form.formState.isSubmitting}
             >
               {form.formState.isSubmitting && (
@@ -146,17 +229,18 @@ export default function LoginPage() {
           </form>
         </Form>
       </CardContent>
-      <CardFooter className="flex justify-center border-t border-slate-800 pt-6">
-        <p className="text-sm text-slate-400">
+      <CardFooter className="flex justify-center border-t border-border pt-6">
+        <p className="text-sm text-muted-foreground">
           Don&apos;t have an account?{' '}
           <Link
             href="/register"
-            className="text-blue-400 font-medium hover:underline underline-offset-4"
+            className="text-primary font-medium hover:underline underline-offset-4"
           >
             Sign up
           </Link>
         </p>
       </CardFooter>
     </Card>
+    </>
   );
 }

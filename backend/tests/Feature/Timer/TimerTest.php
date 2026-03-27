@@ -27,11 +27,17 @@ class TimerTest extends TestCase
 
     public function test_can_start_timer(): void
     {
-        // TimerService::start(): set(lock), setex(timer), del(lock); then controller calls todayTotal() which calls get()
-        Redis::shouldReceive('set')->once()->andReturn(true);     // acquire lock
-        Redis::shouldReceive('setex')->once()->andReturn(true);   // store timer data
-        Redis::shouldReceive('del')->once()->andReturn(1);        // release lock
-        Redis::shouldReceive('get')->once()->andReturn(null);     // todayTotal() after start (no elapsed to add yet)
+        // TimerService::start():
+        //   set(lockKey, 1, 'EX', 5, 'NX') -> acquire lock
+        //   get(redisKey) -> check for existing timer (duplicate guard)
+        //   setex(redisKey, ...) -> store timer data
+        //   del(lockKey) -> release lock (in finally)
+        // Controller then calls todayTotal() which:
+        //   get(redisKey) -> check if timer running for elapsed
+        Redis::shouldReceive('set')->once()->andReturn(true);       // acquire lock
+        Redis::shouldReceive('get')->twice()->andReturn(null, null); // duplicate guard + todayTotal()
+        Redis::shouldReceive('setex')->once()->andReturn(true);     // store timer data
+        Redis::shouldReceive('del')->once()->andReturn(1);          // release lock
 
         $response = $this->postJson('/api/v1/timer/start');
         $response->assertStatus(201)
@@ -45,7 +51,8 @@ class TimerTest extends TestCase
 
     public function test_cannot_start_timer_when_already_running(): void
     {
-        // TimerService::start() calls Redis::set(lockKey, ..., 'NX') which returns false if lock exists
+        // TimerService::start() calls Redis::set(lockKey, 1, 'EX', 5, 'NX') which returns false
+        // The throw happens BEFORE the try/finally block, so no del() call occurs
         Redis::shouldReceive('set')->once()->andReturn(false);
 
         $response = $this->postJson('/api/v1/timer/start');
@@ -65,9 +72,16 @@ class TimerTest extends TestCase
             'entry_id' => $entry->id,
             'started_at' => $entry->started_at->toISOString(),
         ]);
-        // stop() calls get() once; then controller calls todayTotal() which calls get() again
+        // stop():
+        //   get(redisKey) -> read timer data
+        //   set(lockKey, 1, 'EX', 5, 'NX') -> acquire lock
+        //   del(redisKey) -> clear timer (inside txn)
+        //   del(lockKey) -> release lock (finally)
+        // Controller then calls todayTotal():
+        //   get(redisKey) -> check if timer running (returns null since we deleted it)
         Redis::shouldReceive('get')->twice()->andReturn($timerPayload, null);
-        Redis::shouldReceive('del')->once()->andReturn(1);
+        Redis::shouldReceive('set')->once()->andReturn(true);    // acquire lock
+        Redis::shouldReceive('del')->twice()->andReturn(1);      // del(redisKey) + del(lockKey)
 
         $response = $this->postJson('/api/v1/timer/stop');
         $response->assertOk()
@@ -102,5 +116,44 @@ class TimerTest extends TestCase
 
         $response = $this->postJson('/api/v1/timer/start');
         $response->assertStatus(401);
+    }
+
+    public function test_employee_cannot_start_timer_on_unassigned_project(): void
+    {
+        $project = Project::factory()->create([
+            'organization_id' => $this->org->id,
+            'created_by' => $this->user->id,
+        ]);
+        // Do not assign $this->user to the project
+
+        $response = $this->postJson('/api/v1/timer/start', [
+            'project_id' => $project->id,
+        ]);
+        $response->assertStatus(403)
+            ->assertJsonFragment(['message' => 'You are not assigned to this project.']);
+    }
+
+    public function test_employee_can_start_timer_on_assigned_project(): void
+    {
+        $project = Project::factory()->create([
+            'organization_id' => $this->org->id,
+            'created_by' => $this->user->id,
+        ]);
+        $project->members()->attach($this->user->id);
+
+        Redis::shouldReceive('set')->once()->andReturn(true);       // acquire lock
+        Redis::shouldReceive('get')->twice()->andReturn(null, null); // duplicate guard + todayTotal()
+        Redis::shouldReceive('setex')->once()->andReturn(true);     // store timer data
+        Redis::shouldReceive('del')->once()->andReturn(1);          // release lock
+
+        $response = $this->postJson('/api/v1/timer/start', [
+            'project_id' => $project->id,
+        ]);
+        $response->assertStatus(201);
+        $this->assertDatabaseHas('time_entries', [
+            'user_id' => $this->user->id,
+            'project_id' => $project->id,
+            'type' => 'tracked',
+        ]);
     }
 }

@@ -47,6 +47,28 @@ class TimerController extends Controller
         }
     }
 
+    // TIME-02b: Switch project atomically (stop current + start new in one transaction)
+    public function switch(Request $request): JsonResponse
+    {
+        $request->validate([
+            'project_id' => 'required|uuid',
+            'task_id' => 'nullable|uuid',
+        ]);
+
+        try {
+            $result = $this->timerService->switchProject($request->only('project_id', 'task_id'));
+            $todayTotal = $this->timerService->todayTotal($result['started']->project_id);
+
+            return response()->json([
+                'stopped_entry' => $result['stopped'],
+                'entry' => $result['started'],
+                'today_total' => $todayTotal,
+            ]);
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 409);
+        }
+    }
+
     // TIME-03: Pause timer
     public function pause(): JsonResponse
     {
@@ -88,23 +110,34 @@ class TimerController extends Controller
     // TIME-05: Report idle time (from desktop agent)
     public function idle(Request $request): JsonResponse
     {
-        $request->validate([
+        $rules = [
             'time_entry_id' => 'required|uuid',
             'idle_started_at' => 'required|date',
             'idle_ended_at' => 'required|date',
             'idle_seconds' => 'required|integer|min:1',
-            'action' => 'required|in:discard,keep',
-        ]);
+            'action' => 'required|in:discard,keep,reassign',
+        ];
+        if ($request->action === 'reassign') {
+            $rules['project_id'] = 'required|uuid|exists:projects,id';
+        }
+        $request->validate($rules);
+
+        if ($request->action === 'reassign') {
+            $request->user()->organization->projects()->findOrFail($request->project_id);
+        }
 
         if ($request->action === 'keep') {
             return response()->json(['message' => 'Idle time kept.']);
         }
 
-        $entry = $this->timerService->reportIdle($request->all());
+        $result = $this->timerService->reportIdle($request->all());
 
         return response()->json([
-            'message' => 'Idle time recorded and discarded.',
-            'idle_entry' => $entry,
+            'message' => $request->action === 'reassign'
+                ? 'Idle time reassigned to project.'
+                : 'Idle time recorded and discarded.',
+            'idle_entry' => $result['idle_entry'],
+            'new_entry' => $result['new_entry'],
         ]);
     }
 
@@ -114,6 +147,7 @@ class TimerController extends Controller
         $request->validate([
             'keyboard_events' => 'required|integer|min:0',
             'mouse_events' => 'required|integer|min:0',
+            'active_seconds' => 'nullable|integer|min:0|max:30',
             'active_app' => 'nullable|string|max:255',
             'active_window_title' => 'nullable|string|max:512',
             'active_url' => 'nullable|string|max:1024',
