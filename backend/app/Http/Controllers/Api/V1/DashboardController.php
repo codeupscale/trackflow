@@ -72,9 +72,10 @@ class DashboardController extends Controller
         }
 
         // Time entries in range (completed, tracked) — team sum + duration-weighted activity
-        // Duration-weighted average: longer entries contribute more to the score.
-        // This matches Hubstaff's approach: a 1-min entry at 10% shouldn't drag down
-        // an 8-hour entry at 90%. COALESCE handles NULL activity_score (short entries with no heartbeats).
+        // Duration-weighted average: only entries with meaningful activity (score > 0) contribute
+        // to the activity percentage. Entries with NULL or 0 score (idle/no heartbeats) still
+        // count toward total hours but don't drag down the activity average.
+        // This matches Hubstaff: idle time counts as hours worked but doesn't affect activity %.
         $rangeEntries = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('organization_id', $orgId)
             ->where('started_at', '>=', $dateFrom)
@@ -85,8 +86,9 @@ class DashboardController extends Controller
                 user_id,
                 SUM(duration_seconds) as total_seconds,
                 CASE
-                    WHEN SUM(CASE WHEN activity_score IS NOT NULL THEN duration_seconds ELSE 0 END) > 0
-                    THEN SUM(COALESCE(activity_score, 0) * duration_seconds) / SUM(CASE WHEN activity_score IS NOT NULL THEN duration_seconds ELSE 0 END)
+                    WHEN SUM(CASE WHEN activity_score IS NOT NULL AND activity_score > 0 THEN duration_seconds ELSE 0 END) > 0
+                    THEN SUM(CASE WHEN activity_score IS NOT NULL AND activity_score > 0 THEN activity_score * duration_seconds ELSE 0 END)
+                         / SUM(CASE WHEN activity_score IS NOT NULL AND activity_score > 0 THEN duration_seconds ELSE 0 END)
                     ELSE 0
                 END as avg_activity
             ')
