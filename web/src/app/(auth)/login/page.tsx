@@ -66,8 +66,7 @@ export default function LoginPage() {
       toast.success('Welcome!');
       router.push('/dashboard');
     } catch (err: unknown) {
-      const axiosError = err as { response?: { data?: { message?: string }; status?: number } };
-      const message = axiosError.response?.data?.message || 'Google sign-in failed.';
+      const message = (err as Error).message || 'Google sign-in failed.';
       setError(message);
       toast.error(message);
     } finally {
