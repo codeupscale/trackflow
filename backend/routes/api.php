@@ -27,6 +27,7 @@ Route::prefix('v1')->group(function () {
         Route::post('forgot-password', [AuthController::class, 'forgotPassword']);
         Route::post('reset-password', [AuthController::class, 'resetPassword']);
         Route::post('google', [AuthController::class, 'googleAuth']);
+        Route::post('select-organization', [AuthController::class, 'selectOrganization']);
     });
 
     // SAML2 SSO endpoints (public — IdP-initiated)
@@ -47,6 +48,8 @@ Route::prefix('v1')->group(function () {
         Route::get('auth/me', [AuthController::class, 'me']);
         Route::patch('auth/me', [AuthController::class, 'updateProfile']);
         Route::post('auth/change-password', [AuthController::class, 'changePassword'])->middleware('throttle:10,1');
+        Route::get('auth/organizations', [AuthController::class, 'organizations']);
+        Route::post('auth/switch-organization', [AuthController::class, 'switchOrganization']);
 
         // Invitations (owner/admin only)
         Route::get('invitations', [InvitationController::class, 'index'])

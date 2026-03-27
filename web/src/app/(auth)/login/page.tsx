@@ -29,6 +29,7 @@ import {
   FormControl,
   FormMessage,
 } from '@/components/ui/form';
+import { OrgSelector } from '@/components/org-selector';
 import { useAuthStore } from '@/stores/auth-store';
 import api from '@/lib/api';
 
@@ -43,7 +44,14 @@ const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login, setTokens } = useAuthStore();
+  const {
+    login,
+    setTokens,
+    selectOrganization,
+    pendingOrgSelection,
+    clearPendingOrgSelection,
+    setPendingOrgSelection,
+  } = useAuthStore();
   const [googleLoading, setGoogleLoading] = useState(false);
 
   // If already logged in, redirect to dashboard
@@ -55,12 +63,24 @@ export default function LoginPage() {
   }, [router]);
   const [error, setError] = useState<string | null>(null);
 
-  // Google Sign-In callback
+  // Google Sign-In callback — now handles multi-org
   const handleGoogleResponse = useCallback(async (response: { credential: string }) => {
     setError(null);
     setGoogleLoading(true);
     try {
       const res = await api.post('/auth/google', { id_token: response.credential });
+
+      if (res.data.requires_org_selection) {
+        // Multi-org detected — show org selector
+        setPendingOrgSelection({
+          organizations: res.data.organizations,
+          id_token: response.credential,
+          auth_method: 'google',
+        });
+        setGoogleLoading(false);
+        return;
+      }
+
       const { access_token, refresh_token } = res.data;
       setTokens(access_token, refresh_token);
       toast.success('Welcome!');
@@ -72,7 +92,7 @@ export default function LoginPage() {
     } finally {
       setGoogleLoading(false);
     }
-  }, [router, setTokens]);
+  }, [router, setTokens, setPendingOrgSelection]);
 
   // Initialize Google Sign-In
   useEffect(() => {
@@ -111,16 +131,50 @@ export default function LoginPage() {
   const onSubmit = async (values: LoginFormValues) => {
     setError(null);
     try {
-      await login(values.email, values.password);
+      const result = await login(values.email, values.password);
+      if (result.requires_org_selection) {
+        // Multi-org — org selector will show via pendingOrgSelection state
+        return;
+      }
       toast.success('Welcome back!');
       router.push('/dashboard');
     } catch (err: unknown) {
       const axiosError = err as { response?: { data?: { message?: string } } };
-      const message = axiosError.response?.data?.message || 'Invalid credentials. Please try again.';
+      const message = axiosError.response?.data?.message || (err as Error).message || 'Invalid credentials. Please try again.';
       setError(message);
       toast.error(message);
     }
   };
+
+  const handleOrgSelect = async (organizationId: string) => {
+    await selectOrganization(organizationId);
+    toast.success('Welcome!');
+    router.push('/dashboard');
+  };
+
+  const handleOrgSelectBack = () => {
+    clearPendingOrgSelection();
+  };
+
+  // Show org selector if pending
+  if (pendingOrgSelection) {
+    return (
+      <>
+        {GOOGLE_CLIENT_ID && (
+          <Script
+            src="https://accounts.google.com/gsi/client"
+            strategy="afterInteractive"
+            onLoad={() => window.dispatchEvent(new Event('google-loaded'))}
+          />
+        )}
+        <OrgSelector
+          organizations={pendingOrgSelection.organizations}
+          onSelect={handleOrgSelect}
+          onBack={handleOrgSelectBack}
+        />
+      </>
+    );
+  }
 
   return (
     <>
