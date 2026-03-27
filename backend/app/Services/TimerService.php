@@ -20,6 +20,12 @@ class TimerService
     // Value: JSON {entry_id, started_at, project_id, task_id}
     // TTL: 30 days (2592000 seconds)
 
+    /**
+     * Maximum duration (seconds) for any single time entry.
+     * 12 hours = 43200 seconds. Prevents runaway timers from corrupting reports.
+     */
+    private const MAX_ENTRY_DURATION = 43200;
+
     public function start(array $data): TimeEntry
     {
         $user = Auth::user();
@@ -56,7 +62,10 @@ class TimerService
 
                     if ($existingEntry) {
                         $now = now();
-                        $duration = (int) abs($now->diffInSeconds($existingEntry->started_at));
+                        $duration = min(
+                            (int) abs($now->diffInSeconds($existingEntry->started_at)),
+                            self::MAX_ENTRY_DURATION
+                        );
                         $finalScore = $this->computeFinalActivityScore($existingEntry->id);
 
                         $existingEntry->update([
@@ -131,7 +140,10 @@ class TimerService
                     ->firstOrFail();
 
                 $now = now();
-                $duration = (int) abs($now->diffInSeconds($entry->started_at));
+                $duration = min(
+                    (int) abs($now->diffInSeconds($entry->started_at)),
+                    self::MAX_ENTRY_DURATION
+                );
 
                 // Finalize activity_score from actual ActivityLog records (ground truth).
                 // This replaces the running EMA with a proper weighted calculation.
@@ -200,7 +212,10 @@ class TimerService
                     ->firstOrFail();
 
                 $now = now();
-                $duration = (int) abs($now->diffInSeconds($currentEntry->started_at));
+                $duration = min(
+                    (int) abs($now->diffInSeconds($currentEntry->started_at)),
+                    self::MAX_ENTRY_DURATION
+                );
                 $finalScore = $this->computeFinalActivityScore($currentEntry->id);
 
                 $currentEntry->update([
