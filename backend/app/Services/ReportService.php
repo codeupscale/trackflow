@@ -34,17 +34,22 @@ class ReportService
                 $query->where('user_id', $userId);
             }
 
+            // Use EXTRACT(EPOCH FROM ...) for accurate duration — duration_seconds
+            // can be corrupted by idle-deduction bugs in older desktop versions.
             $daily = $query->selectRaw("
                 DATE(started_at) as date,
-                SUM(duration_seconds) as total_seconds,
+                SUM(GREATEST(EXTRACT(EPOCH FROM (ended_at - started_at))::int, 0)) as total_seconds,
                 CASE
-                    WHEN SUM(CASE WHEN activity_score IS NOT NULL THEN duration_seconds ELSE 0 END) > 0
-                    THEN SUM(COALESCE(activity_score, 0) * duration_seconds) / SUM(CASE WHEN activity_score IS NOT NULL THEN duration_seconds ELSE 0 END)
+                    WHEN SUM(CASE WHEN activity_score IS NOT NULL AND activity_score > 0
+                         THEN GREATEST(EXTRACT(EPOCH FROM (ended_at - started_at))::int, 0) ELSE 0 END) > 0
+                    THEN SUM(COALESCE(activity_score, 0) * GREATEST(EXTRACT(EPOCH FROM (ended_at - started_at))::int, 0))
+                         / SUM(CASE WHEN activity_score IS NOT NULL AND activity_score > 0
+                               THEN GREATEST(EXTRACT(EPOCH FROM (ended_at - started_at))::int, 0) ELSE 0 END)
                     ELSE 0
                 END as activity_score_avg,
                 COUNT(*) as entry_count,
-                COALESCE(SUM(CASE WHEN type = 'tracked' THEN duration_seconds ELSE 0 END), 0) as tracked_seconds,
-                COALESCE(SUM(CASE WHEN type = 'idle' THEN duration_seconds ELSE 0 END), 0) as idle_seconds
+                COALESCE(SUM(CASE WHEN type = 'tracked' THEN GREATEST(EXTRACT(EPOCH FROM (ended_at - started_at))::int, 0) ELSE 0 END), 0) as tracked_seconds,
+                COALESCE(SUM(CASE WHEN type = 'idle' THEN GREATEST(EXTRACT(EPOCH FROM (ended_at - started_at))::int, 0) ELSE 0 END), 0) as idle_seconds
             ")
             ->groupBy(DB::raw('DATE(started_at)'))
             ->orderBy('date')
@@ -72,7 +77,7 @@ class ReportService
                 }
 
                 $totalEarnings = $earningsQuery
-                    ->selectRaw('COALESCE(SUM(time_entries.duration_seconds / 3600.0 * projects.hourly_rate), 0) as total_earnings')
+                    ->selectRaw('COALESCE(SUM(GREATEST(EXTRACT(EPOCH FROM (time_entries.ended_at - time_entries.started_at))::int, 0) / 3600.0 * projects.hourly_rate), 0) as total_earnings')
                     ->value('total_earnings') ?? 0;
             }
 
@@ -104,13 +109,13 @@ class ReportService
                 ->whereNotNull('ended_at')
                 ->selectRaw('
                     user_id,
-                    COALESCE(SUM(duration_seconds), 0) as total_seconds,
+                    COALESCE(SUM(GREATEST(EXTRACT(EPOCH FROM (ended_at - started_at))::int, 0)), 0) as total_seconds,
                     COUNT(*) as entry_count,
-                    COALESCE(SUM(CASE WHEN type = \'tracked\' THEN duration_seconds ELSE 0 END), 0) as tracked_seconds,
-                    COALESCE(SUM(CASE WHEN type = \'idle\' THEN duration_seconds ELSE 0 END), 0) as idle_seconds,
+                    COALESCE(SUM(CASE WHEN type = \'tracked\' THEN GREATEST(EXTRACT(EPOCH FROM (ended_at - started_at))::int, 0) ELSE 0 END), 0) as tracked_seconds,
+                    COALESCE(SUM(CASE WHEN type = \'idle\' THEN GREATEST(EXTRACT(EPOCH FROM (ended_at - started_at))::int, 0) ELSE 0 END), 0) as idle_seconds,
                     CASE
-                        WHEN SUM(CASE WHEN activity_score IS NOT NULL THEN duration_seconds ELSE 0 END) > 0
-                        THEN SUM(COALESCE(activity_score, 0) * duration_seconds) / SUM(CASE WHEN activity_score IS NOT NULL THEN duration_seconds ELSE 0 END)
+                        WHEN SUM(CASE WHEN activity_score IS NOT NULL AND activity_score > 0 THEN GREATEST(EXTRACT(EPOCH FROM (ended_at - started_at))::int, 0) ELSE 0 END) > 0
+                        THEN SUM(COALESCE(activity_score, 0) * GREATEST(EXTRACT(EPOCH FROM (ended_at - started_at))::int, 0)) / SUM(CASE WHEN activity_score IS NOT NULL AND activity_score > 0 THEN GREATEST(EXTRACT(EPOCH FROM (ended_at - started_at))::int, 0) ELSE 0 END)
                         ELSE 0
                     END as avg_activity
                 ')
@@ -174,7 +179,7 @@ class ReportService
                     projects.hourly_rate,
                     tasks.id as task_id,
                     tasks.name as task_name,
-                    SUM(time_entries.duration_seconds) as total_seconds,
+                    SUM(GREATEST(EXTRACT(EPOCH FROM (time_entries.ended_at - time_entries.started_at))::int, 0)) as total_seconds,
                     COUNT(time_entries.id) as entry_count
                 ")
                 ->groupBy('projects.id', 'projects.name', 'projects.color', 'projects.billable', 'projects.hourly_rate', 'tasks.id', 'tasks.name')
@@ -275,9 +280,9 @@ class ReportService
                 ->leftJoin('projects', 'time_entries.project_id', '=', 'projects.id')
                 ->selectRaw('
                     time_entries.user_id,
-                    COALESCE(SUM(time_entries.duration_seconds), 0) as total_seconds,
-                    COALESCE(SUM(CASE WHEN projects.billable = true THEN time_entries.duration_seconds ELSE 0 END), 0) as billable_seconds,
-                    COALESCE(SUM(CASE WHEN projects.billable = true THEN time_entries.duration_seconds / 3600.0 * projects.hourly_rate ELSE 0 END), 0) as earnings
+                    COALESCE(SUM(GREATEST(EXTRACT(EPOCH FROM (time_entries.ended_at - time_entries.started_at))::int, 0)), 0) as total_seconds,
+                    COALESCE(SUM(CASE WHEN projects.billable = true THEN GREATEST(EXTRACT(EPOCH FROM (time_entries.ended_at - time_entries.started_at))::int, 0) ELSE 0 END), 0) as billable_seconds,
+                    COALESCE(SUM(CASE WHEN projects.billable = true THEN GREATEST(EXTRACT(EPOCH FROM (time_entries.ended_at - time_entries.started_at))::int, 0) / 3600.0 * projects.hourly_rate ELSE 0 END), 0) as earnings
                 ')
                 ->groupBy('time_entries.user_id')
                 ->get()
@@ -321,7 +326,7 @@ class ReportService
                     DATE(started_at) as date,
                     MIN(started_at) as first_seen,
                     MAX(ended_at) as last_seen,
-                    SUM(duration_seconds) as total_seconds
+                    SUM(GREATEST(EXTRACT(EPOCH FROM (ended_at - started_at))::int, 0)) as total_seconds
                 ")
                 ->groupBy('user_id', DB::raw('DATE(started_at)'))
                 ->orderBy('date')

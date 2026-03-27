@@ -383,7 +383,11 @@ export default function ReportsPage() {
                 <label className="text-sm font-medium text-foreground">User</label>
                 <Select value={userFilter} onValueChange={(val) => { setUserFilter(val ?? 'all'); setShouldFetch(false); }}>
                   <SelectTrigger className="w-[200px] bg-muted border-border">
-                    <SelectValue placeholder="All users" />
+                    <span className="truncate">
+                      {userFilter === 'all'
+                        ? 'All Users'
+                        : teamUsers?.find((u) => u.id === userFilter)?.name ?? 'Select user'}
+                    </span>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Users</SelectItem>
