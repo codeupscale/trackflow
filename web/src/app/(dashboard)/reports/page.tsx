@@ -151,9 +151,9 @@ function transformReportResponse(type: ReportType, raw: Record<string, unknown>)
     case 'attendance': {
       const attendance = (raw.attendance || []) as Record<string, unknown>[];
       return {
-        columns: ['user_id', 'date', 'first_seen', 'last_seen', 'total_seconds'],
+        columns: ['user', 'date', 'first_seen', 'last_seen', 'total_seconds'],
         rows: attendance.map((a) => ({
-          user_id: String(a.user_id ?? ''),
+          user: String(a.user_name ?? a.user_id ?? ''),
           date: String(a.date ?? ''),
           first_seen: String(a.first_seen ?? ''),
           last_seen: String(a.last_seen ?? ''),
