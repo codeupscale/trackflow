@@ -9,13 +9,26 @@ class ApiClient {
     this._isRefreshing = false;
     this._refreshPromise = null;
     this._onTokenRefreshed = null; // Callback to persist new tokens
+    this._onAuthFailed = null; // Callback when token refresh fails (force logout)
+
+    // Dynamically resolve agent version from Electron app or package.json
+    let agentVersion = '1.0.0';
+    try {
+      const { app } = require('electron');
+      agentVersion = app.getVersion();
+    } catch {
+      // Fallback: read from package.json if Electron app not available
+      try {
+        agentVersion = require('../../package.json').version;
+      } catch {}
+    }
 
     this.client = axios.create({
       baseURL: API_BASE,
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'X-Agent-Version': '1.0.0',
+        'X-Agent-Version': agentVersion,
       },
       timeout: 30000,
     });
@@ -44,7 +57,10 @@ class ApiClient {
             originalRequest.headers['Authorization'] = `Bearer ${tokens.access_token}`;
             return this.client(originalRequest);
           } catch (refreshErr) {
-            // Refresh failed — token is truly expired
+            // Refresh failed — token is truly expired (e.g. password changed)
+            if (this._onAuthFailed) {
+              this._onAuthFailed(refreshErr);
+            }
             return Promise.reject(refreshErr);
           }
         }
@@ -99,6 +115,11 @@ class ApiClient {
     this._onTokenRefreshed = callback;
   }
 
+  // Register callback for when token refresh fails (password changed, tokens revoked)
+  onAuthFailed(callback) {
+    this._onAuthFailed = callback;
+  }
+
   setToken(token) {
     this.client.defaults.headers.common['Authorization'] = `Bearer ${token}`;
   }
@@ -129,6 +150,17 @@ class ApiClient {
 
   async stopTimer() {
     const res = await this.client.post('/timer/stop');
+    return res.data;
+  }
+
+  /**
+   * Atomically switch the running timer to a different project.
+   * Stops the current entry and starts a new one in a single server transaction.
+   */
+  async switchProject(projectId, taskId = null) {
+    const payload = { project_id: projectId };
+    if (taskId) payload.task_id = taskId;
+    const res = await this.client.post('/timer/switch', payload);
     return res.data;
   }
 
@@ -166,11 +198,18 @@ class ApiClient {
 
   async getProjects() {
     const res = await this.client.get('/projects');
-    return res.data.projects;
+    // Backend returns paginated response: { data: [...], current_page, ... }
+    // or legacy format: { projects: [...] }
+    return res.data.data || res.data.projects || res.data || [];
   }
 
   async reportIdleTime(data) {
     const res = await this.client.post('/timer/idle', data);
+    return res.data;
+  }
+
+  async deleteTimeEntry(entryId) {
+    const res = await this.client.delete(`/time-entries/${entryId}`);
     return res.data;
   }
 

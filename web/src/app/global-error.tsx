@@ -1,5 +1,16 @@
 'use client';
 
+import { useEffect } from 'react';
+import { captureError } from '@/lib/posthog';
+
+function isChunkLoadError(error: Error): boolean {
+  return (
+    error.name === 'ChunkLoadError' ||
+    error.message.includes('Loading chunk') ||
+    error.message.includes('Failed to fetch dynamically imported module')
+  );
+}
+
 export default function GlobalError({
   error,
   reset,
@@ -7,6 +18,23 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const isChunkError = isChunkLoadError(error);
+
+  useEffect(() => {
+    captureError(error, {
+      digest: error.digest,
+      isChunkLoadError: isChunkError,
+    });
+  }, [error, isChunkError]);
+
+  function handleRetry() {
+    if (isChunkError) {
+      window.location.reload();
+    } else {
+      reset();
+    }
+  }
+
   return (
     <html lang="en" className="dark">
       <body className="bg-slate-950 text-slate-50">
@@ -14,13 +42,15 @@ export default function GlobalError({
           <div className="text-center max-w-md p-8">
             <h2 className="text-xl font-bold text-white mb-4">Something went wrong</h2>
             <p className="text-slate-400 text-sm mb-6">
-              {error?.message || 'An unexpected error occurred.'}
+              {isChunkError
+                ? 'A new version of the app is available. Please reload the page.'
+                : error?.message || 'An unexpected error occurred.'}
             </p>
             <button
-              onClick={() => reset()}
+              onClick={handleRetry}
               className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors"
             >
-              Try again
+              {isChunkError ? 'Reload page' : 'Try again'}
             </button>
           </div>
         </div>

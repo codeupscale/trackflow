@@ -40,8 +40,7 @@ class SendEmailNotificationJob implements ShouldQueue
     public function failed(\Throwable $exception): void
     {
         \Illuminate\Support\Facades\Log::critical("SendEmailNotificationJob failed", [
-            'to' => $this->to,
-            'subject' => $this->subject,
+            'view' => $this->view,
             'error' => $exception->getMessage(),
         ]);
     }

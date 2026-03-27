@@ -42,41 +42,63 @@ class DashboardController extends Controller
         }
 
         // Managers/admins/owners see the full team dashboard
-        $users = User::withoutGlobalScopes()
+        $users = User::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('organization_id', $orgId)
             ->where('is_active', true)
             ->get(['id', 'name', 'email', 'role', 'last_active_at', 'avatar_url']);
 
+        // Batch Redis fetch: 1 call instead of N (one per user)
+        // Build keys from user IDs to avoid fragile string parsing
+        $userIds = $users->pluck('id')->values()->all();
+        $redisKeys = array_map(fn ($id) => "timer:{$id}", $userIds);
+        $redisValues = count($redisKeys) > 0 ? Redis::mget($redisKeys) : [];
+        $userById = $users->keyBy('id');
+        $now = now();
+
         $onlineUsers = [];
-        foreach ($users as $u) {
-            $timerData = Redis::get("timer:{$u->id}");
+        foreach ($userIds as $i => $userId) {
+            $timerData = $redisValues[$i] ?? null;
             if ($timerData) {
                 $data = json_decode($timerData, true);
-                $onlineUsers[] = [
-                    'user' => $u,
-                    'timer' => $data,
-                    'elapsed_seconds' => (int) abs(now()->diffInSeconds(Carbon::parse($data['started_at']))),
-                ];
+                $u = $userById->get($userId);
+                if ($u) {
+                    $onlineUsers[] = [
+                        'user' => $u,
+                        'timer' => $data,
+                        'elapsed_seconds' => (int) abs($now->diffInSeconds(Carbon::parse($data['started_at']))),
+                    ];
+                }
             }
         }
 
-        // Time entries in range (completed, tracked) — team sum according to selected filter
-        $rangeEntries = TimeEntry::withoutGlobalScopes()
+        // Time entries in range (completed, tracked) — team sum + duration-weighted activity
+        // Duration-weighted average: longer entries contribute more to the score.
+        // This matches Hubstaff's approach: a 1-min entry at 10% shouldn't drag down
+        // an 8-hour entry at 90%. COALESCE handles NULL activity_score (short entries with no heartbeats).
+        $rangeEntries = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('organization_id', $orgId)
             ->where('started_at', '>=', $dateFrom)
-            ->where('started_at', '<=', $dateTo)
+            ->where('started_at', '<', $dateTo)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked')
-            ->selectRaw('user_id, SUM(duration_seconds) as total_seconds, AVG(activity_score) as avg_activity')
+            ->selectRaw('
+                user_id,
+                SUM(duration_seconds) as total_seconds,
+                CASE
+                    WHEN SUM(CASE WHEN activity_score IS NOT NULL THEN duration_seconds ELSE 0 END) > 0
+                    THEN SUM(COALESCE(activity_score, 0) * duration_seconds) / SUM(CASE WHEN activity_score IS NOT NULL THEN duration_seconds ELSE 0 END)
+                    ELSE 0
+                END as avg_activity
+            ')
             ->groupBy('user_id')
             ->get()
             ->keyBy('user_id');
 
         // Active projects in range: distinct project_id (exclude null)
-        $activeProjectsCount = (int) TimeEntry::withoutGlobalScopes()
+        $activeProjectsCount = (int) TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('organization_id', $orgId)
             ->where('started_at', '>=', $dateFrom)
-            ->where('started_at', '<=', $dateTo)
+            ->where('started_at', '<', $dateTo)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked')
             ->whereNotNull('project_id')
@@ -84,7 +106,7 @@ class DashboardController extends Controller
             ->value('c');
 
         $now = Carbon::now();
-        $rangeIncludesNow = $now->between($dateFrom, $dateTo);
+        $rangeIncludesNow = $now >= Carbon::parse($dateFrom) && $now < Carbon::parse($dateTo);
         $onlineByUserId = collect($onlineUsers)->keyBy(fn ($o) => $o['user']->id);
 
         $teamSummary = $users->map(function ($u) use ($rangeEntries, $rangeIncludesNow, $onlineByUserId) {
@@ -137,29 +159,80 @@ class DashboardController extends Controller
             $responseDateTo = $responseDateFrom;
         }
 
-        $rangeSeconds = TimeEntry::withoutGlobalScopes()
+        $rangeSeconds = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('user_id', $user->id)
             ->where('started_at', '>=', $dateFrom)
-            ->where('started_at', '<=', $dateTo)
+            ->where('started_at', '<', $dateTo)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked')
             ->sum('duration_seconds');
 
         $now = Carbon::now();
-        if ($now->between($dateFrom, $dateTo) && $timer) {
+        if ($now >= Carbon::parse($dateFrom) && $now < Carbon::parse($dateTo) && $timer) {
             $rangeSeconds += (int) $timer['elapsed_seconds'];
         }
 
-        $weekSeconds = TimeEntry::withoutGlobalScopes()
+        // Week range uses the user's timezone so the boundaries align with their calendar week
+        $weekStart = Carbon::now($tz)->startOfWeek(); // Monday 00:00 local
+        $weekEnd = Carbon::now($tz)->endOfWeek();     // Sunday 23:59 local
+        [$weekStartUtc, $weekEndUtc] = TimezoneAwareDateRange::toUtcBounds(
+            $weekStart->toDateString(),
+            $weekEnd->toDateString(),
+            $tz
+        );
+
+        $weekSeconds = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('user_id', $user->id)
-            ->where('started_at', '>=', now()->startOfWeek())
+            ->where('started_at', '>=', $weekStartUtc)
+            ->where('started_at', '<', $weekEndUtc)
             ->whereNotNull('ended_at')
+            ->where('type', 'tracked')
             ->sum('duration_seconds');
+
+        // Include current running timer in weekly total (if timer is running within this week)
+        if ($timer) {
+            $weekSeconds += (int) $timer['elapsed_seconds'];
+        }
+
+        // Use weekly_limit_hours (set via Settings UI) — fall back to weekly_hours_target for backwards compat
+        $weeklyTarget = (int) ($user->organization->getSetting('weekly_limit_hours', null)
+            ?? $user->organization->getSetting('weekly_hours_target', 0));
+
+        // Daily breakdown for the current week (Mon–Sun) for bar chart
+        $dailyBreakdown = [];
+        $todayLocal = Carbon::now($tz)->toDateString();
+        for ($d = 0; $d < 7; $d++) {
+            $dayLocal = $weekStart->copy()->addDays($d);
+            $dayStr = $dayLocal->toDateString();
+            [$dayStartUtc, $dayEndUtc] = TimezoneAwareDateRange::toUtcBounds($dayStr, $dayStr, $tz);
+
+            $daySecs = (int) TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                ->where('user_id', $user->id)
+                ->where('started_at', '>=', $dayStartUtc)
+                ->where('started_at', '<', $dayEndUtc)
+                ->whereNotNull('ended_at')
+                ->where('type', 'tracked')
+                ->sum('duration_seconds');
+
+            // Add running timer elapsed to today's bar
+            if ($dayStr === $todayLocal && $timer) {
+                $daySecs += (int) $timer['elapsed_seconds'];
+            }
+
+            $dailyBreakdown[] = [
+                'date' => $dayStr,
+                'day' => $dayLocal->format('D'),  // Mon, Tue, etc.
+                'seconds' => $daySecs,
+                'hours' => round($daySecs / self::SECONDS_PER_HOUR, 1),
+            ];
+        }
 
         return response()->json([
             'timer' => $timer,
             'today_seconds' => (int) $rangeSeconds,
             'week_seconds' => (int) $weekSeconds,
+            'weekly_hours_target' => $weeklyTarget,
+            'daily_breakdown' => $dailyBreakdown,
             'date_from' => $responseDateFrom,
             'date_to' => $responseDateTo,
         ]);

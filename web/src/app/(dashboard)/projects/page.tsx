@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   FolderOpen,
@@ -10,7 +10,10 @@ import {
   Archive,
   Pencil,
   Trash2,
-  Clock,
+  Users,
+  Search,
+  ChevronLeft,
+  ChevronRight,
   DollarSign,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -42,10 +45,19 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import api from '@/lib/api';
+import { useAuthStore } from '@/stores/auth-store';
 
 interface Task {
   id: string;
   name: string;
+}
+
+interface MemberUser {
+  id: string;
+  name: string;
+  email: string;
+  role: 'owner' | 'admin' | 'manager' | 'employee';
+  avatar_url?: string | null;
 }
 
 interface Project {
@@ -56,7 +68,6 @@ interface Project {
   hourly_rate: number | null;
   is_archived: boolean;
   tasks: Task[];
-  total_hours: number;
   created_at: string;
 }
 
@@ -66,20 +77,65 @@ const COLORS = [
 ];
 
 export default function ProjectsPage() {
+  const { user } = useAuthStore();
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [expandedProject, setExpandedProject] = useState<string | null>(null);
+  const [membersDialogOpen, setMembersDialogOpen] = useState(false);
+  const [membersProject, setMembersProject] = useState<Project | null>(null);
+  const [memberIds, setMemberIds] = useState<string[]>([]);
+  const [memberSearch, setMemberSearch] = useState('');
   const [formName, setFormName] = useState('');
   const [formColor, setFormColor] = useState('#3B82F6');
   const [formBillable, setFormBillable] = useState(false);
   const [formRate, setFormRate] = useState('');
 
-  const { data: projects, isLoading } = useQuery<Project[]>({
-    queryKey: ['projects'],
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const PER_PAGE = 12;
+
+  const canCreateProjects = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
+  const canUpdateProjects = canCreateProjects;
+  const canDeleteProjects = user?.role === 'owner' || user?.role === 'admin';
+  const canManageMembers = canUpdateProjects;
+
+  // Debounce search to avoid hammering backend
+  const debounceTimer = useState<NodeJS.Timeout | null>(null);
+  const handleSearch = useCallback((value: string) => {
+    setSearchQuery(value);
+    if (debounceTimer[0]) clearTimeout(debounceTimer[0]);
+    debounceTimer[0] = setTimeout(() => {
+      setDebouncedSearch(value);
+      setCurrentPage(1);
+    }, 300);
+  }, [debounceTimer]);
+
+  // Server-side search + pagination
+  const { data: paginatedData, isLoading, isError: isProjectsError } = useQuery({
+    queryKey: ['projects', currentPage, debouncedSearch],
     queryFn: async () => {
-      const res = await api.get('/projects');
-      return res.data.projects || res.data.data || res.data;
+      const params: Record<string, string | number> = { per_page: PER_PAGE, page: currentPage };
+      if (debouncedSearch.trim()) params.search = debouncedSearch.trim();
+      const res = await api.get('/projects', { params });
+      return res.data;
+    },
+  });
+
+  const projects: Project[] = paginatedData?.data || [];
+  const totalPages = paginatedData?.last_page || 1;
+  const totalCount = paginatedData?.total || 0;
+  const from = paginatedData?.from || 0;
+  const to = paginatedData?.to || 0;
+
+  const { data: orgUsers } = useQuery<MemberUser[]>({
+    queryKey: ['org-users'],
+    enabled: canManageMembers && membersDialogOpen,
+    queryFn: async () => {
+      const res = await api.get('/users', { params: { per_page: 200 } });
+      // backend is apiResource paginate; normalize
+      return res.data.data || res.data.users || res.data;
     },
   });
 
@@ -89,10 +145,21 @@ export default function ProjectsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      // BUG-008: Also invalidate 'projects-list' used by time page and other components
+      queryClient.invalidateQueries({ queryKey: ['projects-list'] });
       closeDialog();
       toast.success('Project created');
     },
-    onError: () => toast.error('Failed to create project'),
+    onError: (err: unknown) => {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      const message = (err as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message
+        ?? (err as { message?: string })?.message;
+      if (status === 403) {
+        toast.error('You don\'t have permission to create projects.');
+      } else {
+        toast.error(message || 'Failed to create project');
+      }
+    },
   });
 
   const updateMutation = useMutation({
@@ -101,6 +168,7 @@ export default function ProjectsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['projects-list'] });
       closeDialog();
       toast.success('Project updated');
     },
@@ -113,9 +181,26 @@ export default function ProjectsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['projects-list'] });
       toast.success('Project deleted');
     },
     onError: () => toast.error('Failed to delete project'),
+  });
+
+  const syncMembersMutation = useMutation({
+    mutationFn: async ({ projectId, userIds }: { projectId: string; userIds: string[] }) => {
+      return api.put(`/projects/${projectId}/members`, { user_ids: userIds });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      toast.success('Project members updated');
+      setMembersDialogOpen(false);
+      setMembersProject(null);
+      setMemberIds([]);
+    },
+    onError: (err: unknown) => {
+      toast.error((err as { message?: string })?.message || 'Failed to update members');
+    },
   });
 
   const closeDialog = () => {
@@ -125,6 +210,21 @@ export default function ProjectsPage() {
     setFormColor('#3B82F6');
     setFormBillable(false);
     setFormRate('');
+  };
+
+  const openMembers = (project: Project) => {
+    setMembersProject(project);
+    setMembersDialogOpen(true);
+    setMemberIds([]);
+    setMemberSearch('');
+    api.get(`/projects/${project.id}/members`)
+      .then((res) => {
+        const members = (res.data?.members || []) as MemberUser[];
+        setMemberIds(members.map((m) => m.id));
+      })
+      .catch((err: unknown) => {
+        toast.error((err as { message?: string })?.message || 'Failed to load project members');
+      });
   };
 
   const openCreate = () => {
@@ -166,34 +266,63 @@ export default function ProjectsPage() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white">Projects</h1>
-          <p className="text-slate-400 text-sm mt-1">Manage your projects and tasks</p>
+          <h1 className="text-2xl font-bold text-foreground">Projects</h1>
+          <p className="text-muted-foreground text-sm mt-1">Manage your projects and tasks</p>
         </div>
-        <Button onClick={openCreate} className="bg-blue-600 hover:bg-blue-700 text-white">
-          <Plus className="mr-2 h-4 w-4" />
-          New Project
-        </Button>
+        {canCreateProjects && (
+          <Button onClick={openCreate} className="bg-blue-600 hover:bg-blue-700 text-foreground">
+            <Plus className="mr-2 h-4 w-4" />
+            New Project
+          </Button>
+        )}
+      </div>
+
+      {/* Search */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Input
+          placeholder="Search projects..."
+          value={searchQuery}
+          onChange={(e) => handleSearch(e.target.value)}
+          className="pl-9 bg-card border-border text-foreground placeholder:text-muted-foreground"
+        />
       </div>
 
       {/* Projects Grid */}
-      {isLoading ? (
+      {isProjectsError ? (
+        <Card className="border-border bg-card">
+          <CardContent className="py-16">
+            <div className="text-center">
+              <FolderOpen className="h-10 w-10 text-red-500/60 mx-auto mb-3" />
+              <p className="text-muted-foreground font-medium">Failed to load projects</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                Please try again.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : isLoading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
-            <Card key={i} className="border-slate-800 bg-slate-900/50">
+            <Card key={i} className="border-border bg-card">
               <CardContent className="p-6">
-                <div className="h-32 bg-slate-800/50 rounded animate-pulse" />
+                <div className="h-32 bg-muted rounded animate-pulse" />
               </CardContent>
             </Card>
           ))}
         </div>
       ) : !projects || projects.length === 0 ? (
-        <Card className="border-slate-800 bg-slate-900/50">
+        <Card className="border-border bg-card">
           <CardContent className="py-16">
             <div className="text-center">
-              <FolderOpen className="h-10 w-10 text-slate-600 mx-auto mb-3" />
-              <p className="text-slate-400 font-medium">No projects yet</p>
-              <p className="text-sm text-slate-500 mt-1">
-                Create your first project to start tracking time
+              <FolderOpen className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+              <p className="text-muted-foreground font-medium">
+                {user?.role === 'employee' ? 'No projects assigned' : 'No projects yet'}
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                {user?.role === 'employee'
+                  ? 'Ask your manager to assign you to a project.'
+                  : 'Create your first project to start tracking time'}
               </p>
             </div>
           </CardContent>
@@ -203,7 +332,7 @@ export default function ProjectsPage() {
           {projects.map((project) => (
             <Card
               key={project.id}
-              className={`border-slate-800 bg-slate-900/50 transition-all hover:border-slate-700 cursor-pointer ${
+              className={`border-border bg-card transition-all hover:border-border cursor-pointer ${
                 project.is_archived ? 'opacity-60' : ''
               }`}
               onClick={() =>
@@ -218,51 +347,65 @@ export default function ProjectsPage() {
                       style={{ backgroundColor: project.color }}
                     />
                     <div>
-                      <CardTitle className="text-base text-white">{project.name}</CardTitle>
+                      <CardTitle className="text-base text-foreground">{project.name}</CardTitle>
                     </div>
                   </div>
                   <DropdownMenu>
                     <DropdownMenuTrigger
-                      className="inline-flex items-center justify-center rounded-md h-8 w-8 hover:bg-slate-800 text-slate-400"
+                      className="inline-flex items-center justify-center rounded-md h-8 w-8 hover:bg-muted text-muted-foreground"
                       onClick={(e) => e.stopPropagation()}
                     >
                       <MoreHorizontal className="h-4 w-4" />
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openEdit(project); }}>
-                        <Pencil className="mr-2 h-4 w-4" />
-                        Edit
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          updateMutation.mutate({ id: project.id, is_archived: !project.is_archived });
-                        }}
-                      >
-                        <Archive className="mr-2 h-4 w-4" />
-                        {project.is_archived ? 'Unarchive' : 'Archive'}
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        variant="destructive"
-                        onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(project.id); }}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
-                      </DropdownMenuItem>
+                      {canManageMembers && (
+                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openMembers(project); }}>
+                          <Users className="mr-2 h-4 w-4" />
+                          Members
+                        </DropdownMenuItem>
+                      )}
+                      {canUpdateProjects && (
+                        <>
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openEdit(project); }}>
+                            <Pencil className="mr-2 h-4 w-4" />
+                            Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateMutation.mutate({ id: project.id, is_archived: !project.is_archived });
+                            }}
+                          >
+                            <Archive className="mr-2 h-4 w-4" />
+                            {project.is_archived ? 'Unarchive' : 'Archive'}
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                      {canDeleteProjects && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            variant="destructive"
+                            onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(project.id); }}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete
+                          </DropdownMenuItem>
+                        </>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
               </CardHeader>
               <CardContent className="pt-0">
                 <div className="flex items-center gap-4 text-sm">
-                  <div className="flex items-center gap-1.5 text-slate-400">
+                  <div className="flex items-center gap-1.5 text-muted-foreground">
                     <FolderOpen className="h-3.5 w-3.5" />
                     <span>{project.tasks?.length || 0} tasks</span>
                   </div>
-                  <div className="flex items-center gap-1.5 text-slate-400">
-                    <Clock className="h-3.5 w-3.5" />
-                    <span>{(project.total_hours || 0).toFixed(1)}h</span>
+                  <div className="flex items-center gap-1.5 text-muted-foreground">
+                    <Users className="h-3.5 w-3.5" />
+                    <span>{String((project as unknown as { members_count?: number }).members_count ?? 0)} members</span>
                   </div>
                 </div>
 
@@ -273,7 +416,7 @@ export default function ProjectsPage() {
                       {project.hourly_rate ? `$${project.hourly_rate}/hr` : 'Billable'}
                     </Badge>
                   ) : (
-                    <Badge className="bg-slate-800 text-slate-400 border-slate-700 text-xs">
+                    <Badge className="bg-muted text-muted-foreground border-border text-xs">
                       Non-billable
                     </Badge>
                   )}
@@ -286,12 +429,12 @@ export default function ProjectsPage() {
 
                 {/* Expanded tasks */}
                 {expandedProject === project.id && project.tasks && project.tasks.length > 0 && (
-                  <div className="mt-4 pt-3 border-t border-slate-800">
-                    <p className="text-xs font-medium text-slate-400 mb-2">Tasks</p>
+                  <div className="mt-4 pt-3 border-t border-border">
+                    <p className="text-xs font-medium text-muted-foreground mb-2">Tasks</p>
                     <div className="space-y-1">
                       {project.tasks.map((task) => (
-                        <div key={task.id} className="text-sm text-slate-300 flex items-center gap-2">
-                          <div className="h-1 w-1 rounded-full bg-slate-600" />
+                        <div key={task.id} className="text-sm text-foreground flex items-center gap-2">
+                          <div className="h-1 w-1 rounded-full bg-muted-foreground" />
                           {task.name}
                         </div>
                       ))}
@@ -304,30 +447,70 @@ export default function ProjectsPage() {
         </div>
       )}
 
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">
+            Showing {from}–{to} of {totalCount} projects
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="border-border text-foreground"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+              <Button
+                key={page}
+                variant={page === currentPage ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setCurrentPage(page)}
+                className={page === currentPage ? 'bg-blue-600 text-white' : 'border-border text-foreground'}
+              >
+                {page}
+              </Button>
+            ))}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="border-border text-foreground"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Create/Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) closeDialog(); }}>
-        <DialogContent className="bg-slate-900 border-slate-800">
+        <DialogContent className="bg-card border-border">
           <form onSubmit={handleSubmit}>
             <DialogHeader>
-              <DialogTitle className="text-white">{editingProject ? 'Edit Project' : 'New Project'}</DialogTitle>
-              <DialogDescription className="text-slate-400">
+              <DialogTitle className="text-foreground">{editingProject ? 'Edit Project' : 'New Project'}</DialogTitle>
+              <DialogDescription className="text-muted-foreground">
                 {editingProject ? 'Update project details.' : 'Create a new project to track time against.'}
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
-                <Label htmlFor="project-name" className="text-slate-300">Name</Label>
+                <Label htmlFor="project-name" className="text-foreground">Name</Label>
                 <Input
                   id="project-name"
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
                   placeholder="Project name"
-                  className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                  className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
                   required
                 />
               </div>
               <div className="grid gap-2">
-                <Label className="text-slate-300">Color</Label>
+                <Label className="text-foreground">Color</Label>
                 <div className="flex gap-2">
                   {COLORS.map((c) => (
                     <button
@@ -336,7 +519,7 @@ export default function ProjectsPage() {
                       onClick={() => setFormColor(c)}
                       className={`h-8 w-8 rounded-full transition-all ${
                         formColor === c
-                          ? 'ring-2 ring-offset-2 ring-offset-slate-900 ring-blue-500 scale-110'
+                          ? 'ring-2 ring-offset-2 ring-offset-background ring-blue-500 scale-110'
                           : 'hover:scale-105'
                       }`}
                       style={{ backgroundColor: c }}
@@ -346,8 +529,8 @@ export default function ProjectsPage() {
               </div>
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-slate-300">Billable</Label>
-                  <p className="text-xs text-slate-500">Track billable hours for this project</p>
+                  <Label className="text-foreground">Billable</Label>
+                  <p className="text-xs text-muted-foreground">Track billable hours for this project</p>
                 </div>
                 <Switch
                   checked={formBillable}
@@ -356,7 +539,7 @@ export default function ProjectsPage() {
               </div>
               {formBillable && (
                 <div className="grid gap-2">
-                  <Label htmlFor="hourly-rate" className="text-slate-300">Hourly Rate ($)</Label>
+                  <Label htmlFor="hourly-rate" className="text-foreground">Hourly Rate ($)</Label>
                   <Input
                     id="hourly-rate"
                     type="number"
@@ -365,21 +548,198 @@ export default function ProjectsPage() {
                     value={formRate}
                     onChange={(e) => setFormRate(e.target.value)}
                     placeholder="0.00"
-                    className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                    className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
                   />
                 </div>
               )}
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={closeDialog} className="border-slate-700 text-slate-300">
+              <Button type="button" variant="outline" onClick={closeDialog} className="border-border text-foreground">
                 Cancel
               </Button>
-              <Button type="submit" disabled={isPending} className="bg-blue-600 hover:bg-blue-700 text-white">
+              <Button type="submit" disabled={isPending} className="bg-blue-600 hover:bg-blue-700 text-foreground">
                 {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {editingProject ? 'Save Changes' : 'Create Project'}
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Members Dialog */}
+      <Dialog
+        open={membersDialogOpen}
+        onOpenChange={(open) => {
+          setMembersDialogOpen(open);
+          if (!open) {
+            setMembersProject(null);
+            setMemberIds([]);
+            setMemberSearch('');
+          }
+        }}
+      >
+        <DialogContent className="bg-card border-border sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-foreground">Project Members</DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              Assign team members to <span className="font-medium text-foreground">{membersProject?.name}</span>
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            {/* Search */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search members..."
+                value={memberSearch}
+                onChange={(e) => setMemberSearch(e.target.value)}
+                className="pl-9 bg-background border-border text-foreground placeholder:text-muted-foreground"
+              />
+            </div>
+
+            {/* Stats bar */}
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>{memberIds.length} selected of {orgUsers?.length ?? 0} members</span>
+              {orgUsers && orgUsers.length > 0 && (
+                <button
+                  type="button"
+                  className="text-blue-500 hover:text-blue-400 font-medium transition-colors"
+                  onClick={() => {
+                    const filtered = (orgUsers || []).filter((u) => {
+                      if (!memberSearch.trim()) return true;
+                      const q = memberSearch.toLowerCase();
+                      return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+                    });
+                    const allFilteredSelected = filtered.every((u) => memberIds.includes(u.id));
+                    if (allFilteredSelected) {
+                      setMemberIds(memberIds.filter((id) => !filtered.some((u) => u.id === id)));
+                    } else {
+                      const newIds = new Set([...memberIds, ...filtered.map((u) => u.id)]);
+                      setMemberIds([...newIds]);
+                    }
+                  }}
+                >
+                  {(() => {
+                    const filtered = (orgUsers || []).filter((u) => {
+                      if (!memberSearch.trim()) return true;
+                      const q = memberSearch.toLowerCase();
+                      return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+                    });
+                    return filtered.every((u) => memberIds.includes(u.id)) ? 'Deselect all' : 'Select all';
+                  })()}
+                </button>
+              )}
+            </div>
+
+            {/* Members list */}
+            <div className="max-h-[360px] overflow-y-auto rounded-lg border border-border">
+              {!orgUsers ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  <span className="ml-2 text-sm text-muted-foreground">Loading members...</span>
+                </div>
+              ) : (() => {
+                const q = memberSearch.toLowerCase().trim();
+                const filtered = orgUsers.filter((u) =>
+                  !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q) || u.role.includes(q)
+                );
+                // Sort: selected first, then alphabetically
+                const sorted = [...filtered].sort((a, b) => {
+                  const aChecked = memberIds.includes(a.id) ? 0 : 1;
+                  const bChecked = memberIds.includes(b.id) ? 0 : 1;
+                  if (aChecked !== bChecked) return aChecked - bChecked;
+                  return a.name.localeCompare(b.name);
+                });
+
+                if (sorted.length === 0) {
+                  return (
+                    <div className="py-8 text-center text-sm text-muted-foreground">
+                      No members match &ldquo;{memberSearch}&rdquo;
+                    </div>
+                  );
+                }
+
+                return sorted.map((u) => {
+                  const checked = memberIds.includes(u.id);
+                  const initials = u.name
+                    .split(' ')
+                    .map((n) => n[0])
+                    .join('')
+                    .toUpperCase()
+                    .slice(0, 2);
+                  return (
+                    <label
+                      key={u.id}
+                      className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors border-b border-border last:border-b-0 ${
+                        checked
+                          ? 'bg-blue-500/10 hover:bg-blue-500/15'
+                          : 'hover:bg-muted/50'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => {
+                          setMemberIds(
+                            e.target.checked
+                              ? [...memberIds, u.id]
+                              : memberIds.filter((id) => id !== u.id)
+                          );
+                        }}
+                        className="h-4 w-4 rounded border-border accent-blue-600 shrink-0"
+                      />
+                      <div
+                        className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-medium shrink-0 ${
+                          checked
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-muted text-muted-foreground'
+                        }`}
+                      >
+                        {initials}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-foreground truncate">{u.name}</div>
+                        <div className="text-xs text-muted-foreground truncate">{u.email}</div>
+                      </div>
+                      <Badge
+                        className={`text-[10px] shrink-0 ${
+                          u.role === 'owner'
+                            ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
+                            : 'bg-muted text-muted-foreground border-border'
+                        }`}
+                      >
+                        {u.role}
+                      </Badge>
+                    </label>
+                  );
+                });
+              })()}
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setMembersDialogOpen(false)}
+              className="border-border text-foreground"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              disabled={!membersProject?.id || syncMembersMutation.isPending}
+              onClick={() => {
+                if (!membersProject?.id) return;
+                syncMembersMutation.mutate({ projectId: membersProject.id, userIds: memberIds });
+              }}
+            >
+              {syncMembersMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save ({memberIds.length})
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

@@ -102,9 +102,10 @@ class GenerateReportJob implements ShouldQueue
                     $row['earnings'],
                 ]);
             }
-        } else {
+        } elseif (!empty($data)) {
             // Generic: encode as JSON rows
-            fputcsv($output, array_keys(is_array($data) && count($data) > 0 ? (is_array($data[0]) ? $data[0] : (array)$data[0]) : []));
+            $firstRow = reset($data);
+            fputcsv($output, array_keys(is_array($firstRow) ? $firstRow : (array)$firstRow));
             foreach ($data as $row) {
                 fputcsv($output, is_array($row) ? $row : (array)$row);
             }

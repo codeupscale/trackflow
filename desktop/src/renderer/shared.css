@@ -1,0 +1,430 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   TrackFlow — Shared Cross-Platform CSS
+   Ensures pixel-identical rendering on macOS, Windows, and Linux
+   Supports light and dark themes via CSS custom properties
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Theme Variables ───────────────────────────────────────────────────── */
+:root {
+  /* Dark theme (default) — colors match the web portal's .dark theme exactly
+     Web uses oklch achromatic grays; hex equivalents below.
+     oklch(0.145 0 0) = #0a0a0a  (background)
+     oklch(0.205 0 0) = #171717  (card / secondary surface)
+     oklch(0.269 0 0) = #262626  (muted / tertiary surface)
+     oklch(0.985 0 0) = #fafafa  (foreground text)
+     oklch(0.708 0 0) = #a1a1a1  (muted foreground)
+     oklch(0.556 0 0) = #737373  (ring / muted text)
+     oklch(1 0 0 / 10%) = rgba(255,255,255,0.1) (border)
+     oklch(1 0 0 / 15%) = rgba(255,255,255,0.15) (input border)
+  */
+  --bg-primary: #0a0a0a;
+  --bg-secondary: #171717;
+  --bg-tertiary: #262626;
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1a1;
+  --text-muted: #737373;
+  --text-xs-muted: #525252;
+  --border-color: rgba(255, 255, 255, 0.1);
+  --border-input: rgba(255, 255, 255, 0.15);
+  --accent-blue: #3b82f6;
+  --accent-blue-hover: #2563eb;
+  --accent-blue-active: #1d4ed8;
+  --accent-blue-ring: rgba(59, 130, 246, 0.15);
+  --accent-red: #ff6467;
+  --accent-red-hover: #ef4444;
+  --accent-red-active: #dc2626;
+  --accent-green: #22c55e;
+  --scrollbar-thumb: #262626;
+  --scrollbar-thumb-hover: #525252;
+  --btn-ghost-hover-bg: #171717;
+  --btn-ghost-active-bg: #262626;
+  --select-bg: #171717;
+  --select-option-bg: #171717;
+  --kbd-bg: #171717;
+  --kbd-border: #262626;
+  --notification-shadow: rgba(0, 0, 0, 0.4);
+  --focus-ring-outer: #0a0a0a;
+  --autofill-bg: #0a0a0a;
+  --accent-amber: #f59e0b;
+  --accent-amber-hover: #d97706;
+  --accent-amber-active: #b45309;
+  --accent-indigo: #6366f1;
+  --accent-indigo-hover: #4f46e5;
+  --accent-indigo-active: #4338ca;
+  --accent-indigo-ring: rgba(99, 102, 241, 0.15);
+  --accent-green-hover: #16a34a;
+  --accent-green-active: #15803d;
+  --link-primary-hover: #60a5fa;
+  --close-btn-bg: #ff6467;
+  --error-bg: rgba(255, 100, 103, 0.1);
+  --error-border: rgba(255, 100, 103, 0.2);
+}
+
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8fafc;
+  --bg-tertiary: #e2e8f0;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --text-xs-muted: #94a3b8;
+  --border-color: #e2e8f0;
+  --border-input: #cbd5e1;
+  --accent-blue: #3b82f6;
+  --accent-blue-hover: #2563eb;
+  --accent-blue-active: #1d4ed8;
+  --accent-blue-ring: rgba(59, 130, 246, 0.2);
+  --accent-red: #ef4444;
+  --accent-red-hover: #dc2626;
+  --accent-red-active: #b91c1c;
+  --accent-green: #16a34a;
+  --scrollbar-thumb: #cbd5e1;
+  --scrollbar-thumb-hover: #94a3b8;
+  --btn-ghost-hover-bg: #f1f5f9;
+  --btn-ghost-active-bg: #e2e8f0;
+  --select-bg: #f8fafc;
+  --select-option-bg: #ffffff;
+  --kbd-bg: #f1f5f9;
+  --kbd-border: #e2e8f0;
+  --notification-shadow: rgba(0, 0, 0, 0.15);
+  --focus-ring-outer: #ffffff;
+  --autofill-bg: #ffffff;
+  --accent-amber: #f59e0b;
+  --accent-amber-hover: #d97706;
+  --accent-amber-active: #b45309;
+  --accent-indigo: #6366f1;
+  --accent-indigo-hover: #4f46e5;
+  --accent-indigo-active: #4338ca;
+  --accent-indigo-ring: rgba(99, 102, 241, 0.15);
+  --accent-green-hover: #16a34a;
+  --accent-green-active: #15803d;
+  --link-primary-hover: #2563eb;
+  --close-btn-bg: #ef4444;
+  --error-bg: rgba(239, 68, 68, 0.1);
+  --error-border: rgba(239, 68, 68, 0.2);
+}
+
+/* ── Reset & Normalization ──────────────────────────────────────────────── */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  /* Force consistent font rendering across all platforms */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  /* Prevent text size inflation on mobile/tablets */
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  /* Cross-platform font stack: system UI on all platforms */
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Custom Scrollbar (consistent on all platforms) ─────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* ── Custom Titlebar (replaces native frame for consistent look) ───────── */
+.titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  padding: 0 8px;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border-color);
+  -webkit-app-region: drag;
+  /* Fallback for Linux where app-region:drag may not work */
+  cursor: default;
+}
+.titlebar-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-blue);
+  pointer-events: none;
+}
+.titlebar-controls {
+  display: flex;
+  gap: 4px;
+  -webkit-app-region: no-drag;
+}
+.titlebar-btn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-app-region: no-drag;
+}
+.titlebar-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+.titlebar-btn.close:hover {
+  background: var(--close-btn-bg);
+  color: white;
+}
+
+/* ── Buttons — Unified Cross-Platform ──────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  outline: none;
+  -webkit-app-region: no-drag;
+  /* Remove native button styling on all platforms */
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+.btn:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus-ring-outer), 0 0 0 4px var(--accent-blue);
+}
+.btn:active {
+  transform: scale(0.97);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+.btn-primary {
+  background: var(--accent-blue);
+  color: white;
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-blue-hover);
+}
+.btn-primary:active:not(:disabled) {
+  background: var(--accent-blue-active);
+}
+.btn-danger {
+  background: var(--accent-red);
+  color: white;
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--accent-red-hover);
+}
+.btn-danger:active:not(:disabled) {
+  background: var(--accent-red-active);
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+}
+.btn-ghost:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--btn-ghost-hover-bg);
+}
+.btn-ghost:active:not(:disabled) {
+  background: var(--btn-ghost-active-bg);
+}
+
+/* ── Form Inputs — Unified Cross-Platform ──────────────────────────────── */
+input, textarea {
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 6px;
+  padding: 10px 12px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  /* Remove native styling */
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  width: 100%;
+}
+input:focus, textarea:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px var(--accent-blue-ring);
+}
+input::placeholder, textarea::placeholder {
+  color: var(--text-xs-muted);
+  opacity: 1; /* Firefox fix */
+}
+/* Autofill styling — prevent yellow/white background on all platforms */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 100px var(--autofill-bg) inset;
+  -webkit-text-fill-color: var(--text-primary);
+  border-color: var(--accent-blue);
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+/* ── Select — Custom Cross-Platform (replaces native <select>) ─────────── */
+.select-wrap {
+  position: relative;
+  width: 100%;
+  -webkit-app-region: no-drag;
+}
+.select-wrap::after {
+  content: '';
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 5px solid var(--text-muted);
+  pointer-events: none;
+}
+.select-wrap select {
+  width: 100%;
+  padding: 8px 32px 8px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--select-bg);
+  border: 1px solid var(--border-input);
+  border-radius: 6px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  /* Remove ALL native select styling on every platform */
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+.select-wrap select:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px var(--accent-blue-ring);
+}
+.select-wrap select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.select-wrap select option {
+  background: var(--select-option-bg);
+  color: var(--text-primary);
+  padding: 8px 12px;
+}
+
+/* ── Links ─────────────────────────────────────────────────────────────── */
+a, .link {
+  color: var(--text-muted);
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 0.15s;
+  -webkit-app-region: no-drag;
+}
+a:hover, .link:hover {
+  color: var(--text-secondary);
+}
+a:focus-visible, .link:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.link-primary {
+  color: var(--accent-blue);
+}
+.link-primary:hover {
+  color: var(--link-primary-hover);
+}
+
+/* ── Notification Toast ────────────────────────────────────────────────── */
+.notification {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent-red);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  z-index: 999;
+  opacity: 1;
+  transition: opacity 0.3s;
+  box-shadow: 0 4px 12px var(--notification-shadow);
+}
+
+/* ── Animations ────────────────────────────────────────────────────────── */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ── Utility Classes ───────────────────────────────────────────────────── */
+.text-muted { color: var(--text-muted); }
+.text-sm { font-size: 12px; }
+.text-xs { font-size: 11px; }
+.text-center { text-align: center; }
+.tabular-nums { font-variant-numeric: tabular-nums; }
+
+/* SVG icon base */
+.icon-svg {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+  vertical-align: middle;
+}
+
+/* ── Keyboard Shortcut Hint ────────────────────────────────────────────── */
+.kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  background: var(--kbd-bg);
+  border: 1px solid var(--kbd-border);
+  border-radius: 3px;
+}

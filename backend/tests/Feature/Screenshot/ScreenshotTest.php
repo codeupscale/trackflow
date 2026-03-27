@@ -37,7 +37,7 @@ class ScreenshotTest extends TestCase
             'role' => 'employee',
         ]);
 
-        $this->timeEntry = TimeEntry::factory()->create([
+        $this->timeEntry = TimeEntry::factory()->running()->create([
             'organization_id' => $this->org->id,
             'user_id' => $this->employee->id,
         ]);
