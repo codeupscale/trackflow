@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { format, startOfWeek, endOfWeek, isToday, isSameDay } from 'date-fns';
+import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subDays, subMonths, isToday, isSameDay } from 'date-fns';
 import {
   Clock,
   Users,
@@ -76,12 +76,18 @@ interface DashboardData {
   dailyBreakdown: DailyBreakdown[];
 }
 
-type FilterPreset = 'today' | 'week' | 'custom';
+type FilterPreset = 'today' | 'yesterday' | 'week' | 'last-month' | 'custom';
 
 // ─── Date range helpers ───────────────────────────────────────────
 
 function getTodayRange(): { dateFrom: string; dateTo: string } {
   const d = new Date();
+  const s = format(d, 'yyyy-MM-dd');
+  return { dateFrom: s, dateTo: s };
+}
+
+function getYesterdayRange(): { dateFrom: string; dateTo: string } {
+  const d = subDays(new Date(), 1);
   const s = format(d, 'yyyy-MM-dd');
   return { dateFrom: s, dateTo: s };
 }
@@ -94,6 +100,14 @@ function getWeekRange(): { dateFrom: string; dateTo: string } {
   return {
     dateFrom: format(start, 'yyyy-MM-dd'),
     dateTo: format(endUse, 'yyyy-MM-dd'),
+  };
+}
+
+function getLastMonthRange(): { dateFrom: string; dateTo: string } {
+  const lastMonth = subMonths(new Date(), 1);
+  return {
+    dateFrom: format(startOfMonth(lastMonth), 'yyyy-MM-dd'),
+    dateTo: format(endOfMonth(lastMonth), 'yyyy-MM-dd'),
   };
 }
 
@@ -112,19 +126,26 @@ export default function DashboardPage() {
       const d = new Date(dateFrom + 'T00:00:00');
       return isToday(d) ? 'Today' : format(d, 'EEE, MMM d, yyyy');
     }
+    if (filterPreset === 'yesterday') return 'Yesterday';
+    if (filterPreset === 'last-month') {
+      const d = new Date(dateFrom + 'T00:00:00');
+      return format(d, 'MMMM yyyy');
+    }
     return `${format(new Date(dateFrom + 'T00:00:00'), 'MMM d')} – ${format(new Date(dateTo + 'T00:00:00'), 'MMM d, yyyy')}`;
   }, [filterPreset, dateFrom, dateTo]);
 
-  const applyPreset = (preset: 'today' | 'week') => {
+  const applyPreset = (preset: FilterPreset) => {
     setFilterPreset(preset);
-    if (preset === 'today') {
-      const { dateFrom: from, dateTo: to } = getTodayRange();
-      setDateFrom(from);
-      setDateTo(to);
-    } else {
-      const { dateFrom: from, dateTo: to } = getWeekRange();
-      setDateFrom(from);
-      setDateTo(to);
+    const ranges: Record<string, () => { dateFrom: string; dateTo: string }> = {
+      today: getTodayRange,
+      yesterday: getYesterdayRange,
+      week: getWeekRange,
+      'last-month': getLastMonthRange,
+    };
+    const range = ranges[preset]?.();
+    if (range) {
+      setDateFrom(range.dateFrom);
+      setDateTo(range.dateTo);
     }
   };
 
