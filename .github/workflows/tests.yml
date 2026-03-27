@@ -64,6 +64,9 @@ jobs:
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: 6379
 
+      - name: Update vulnerable packages
+        run: composer update league/commonmark --with-all-dependencies --no-interaction
+
       - name: Audit PHP dependencies for vulnerabilities
         run: composer audit
 
