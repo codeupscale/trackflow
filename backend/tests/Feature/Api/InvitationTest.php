@@ -44,7 +44,7 @@ class InvitationTest extends TestCase
         ]);
 
         $response->assertStatus(201)
-            ->assertJsonPath('invitation.email', $email)
+            ->assertJsonPath('invitation.email', strtolower($email))
             ->assertJsonPath('message', 'Invitation sent successfully.');
     }
 
