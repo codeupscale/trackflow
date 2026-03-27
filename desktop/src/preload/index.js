@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('trackflow', {
   onTimerStopped: (callback) => safeOn('timer-stopped', (_, data) => callback(data)),
   onTimerTick: (callback) => safeOn('timer-tick', (_, data) => callback(data)),
   onSyncTimer: (callback) => safeOn('sync-timer', () => callback()),
+  onProjectsReady: (callback) => safeOn('projects-ready', () => callback()),
   onIdleData: (callback) => safeOn('idle-data', (_, data) => callback(data)),
 
   // Auto-update

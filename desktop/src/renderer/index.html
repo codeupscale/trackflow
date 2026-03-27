@@ -450,11 +450,23 @@
       }
     }
 
-    async function loadProjects() {
+    async function loadProjects(retryCount = 0) {
+      const MAX_RETRIES = 3;
       try {
         const projects = await window.trackflow.getProjects();
         const list = Array.isArray(projects) ? projects
           : (projects?.data && Array.isArray(projects.data)) ? projects.data : [];
+
+        // If we got an empty list and haven't exhausted retries, try again after a delay.
+        // This handles the race where the API returns empty because the access token
+        // is being refreshed during app startup.
+        if (list.length === 0 && retryCount < MAX_RETRIES) {
+          const delay = 1000 * (retryCount + 1);
+          console.log(`[loadProjects] Empty list, retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+          setTimeout(() => loadProjects(retryCount + 1), delay);
+          return;
+        }
+
         const currentValue = projectSelect.value || '';
         projectSelect.innerHTML = '<option value="">Select a project</option>';
         list.forEach(p => {
@@ -467,7 +479,15 @@
           projectSelect.value = currentValue;
         }
         updateStartBtnState();
-      } catch {}
+      } catch (e) {
+        console.error('[loadProjects] Failed:', e);
+        // Retry on error (network issue, token refresh in progress)
+        if (retryCount < MAX_RETRIES) {
+          const delay = 1000 * (retryCount + 1);
+          console.log(`[loadProjects] Error, retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+          setTimeout(() => loadProjects(retryCount + 1), delay);
+        }
+      }
     }
 
     // Disable Start button when no project selected
@@ -638,6 +658,15 @@
     });
 
     window.trackflow.onSyncTimer(() => syncTimerState());
+
+    // When main process signals that projects are ready (e.g. after app init
+    // completes and API client has a valid token), reload the project list.
+    // This fixes the race where the renderer fetches projects before the
+    // main process has finished validating/refreshing the auth token.
+    window.trackflow.onProjectsReady(() => {
+      console.log('[renderer] Received projects-ready signal — reloading projects');
+      loadProjects();
+    });
 
     // ── Update Dialog Logic ──
     const updateOverlay = document.getElementById('updateOverlay');

@@ -661,8 +661,12 @@ async function initializeApp() {
   setupIPC();
   checkForUpdates();
 
-  // Load projects for tray menu
-  loadProjects();
+  // Load projects for tray menu, then notify the popup renderer
+  loadProjects().then(() => {
+    if (popupWindow && !popupWindow.isDestroyed()) {
+      popupWindow.webContents.send('projects-ready');
+    }
+  });
 
   // Flush offline queue
   offlineQueue.flush(apiClient);
@@ -1073,6 +1077,9 @@ function showPopup() {
     setImmediate(() => {
       if (popupWindow && !popupWindow.isDestroyed()) {
         popupWindow.webContents.send('sync-timer');
+        // Also signal the renderer to reload projects in case they were
+        // empty from a previous failed load (e.g. token refresh race on startup)
+        popupWindow.webContents.send('projects-ready');
       }
     });
     return;
