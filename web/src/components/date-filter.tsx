@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Calendar, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
-type FilterPreset = 'today' | 'yesterday' | 'week' | 'last-month' | 'custom';
+type FilterPreset = 'today' | 'yesterday' | 'week' | 'last-week' | 'this-month' | 'last-month' | 'custom';
 
 interface DateFilterProps {
   filterPreset: FilterPreset;
@@ -56,6 +56,8 @@ export function DateFilter({
     { key: 'today', label: 'Today' },
     { key: 'yesterday', label: 'Yesterday' },
     { key: 'week', label: 'This week' },
+    { key: 'last-week', label: 'Last week' },
+    { key: 'this-month', label: 'This month' },
     { key: 'last-month', label: 'Last month' },
   ];
 

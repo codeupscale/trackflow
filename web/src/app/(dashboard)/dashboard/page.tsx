@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subDays, subMonths, isToday, isSameDay } from 'date-fns';
+import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subDays, subWeeks, subMonths, isToday, isSameDay } from 'date-fns';
 import {
   Clock,
   Users,
@@ -76,7 +76,7 @@ interface DashboardData {
   dailyBreakdown: DailyBreakdown[];
 }
 
-type FilterPreset = 'today' | 'yesterday' | 'week' | 'last-month' | 'custom';
+type FilterPreset = 'today' | 'yesterday' | 'week' | 'last-week' | 'this-month' | 'last-month' | 'custom';
 
 // ─── Date range helpers ───────────────────────────────────────────
 
@@ -100,6 +100,22 @@ function getWeekRange(): { dateFrom: string; dateTo: string } {
   return {
     dateFrom: format(start, 'yyyy-MM-dd'),
     dateTo: format(endUse, 'yyyy-MM-dd'),
+  };
+}
+
+function getLastWeekRange(): { dateFrom: string; dateTo: string } {
+  const lastWeek = subWeeks(new Date(), 1);
+  return {
+    dateFrom: format(startOfWeek(lastWeek, { weekStartsOn: 1 }), 'yyyy-MM-dd'),
+    dateTo: format(endOfWeek(lastWeek, { weekStartsOn: 1 }), 'yyyy-MM-dd'),
+  };
+}
+
+function getThisMonthRange(): { dateFrom: string; dateTo: string } {
+  const now = new Date();
+  return {
+    dateFrom: format(startOfMonth(now), 'yyyy-MM-dd'),
+    dateTo: format(now, 'yyyy-MM-dd'),
   };
 }
 
@@ -127,6 +143,11 @@ export default function DashboardPage() {
       return isToday(d) ? 'Today' : format(d, 'EEE, MMM d, yyyy');
     }
     if (filterPreset === 'yesterday') return 'Yesterday';
+    if (filterPreset === 'last-week') return 'Last Week';
+    if (filterPreset === 'this-month') {
+      const d = new Date(dateFrom + 'T00:00:00');
+      return format(d, 'MMMM yyyy');
+    }
     if (filterPreset === 'last-month') {
       const d = new Date(dateFrom + 'T00:00:00');
       return format(d, 'MMMM yyyy');
@@ -140,6 +161,8 @@ export default function DashboardPage() {
       today: getTodayRange,
       yesterday: getYesterdayRange,
       week: getWeekRange,
+      'last-week': getLastWeekRange,
+      'this-month': getThisMonthRange,
       'last-month': getLastMonthRange,
     };
     const range = ranges[preset]?.();
@@ -425,8 +448,8 @@ export default function DashboardPage() {
         })}
       </div>
 
-      {/* Weekly Hours Target — employee view only */}
-      {isEmployeeView && (data?.weeklyHoursTarget ?? 0) > 0 && (() => {
+      {/* Weekly Hours Target — employee view only, shown for current-week filters */}
+      {isEmployeeView && (filterPreset === 'today' || filterPreset === 'week') && (data?.weeklyHoursTarget ?? 0) > 0 && (() => {
         const target = data!.weeklyHoursTarget;
         const targetSec = target * 3600;
         const ws = data?.weekSeconds || 0;
@@ -494,8 +517,8 @@ export default function DashboardPage() {
         );
       })()}
 
-      {/* Daily Hours Bar Chart — employee view */}
-      {isEmployeeView && (data?.dailyBreakdown?.length ?? 0) > 0 && (() => {
+      {/* Daily Hours Bar Chart — employee view, shown for current-week filters */}
+      {isEmployeeView && (filterPreset === 'today' || filterPreset === 'week') && (data?.dailyBreakdown?.length ?? 0) > 0 && (() => {
         const todayStr = format(new Date(), 'yyyy-MM-dd');
         const maxHours = Math.max(...(data?.dailyBreakdown || []).map(d => d.hours), 1);
         const dailyTarget = (data?.weeklyHoursTarget || 0) / 5; // avg target per weekday

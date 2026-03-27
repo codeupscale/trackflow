@@ -226,7 +226,11 @@ export default function TimePage() {
               <label className="text-sm font-medium text-foreground">Project</label>
               <Select value={projectFilter} onValueChange={(val) => { setProjectFilter(val ?? 'all'); setPage(1); }}>
                 <SelectTrigger className="w-[200px] bg-muted border-border">
-                  <SelectValue placeholder="All projects" />
+                  <SelectValue placeholder="All projects">
+                    {projectFilter === 'all'
+                      ? 'All Projects'
+                      : projects?.find((p) => p.id === projectFilter)?.name ?? 'All Projects'}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Projects</SelectItem>
@@ -282,7 +286,10 @@ export default function TimePage() {
         <CardHeader>
           <CardTitle className="text-foreground">Entries</CardTitle>
           <CardDescription className="text-muted-foreground">
-            {entries.length} entries | Total: {formatDuration(totalSeconds)}
+            {meta && meta.total != null
+              ? `Showing ${entries.length} of ${meta.total} entries`
+              : `${entries.length} entries`}{' '}
+            | Page Total: {formatDuration(totalSeconds)}
           </CardDescription>
         </CardHeader>
         <CardContent>
