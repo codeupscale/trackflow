@@ -23,7 +23,13 @@ contextBridge.exposeInMainWorld('trackflow', {
   setLastProject: (projectId) => ipcRenderer.invoke('set-last-project', projectId),
   logout: () => ipcRenderer.invoke('logout'),
   login: (email, password) => ipcRenderer.invoke('login', email, password),
+  googleLogin: () => ipcRenderer.invoke('google-login'),
+  selectOrganization: (orgId, credentials) => ipcRenderer.invoke('select-organization', orgId, credentials),
   openDashboard: () => ipcRenderer.invoke('open-dashboard'),
+
+  // Multi-org events from main process
+  onOrgSelection: (callback) => safeOn('org-selection-required', (_, data) => callback(data)),
+  onGoogleAuthError: (callback) => safeOn('google-auth-error', (_, data) => callback(data)),
 
   // Idle alert actions (action: 'keep'|'discard'|'stop'|'reassign'; projectId only for reassign)
   resolveIdle: (action, projectId) => ipcRenderer.invoke('resolve-idle', action, projectId),

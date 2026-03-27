@@ -65,7 +65,7 @@ api.interceptors.response.use(
     // Handle unauthorized (401) - refresh token or redirect to login
     // Skip redirect logic for auth endpoints (login, register, google) — they legitimately
     // return 401/422 for bad credentials and should NOT trigger a page reload.
-    const isAuthEndpoint = /\/auth\/(login|register|google|refresh)/.test(error.config?.url || '');
+    const isAuthEndpoint = /\/auth\/(login|register|google|refresh|select-organization)/.test(error.config?.url || '');
     if (error.response?.status === 401 && !isAuthEndpoint) {
       const refreshToken = typeof window !== 'undefined' ? localStorage.getItem('refresh_token') : null;
       if (refreshToken && !error.config._retry) {
