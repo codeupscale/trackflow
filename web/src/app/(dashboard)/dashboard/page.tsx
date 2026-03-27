@@ -781,7 +781,7 @@ export default function DashboardPage() {
               {timeEntries.length > 10 && (
                 <div className="mt-4 pt-4 border-t border-border text-center">
                   <Link
-                    href="/time"
+                    href={`/time?from=${dateFrom}&to=${dateTo}`}
                     className="inline-flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300 transition-colors"
                   >
                     View all {timeEntries.length} entries
