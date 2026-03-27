@@ -123,7 +123,7 @@ class TimerServiceTest extends TestCase
         $entry = $this->service->start([]);
 
         \Illuminate\Support\Facades\Event::assertDispatched(\App\Events\TimerStarted::class, function ($event) use ($entry) {
-            return $event->timeEntry->id === $entry->id;
+            return $event->entry->id === $entry->id;
         });
     }
 
@@ -167,7 +167,7 @@ class TimerServiceTest extends TestCase
         $stopped = $this->service->stop();
 
         \Illuminate\Support\Facades\Event::assertDispatched(\App\Events\TimerStopped::class, function ($event) use ($stopped) {
-            return $event->timeEntry->id === $stopped->id;
+            return $event->entry->id === $stopped->id;
         });
     }
 

@@ -91,6 +91,6 @@ class TeamTest extends TestCase
 
         $response = $this->getJson('/api/v1/teams');
         $response->assertOk();
-        $this->assertCount(2, $response->json('teams'));
+        $this->assertCount(2, $response->json('data'));
     }
 }

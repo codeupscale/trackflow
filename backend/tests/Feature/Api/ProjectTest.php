@@ -60,7 +60,7 @@ class ProjectTest extends TestCase
         $this->actingAs($this->owner, 'sanctum');
         $response = $this->getJson('/api/v1/projects');
         $response->assertOk();
-        $this->assertCount(3, $response->json('projects'));
+        $this->assertCount(3, $response->json('data'));
     }
 
     public function test_employee_sees_only_assigned_projects(): void
@@ -73,14 +73,14 @@ class ProjectTest extends TestCase
         $this->actingAs($this->employee, 'sanctum');
         $response = $this->getJson('/api/v1/projects');
         $response->assertOk();
-        $this->assertCount(0, $response->json('projects'));
+        $this->assertCount(0, $response->json('data'));
 
         // Assign employee to one project
         $projects[0]->members()->attach($this->employee->id);
         $response = $this->getJson('/api/v1/projects');
         $response->assertOk();
-        $this->assertCount(1, $response->json('projects'));
-        $this->assertEquals($projects[0]->id, $response->json('projects.0.id'));
+        $this->assertCount(1, $response->json('data'));
+        $this->assertEquals($projects[0]->id, $response->json('data.0.id'));
     }
 
     public function test_employee_cannot_view_unassigned_project(): void
@@ -169,7 +169,7 @@ class ProjectTest extends TestCase
 
         $this->actingAs($this->owner, 'sanctum');
         $response = $this->getJson('/api/v1/projects');
-        $this->assertCount(1, $response->json('projects'));
+        $this->assertCount(1, $response->json('data'));
     }
 
     public function test_can_update_project(): void

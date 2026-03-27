@@ -149,7 +149,7 @@ class MultiTenancyTest extends TestCase
             ->getJson('/api/v1/teams');
 
         $response->assertStatus(200);
-        $names = collect($response->json('teams'))->pluck('name');
+        $names = collect($response->json('data'))->pluck('name');
         $this->assertContains('Team A', $names->toArray());
         $this->assertNotContains('Team B', $names->toArray());
     }
