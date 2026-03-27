@@ -1840,6 +1840,10 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
     skipTaskbar: false,
     center: true,
     show: false,
+    // Ensure the idle alert appears on whichever macOS Space / Linux workspace the
+    // user is currently viewing. Without this the window can open on a different
+    // desktop and appear invisible.
+    visibleOnAllWorkspaces: true,
     backgroundColor: '#0a0a0a',   // Prevent white flash on all platforms
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
@@ -1849,21 +1853,40 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
     },
   });
 
-  idleAlertWindow.loadFile(path.join(__dirname, '..', 'renderer', 'idle-alert.html'));
+  // Keep a local reference so the ready-to-show / did-finish-load callbacks
+  // always operate on the window they were registered on, even if the outer
+  // idleAlertWindow variable is reassigned or nulled by dismissIdleAlert().
+  const win = idleAlertWindow;
+  let shown = false;
 
-  idleAlertWindow.once('ready-to-show', () => {
-    idleAlertWindow.show();
-    idleAlertWindow.focus();
-    idleAlertWindow.webContents.send('idle-data', {
+  function showAndSendData() {
+    if (shown) return;
+    if (win.isDestroyed()) return;
+    shown = true;
+    win.show();
+    win.focus();
+    win.webContents.send('idle-data', {
       idleStartedAt,
       idleSeconds,
       autoStopTotalSec: idleDetector ? (idleDetector.idleTimeoutSec + idleDetector.alertAutoStopSec) : 0,
       projects: cachedProjects || [],
     });
+  }
+
+  // Primary: show as soon as first paint completes
+  win.once('ready-to-show', showAndSendData);
+
+  // Fallback: on some macOS configurations (e.g., app backgrounded, Spaces,
+  // or sandbox + alwaysOnTop combos), ready-to-show may not fire reliably.
+  // Use did-finish-load as a safety net.
+  win.webContents.once('did-finish-load', showAndSendData);
+
+  win.on('closed', () => {
+    idleAlertWindow = null;
   });
 
-  idleAlertWindow.on('closed', () => {
-    idleAlertWindow = null;
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'idle-alert.html')).catch((err) => {
+    console.error('[IdleAlert] Failed to load idle-alert.html:', err.message);
   });
 
 }
