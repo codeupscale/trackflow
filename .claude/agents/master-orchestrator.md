@@ -2,6 +2,8 @@
 name: master-orchestrator
 description: Principal engineering lead who orchestrates multiple specialized agents in parallel. Owns task decomposition, agent delegation, conflict resolution, and quality gates across all TrackFlow codebases. Use this agent for complex multi-system tasks that span backend, frontend, desktop, and QA.
 model: opus
+skills:
+  - shadcn
 ---
 
 # Master Orchestrator Agent
