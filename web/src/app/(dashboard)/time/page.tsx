@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
-import { CalendarIcon, CheckCircle, Clock, Info, Loader2 } from 'lucide-react';
+import { CheckCircle, ChevronsUpDown, Clock, Info, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -18,7 +18,20 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
+import { DatePicker } from '@/components/ui/date-picker';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import {
   Pagination,
   PaginationContent,
@@ -99,6 +112,7 @@ export default function TimePage() {
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
   const [page, setPage] = useState(1);
+  const [projectComboboxOpen, setProjectComboboxOpen] = useState(false);
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ['projects-list'],
@@ -199,62 +213,87 @@ export default function TimePage() {
       {/* Filters */}
       <Card className="border-border bg-card">
         <CardContent className="pt-6">
-          <div className="flex flex-col sm:flex-row gap-4 items-end">
+          <div className="flex flex-col sm:flex-row gap-4 items-end flex-wrap">
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-foreground" htmlFor="date-from">
+              <label className="text-sm font-medium text-foreground">
                 From
               </label>
-              <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="date-from"
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
-                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
-                />
-              </div>
+              <DatePicker
+                value={dateFrom}
+                onChange={(val) => { setDateFrom(val); setPage(1); }}
+                placeholder="Start date"
+              />
             </div>
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-foreground" htmlFor="date-to">
+              <label className="text-sm font-medium text-foreground">
                 To
               </label>
-              <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="date-to"
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
-                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
-                />
-              </div>
+              <DatePicker
+                value={dateTo}
+                onChange={(val) => { setDateTo(val); setPage(1); }}
+                placeholder="End date"
+              />
             </div>
             <div className="grid gap-1.5">
               <label className="text-sm font-medium text-foreground">Project</label>
-              <Select value={projectFilter} onValueChange={(val) => { setProjectFilter(val ?? 'all'); setPage(1); }}>
-                <SelectTrigger className="w-[200px] bg-muted border-border">
-                  <SelectValue placeholder="All projects">
+              <Popover open={projectComboboxOpen} onOpenChange={setProjectComboboxOpen}>
+                <PopoverTrigger
+                  render={
+                    <Button
+                      variant="outline"
+                      className="w-[200px] justify-between font-normal"
+                    />
+                  }
+                >
+                  <span className="truncate">
                     {projectFilter === 'all'
                       ? 'All Projects'
                       : projects?.find((p) => p.id === projectFilter)?.name ?? 'All Projects'}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Projects</SelectItem>
-                  {projects?.map((project) => (
-                    <SelectItem key={project.id} value={project.id}>
-                      <div className="flex items-center gap-2">
-                        <div
-                          className="h-2 w-2 rounded-full"
-                          style={{ backgroundColor: project.color || '#6366f1' }}
-                        />
-                        {project.name}
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                  </span>
+                  <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+                </PopoverTrigger>
+                <PopoverContent className="w-[200px] p-0">
+                  <Command>
+                    <CommandInput placeholder="Search projects..." />
+                    <CommandList>
+                      <CommandEmpty>No projects found.</CommandEmpty>
+                      <CommandGroup>
+                        <CommandItem
+                          value="all"
+                          data-checked={projectFilter === 'all' ? true : undefined}
+                          onSelect={() => {
+                            setProjectFilter('all');
+                            setPage(1);
+                            setProjectComboboxOpen(false);
+                          }}
+                        >
+                          All Projects
+                        </CommandItem>
+                        {projects?.map((project) => (
+                          <CommandItem
+                            key={project.id}
+                            value={project.name}
+                            data-checked={projectFilter === project.id ? true : undefined}
+                            onSelect={() => {
+                              setProjectFilter(project.id);
+                              setPage(1);
+                              setProjectComboboxOpen(false);
+                            }}
+                          >
+                            <div className="flex items-center gap-2">
+                              <div
+                                className="h-2 w-2 rounded-full shrink-0"
+                                style={{ backgroundColor: project.color || '#6366f1' }}
+                              />
+                              {project.name}
+                            </div>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
             <div className="grid gap-1.5">
               <label className="text-sm font-medium text-foreground">Time type</label>
