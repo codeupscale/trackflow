@@ -252,24 +252,26 @@ return [
     ],
 
     'environments' => [
+        // Tuned for shared server — max 5 total worker processes
+        // (down from 13) to keep CPU/memory in check.
         'production' => [
             'supervisor-critical' => [
-                'maxProcesses' => 2,
+                'maxProcesses' => 1,
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
             ],
             'supervisor-high' => [
-                'maxProcesses' => 5,
+                'maxProcesses' => 2,
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
             ],
             'supervisor-default' => [
-                'maxProcesses' => 4,
+                'maxProcesses' => 1,
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
             ],
             'supervisor-low' => [
-                'maxProcesses' => 2,
+                'maxProcesses' => 1,
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
             ],

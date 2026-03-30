@@ -1,6 +1,7 @@
 <?php
 
 use App\Jobs\PruneOldActivityLogsJob;
+use App\Jobs\SendDailyActivitySummaryJob;
 use App\Jobs\SendTimerIdleAlertJob;
 use App\Jobs\SendTimesheetReminderJob;
 use App\Models\Organization;
@@ -53,6 +54,19 @@ Schedule::call(function () {
 // JOB-07: Cleanup stale time entries — every 5 minutes
 // Auto-closes running entries with no heartbeat for 30+ minutes (orphaned timers)
 Schedule::command('timer:cleanup-stale')->everyFiveMinutes()->name('cleanup-stale-entries');
+
+// JOB-08: Daily activity summary emails — weekdays (Mon-Fri) at 23:59
+// Dispatches one job per organization; each job queries that org's employees and queues individual emails.
+Schedule::call(function () {
+    $today = now()->toDateString();
+    Organization::query()
+        ->select('id')
+        ->chunkById(500, function ($orgs) use ($today) {
+            foreach ($orgs as $org) {
+                SendDailyActivitySummaryJob::dispatch($org->id, $today);
+            }
+        });
+})->weekdays()->dailyAt('23:59')->name('daily-activity-summary');
 
 // Data retention enforcement — Daily 4am UTC
 Schedule::job(new \App\Jobs\EnforceDataRetentionJob)->dailyAt('04:00')->name('enforce-data-retention');

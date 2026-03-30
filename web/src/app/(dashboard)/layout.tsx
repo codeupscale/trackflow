@@ -40,6 +40,7 @@ import { TimerWidget } from '@/components/timer-widget';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { OfflineBanner } from '@/components/offline-banner';
+import { OrgSwitcher } from '@/components/org-switcher';
 import { useAuthStore } from '@/stores/auth-store';
 import { useAuthGuard } from '@/hooks/use-auth-guard';
 import { cn } from '@/lib/utils';
@@ -217,6 +218,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 </div>
               </SheetContent>
             </Sheet>
+
+            {/* Organization Switcher — only visible when user has multiple orgs */}
+            <OrgSwitcher />
           </div>
 
           {/* Center: Timer Widget (single instance, responsive via flex order) */}

@@ -75,6 +75,41 @@ Every database query MUST be scoped by `organization_id`. The `GlobalOrganizatio
 - Desktop releases: GitHub Releases with `latest-mac.yml` / `latest.yml` manifests
 - CI: `.github/workflows/tests.yml` — PHPUnit + `composer audit` + `npm audit`
 
+## Multi-Organization Authentication
+
+Users can belong to multiple organizations (same email, different `organization_id` in `users` table). The auth system handles this:
+
+### Login Flow (email/password & Google OAuth)
+1. Backend finds ALL User rows matching the email/Google ID
+2. If single org: direct login (original behavior)
+3. If multiple orgs: returns `{ "requires_org_selection": true, "organizations": [...] }`
+4. Client shows org selector, user picks one
+5. Client calls `POST /auth/select-organization` with credentials + `organization_id`
+
+### API Endpoints
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `POST /auth/select-organization` | Public | Complete login after multi-org detection |
+| `GET /auth/organizations` | Sanctum | List all orgs for the current user's email |
+| `POST /auth/switch-organization` | Sanctum | Switch to different org (issues new tokens) |
+
+### Frontend Components
+| Component | Path | Purpose |
+|---|---|---|
+| OrgSelector | `web/src/components/org-selector.tsx` | Login-time org picker (Card UI) |
+| OrgSwitcher | `web/src/components/org-switcher.tsx` | Dashboard header dropdown to switch orgs |
+
+### Desktop Google OAuth
+- Uses OAuth Authorization Code flow via system browser
+- Starts temporary local HTTP server on `127.0.0.1` for the callback
+- Exchanges auth code for ID token, sends to `POST /auth/google`
+- Requires `TRACKFLOW_GOOGLE_CLIENT_ID` and `TRACKFLOW_GOOGLE_CLIENT_SECRET` env vars
+
+### Invitation-Aware Google Signup
+- When a new Google user signs up, the backend checks for pending invitations
+- Pending invitations are auto-accepted: user is added to those orgs with the invited role
+- A personal org is also created so the user always has at least one
+
 ## Quick Reference — Key Files
 
 | What | Where |
@@ -87,6 +122,8 @@ Every database query MUST be scoped by `organization_id`. The `GlobalOrganizatio
 | Frontend pages | `web/src/app/(dashboard)/*/page.tsx` |
 | API client | `web/src/lib/api.ts` (axios + token refresh mutex) |
 | Zustand stores | `web/src/stores/` (auth-store, timer-store) |
+| Org selector | `web/src/components/org-selector.tsx` |
+| Org switcher | `web/src/components/org-switcher.tsx` |
 | Desktop main | `desktop/src/main/index.js` |
 | Desktop services | `desktop/src/main/` (screenshot, activity, idle, offline, keychain) |
 | Build config | `desktop/package.json` (build field) |
