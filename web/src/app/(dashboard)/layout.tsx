@@ -15,6 +15,7 @@ import {
   Settings,
   LogOut,
 } from 'lucide-react';
+import { TrackFlowLogo } from '@/components/ui/trackflow-logo';
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
@@ -122,7 +123,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex items-center gap-2 text-muted-foreground">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-muted border-t-blue-500" />
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-muted border-t-primary" />
           Loading...
         </div>
       </div>
@@ -133,11 +134,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     <SidebarProvider className="h-screen overflow-hidden">
       {/* Sidebar */}
       <Sidebar collapsible="icon">
-        <SidebarHeader className="border-b border-sidebar-border">
-          <Link href="/dashboard" className="flex items-center gap-2 px-2 py-1">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <Clock className="h-4 w-4" />
-            </div>
+        <SidebarHeader className="border-b border-sidebar-border px-3 py-3">
+          <Link href="/dashboard" className="flex items-center gap-2.5">
+            <TrackFlowLogo size={28} className="shrink-0" />
             <span className="text-lg font-bold text-sidebar-foreground tracking-tight group-data-[collapsible=icon]:hidden">
               TrackFlow
             </span>
@@ -154,7 +153,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
             return (
               <SidebarGroup key={group.label}>
-                <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+                <SidebarGroupLabel className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{group.label}</SidebarGroupLabel>
                 <SidebarGroupContent>
                   <SidebarMenu>
                     {visibleItems.map((item) => {
@@ -193,7 +192,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 </Avatar>
                 <div className="flex flex-col group-data-[collapsible=icon]:hidden">
                   <span className="text-sm font-medium text-sidebar-foreground leading-none">{user?.name}</span>
-                  <span className="text-xs text-sidebar-foreground/70 mt-0.5">{user?.organization?.name || 'Organization'}</span>
+                  <span className="text-xs text-muted-foreground mt-0.5">{user?.organization?.name || 'Organization'}</span>
                 </div>
               </div>
             </SidebarMenuItem>
@@ -206,9 +205,10 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       {/* Main Content */}
       <SidebarInset className="flex flex-col overflow-hidden">
         {/* Top Header */}
-        <header className="flex items-center justify-between h-14 px-4 md:px-6 border-b border-border bg-card/50">
-          <div className="flex items-center gap-3">
-            <SidebarTrigger />
+        <header className="flex items-center justify-between h-14 px-4 md:px-6 border-b border-border bg-background">
+          <div className="flex items-center gap-2">
+            <SidebarTrigger className="hover:bg-muted" />
+            <Separator orientation="vertical" className="h-5 hidden md:block" />
             <OrgSwitcher />
           </div>
 
@@ -218,7 +218,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           </div>
 
           {/* Right side */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <ThemeToggle />
             <Separator orientation="vertical" className="h-6 hidden md:block" />
 
