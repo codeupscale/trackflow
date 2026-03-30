@@ -53,7 +53,8 @@ Every database query MUST be scoped by `organization_id`. The `GlobalOrganizatio
 - Error handling: Every query destructures `isLoading`, `isError` and renders both states.
 - Role-based: Early return with `<PageLoading />` for unauthorized roles. No content flash.
 - Layout: shadcn Sidebar primitive (`web/src/components/ui/sidebar.tsx`) with collapsible icon mode; mobile uses Sheet overlay.
-- Charts: Recharts (`recharts`) for dashboard bar/pie charts. Use `ResponsiveContainer` wrapper and CSS variable fills (`var(--color-chart-N)`).
+- Charts: shadcn `ChartContainer` (`web/src/components/ui/chart.tsx`) wrapping Recharts primitives. Never use raw `ResponsiveContainer` — always wrap in `<ChartContainer config={...}>`. Use `ChartTooltip`/`ChartTooltipContent` and `ChartLegend`/`ChartLegendContent` from the chart component. Colors use CSS variables `--chart-1` through `--chart-5` via `hsl(var(--chart-N))` in `ChartConfig`.
+- Dashboard layout: shadcn dashboard-01 design. Sidebar has 3 nav groups (Main / Analytics / Team) with role-based filtering. Area charts with gradient fills for both admin (hours + activity) and employee (hours) views.
 
 ### 5. Desktop Security
 - `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` on ALL BrowserWindows
@@ -128,6 +129,7 @@ Users can belong to multiple organizations (same email, different `organization_
 | Org selector | `web/src/components/org-selector.tsx` |
 | Org switcher | `web/src/components/org-switcher.tsx` |
 | Sidebar primitive | `web/src/components/ui/sidebar.tsx` (shadcn Sidebar with collapsible icon mode) |
+| Chart primitive | `web/src/components/ui/chart.tsx` (shadcn ChartContainer, ChartTooltip, ChartLegend) |
 | Desktop main | `desktop/src/main/index.js` |
 | Desktop services | `desktop/src/main/` (screenshot, activity, idle, offline, keychain) |
 | Build config | `desktop/package.json` (build field) |

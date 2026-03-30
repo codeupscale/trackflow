@@ -32,6 +32,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
@@ -49,14 +50,36 @@ import { OrgSwitcher } from '@/components/org-switcher';
 import { useAuthStore } from '@/stores/auth-store';
 import { useAuthGuard } from '@/hooks/use-auth-guard';
 
-const allNavItems = [
-  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['owner', 'admin', 'manager', 'employee'] },
-  { name: 'Time', href: '/time', icon: Clock, roles: ['owner', 'admin', 'manager', 'employee'] },
-  { name: 'Screenshots', href: '/screenshots', icon: Camera, roles: ['owner', 'admin', 'manager', 'employee'] },
-  { name: 'Reports', href: '/reports', icon: BarChart3, roles: ['owner', 'admin', 'manager'] },
-  { name: 'Team', href: '/team', icon: Users, roles: ['owner', 'admin', 'manager'] },
-  { name: 'Projects', href: '/projects', icon: FolderOpen, roles: ['owner', 'admin', 'manager', 'employee'] },
-  { name: 'Settings', href: '/settings', icon: Settings, roles: ['owner', 'admin', 'manager', 'employee'] },
+type NavItem = {
+  name: string;
+  href: string;
+  icon: typeof LayoutDashboard;
+  roles: string[];
+};
+
+const navGroups: { label: string; items: NavItem[] }[] = [
+  {
+    label: 'Main',
+    items: [
+      { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['owner', 'admin', 'manager', 'employee'] },
+      { name: 'Time', href: '/time', icon: Clock, roles: ['owner', 'admin', 'manager', 'employee'] },
+      { name: 'Screenshots', href: '/screenshots', icon: Camera, roles: ['owner', 'admin', 'manager', 'employee'] },
+    ],
+  },
+  {
+    label: 'Analytics',
+    items: [
+      { name: 'Reports', href: '/reports', icon: BarChart3, roles: ['owner', 'admin', 'manager'] },
+      { name: 'Projects', href: '/projects', icon: FolderOpen, roles: ['owner', 'admin', 'manager', 'employee'] },
+    ],
+  },
+  {
+    label: 'Team',
+    items: [
+      { name: 'Team', href: '/team', icon: Users, roles: ['owner', 'admin', 'manager'] },
+      { name: 'Settings', href: '/settings', icon: Settings, roles: ['owner', 'admin', 'manager', 'employee'] },
+    ],
+  },
 ];
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
@@ -93,9 +116,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       .toUpperCase()
       .slice(0, 2) || '??';
 
-  const navigation = user?.role
-    ? allNavItems.filter((item) => item.roles.includes(user.role))
-    : allNavItems;
+  const userRole = user?.role || '';
 
   if (!isAuthenticated) {
     return (
@@ -114,6 +135,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       <Sidebar collapsible="icon">
         <SidebarHeader className="border-b border-sidebar-border">
           <Link href="/dashboard" className="flex items-center gap-2 px-2 py-1">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <Clock className="h-4 w-4" />
+            </div>
             <span className="text-lg font-bold text-sidebar-foreground tracking-tight group-data-[collapsible=icon]:hidden">
               TrackFlow
             </span>
@@ -121,35 +145,59 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         </SidebarHeader>
 
         <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {navigation.map((item) => {
-                  const Icon = item.icon;
-                  const isActive =
-                    pathname === item.href || pathname.startsWith(item.href + '/');
-                  return (
-                    <SidebarMenuItem key={item.name}>
-                      <SidebarMenuButton
-                        isActive={isActive}
-                        tooltip={item.name}
-                        render={<Link href={item.href} />}
-                      >
-                        <Icon className="h-4 w-4 shrink-0" />
-                        <span>{item.name}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          {navGroups.map((group) => {
+            const visibleItems = userRole
+              ? group.items.filter((item) => item.roles.includes(userRole))
+              : group.items;
+
+            if (visibleItems.length === 0) return null;
+
+            return (
+              <SidebarGroup key={group.label}>
+                <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {visibleItems.map((item) => {
+                      const Icon = item.icon;
+                      const isActive =
+                        pathname === item.href || pathname.startsWith(item.href + '/');
+                      return (
+                        <SidebarMenuItem key={item.name}>
+                          <SidebarMenuButton
+                            isActive={isActive}
+                            tooltip={item.name}
+                            render={<Link href={item.href} />}
+                          >
+                            <Icon className="h-4 w-4 shrink-0" />
+                            <span>{item.name}</span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      );
+                    })}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            );
+          })}
         </SidebarContent>
 
         <SidebarFooter className="border-t border-sidebar-border">
-          <p className="text-xs text-sidebar-foreground/70 px-2 truncate group-data-[collapsible=icon]:hidden">
-            {user?.organization?.name || 'Organization'}
-          </p>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <div className="flex items-center gap-2 px-2 py-1.5 group-data-[collapsible=icon]:justify-center">
+                <Avatar className="h-7 w-7 border border-border">
+                  <AvatarImage src={user?.avatar_url || undefined} alt={user?.name || 'User'} />
+                  <AvatarFallback className="bg-blue-600 text-white text-xs font-medium">
+                    {userInitials}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex flex-col group-data-[collapsible=icon]:hidden">
+                  <span className="text-sm font-medium text-sidebar-foreground leading-none">{user?.name}</span>
+                  <span className="text-xs text-sidebar-foreground/70 mt-0.5">{user?.organization?.name || 'Organization'}</span>
+                </div>
+              </div>
+            </SidebarMenuItem>
+          </SidebarMenu>
         </SidebarFooter>
 
         <SidebarRail />
