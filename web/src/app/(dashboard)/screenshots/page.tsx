@@ -243,9 +243,11 @@ export default function ScreenshotsPage() {
                 <Select value={userFilter} onValueChange={(val) => { setUserFilter(val ?? 'all'); setPage(1); }}>
                   <SelectTrigger className="w-[200px] bg-muted border-border">
                     <SelectValue placeholder="All members">
-                      {userFilter === 'all'
-                        ? 'All Members'
-                        : (teamUsers?.find((u) => u.id === userFilter)?.name ?? 'All Members')}
+                      {(value: string | null) =>
+                        !value || value === 'all'
+                          ? 'All Members'
+                          : (teamUsers?.find((u) => u.id === value)?.name ?? 'Loading...')
+                      }
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
