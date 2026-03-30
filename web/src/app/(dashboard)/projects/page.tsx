@@ -12,8 +12,6 @@ import {
   Trash2,
   Users,
   Search,
-  ChevronLeft,
-  ChevronRight,
   DollarSign,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -28,6 +26,16 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { Switch } from '@/components/ui/switch';
 import {
   Dialog,
@@ -270,7 +278,7 @@ export default function ProjectsPage() {
           <p className="text-muted-foreground text-sm mt-1">Manage your projects and tasks</p>
         </div>
         {canCreateProjects && (
-          <Button onClick={openCreate} className="bg-blue-600 hover:bg-blue-700 text-foreground">
+          <Button onClick={openCreate}>
             <Plus className="mr-2 h-4 w-4" />
             New Project
           </Button>
@@ -411,17 +419,17 @@ export default function ProjectsPage() {
 
                 <div className="flex items-center gap-2 mt-3">
                   {project.billable ? (
-                    <Badge className="bg-green-500/10 text-green-400 border-green-500/20 text-xs">
+                    <Badge variant="default" className="text-xs">
                       <DollarSign className="h-3 w-3 mr-0.5" />
                       {project.hourly_rate ? `$${project.hourly_rate}/hr` : 'Billable'}
                     </Badge>
                   ) : (
-                    <Badge className="bg-muted text-muted-foreground border-border text-xs">
+                    <Badge variant="secondary" className="text-xs">
                       Non-billable
                     </Badge>
                   )}
                   {project.is_archived && (
-                    <Badge className="bg-amber-500/10 text-amber-400 border-amber-500/20 text-xs">
+                    <Badge variant="outline" className="text-xs">
                       Archived
                     </Badge>
                   )}
@@ -449,41 +457,39 @@ export default function ProjectsPage() {
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
           <p className="text-sm text-muted-foreground">
             Showing {from}–{to} of {totalCount} projects
           </p>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-              className="border-border text-foreground"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-              <Button
-                key={page}
-                variant={page === currentPage ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setCurrentPage(page)}
-                className={page === currentPage ? 'bg-blue-600 text-white' : 'border-border text-foreground'}
-              >
-                {page}
-              </Button>
-            ))}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
-              className="border-border text-foreground"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
+          <Pagination>
+            <PaginationContent>
+              <PaginationItem>
+                <PaginationPrevious
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  aria-disabled={currentPage === 1}
+                  className={currentPage === 1 ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                />
+              </PaginationItem>
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map((pg) => (
+                <PaginationItem key={pg}>
+                  <PaginationLink
+                    isActive={pg === currentPage}
+                    onClick={() => setCurrentPage(pg)}
+                    className="cursor-pointer"
+                  >
+                    {pg}
+                  </PaginationLink>
+                </PaginationItem>
+              ))}
+              <PaginationItem>
+                <PaginationNext
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  aria-disabled={currentPage === totalPages}
+                  className={currentPage === totalPages ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                />
+              </PaginationItem>
+            </PaginationContent>
+          </Pagination>
         </div>
       )}
 
@@ -557,7 +563,7 @@ export default function ProjectsPage() {
               <Button type="button" variant="outline" onClick={closeDialog} className="border-border text-foreground">
                 Cancel
               </Button>
-              <Button type="submit" disabled={isPending} className="bg-blue-600 hover:bg-blue-700 text-foreground">
+              <Button type="submit" disabled={isPending}>
                 {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {editingProject ? 'Save Changes' : 'Create Project'}
               </Button>
@@ -604,7 +610,7 @@ export default function ProjectsPage() {
               {orgUsers && orgUsers.length > 0 && (
                 <button
                   type="button"
-                  className="text-blue-500 hover:text-blue-400 font-medium transition-colors"
+                  className="text-primary hover:text-primary/80 font-medium transition-colors"
                   onClick={() => {
                     const filtered = (orgUsers || []).filter((u) => {
                       if (!memberSearch.trim()) return true;
@@ -633,7 +639,7 @@ export default function ProjectsPage() {
             </div>
 
             {/* Members list */}
-            <div className="max-h-[360px] overflow-y-auto rounded-lg border border-border">
+            <ScrollArea className="max-h-[360px] rounded-lg border border-border">
               {!orgUsers ? (
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -673,26 +679,25 @@ export default function ProjectsPage() {
                       key={u.id}
                       className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors border-b border-border last:border-b-0 ${
                         checked
-                          ? 'bg-blue-500/10 hover:bg-blue-500/15'
+                          ? 'bg-primary/10 hover:bg-primary/15'
                           : 'hover:bg-muted/50'
                       }`}
                     >
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={checked}
-                        onChange={(e) => {
+                        onCheckedChange={(val) => {
                           setMemberIds(
-                            e.target.checked
+                            val
                               ? [...memberIds, u.id]
                               : memberIds.filter((id) => id !== u.id)
                           );
                         }}
-                        className="h-4 w-4 rounded border-border accent-blue-600 shrink-0"
+                        aria-label={`Select ${u.name}`}
                       />
                       <div
                         className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-medium shrink-0 ${
                           checked
-                            ? 'bg-blue-600 text-white'
+                            ? 'bg-primary text-primary-foreground'
                             : 'bg-muted text-muted-foreground'
                         }`}
                       >
@@ -703,11 +708,8 @@ export default function ProjectsPage() {
                         <div className="text-xs text-muted-foreground truncate">{u.email}</div>
                       </div>
                       <Badge
-                        className={`text-[10px] shrink-0 ${
-                          u.role === 'owner'
-                            ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
-                            : 'bg-muted text-muted-foreground border-border'
-                        }`}
+                        variant={u.role === 'owner' ? 'default' : 'secondary'}
+                        className="text-[10px] shrink-0"
                       >
                         {u.role}
                       </Badge>
@@ -715,7 +717,7 @@ export default function ProjectsPage() {
                   );
                 });
               })()}
-            </div>
+            </ScrollArea>
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">
@@ -729,7 +731,7 @@ export default function ProjectsPage() {
             </Button>
             <Button
               type="button"
-              className="bg-blue-600 hover:bg-blue-700 text-white"
+              className=""
               disabled={!membersProject?.id || syncMembersMutation.isPending}
               onClick={() => {
                 if (!membersProject?.id) return;

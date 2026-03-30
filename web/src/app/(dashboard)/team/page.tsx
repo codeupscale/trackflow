@@ -113,11 +113,11 @@ const parsePositiveInt = (value: string | null, fallback: number) => {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-const roleBadgeClass: Record<string, string> = {
-    owner: "bg-purple-500/10 text-purple-400 border-purple-500/20",
-    admin: "bg-blue-500/10 text-blue-400 border-blue-500/20",
-    manager: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-    employee: "bg-muted/50 text-muted-foreground border-border",
+const roleBadgeVariant: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
+    owner: "default",
+    admin: "secondary",
+    manager: "outline",
+    employee: "outline",
 };
 
 type ApiValidationErrorResponse = {
@@ -518,7 +518,7 @@ export default function TeamPage() {
                             setInviteOpen(true);
                         }}
                         disabled={seatLimitReached}
-                        className="bg-blue-600 hover:bg-blue-700 text-foreground disabled:opacity-60"
+                        className="disabled:opacity-60"
                     >
                         <UserPlus className="mr-2 h-4 w-4" />
                         {seatLimitReached
@@ -569,7 +569,7 @@ export default function TeamPage() {
                                                 }
                                             }}
                                             aria-invalid={!!inviteErrors.email}
-                                            className={`pl-10 bg-muted border-border text-white placeholder:text-muted-foreground ${
+                                            className={`pl-10 bg-muted border-border text-foreground placeholder:text-muted-foreground ${
                                                 inviteErrors.email
                                                     ? "border-destructive focus-visible:ring-destructive"
                                                     : ""
@@ -634,7 +634,6 @@ export default function TeamPage() {
                                 <Button
                                     type="submit"
                                     disabled={inviteMutation.isPending}
-                                    className="bg-blue-600 hover:bg-blue-700 text-foreground"
                                 >
                                     {inviteMutation.isPending ? (
                                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -673,7 +672,7 @@ export default function TeamPage() {
                         <CardTitle className="text-sm font-medium text-muted-foreground">
                             Active
                         </CardTitle>
-                        <div className="h-2.5 w-2.5 rounded-full bg-green-500" />
+                        <div className="h-2.5 w-2.5 rounded-full bg-primary" />
                     </CardHeader>
                     <CardContent>
                         <div className="text-2xl font-bold text-foreground">
@@ -718,7 +717,7 @@ export default function TeamPage() {
                             usage.limit > 0 && (
                                 <div className="mt-2 h-1.5 bg-muted rounded-full">
                                     <div
-                                        className="h-full bg-blue-500 rounded-full transition-all"
+                                        className="h-full bg-primary rounded-full transition-all"
                                         style={{
                                             width: `${Math.min((usage.used / usage.limit) * 100, 100)}%`,
                                         }}
@@ -763,6 +762,7 @@ export default function TeamPage() {
                             </div>
                         ) : (
                             <>
+                                <div className="overflow-x-auto">
                                 <Table>
                                     <TableHeader>
                                         <TableRow className="border-border hover:bg-transparent">
@@ -794,12 +794,12 @@ export default function TeamPage() {
                                                 </TableCell>
                                                 <TableCell>
                                                     <Badge
-                                                        variant="outline"
-                                                        className={
-                                                            roleBadgeClass[
+                                                        variant={
+                                                            roleBadgeVariant[
                                                                 inv.role
-                                                            ]
+                                                            ] || "outline"
                                                         }
+                                                        className="capitalize"
                                                     >
                                                         {inv.role}
                                                     </Badge>
@@ -842,9 +842,8 @@ export default function TeamPage() {
                                                             Resend
                                                         </Button>
                                                         <Button
-                                                            variant="outline"
+                                                            variant="destructive"
                                                             size="sm"
-                                                            className="border-red-500/30 text-red-400 hover:bg-red-500/10"
                                                             disabled={
                                                                 revokeInviteMutation.isPending
                                                             }
@@ -863,6 +862,7 @@ export default function TeamPage() {
                                         ))}
                                     </TableBody>
                                 </Table>
+                                </div>
                                 {invitationsResponse &&
                                     invitationsResponse.last_page > 1 && (
                                         <div className="flex items-center justify-between mt-4">
@@ -970,6 +970,7 @@ export default function TeamPage() {
                         </div>
                     ) : (
                         <>
+                            <div className="overflow-x-auto">
                             <Table>
                                 <TableHeader>
                                     <TableRow className="border-border hover:bg-transparent">
@@ -1032,24 +1033,25 @@ export default function TeamPage() {
                                                 </TableCell>
                                                 <TableCell>
                                                     <Badge
-                                                        className={`text-xs capitalize ${roleBadgeClass[member.role] || ""}`}
+                                                        variant={roleBadgeVariant[member.role] || "outline"}
+                                                        className="text-xs capitalize"
                                                     >
                                                         {member.role}
                                                     </Badge>
                                                 </TableCell>
                                                 <TableCell>
                                                     <Badge
-                                                        className={
+                                                        variant={
                                                             member.is_active
-                                                                ? "bg-green-500/10 text-green-400 border-green-500/20"
-                                                                : "bg-muted text-muted-foreground border-border"
+                                                                ? "default"
+                                                                : "secondary"
                                                         }
                                                     >
                                                         <span
                                                             className={`h-1.5 w-1.5 rounded-full mr-1.5 inline-block ${
                                                                 member.is_active
-                                                                    ? "bg-green-400"
-                                                                    : "bg-slate-500"
+                                                                    ? "bg-primary-foreground"
+                                                                    : "bg-muted-foreground"
                                                             }`}
                                                         />
                                                         {member.is_active
@@ -1159,6 +1161,7 @@ export default function TeamPage() {
                                     })}
                                 </TableBody>
                             </Table>
+                            </div>
                             {membersResponse &&
                                 membersResponse.last_page > 1 && (
                                     <div className="flex items-center justify-between mt-4">
