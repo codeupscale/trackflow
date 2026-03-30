@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
-import { CalendarIcon, CheckCircle, Clock, Info, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { CalendarIcon, CheckCircle, Clock, Info, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -17,7 +17,15 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
 import {
   Select,
   SelectContent,
@@ -267,7 +275,7 @@ export default function TimePage() {
               <Button
                 onClick={() => approveMutation.mutate(selectedEntries)}
                 disabled={approveMutation.isPending}
-                className="ml-auto bg-blue-600 hover:bg-blue-700"
+                className="ml-auto"
               >
                 {approveMutation.isPending ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -309,20 +317,20 @@ export default function TimePage() {
             </div>
           ) : (
             <>
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow className="border-border hover:bg-transparent">
                     {canApprove && (
                       <TableHead className="w-[40px]">
-                        <input
-                          type="checkbox"
+                        <Checkbox
                           checked={
                             selectedEntries.length ===
                             entries.filter((e) => e.status === 'pending').length &&
                             entries.filter((e) => e.status === 'pending').length > 0
                           }
-                          onChange={toggleAll}
-                          className="rounded border-border"
+                          onCheckedChange={toggleAll}
+                          aria-label="Select all pending entries"
                         />
                       </TableHead>
                     )}
@@ -357,11 +365,10 @@ export default function TimePage() {
                       {canApprove && (
                         <TableCell>
                           {entry.status === 'pending' && (
-                            <input
-                              type="checkbox"
+                            <Checkbox
                               checked={selectedEntries.includes(entry.id)}
-                              onChange={() => toggleEntry(entry.id)}
-                              className="rounded border-border"
+                              onCheckedChange={() => toggleEntry(entry.id)}
+                              aria-label={`Select entry ${entry.id}`}
                             />
                           )}
                         </TableCell>
@@ -383,15 +390,15 @@ export default function TimePage() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <span className={
+                        <Badge variant={
                           entry.type === 'idle'
-                            ? 'bg-amber-400/10 text-amber-400 border border-amber-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
+                            ? 'outline'
                             : entry.type === 'manual'
-                            ? 'bg-slate-400/10 text-muted-foreground border border-muted-foreground/20 rounded-full px-2 py-0.5 text-xs font-medium'
-                            : 'bg-blue-400/10 text-blue-400 border border-blue-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
+                            ? 'secondary'
+                            : 'default'
                         }>
                           {entry.type === 'idle' ? 'Idle' : entry.type === 'manual' ? 'Manual' : 'Tracked'}
-                        </span>
+                        </Badge>
                       </TableCell>
                       <TableCell>
                         {entry.project ? (
@@ -430,49 +437,46 @@ export default function TimePage() {
                         </div>
                       </TableCell>
                       <TableCell className="text-center">
-                        <span
-                          className={
-                            entry.status === 'approved'
-                              ? 'bg-green-400/10 text-green-400 border border-green-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
-                              : entry.status === 'rejected'
-                              ? 'bg-red-400/10 text-red-400 border border-red-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
-                              : 'bg-amber-400/10 text-amber-400 border border-amber-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
-                          }
-                        >
+                        <Badge variant={
+                          entry.status === 'approved'
+                            ? 'default'
+                            : entry.status === 'rejected'
+                            ? 'destructive'
+                            : 'secondary'
+                        }>
                           {entry.status.charAt(0).toUpperCase() + entry.status.slice(1)}
-                        </span>
+                        </Badge>
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
+              </div>
 
               {/* Pagination */}
               {meta && meta.last_page > 1 && (
-                <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-4 pt-4 border-t border-border">
                   <p className="text-sm text-muted-foreground">
                     Page {meta.current_page} of {meta.last_page} ({meta.total} total)
                   </p>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPage((p) => Math.max(1, p - 1))}
-                      disabled={page <= 1}
-                      className="border-border text-foreground"
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPage((p) => p + 1)}
-                      disabled={page >= (meta.last_page || 1)}
-                      className="border-border text-foreground"
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </Button>
-                  </div>
+                  <Pagination>
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious
+                          onClick={() => setPage((p) => Math.max(1, p - 1))}
+                          aria-disabled={page <= 1}
+                          className={page <= 1 ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                        />
+                      </PaginationItem>
+                      <PaginationItem>
+                        <PaginationNext
+                          onClick={() => setPage((p) => p + 1)}
+                          aria-disabled={page >= (meta.last_page || 1)}
+                          className={page >= (meta.last_page || 1) ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
                 </div>
               )}
             </>
