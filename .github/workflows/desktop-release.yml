@@ -41,7 +41,7 @@ jobs:
       - name: Set version
         if: ${{ inputs.version != '' }}
         working-directory: desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version --allow-same-version
 
       - name: Build and publish macOS
         working-directory: desktop
@@ -84,7 +84,7 @@ jobs:
       - name: Set version
         if: ${{ inputs.version != '' }}
         working-directory: desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Build and publish Windows
         working-directory: desktop
