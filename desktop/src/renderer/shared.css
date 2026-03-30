@@ -164,7 +164,7 @@ body {
 .titlebar-title {
   font-size: 12px;
   font-weight: 600;
-  color: var(--accent-blue);
+  color: var(--text-primary);
   pointer-events: none;
   display: flex;
   align-items: center;
