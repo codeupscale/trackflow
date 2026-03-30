@@ -52,6 +52,8 @@ Every database query MUST be scoped by `organization_id`. The `GlobalOrganizatio
 - SSR safety: `typeof window !== 'undefined'` guard on all browser-only APIs.
 - Error handling: Every query destructures `isLoading`, `isError` and renders both states.
 - Role-based: Early return with `<PageLoading />` for unauthorized roles. No content flash.
+- Layout: shadcn Sidebar primitive (`web/src/components/ui/sidebar.tsx`) with collapsible icon mode; mobile uses Sheet overlay.
+- Charts: Recharts (`recharts`) for dashboard bar/pie charts. Use `ResponsiveContainer` wrapper and CSS variable fills (`var(--color-chart-N)`).
 
 ### 5. Desktop Security
 - `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` on ALL BrowserWindows
@@ -98,6 +100,7 @@ Users can belong to multiple organizations (same email, different `organization_
 |---|---|---|
 | OrgSelector | `web/src/components/org-selector.tsx` | Login-time org picker (Card UI) |
 | OrgSwitcher | `web/src/components/org-switcher.tsx` | Dashboard header dropdown to switch orgs |
+| Sidebar | `web/src/components/ui/sidebar.tsx` | shadcn Sidebar primitive (collapsible, mobile sheet, keyboard shortcut Cmd+B) |
 
 ### Desktop Google OAuth
 - Uses OAuth Authorization Code flow via system browser
@@ -124,6 +127,7 @@ Users can belong to multiple organizations (same email, different `organization_
 | Zustand stores | `web/src/stores/` (auth-store, timer-store) |
 | Org selector | `web/src/components/org-selector.tsx` |
 | Org switcher | `web/src/components/org-switcher.tsx` |
+| Sidebar primitive | `web/src/components/ui/sidebar.tsx` (shadcn Sidebar with collapsible icon mode) |
 | Desktop main | `desktop/src/main/index.js` |
 | Desktop services | `desktop/src/main/` (screenshot, activity, idle, offline, keychain) |
 | Build config | `desktop/package.json` (build field) |

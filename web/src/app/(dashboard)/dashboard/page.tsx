@@ -13,7 +13,19 @@ import {
   ArrowRight,
   BarChart3,
 } from 'lucide-react';
-// Bar chart uses pure CSS — no recharts dependency needed for this component
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip as RechartsTooltip,
+  ReferenceLine,
+  ResponsiveContainer,
+  Cell,
+  PieChart,
+  Pie,
+  Legend,
+} from 'recharts';
 
 import {
   Card,
@@ -394,7 +406,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       {/* Page header + date filter */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -447,6 +459,127 @@ export default function DashboardPage() {
           );
         })}
       </div>
+
+      {/* Weekly Trend Charts — admin/manager/owner only */}
+      {!isEmployeeView && team.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Team Hours Bar Chart */}
+          <Card className="border-border bg-card">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-foreground text-base">Team Hours This Week</CardTitle>
+              <CardDescription className="text-muted-foreground">Hours tracked per team member</CardDescription>
+            </CardHeader>
+            <CardContent className="pt-0 pb-4">
+              <ResponsiveContainer width="100%" height={240}>
+                <BarChart
+                  layout="vertical"
+                  data={[...team]
+                    .sort((a, b) => b.today_seconds - a.today_seconds)
+                    .slice(0, 8)
+                    .map((m) => ({
+                      name: m.name.split(' ')[0],
+                      hours: Math.round((m.today_seconds / 3600) * 10) / 10,
+                    }))}
+                  barCategoryGap="20%"
+                >
+                  <XAxis
+                    type="number"
+                    tickFormatter={(v: number) => `${v}h`}
+                    tick={{ fontSize: 12 }}
+                    tickLine={false}
+                    axisLine={false}
+                    className="fill-muted-foreground"
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    tick={{ fontSize: 12 }}
+                    tickLine={false}
+                    axisLine={false}
+                    width={60}
+                    className="fill-muted-foreground"
+                  />
+                  <RechartsTooltip
+                    content={({ active, payload }) => {
+                      if (!active || !payload?.length) return null;
+                      const d = payload[0].payload as { name: string; hours: number };
+                      return (
+                        <div className="bg-popover text-popover-foreground border border-border rounded-lg shadow-lg px-3 py-2 text-xs">
+                          <div className="font-medium">{d.name}</div>
+                          <div className="text-muted-foreground">{d.hours}h</div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Bar dataKey="hours" radius={[0, 4, 4, 0]} fill="var(--color-chart-1)" />
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
+          {/* Activity Distribution Pie Chart */}
+          <Card className="border-border bg-card">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-foreground text-base">Activity Distribution</CardTitle>
+              <CardDescription className="text-muted-foreground">Team activity level breakdown</CardDescription>
+            </CardHeader>
+            <CardContent className="pt-0 pb-4">
+              {(() => {
+                const high = team.filter((m) => m.activity_score > 75).length;
+                const medium = team.filter((m) => m.activity_score >= 50 && m.activity_score <= 75).length;
+                const low = team.filter((m) => m.activity_score < 50).length;
+                const avg = team.length > 0
+                  ? Math.round(team.reduce((s, m) => s + m.activity_score, 0) / team.length)
+                  : 0;
+                const pieData = [
+                  { name: 'High (>75%)', value: high, fill: 'var(--color-chart-2)' },
+                  { name: 'Medium (50-75%)', value: medium, fill: 'var(--color-chart-1)' },
+                  { name: 'Low (<50%)', value: low, fill: 'var(--color-chart-4)' },
+                ].filter((d) => d.value > 0);
+                return (
+                  <div className="relative">
+                    <ResponsiveContainer width="100%" height={240}>
+                      <PieChart>
+                        <Pie
+                          data={pieData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={60}
+                          outerRadius={90}
+                          paddingAngle={2}
+                          dataKey="value"
+                        />
+                        <RechartsTooltip
+                          content={({ active, payload }) => {
+                            if (!active || !payload?.length) return null;
+                            const d = payload[0].payload as { name: string; value: number };
+                            return (
+                              <div className="bg-popover text-popover-foreground border border-border rounded-lg shadow-lg px-3 py-2 text-xs">
+                                <div className="font-medium">{d.name}</div>
+                                <div className="text-muted-foreground">{d.value} member{d.value !== 1 ? 's' : ''}</div>
+                              </div>
+                            );
+                          }}
+                        />
+                        <Legend
+                          formatter={(value: string) => <span className="text-xs text-muted-foreground">{value}</span>}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                    {/* Center label */}
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none" style={{ marginBottom: 24 }}>
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-foreground">{avg}%</div>
+                        <div className="text-xs text-muted-foreground">avg activity</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Weekly Hours Target — employee view only, shown for current-week filters */}
       {isEmployeeView && (filterPreset === 'today' || filterPreset === 'week') && (data?.weeklyHoursTarget ?? 0) > 0 && (() => {
@@ -520,7 +653,6 @@ export default function DashboardPage() {
       {/* Daily Hours Bar Chart — employee view, shown for current-week filters */}
       {isEmployeeView && (filterPreset === 'today' || filterPreset === 'week') && (data?.dailyBreakdown?.length ?? 0) > 0 && (() => {
         const todayStr = format(new Date(), 'yyyy-MM-dd');
-        const maxHours = Math.max(...(data?.dailyBreakdown || []).map(d => d.hours), 1);
         const dailyTarget = (data?.weeklyHoursTarget || 0) / 5; // avg target per weekday
 
         return (
@@ -546,72 +678,52 @@ export default function DashboardPage() {
               </div>
             </CardHeader>
             <CardContent className="pt-0 pb-4">
-              {/* Custom CSS bar chart — works perfectly with both themes */}
-              <div className="flex items-end gap-2 h-44 px-1">
-                {data!.dailyBreakdown.map((entry) => {
-                  const isTodayBar = entry.date === todayStr;
-                  const hasHours = entry.hours > 0;
-                  const heightPct = maxHours > 0 ? Math.max((entry.hours / maxHours) * 100, hasHours ? 4 : 0) : 0;
-                  const isFuture = new Date(entry.date + 'T00:00:00') > new Date();
-
-                  const dayLabel = format(new Date(entry.date + 'T00:00:00'), 'EEE, MMM d');
-                  const hrs = Math.floor(entry.hours);
-                  const mins = Math.round((entry.hours - hrs) * 60);
-
-                  return (
-                    <div key={entry.date} className="flex-1 flex flex-col items-center gap-1.5 group relative">
-                      {/* Tooltip on hover */}
-                      <div className="absolute -top-12 left-1/2 -translate-x-1/2 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
-                        <div className="bg-popover text-popover-foreground border border-border rounded-lg shadow-lg px-3 py-1.5 text-xs whitespace-nowrap">
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={data!.dailyBreakdown} barCategoryGap="20%">
+                  <XAxis
+                    dataKey="day"
+                    tick={{ fontSize: 12 }}
+                    tickLine={false}
+                    axisLine={false}
+                    className="fill-muted-foreground"
+                  />
+                  <YAxis
+                    tickFormatter={(v: number) => `${Math.round(v)}h`}
+                    tick={{ fontSize: 12 }}
+                    tickLine={false}
+                    axisLine={false}
+                    width={32}
+                    className="fill-muted-foreground"
+                  />
+                  <RechartsTooltip
+                    content={({ active, payload }) => {
+                      if (!active || !payload?.length) return null;
+                      const entry = payload[0].payload as DailyBreakdown;
+                      const hrs = Math.floor(entry.hours);
+                      const mins = Math.round((entry.hours - hrs) * 60);
+                      const dayLabel = format(new Date(entry.date + 'T00:00:00'), 'EEE, MMM d');
+                      return (
+                        <div className="bg-popover text-popover-foreground border border-border rounded-lg shadow-lg px-3 py-2 text-xs">
                           <div className="font-medium">{dayLabel}</div>
                           <div className="text-muted-foreground">{hrs}h {mins}m worked</div>
                         </div>
-                      </div>
-
-                      {/* Hours label */}
-                      <span className={`text-xs tabular-nums transition-opacity ${
-                        hasHours ? 'text-foreground font-medium' : 'text-muted-foreground/50'
-                      } ${!hasHours && !isTodayBar ? 'opacity-0 group-hover:opacity-100' : ''}`}>
-                        {entry.hours > 0 ? `${entry.hours}h` : '0h'}
-                      </span>
-
-                      {/* Bar */}
-                      <div className="w-full relative cursor-pointer" style={{ height: '120px' }}>
-                        <div className="absolute bottom-0 left-1 right-1 rounded-t-md transition-all duration-500 ease-out group-hover:scale-x-110"
-                          style={{ height: `${heightPct}%`, minHeight: hasHours ? '4px' : '2px' }}
-                        >
-                          <div className={`w-full h-full rounded-t-md transition-colors ${
-                            isTodayBar
-                              ? 'bg-primary shadow-sm shadow-primary/25 group-hover:bg-primary/90'
-                              : hasHours
-                                ? 'bg-primary/40 dark:bg-primary/30 group-hover:bg-primary/60 dark:group-hover:bg-primary/50'
-                                : isFuture
-                                  ? 'bg-muted/30'
-                                  : 'bg-muted/60 group-hover:bg-muted/80'
-                          }`} />
-                        </div>
-
-                        {/* Daily target line */}
-                        {dailyTarget > 0 && !isFuture && (
-                          <div
-                            className="absolute left-0 right-0 border-t border-dashed border-muted-foreground/20"
-                            style={{ bottom: `${Math.min((dailyTarget / maxHours) * 100, 100)}%` }}
-                          />
-                        )}
-                      </div>
-
-                      {/* Day label */}
-                      <span className={`text-xs ${
-                        isTodayBar
-                          ? 'text-primary font-semibold'
-                          : 'text-muted-foreground'
-                      }`}>
-                        {entry.day}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
+                      );
+                    }}
+                  />
+                  {dailyTarget > 0 && (
+                    <ReferenceLine y={dailyTarget} stroke="var(--color-chart-4)" strokeDasharray="4 4" />
+                  )}
+                  <Bar dataKey="hours" radius={[4, 4, 0, 0]}>
+                    {data!.dailyBreakdown.map((entry) => (
+                      <Cell
+                        key={entry.date}
+                        fill={entry.date === todayStr ? 'var(--color-primary)' : 'var(--color-muted-foreground)'}
+                        fillOpacity={entry.date === todayStr ? 1 : 0.3}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
 
               {/* Legend */}
               {dailyTarget > 0 && (
@@ -621,11 +733,11 @@ export default function DashboardPage() {
                     <span className="text-xs text-muted-foreground">Today</span>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <div className="h-2.5 w-2.5 rounded-sm bg-primary/40 dark:bg-primary/30" />
+                    <div className="h-2.5 w-2.5 rounded-sm bg-muted-foreground/30" />
                     <span className="text-xs text-muted-foreground">Other days</span>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <div className="h-px w-4 border-t border-dashed border-muted-foreground/40" />
+                    <div className="h-px w-4 border-t border-dashed border-chart-4" />
                     <span className="text-xs text-muted-foreground">Daily avg target</span>
                   </div>
                 </div>
