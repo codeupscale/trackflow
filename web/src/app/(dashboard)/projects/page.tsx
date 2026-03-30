@@ -14,6 +14,7 @@ import {
   Search,
   DollarSign,
 } from 'lucide-react';
+import { SearchInput } from '@/components/ui/search-input';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -290,15 +291,11 @@ export default function ProjectsPage() {
       </div>
 
       {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Search projects..."
-          value={searchQuery}
-          onChange={(e) => handleSearch(e.target.value)}
-          className="pl-9 bg-card border-border text-foreground placeholder:text-muted-foreground"
-        />
-      </div>
+      <SearchInput
+        value={searchQuery}
+        onChange={handleSearch}
+        placeholder="Search projects..."
+      />
 
       {/* Projects Grid */}
       {isProjectsError ? (
@@ -598,15 +595,12 @@ export default function ProjectsPage() {
 
           <div className="flex flex-col gap-3 min-h-0 flex-1">
             {/* Search */}
-            <div className="relative shrink-0">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search members..."
-                value={memberSearch}
-                onChange={(e) => setMemberSearch(e.target.value)}
-                className="pl-9 bg-background border-border text-foreground placeholder:text-muted-foreground"
-              />
-            </div>
+            <SearchInput
+              value={memberSearch}
+              onChange={setMemberSearch}
+              placeholder="Search members..."
+              className="shrink-0"
+            />
 
             {/* Stats bar */}
             <div className="flex items-center justify-between text-xs text-muted-foreground shrink-0">
