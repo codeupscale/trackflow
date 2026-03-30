@@ -242,7 +242,11 @@ export default function ScreenshotsPage() {
                 <label className="text-sm font-medium text-foreground">Team Member</label>
                 <Select value={userFilter} onValueChange={(val) => { setUserFilter(val ?? 'all'); setPage(1); }}>
                   <SelectTrigger className="w-[200px] bg-muted border-border">
-                    <SelectValue placeholder="All members" />
+                    <SelectValue placeholder="All members">
+                      {userFilter === 'all'
+                        ? 'All Members'
+                        : (teamUsers?.find((u) => u.id === userFilter)?.name ?? 'All Members')}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Members</SelectItem>
@@ -365,7 +369,7 @@ export default function ScreenshotsPage() {
                 <CardContent className="p-3 space-y-1">
                   {isManager && (
                     <div className="flex items-center justify-between">
-                      <p className="text-sm font-medium text-white truncate">
+                      <p className="text-sm font-medium text-foreground truncate">
                         {screenshot.user_name}
                       </p>
                     </div>
