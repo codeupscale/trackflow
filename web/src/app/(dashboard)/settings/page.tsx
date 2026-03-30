@@ -1,17 +1,22 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Settings,
   Save,
   Loader2,
   CreditCard,
+  Camera,
+  Lock,
+  Linkedin,
+  Github,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import type { AxiosError } from 'axios';
 
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -26,6 +31,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Select,
   SelectContent,
@@ -210,6 +216,108 @@ export default function SettingsPage() {
     onError: () => toast.error('Failed to update timezone'),
   });
 
+  // ── Profile tab state ──
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [profileName, setProfileName] = useState(user?.name ?? '');
+  const [profileJobTitle, setProfileJobTitle] = useState(user?.job_title ?? '');
+  const [profilePhone, setProfilePhone] = useState(user?.phone ?? '');
+  const [profileTimezone, setProfileTimezone] = useState(user?.timezone ?? 'UTC');
+  const [profileBio, setProfileBio] = useState(user?.bio ?? '');
+  const [profileDob, setProfileDob] = useState(user?.date_of_birth ?? '');
+  const [profileDoj, setProfileDoj] = useState(user?.date_of_joining ?? '');
+  const [profileLinkedin, setProfileLinkedin] = useState(user?.linkedin_url ?? '');
+  const [profileGithub, setProfileGithub] = useState(user?.github_url ?? '');
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [profileInitialized, setProfileInitialized] = useState(false);
+
+  useEffect(() => {
+    if (!user || profileInitialized) return;
+    setProfileName(user.name ?? '');
+    setProfileJobTitle(user.job_title ?? '');
+    setProfilePhone(user.phone ?? '');
+    setProfileTimezone(user.timezone ?? 'UTC');
+    setProfileBio(user.bio ?? '');
+    setProfileDob(user.date_of_birth ?? '');
+    setProfileDoj(user.date_of_joining ?? '');
+    setProfileLinkedin(user.linkedin_url ?? '');
+    setProfileGithub(user.github_url ?? '');
+    setProfileInitialized(true);
+  }, [user, profileInitialized]);
+
+  const saveProfileMutation = useMutation({
+    mutationFn: async (data: Record<string, unknown>) => {
+      const res = await api.put('/profile', data);
+      return res.data;
+    },
+    onSuccess: (data) => {
+      if (data.user) {
+        useAuthStore.getState().setUser(data.user);
+      }
+      toast.success('Profile updated successfully');
+    },
+    onError: () => toast.error('Failed to update profile'),
+  });
+
+  const uploadAvatarMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const form = new FormData();
+      form.append('avatar', file);
+      const res = await api.post('/profile/avatar', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return res.data;
+    },
+    onSuccess: (data) => {
+      const currentUser = useAuthStore.getState().user;
+      if (currentUser) {
+        useAuthStore.getState().setUser({ ...currentUser, avatar_url: data.avatar_url });
+      }
+      setAvatarPreview(null);
+      toast.success('Profile photo updated');
+    },
+    onError: () => {
+      setAvatarPreview(null);
+      toast.error('Failed to upload photo');
+    },
+  });
+
+  const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('File must be under 2MB');
+      return;
+    }
+    // Show local preview immediately
+    const previewUrl = URL.createObjectURL(file);
+    setAvatarPreview(previewUrl);
+    uploadAvatarMutation.mutate(file);
+    // Reset input so the same file can be re-selected
+    e.target.value = '';
+  };
+
+  const handleSaveProfile = () => {
+    saveProfileMutation.mutate({
+      name: profileName,
+      job_title: profileJobTitle || null,
+      phone: profilePhone || null,
+      linkedin_url: profileLinkedin || null,
+      github_url: profileGithub || null,
+      date_of_birth: profileDob || null,
+      date_of_joining: profileDoj || null,
+      bio: profileBio || null,
+      timezone: profileTimezone || null,
+    });
+  };
+
+  const profileInitials =
+    user?.name
+      ?.split(' ')
+      .map((n) => n[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2) || '??';
+
   const handleSave = () => {
     const rawIdle = idleTimeout === '0' ? 0 : (idleTimeout === 'custom' ? idleTimeoutCustom : idleTimeout);
     const idleVal = rawIdle === '' || rawIdle === '0' ? 0 : Math.min(30, Math.max(0, parseInt(String(rawIdle), 10) || 0));
@@ -351,11 +459,230 @@ export default function SettingsPage() {
         )}
       </div>
 
-      <Tabs defaultValue="general">
+      <Tabs defaultValue="profile">
         <TabsList className="bg-muted/50">
+          <TabsTrigger value="profile">Profile</TabsTrigger>
           <TabsTrigger value="general">General</TabsTrigger>
           {isAdmin && <TabsTrigger value="tracking">Tracking</TabsTrigger>}
         </TabsList>
+
+        {/* Profile Tab */}
+        <TabsContent value="profile" className="space-y-6 mt-6">
+          {/* Avatar + Name Header */}
+          <Card className="border-border bg-card/50">
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-6">
+                {/* Avatar */}
+                <div
+                  className="relative group w-24 h-24 cursor-pointer shrink-0"
+                  onClick={() => fileRef.current?.click()}
+                >
+                  <Avatar className="w-24 h-24 border-2 border-border">
+                    <AvatarImage src={avatarPreview || user?.avatar_url || undefined} alt={user?.name || 'User'} />
+                    <AvatarFallback className="bg-blue-600 text-white text-2xl font-medium">
+                      {profileInitials}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="absolute inset-0 bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1">
+                    <Camera className="w-5 h-5 text-white" />
+                    <span className="text-white text-[10px] font-medium">Change</span>
+                  </div>
+                  {uploadAvatarMutation.isPending && (
+                    <div className="absolute inset-0 bg-black/60 rounded-full flex items-center justify-center">
+                      <Loader2 className="w-6 h-6 text-white animate-spin" />
+                    </div>
+                  )}
+                </div>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  className="hidden"
+                  onChange={handleAvatarUpload}
+                />
+                <div className="flex flex-col gap-1">
+                  <h2 className="text-xl font-semibold text-foreground">{user?.name}</h2>
+                  {user?.job_title && (
+                    <p className="text-sm text-muted-foreground">{user.job_title}</p>
+                  )}
+                  <p className="text-sm text-muted-foreground">{user?.email}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Personal Information */}
+          <Card className="border-border bg-card/50">
+            <CardHeader>
+              <CardTitle className="text-foreground">Personal Information</CardTitle>
+              <CardDescription className="text-muted-foreground">
+                Update your personal details
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="profile-name">Full Name</Label>
+                  <Input
+                    id="profile-name"
+                    value={profileName}
+                    onChange={(e) => setProfileName(e.target.value)}
+                    className="bg-background/50"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="profile-job-title">Job Title</Label>
+                  <Input
+                    id="profile-job-title"
+                    placeholder="e.g. Senior Developer"
+                    value={profileJobTitle}
+                    onChange={(e) => setProfileJobTitle(e.target.value)}
+                    className="bg-background/50"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="profile-email">Email</Label>
+                  <div className="relative" title="Email cannot be changed">
+                    <Input
+                      id="profile-email"
+                      value={user?.email ?? ''}
+                      disabled
+                      className="bg-muted/50 pr-9"
+                    />
+                    <Lock className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <p className="text-xs text-muted-foreground">Email cannot be changed</p>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="profile-phone">Phone Number</Label>
+                  <Input
+                    id="profile-phone"
+                    placeholder="+1 (555) 000-0000"
+                    value={profilePhone}
+                    onChange={(e) => setProfilePhone(e.target.value)}
+                    className="bg-background/50"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="profile-tz">Timezone</Label>
+                  <Select value={profileTimezone} onValueChange={(v) => v && setProfileTimezone(v)}>
+                    <SelectTrigger id="profile-tz" className="bg-background/50">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {timezones.map((tz) => (
+                        <SelectItem key={tz} value={tz}>{tz.replace(/_/g, ' ')}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="profile-bio">Bio</Label>
+                <Textarea
+                  id="profile-bio"
+                  placeholder="Tell us a little about yourself..."
+                  value={profileBio}
+                  onChange={(e) => {
+                    if (e.target.value.length <= 500) {
+                      setProfileBio(e.target.value);
+                    }
+                  }}
+                  className="bg-background/50 min-h-[80px]"
+                  maxLength={500}
+                />
+                <p className="text-xs text-muted-foreground text-right">
+                  {profileBio.length} / 500
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Important Dates */}
+          <Card className="border-border bg-card/50">
+            <CardHeader>
+              <CardTitle className="text-foreground">Important Dates</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="profile-dob">Date of Birth</Label>
+                  <Input
+                    id="profile-dob"
+                    type="date"
+                    value={profileDob}
+                    onChange={(e) => setProfileDob(e.target.value)}
+                    className="bg-background/50"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="profile-doj">Date of Joining</Label>
+                  <Input
+                    id="profile-doj"
+                    type="date"
+                    value={profileDoj}
+                    onChange={(e) => setProfileDoj(e.target.value)}
+                    className="bg-background/50"
+                  />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Social Links */}
+          <Card className="border-border bg-card/50">
+            <CardHeader>
+              <CardTitle className="text-foreground">Social Links</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-2">
+                <Label htmlFor="profile-linkedin">LinkedIn</Label>
+                <div className="relative">
+                  <Linkedin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="profile-linkedin"
+                    placeholder="https://linkedin.com/in/your-profile"
+                    value={profileLinkedin}
+                    onChange={(e) => setProfileLinkedin(e.target.value)}
+                    className="bg-background/50 pl-9"
+                  />
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="profile-github">GitHub</Label>
+                <div className="relative">
+                  <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="profile-github"
+                    placeholder="https://github.com/your-username"
+                    value={profileGithub}
+                    onChange={(e) => setProfileGithub(e.target.value)}
+                    className="bg-background/50 pl-9"
+                  />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Save Profile Button */}
+          <div className="flex justify-end">
+            <Button
+              onClick={handleSaveProfile}
+              disabled={saveProfileMutation.isPending}
+            >
+              {saveProfileMutation.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="mr-2 h-4 w-4" />
+              )}
+              Save Profile
+            </Button>
+          </div>
+        </TabsContent>
 
         {/* General Tab */}
         <TabsContent value="general" className="space-y-6 mt-6">
