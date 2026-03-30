@@ -272,6 +272,15 @@
         <button class="permission-banner-btn" id="fixPermissionBtn">Fix</button>
       </div>
 
+      <!-- Wallpaper-only warning — shown when captures appear to be wallpaper-only -->
+      <div class="permission-banner" id="wallpaperBanner" style="display:none" role="alert">
+        <div class="permission-banner-text">
+          <span class="permission-banner-icon" aria-hidden="true">!</span>
+          <span>Screenshots may be wallpaper-only</span>
+        </div>
+        <button class="permission-banner-btn" id="fixWallpaperBtn">Fix</button>
+      </div>
+
       <div class="timer-display">
         <div class="time stopped" id="timerDisplay" role="timer" aria-live="polite">00:00:00</div>
         <div class="status">
@@ -366,6 +375,8 @@
     const dashboardLink = document.getElementById('dashboardLink');
     const permissionBanner = document.getElementById('permissionBanner');
     const fixPermissionBtn = document.getElementById('fixPermissionBtn');
+    const wallpaperBanner = document.getElementById('wallpaperBanner');
+    const fixWallpaperBtn = document.getElementById('fixWallpaperBtn');
 
     function formatTime(seconds) {
       const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
@@ -536,6 +547,28 @@
         showPermissionBanner();
       } else {
         hidePermissionBanner();
+      }
+    });
+
+    // ── Wallpaper-Only Warning Banner Logic ──
+    function showWallpaperBanner() {
+      wallpaperBanner.style.display = 'flex';
+    }
+    function hideWallpaperBanner() {
+      wallpaperBanner.style.display = 'none';
+    }
+
+    fixWallpaperBtn.addEventListener('click', async () => {
+      try {
+        await window.trackflow.openScreenRecordingSettings();
+      } catch {}
+    });
+
+    // Listen for wallpaper-only detection from main process
+    window.trackflow.onScreenshotPermissionIssue((data) => {
+      if (data && data.type === 'wallpaper-detected') {
+        console.log('[renderer] Wallpaper-only capture detected — showing warning banner');
+        showWallpaperBanner();
       }
     });
 

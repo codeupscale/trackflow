@@ -24,7 +24,8 @@
 //      This matches how Hubstaff and Time Doctor handle multi-monitor setups
 //      and allows the web dashboard to show per-display screenshots.
 
-const { desktopCapturer, Notification, screen, systemPreferences, shell, dialog, BrowserWindow, powerMonitor } = require('electron');
+const { desktopCapturer, Notification, screen, systemPreferences, shell, dialog, BrowserWindow, powerMonitor, ipcMain } = require('electron');
+const crypto = require('crypto');
 const FormData = require('form-data');
 
 // Lazy-load sharp
@@ -44,6 +45,11 @@ function getSharp() {
 
 const MAX_CONSECUTIVE_FAILURES = 5;
 const FAILURE_PAUSE_MS = 5 * 60 * 1000;
+
+// Number of consecutive identical capture hashes before flagging as wallpaper-only.
+// 3 captures means the exact same pixel content was returned 3 times in a row,
+// which is extremely unlikely for real screen content (the clock alone changes).
+const STATIC_CAPTURE_THRESHOLD = 3;
 
 // Skip screenshot capture when system has been idle for 5+ minutes.
 // Catches screen lock, sleep/wake recovery, and extended AFK scenarios.
@@ -74,10 +80,13 @@ class ScreenshotService {
     // Track last capture hash to detect static/wallpaper-only images
     this._lastCaptureHash = null;
     this._staticCaptureCount = 0;
+    this._wallpaperWarningEmitted = false;
     // Once we confirm desktopCapturer returns real content, skip native fallback
     this._desktopCapturerWorks = false;
     // Optional callback for when permission dialog triggers a restart-state save
     this._onPermissionDialogSave = null;
+    // Optional callback when wallpaper-only capture is detected
+    this._onWallpaperDetected = null;
   }
 
   // Set a callback that saves restart state before showing the permission dialog
@@ -85,11 +94,59 @@ class ScreenshotService {
     this._onPermissionDialogSave = typeof fn === 'function' ? fn : null;
   }
 
+  // Set a callback that fires when wallpaper-only capture is detected
+  setWallpaperDetectedCallback(fn) {
+    this._onWallpaperDetected = typeof fn === 'function' ? fn : null;
+  }
+
+  // ── Wallpaper-Only Detection via Image Hash ──────────────────────
+  //
+  // After each successful capture, compute a fast MD5 hash of the buffer.
+  // If the same hash appears STATIC_CAPTURE_THRESHOLD times in a row,
+  // the screen content is not changing — most likely wallpaper-only
+  // (macOS revoked Screen Recording permission after a rebuild).
+  //
+  // This does NOT block uploads — it only emits a warning so the UI
+  // can prompt the user to fix their permission.
+
+  _checkForStaticCapture(buffer) {
+    const hash = crypto.createHash('md5').update(buffer).digest('hex');
+
+    if (hash === this._lastCaptureHash) {
+      this._staticCaptureCount++;
+    } else {
+      // Content changed — reset counter and clear any previous warning
+      this._staticCaptureCount = 1;
+      this._lastCaptureHash = hash;
+      if (this._wallpaperWarningEmitted) {
+        this._wallpaperWarningEmitted = false;
+        console.log('[SS] Capture content changed — wallpaper warning cleared');
+      }
+      return;
+    }
+
+    this._lastCaptureHash = hash;
+
+    if (this._staticCaptureCount >= STATIC_CAPTURE_THRESHOLD && !this._wallpaperWarningEmitted) {
+      this._wallpaperWarningEmitted = true;
+      console.warn(
+        `[SS] WARNING: Possible wallpaper-only capture detected (${this._staticCaptureCount} identical screenshots, hash=${hash.slice(0, 8)})`
+      );
+      // Notify the main process / renderer
+      if (this._onWallpaperDetected) {
+        try { this._onWallpaperDetected(); } catch {}
+      }
+    }
+  }
+
   start(entryId, options = {}) {
     this.stop();
     this.currentEntryId = entryId;
     this._consecutiveFailures = 0;
     this._permissionDialogShown = false;
+    this._lastCaptureHash = null;
+    this._staticCaptureCount = 0;
+    this._wallpaperWarningEmitted = false;
     const immediateCapture = options.immediateCapture === true;
     this._intervalMs = (this.config.screenshot_interval || 5) * 60 * 1000;
     const firstDelayMin = this.config.screenshot_first_capture_delay_min != null
@@ -314,6 +371,12 @@ class ScreenshotService {
 
         console.log(`[SS] Multi-monitor: ${successCount}/${displays.length} displays captured`);
 
+        // Check for wallpaper-only capture using the first valid display's buffer
+        const firstValidBuffer = capturedDisplays.find(d => d !== null);
+        if (firstValidBuffer) {
+          this._checkForStaticCapture(firstValidBuffer);
+        }
+
         // Upload each display's screenshot individually with display metadata
         if (this.currentEntryId) {
           for (let i = 0; i < capturedDisplays.length; i++) {
@@ -375,6 +438,9 @@ class ScreenshotService {
 
         console.log(`[SS] Captured ${buffer.length} bytes (${Math.round(buffer.length / 1024)}KB)`);
 
+        // Check for wallpaper-only capture (static content detection)
+        this._checkForStaticCapture(buffer);
+
         // NOTE: Client-side blur removed (SS-11). The server's ProcessScreenshotJob
         // already applies blur when blur_screenshots is enabled. Having both client
         // and server blur causes double-blurring that makes images unusable.
@@ -408,11 +474,21 @@ class ScreenshotService {
     ];
     const validWindows = windowSources.filter(s => {
       const name = s.name || '';
-      if (skipPatterns.some(skip => name.includes(skip))) return false;
-      if (!s.thumbnail || s.thumbnail.isEmpty()) return false;
+      if (skipPatterns.some(skip => name.includes(skip))) {
+        console.log(`[SS]   Filtered out: "${name}" (system window)`);
+        return false;
+      }
+      if (!s.thumbnail || s.thumbnail.isEmpty()) {
+        console.log(`[SS]   Filtered out: "${name}" (thumbnail empty)`);
+        return false;
+      }
       const size = s.thumbnail.getSize();
       // Skip tiny windows (menubar items, tooltips, etc.)
-      return size.width > 200 && size.height > 200;
+      if (size.width <= 200 || size.height <= 200) {
+        console.log(`[SS]   Filtered out: "${name}" (too small: ${size.width}x${size.height})`);
+        return false;
+      }
+      return true;
     });
 
     // Log all valid windows for debugging
