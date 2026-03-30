@@ -633,12 +633,12 @@ export default function DashboardPage() {
               <AreaChart data={adminChartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="fillHours" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--color-hours)" stopOpacity={0.8} />
-                    <stop offset="95%" stopColor="var(--color-hours)" stopOpacity={0.1} />
+                    <stop offset="5%" stopColor="var(--color-hours)" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="var(--color-hours)" stopOpacity={0.05} />
                   </linearGradient>
                   <linearGradient id="fillActivity" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--color-activity)" stopOpacity={0.8} />
-                    <stop offset="95%" stopColor="var(--color-activity)" stopOpacity={0.1} />
+                    <stop offset="5%" stopColor="var(--color-activity)" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="var(--color-activity)" stopOpacity={0.05} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid vertical={false} />
@@ -701,8 +701,8 @@ export default function DashboardPage() {
               <AreaChart data={employeeChartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="fillEmployeeHours" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--color-hours)" stopOpacity={0.8} />
-                    <stop offset="95%" stopColor="var(--color-hours)" stopOpacity={0.1} />
+                    <stop offset="5%" stopColor="var(--color-hours)" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="var(--color-hours)" stopOpacity={0.05} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid vertical={false} />
@@ -757,37 +757,32 @@ export default function DashboardPage() {
 
         return (
           <Card className={`overflow-hidden ${completed ? 'ring-2 ring-green-500/30' : ''}`}>
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${completed ? 'bg-green-500/10' : 'bg-blue-500/10'}`}>
-                    {completed ? (
-                      <svg className="h-5 w-5 text-green-500" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                    ) : (
-                      <TrendingUp className="h-5 w-5 text-blue-500" />
-                    )}
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-foreground">
-                      Weekly Target
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {target}h required (Mon - Sun)
-                    </p>
-                  </div>
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <div className="flex items-center gap-2">
+                <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${completed ? 'bg-green-500/10' : 'bg-blue-500/10'}`}>
+                  {completed ? (
+                    <svg className="h-5 w-5 text-green-500" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  ) : (
+                    <TrendingUp className="h-5 w-5 text-blue-500" />
+                  )}
                 </div>
-                {completed ? (
-                  <Badge className="bg-green-500/10 text-green-500 border-green-500/20 gap-1 px-3 py-1">
-                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
-                    Goal Achieved
-                  </Badge>
-                ) : (
-                  <span className="text-xs text-muted-foreground tabular-nums">
-                    {remainH}h {remainM}m remaining
-                  </span>
-                )}
+                <div>
+                  <CardTitle className="text-sm">Weekly Target</CardTitle>
+                  <CardDescription>{target}h required (Mon - Sun)</CardDescription>
+                </div>
               </div>
-
+              {completed ? (
+                <Badge className="bg-green-500/10 text-green-500 border-green-500/20 gap-1 px-3 py-1">
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+                  Goal Achieved
+                </Badge>
+              ) : (
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {remainH}h {remainM}m remaining
+                </span>
+              )}
+            </CardHeader>
+            <CardContent>
               {/* Progress bar */}
               <div className="relative h-3 rounded-full bg-muted overflow-hidden">
                 <div
@@ -874,7 +869,7 @@ export default function DashboardPage() {
                               </Avatar>
                               <span
                                 className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-background ${
-                                  member.is_online ? 'bg-green-500' : 'bg-slate-500'
+                                  member.is_online ? 'bg-green-500' : 'bg-muted-foreground'
                                 }`}
                               />
                             </div>
@@ -888,7 +883,7 @@ export default function DashboardPage() {
                           <Badge variant="outline" className="gap-1.5">
                             <span
                               className={`h-1.5 w-1.5 rounded-full ${
-                                member.is_online ? 'bg-green-500' : 'bg-slate-500'
+                                member.is_online ? 'bg-green-500' : 'bg-muted-foreground'
                               }`}
                             />
                             {member.is_online ? 'Online' : 'Offline'}
@@ -995,7 +990,7 @@ export default function DashboardPage() {
                 <div className="mt-4 pt-4 border-t border-border text-center">
                   <Link
                     href={`/time?from=${dateFrom}&to=${dateTo}`}
-                    className="inline-flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300 transition-colors"
+                    className="inline-flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 transition-colors"
                   >
                     View all {timeEntries.length} entries
                     <ArrowRight className="h-4 w-4" />
