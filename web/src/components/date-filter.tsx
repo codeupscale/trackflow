@@ -4,14 +4,14 @@ import { useState, useRef, useEffect } from 'react';
 import { Calendar, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
-type FilterPreset = 'today' | 'week' | 'custom';
+type FilterPreset = 'today' | 'yesterday' | 'week' | 'last-week' | 'this-month' | 'last-month' | 'custom';
 
 interface DateFilterProps {
   filterPreset: FilterPreset;
   dateFrom: string;
   dateTo: string;
   rangeLabel: string;
-  onPreset: (preset: 'today' | 'week') => void;
+  onPreset: (preset: FilterPreset) => void;
   onCustomApply: (from: string, to: string) => void;
 }
 
@@ -31,9 +31,6 @@ export function DateFilter({
   useEffect(() => {
     if (!open) return;
     function handleClick(e: MouseEvent) {
-      // Native date pickers render their popup outside the component tree,
-      // so clicks on them would incorrectly trigger close. Skip the
-      // outside-click check when the target is a date input.
       const target = e.target as HTMLElement;
       if (target instanceof HTMLInputElement && target.type === 'date') return;
       if (ref.current && !ref.current.contains(target)) {
@@ -55,6 +52,15 @@ export function DateFilter({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [open]);
 
+  const presets: { key: FilterPreset; label: string }[] = [
+    { key: 'today', label: 'Today' },
+    { key: 'yesterday', label: 'Yesterday' },
+    { key: 'week', label: 'This week' },
+    { key: 'last-week', label: 'Last week' },
+    { key: 'this-month', label: 'This month' },
+    { key: 'last-month', label: 'Last month' },
+  ];
+
   return (
     <div ref={ref} className="relative">
       <button
@@ -63,7 +69,6 @@ export function DateFilter({
           setOpen((prev) => {
             const next = !prev;
             if (next) {
-              // Initialize local inputs when opening (no effect syncing needed).
               setLocalFrom(dateFrom);
               setLocalTo(dateTo);
             }
@@ -80,28 +85,20 @@ export function DateFilter({
       {open && (
         <div className="absolute right-0 top-full mt-2 z-50 w-80 rounded-lg border border-border bg-card shadow-xl">
           <div className="p-2 space-y-1">
-            <button
-              type="button"
-              onClick={() => { onPreset('today'); setOpen(false); }}
-              className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
-                filterPreset === 'today'
-                  ? 'bg-muted text-foreground'
-                  : 'text-foreground hover:bg-accent hover:text-foreground'
-              }`}
-            >
-              Today
-            </button>
-            <button
-              type="button"
-              onClick={() => { onPreset('week'); setOpen(false); }}
-              className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
-                filterPreset === 'week'
-                  ? 'bg-muted text-foreground'
-                  : 'text-foreground hover:bg-accent hover:text-foreground'
-              }`}
-            >
-              This week
-            </button>
+            {presets.map((p) => (
+              <button
+                key={p.key}
+                type="button"
+                onClick={() => { onPreset(p.key); setOpen(false); }}
+                className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
+                  filterPreset === p.key
+                    ? 'bg-muted text-foreground font-medium'
+                    : 'text-foreground hover:bg-accent hover:text-foreground'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
           </div>
 
           <div className="border-t border-border mx-2" />

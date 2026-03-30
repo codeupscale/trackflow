@@ -1,0 +1,208 @@
+name: Desktop Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.18). Leave empty to use current package.json version.'
+        required: false
+        type: string
+      platforms:
+        description: 'Platforms to build'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - mac
+          - windows
+          - linux
+
+permissions:
+  contents: write
+
+jobs:
+  build-mac:
+    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'mac' }}
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Set version
+        if: ${{ inputs.version != '' }}
+        working-directory: desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version
+
+      - name: Build and publish macOS
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # When Apple Developer cert is ready, uncomment:
+          # CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          # CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder --mac --x64 --arm64 --publish always
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-builds
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
+            desktop/dist/latest-mac.yml
+          retention-days: 5
+
+  build-windows:
+    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'windows' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Set version
+        if: ${{ inputs.version != '' }}
+        working-directory: desktop
+        run: npm version ${{ inputs.version }} --no-git-tag-version
+
+      - name: Build and publish Windows
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # When Windows code signing cert is ready, uncomment:
+          # CSC_LINK: ${{ secrets.WIN_CERTIFICATE_P12 }}
+          # CSC_KEY_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
+        run: npx electron-builder --win --x64 --publish always
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-builds
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/latest.yml
+          retention-days: 5
+
+  build-linux:
+    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'linux' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build and publish Linux
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --linux --x64 --publish always
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-builds
+          path: |
+            desktop/dist/*.AppImage
+            desktop/dist/*.deb
+            desktop/dist/latest-linux.yml
+          retention-days: 5
+
+  update-release-notes:
+    needs: [build-mac, build-windows, build-linux]
+    if: always() && (needs.build-mac.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        working-directory: desktop
+        run: echo "version=$(node -p 'require("./package.json").version')" >> $GITHUB_OUTPUT
+
+      - name: Update release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="v${{ steps.version.outputs.version }}"
+          gh release edit "$VERSION" --notes "$(cat <<'EOF'
+          ## TrackFlow Desktop ${{ steps.version.outputs.version }}
+
+          ### Downloads
+
+          | Platform | File | Notes |
+          |----------|------|-------|
+          | **macOS (Apple Silicon)** | `TrackFlow-${{ steps.version.outputs.version }}-mac-arm64.dmg` | M1/M2/M3/M4 |
+          | **macOS (Intel)** | `TrackFlow-${{ steps.version.outputs.version }}-mac-x64.dmg` | 2020 and older |
+          | **Windows** | `TrackFlow-Setup-${{ steps.version.outputs.version }}.exe` | Windows 10+ |
+          | **Linux (.deb)** | `trackflow-agent_${{ steps.version.outputs.version }}_amd64.deb` | Ubuntu/Debian |
+          | **Linux (AppImage)** | `TrackFlow-${{ steps.version.outputs.version }}-x64.AppImage` | Universal Linux |
+
+          ### Installation
+
+          **macOS:**
+          1. Download the `.dmg` for your chip (Apple Silicon or Intel)
+          2. Open the DMG and drag TrackFlow to Applications
+          3. Open Terminal and run: `xattr -cr /Applications/TrackFlow.app`
+          4. Launch TrackFlow from Applications
+
+          **Windows:**
+          1. Download the `.exe` installer
+          2. Run the installer — choose install location
+          3. Launch TrackFlow from Start Menu or Desktop shortcut
+
+          **Linux (deb):**
+          ```bash
+          sudo dpkg -i trackflow-agent_${{ steps.version.outputs.version }}_amd64.deb
+          ```
+
+          **Linux (AppImage):**
+          ```bash
+          chmod +x TrackFlow-${{ steps.version.outputs.version }}-x64.AppImage
+          ./TrackFlow-${{ steps.version.outputs.version }}-x64.AppImage
+          ```
+
+          ### Troubleshooting
+
+          **macOS "app is damaged" error:**
+          ```bash
+          xattr -cr /Applications/TrackFlow.app
+          ```
+
+          **macOS Screen Recording permission:**
+          Go to System Settings → Privacy & Security → Screen Recording → Enable TrackFlow
+
+          **View logs (all platforms):**
+          - macOS: `~/Library/Logs/trackflow-agent/main.log`
+          - Windows: `%APPDATA%/trackflow-agent/logs/main.log`
+          - Linux: `~/.config/trackflow-agent/logs/main.log`
+          EOF
+          )"

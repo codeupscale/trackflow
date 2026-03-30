@@ -661,8 +661,12 @@ async function initializeApp() {
   setupIPC();
   checkForUpdates();
 
-  // Load projects for tray menu
-  loadProjects();
+  // Load projects for tray menu, then notify the popup renderer
+  loadProjects().then(() => {
+    if (popupWindow && !popupWindow.isDestroyed()) {
+      popupWindow.webContents.send('projects-ready');
+    }
+  });
 
   // Flush offline queue
   offlineQueue.flush(apiClient);
@@ -1073,6 +1077,9 @@ function showPopup() {
     setImmediate(() => {
       if (popupWindow && !popupWindow.isDestroyed()) {
         popupWindow.webContents.send('sync-timer');
+        // Also signal the renderer to reload projects in case they were
+        // empty from a previous failed load (e.g. token refresh race on startup)
+        popupWindow.webContents.send('projects-ready');
       }
     });
     return;
@@ -1840,6 +1847,10 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
     skipTaskbar: false,
     center: true,
     show: false,
+    // Ensure the idle alert appears on whichever macOS Space / Linux workspace the
+    // user is currently viewing. Without this the window can open on a different
+    // desktop and appear invisible.
+    visibleOnAllWorkspaces: true,
     backgroundColor: '#0a0a0a',   // Prevent white flash on all platforms
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
@@ -1849,21 +1860,40 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
     },
   });
 
-  idleAlertWindow.loadFile(path.join(__dirname, '..', 'renderer', 'idle-alert.html'));
+  // Keep a local reference so the ready-to-show / did-finish-load callbacks
+  // always operate on the window they were registered on, even if the outer
+  // idleAlertWindow variable is reassigned or nulled by dismissIdleAlert().
+  const win = idleAlertWindow;
+  let shown = false;
 
-  idleAlertWindow.once('ready-to-show', () => {
-    idleAlertWindow.show();
-    idleAlertWindow.focus();
-    idleAlertWindow.webContents.send('idle-data', {
+  function showAndSendData() {
+    if (shown) return;
+    if (win.isDestroyed()) return;
+    shown = true;
+    win.show();
+    win.focus();
+    win.webContents.send('idle-data', {
       idleStartedAt,
       idleSeconds,
       autoStopTotalSec: idleDetector ? (idleDetector.idleTimeoutSec + idleDetector.alertAutoStopSec) : 0,
       projects: cachedProjects || [],
     });
+  }
+
+  // Primary: show as soon as first paint completes
+  win.once('ready-to-show', showAndSendData);
+
+  // Fallback: on some macOS configurations (e.g., app backgrounded, Spaces,
+  // or sandbox + alwaysOnTop combos), ready-to-show may not fire reliably.
+  // Use did-finish-load as a safety net.
+  win.webContents.once('did-finish-load', showAndSendData);
+
+  win.on('closed', () => {
+    idleAlertWindow = null;
   });
 
-  idleAlertWindow.on('closed', () => {
-    idleAlertWindow = null;
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'idle-alert.html')).catch((err) => {
+    console.error('[IdleAlert] Failed to load idle-alert.html:', err.message);
   });
 
 }
@@ -2012,9 +2042,11 @@ function createLoginWindow() {
     loginWindow = null;
   });
 
-  // Only register the login handler once
+  // Only register the login handlers once
   if (!loginHandlerRegistered) {
     loginHandlerRegistered = true;
+
+    // ── Email/Password Login (multi-org aware) ──
     ipcMain.handle('login', async (_, email, password) => {
       // Validate inputs
       if (typeof email !== 'string' || typeof password !== 'string') {
@@ -2028,6 +2060,16 @@ function createLoginWindow() {
       try {
         const tempClient = new ApiClient(null);
         const result = await tempClient.login(email, password);
+
+        // Multi-org: server says user must pick an organization
+        if (result.requires_org_selection) {
+          return {
+            requires_org_selection: true,
+            organizations: result.organizations,
+            credentials: { email, password },
+          };
+        }
+
         await setToken(result.access_token);
         await setRefreshToken(result.refresh_token);
 
@@ -2035,26 +2077,180 @@ function createLoginWindow() {
         await initializeApp();
         return { success: true };
       } catch (e) {
-        const status = e.response?.status;
-        const serverMsg = e.response?.data?.message;
+        return { error: _friendlyLoginError(e) };
+      }
+    });
 
-        // Friendly error messages for common cases
-        if (serverMsg) {
-          return { error: serverMsg };
-        } else if (e.code === 'ENOTFOUND' || e.code === 'ERR_NETWORK') {
-          return { error: 'Cannot reach the server. Please check your internet connection.' };
-        } else if (e.code === 'ECONNREFUSED') {
-          return { error: 'Server is not responding. Please try again later.' };
-        } else if (e.code === 'ETIMEDOUT' || e.code === 'ECONNABORTED') {
-          return { error: 'Connection timed out. Please try again.' };
-        } else if (status === 404) {
-          return { error: 'Server endpoint not found. Please update the app.' };
-        } else {
-          return { error: e.message || 'Login failed. Please try again.' };
+    // ── Google OAuth Login ──
+    // Opens system browser for Google consent, receives auth code via local HTTP server
+    ipcMain.handle('google-login', async () => {
+      const googleClientId = process.env.TRACKFLOW_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || '';
+      const googleClientSecret = process.env.TRACKFLOW_GOOGLE_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || '';
+
+      if (!googleClientId) {
+        return { error: 'Google login is not configured for the desktop app.' };
+      }
+
+      try {
+        const http = require('http');
+        const crypto = require('crypto');
+        const url = require('url');
+
+        // Start a temporary local HTTP server to receive the OAuth callback
+        const state = crypto.randomBytes(16).toString('hex');
+        let callbackServer = null;
+
+        const result = await new Promise((resolve, reject) => {
+          callbackServer = http.createServer(async (req, res) => {
+            try {
+              const parsed = url.parse(req.url, true);
+              if (parsed.pathname !== '/callback') {
+                res.writeHead(404);
+                res.end('Not found');
+                return;
+              }
+
+              // Verify state to prevent CSRF
+              if (parsed.query.state !== state) {
+                res.writeHead(400);
+                res.end('Invalid state parameter.');
+                resolve({ error: 'OAuth state mismatch. Please try again.' });
+                return;
+              }
+
+              if (parsed.query.error) {
+                res.writeHead(200, { 'Content-Type': 'text/html' });
+                res.end('<html><body><h2>Sign-in cancelled.</h2><p>You can close this tab.</p></body></html>');
+                resolve({ error: parsed.query.error_description || 'Google sign-in was cancelled.' });
+                return;
+              }
+
+              const code = parsed.query.code;
+              if (!code) {
+                res.writeHead(400);
+                res.end('Missing authorization code.');
+                resolve({ error: 'No authorization code received from Google.' });
+                return;
+              }
+
+              // Exchange auth code for ID token
+              const tokenRes = await require('axios').post('https://oauth2.googleapis.com/token', {
+                code,
+                client_id: googleClientId,
+                client_secret: googleClientSecret,
+                redirect_uri: `http://127.0.0.1:${callbackServer.address().port}/callback`,
+                grant_type: 'authorization_code',
+              });
+
+              const idToken = tokenRes.data.id_token;
+              if (!idToken) {
+                res.writeHead(200, { 'Content-Type': 'text/html' });
+                res.end('<html><body><h2>Error</h2><p>Could not get ID token from Google.</p></body></html>');
+                resolve({ error: 'Failed to obtain ID token from Google.' });
+                return;
+              }
+
+              res.writeHead(200, { 'Content-Type': 'text/html' });
+              res.end('<html><body style="font-family:system-ui;text-align:center;padding:40px"><h2>Sign-in successful!</h2><p>You can close this tab and return to TrackFlow.</p></body></html>');
+
+              resolve({ id_token: idToken });
+            } catch (err) {
+              console.error('[GoogleAuth] Callback error:', err.message);
+              res.writeHead(500);
+              res.end('Internal error');
+              resolve({ error: err.message || 'Google authentication failed.' });
+            }
+          });
+
+          // Listen on a random available port on localhost
+          callbackServer.listen(0, '127.0.0.1', () => {
+            const port = callbackServer.address().port;
+            const redirectUri = `http://127.0.0.1:${port}/callback`;
+            const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?`
+              + `client_id=${encodeURIComponent(googleClientId)}`
+              + `&redirect_uri=${encodeURIComponent(redirectUri)}`
+              + `&response_type=code`
+              + `&scope=${encodeURIComponent('openid email profile')}`
+              + `&state=${state}`
+              + `&access_type=offline`
+              + `&prompt=select_account`;
+
+            console.log('[GoogleAuth] Opening system browser for OAuth...');
+            shell.openExternal(authUrl);
+          });
+
+          // Timeout after 5 minutes
+          setTimeout(() => {
+            resolve({ error: 'Google sign-in timed out. Please try again.' });
+          }, 5 * 60 * 1000);
+        });
+
+        // Clean up the callback server
+        if (callbackServer) {
+          callbackServer.close();
         }
+
+        if (result.error) {
+          return { error: result.error };
+        }
+
+        // Send ID token to our backend
+        const tempClient = new ApiClient(null);
+        const authResult = await tempClient.googleAuth(result.id_token);
+
+        // Multi-org: server says user must pick an organization
+        if (authResult.requires_org_selection) {
+          return {
+            requires_org_selection: true,
+            organizations: authResult.organizations,
+            credentials: { id_token: result.id_token },
+          };
+        }
+
+        await setToken(authResult.access_token);
+        await setRefreshToken(authResult.refresh_token);
+
+        BrowserWindow.getAllWindows().forEach((w) => w.close());
+        await initializeApp();
+        return { success: true };
+      } catch (e) {
+        return { error: _friendlyLoginError(e) };
+      }
+    });
+
+    // ── Select Organization (after multi-org detection) ──
+    ipcMain.handle('select-organization', async (_, orgId, credentials) => {
+      if (!orgId || typeof orgId !== 'string') {
+        return { error: 'Invalid organization selection.' };
+      }
+
+      try {
+        const tempClient = new ApiClient(null);
+        const payload = { organization_id: orgId, ...credentials };
+        const result = await tempClient.selectOrganization(payload);
+
+        await setToken(result.access_token);
+        await setRefreshToken(result.refresh_token);
+
+        BrowserWindow.getAllWindows().forEach((w) => w.close());
+        await initializeApp();
+        return { success: true };
+      } catch (e) {
+        return { error: _friendlyLoginError(e) };
       }
     });
   }
+}
+
+/** Extract a user-friendly error message from a login/auth error. */
+function _friendlyLoginError(e) {
+  const serverMsg = e.response?.data?.message;
+  if (serverMsg) return serverMsg;
+  if (e.code === 'ENOTFOUND' || e.code === 'ERR_NETWORK') return 'Cannot reach the server. Please check your internet connection.';
+  if (e.code === 'ECONNREFUSED') return 'Server is not responding. Please try again later.';
+  if (e.code === 'ETIMEDOUT' || e.code === 'ECONNABORTED') return 'Connection timed out. Please try again.';
+  if (e.response?.status === 404) return 'Server endpoint not found. Please update the app.';
+  return e.message || 'Login failed. Please try again.';
 }
 
 function checkForUpdates() {

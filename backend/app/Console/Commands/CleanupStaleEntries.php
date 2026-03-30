@@ -16,6 +16,12 @@ class CleanupStaleEntries extends Command
     protected $description = 'Auto-close stale time entries that have no heartbeat for 30+ minutes';
 
     /**
+     * Maximum duration (seconds) for any single time entry.
+     * 12 hours = 43200 seconds. Prevents runaway timers from corrupting reports.
+     */
+    private const MAX_ENTRY_DURATION = 43200;
+
+    /**
      * Number of times the command may be attempted.
      */
     public $tries = 1;
@@ -62,6 +68,12 @@ class CleanupStaleEntries extends Command
                     $endedAt = $lastActive ?? $entry->started_at;
                     $duration = (int) abs($endedAt->diffInSeconds($entry->started_at));
 
+                    // Cap duration to prevent runaway entries from corrupting reports
+                    $duration = min($duration, self::MAX_ENTRY_DURATION);
+                    if ($duration === self::MAX_ENTRY_DURATION) {
+                        $endedAt = $entry->started_at->copy()->addSeconds(self::MAX_ENTRY_DURATION);
+                    }
+
                     $entry->update([
                         'ended_at' => $endedAt,
                         'duration_seconds' => $duration,
@@ -71,7 +83,7 @@ class CleanupStaleEntries extends Command
                     $redisKey = "timer:{$entry->user_id}";
                     Redis::del($redisKey);
 
-                    Log::info("[cleanup] Auto-closed stale entry {$entry->id} for user {$entry->user_id}, last active: {$referenceTime->toISOString()}");
+                    Log::info("[cleanup] Auto-closed stale entry {$entry->id} for user {$entry->user_id}, duration: {$duration}s, last active: {$referenceTime->toISOString()}");
                     $closed++;
                 }
             });

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { CalendarIcon, CheckCircle, Clock, Info, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
@@ -81,10 +82,11 @@ interface PaginatedResponse {
 export default function TimePage() {
   const { user } = useAuthStore();
   const queryClient = useQueryClient();
+  const searchParams = useSearchParams();
   const canApprove = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
 
-  const [dateFrom, setDateFrom] = useState(() => format(new Date(), 'yyyy-MM-dd'));
-  const [dateTo, setDateTo] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  const [dateFrom, setDateFrom] = useState(() => searchParams.get('from') || format(new Date(), 'yyyy-MM-dd'));
+  const [dateTo, setDateTo] = useState(() => searchParams.get('to') || format(new Date(), 'yyyy-MM-dd'));
   const [projectFilter, setProjectFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
@@ -224,7 +226,11 @@ export default function TimePage() {
               <label className="text-sm font-medium text-foreground">Project</label>
               <Select value={projectFilter} onValueChange={(val) => { setProjectFilter(val ?? 'all'); setPage(1); }}>
                 <SelectTrigger className="w-[200px] bg-muted border-border">
-                  <SelectValue placeholder="All projects" />
+                  <SelectValue placeholder="All projects">
+                    {projectFilter === 'all'
+                      ? 'All Projects'
+                      : projects?.find((p) => p.id === projectFilter)?.name ?? 'All Projects'}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Projects</SelectItem>
@@ -280,7 +286,10 @@ export default function TimePage() {
         <CardHeader>
           <CardTitle className="text-foreground">Entries</CardTitle>
           <CardDescription className="text-muted-foreground">
-            {entries.length} entries | Total: {formatDuration(totalSeconds)}
+            {meta && meta.total != null
+              ? `Showing ${entries.length} of ${meta.total} entries`
+              : `${entries.length} entries`}{' '}
+            | Page Total: {formatDuration(totalSeconds)}
           </CardDescription>
         </CardHeader>
         <CardContent>

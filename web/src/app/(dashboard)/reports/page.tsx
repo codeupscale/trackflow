@@ -151,9 +151,9 @@ function transformReportResponse(type: ReportType, raw: Record<string, unknown>)
     case 'attendance': {
       const attendance = (raw.attendance || []) as Record<string, unknown>[];
       return {
-        columns: ['user_id', 'date', 'first_seen', 'last_seen', 'total_seconds'],
+        columns: ['user', 'date', 'first_seen', 'last_seen', 'total_seconds'],
         rows: attendance.map((a) => ({
-          user_id: String(a.user_id ?? ''),
+          user: String(a.user_name ?? a.user_id ?? ''),
           date: String(a.date ?? ''),
           first_seen: String(a.first_seen ?? ''),
           last_seen: String(a.last_seen ?? ''),
@@ -383,7 +383,11 @@ export default function ReportsPage() {
                 <label className="text-sm font-medium text-foreground">User</label>
                 <Select value={userFilter} onValueChange={(val) => { setUserFilter(val ?? 'all'); setShouldFetch(false); }}>
                   <SelectTrigger className="w-[200px] bg-muted border-border">
-                    <SelectValue placeholder="All users" />
+                    <span className="truncate">
+                      {userFilter === 'all'
+                        ? 'All Users'
+                        : teamUsers?.find((u) => u.id === userFilter)?.name ?? 'Select user'}
+                    </span>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Users</SelectItem>

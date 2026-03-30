@@ -126,6 +126,28 @@ class ApiClient {
 
   async login(email, password) {
     const res = await this.client.post('/auth/login', { email, password });
+    // Multi-org: if requires_org_selection, don't set tokens yet
+    if (res.data.requires_org_selection) {
+      return res.data;
+    }
+    this.setToken(res.data.access_token);
+    this.refreshToken = res.data.refresh_token;
+    return res.data;
+  }
+
+  async googleAuth(idToken) {
+    const res = await this.client.post('/auth/google', { id_token: idToken });
+    // Multi-org: if requires_org_selection, don't set tokens yet
+    if (res.data.requires_org_selection) {
+      return res.data;
+    }
+    this.setToken(res.data.access_token);
+    this.refreshToken = res.data.refresh_token;
+    return res.data;
+  }
+
+  async selectOrganization(payload) {
+    const res = await this.client.post('/auth/select-organization', payload);
     this.setToken(res.data.access_token);
     this.refreshToken = res.data.refresh_token;
     return res.data;
