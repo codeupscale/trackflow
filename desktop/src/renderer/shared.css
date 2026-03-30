@@ -166,7 +166,29 @@ body {
   font-weight: 600;
   color: var(--accent-blue);
   pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
+.titlebar-logo {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+/* ── Logo (login / org selector) ─────────────────────────────────────── */
+.logo {
+  text-align: center;
+  margin-bottom: 8px;
+}
+.logo svg {
+  width: 160px;
+  height: auto;
+}
+.logo-light { display: none; }
+.logo-dark { display: inline-block; }
+[data-theme="light"] .logo-light { display: inline-block; }
+[data-theme="light"] .logo-dark { display: none; }
 .titlebar-controls {
   display: flex;
   gap: 4px;
