@@ -16,10 +16,13 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TrackFlow — Workforce Monitoring",
-  description: "Real-time workforce monitoring, time tracking, and productivity analytics",
+  title: {
+    default: 'TrackFlow',
+    template: '%s | TrackFlow',
+  },
+  description: 'Professional workforce time tracking and monitoring',
   icons: {
-    icon: "/favicon.ico",
+    icon: '/icon.svg',
   },
 };
 

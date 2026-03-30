@@ -135,11 +135,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       {/* Sidebar */}
       <Sidebar collapsible="icon">
         <SidebarHeader className="border-b border-sidebar-border px-3 py-3">
-          <Link href="/dashboard" className="flex items-center gap-2.5">
-            <TrackFlowLogo size={28} className="shrink-0" />
-            <span className="text-lg font-bold text-sidebar-foreground tracking-tight group-data-[collapsible=icon]:hidden">
-              TrackFlow
-            </span>
+          <Link href="/dashboard" className="flex items-center">
+            <TrackFlowLogo size={28} showText={true} className="group-data-[collapsible=icon]:[&>span]:hidden" />
           </Link>
         </SidebarHeader>
 

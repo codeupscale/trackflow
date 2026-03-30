@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { TrackFlowLogo } from '@/components/ui/trackflow-logo';
 import { type OrgSelectionItem } from '@/stores/auth-store';
 
 const roleLabels: Record<string, string> = {
@@ -62,7 +63,10 @@ export function OrgSelector({
 
   return (
     <Card className="border-border bg-card/80 backdrop-blur w-full max-w-md">
-      <CardHeader className="space-y-1">
+      <CardHeader className="space-y-3">
+        <div className="flex justify-center">
+          <TrackFlowLogo size={36} showText={true} />
+        </div>
         <div className="flex items-center gap-2 justify-center">
           <Building2 className="h-5 w-5 text-muted-foreground" />
           <CardTitle className="text-2xl text-center text-foreground">{title}</CardTitle>

@@ -2,6 +2,7 @@
 
 import { ReactNode } from 'react';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { TrackFlowLogo } from '@/components/ui/trackflow-logo';
 
 export default function AuthLayout({ children }: { children: ReactNode }) {
   return (
@@ -11,9 +12,9 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
           <div className="absolute right-0 top-0">
             <ThemeToggle />
           </div>
-          <div className="text-center">
-            <h1 className="text-3xl font-bold tracking-tight text-foreground">TrackFlow</h1>
-            <p className="text-muted-foreground mt-2 text-sm">Workforce monitoring made simple</p>
+          <div className="flex flex-col items-center gap-2">
+            <TrackFlowLogo size={40} showText={true} />
+            <p className="text-muted-foreground mt-1 text-sm">Workforce monitoring made simple</p>
           </div>
         </div>
         {children}
