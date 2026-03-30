@@ -37,7 +37,9 @@ contextBridge.exposeInMainWorld('trackflow', {
   // Screen recording permission (macOS)
   checkScreenPermission: () => ipcRenderer.invoke('check-screen-permission'),
   requestScreenPermission: () => ipcRenderer.invoke('request-screen-permission'),
+  openScreenRecordingSettings: () => ipcRenderer.invoke('open-screen-recording-settings'),
   onPermissionStatus: (callback) => safeOn('permission-status', (_, data) => callback(data)),
+  onScreenshotPermissionIssue: (callback) => safeOn('screenshot-permission-issue', (_, data) => callback(data)),
 
   // OS theme detection
   getTheme: () => ipcRenderer.invoke('get-theme'),

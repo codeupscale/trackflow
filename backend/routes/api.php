@@ -39,6 +39,9 @@ Route::prefix('v1')->group(function () {
     // Public invitation acceptance
     Route::post('invitations/accept', [InvitationController::class, 'accept']);
 
+    // Screenshot file serving (public — access controlled via HMAC signature)
+    Route::get('screenshots/{id}/file', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'show']);
+
     // Authenticated routes
     Route::middleware('auth:sanctum')->group(function () {
 
