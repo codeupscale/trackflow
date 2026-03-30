@@ -49,7 +49,9 @@ import {
 import {
     Pagination,
     PaginationContent,
+    PaginationEllipsis,
     PaginationItem,
+    PaginationLink,
     PaginationNext,
     PaginationPrevious,
 } from "@/components/ui/pagination";
@@ -230,7 +232,21 @@ export default function TeamPage() {
             if (roleFilter !== "all") params.role = roleFilter;
             if (statusFilter !== "all") params.status = statusFilter;
             const res = await api.get("/users", { params });
-            return res.data;
+            const raw = res.data;
+            // Backend returns { data, meta: { current_page, last_page, total, per_page }, users }
+            // Normalize to flat LaravelPaginator shape the UI expects
+            if (raw.meta) {
+                return {
+                    data: raw.data || raw.users || [],
+                    current_page: raw.meta.current_page,
+                    last_page: raw.meta.last_page,
+                    total: raw.meta.total,
+                    per_page: raw.meta.per_page,
+                    from: raw.from ?? ((raw.meta.current_page - 1) * raw.meta.per_page + 1),
+                    to: raw.to ?? Math.min(raw.meta.current_page * raw.meta.per_page, raw.meta.total),
+                } as LaravelPaginator<TeamMember>;
+            }
+            return raw;
         },
         enabled: user?.role !== "employee",
     });
@@ -797,23 +813,24 @@ export default function TeamPage() {
                             </div>
                         ) : (
                             <>
+                                <div className="rounded-lg border border-border overflow-hidden">
                                 <div className="overflow-x-auto">
                                 <Table>
                                     <TableHeader>
                                         <TableRow className="border-border hover:bg-transparent">
-                                            <TableHead className="text-muted-foreground">
+                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                                 Email
                                             </TableHead>
-                                            <TableHead className="text-muted-foreground">
+                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                                 Role
                                             </TableHead>
-                                            <TableHead className="text-muted-foreground">
+                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                                 Invited by
                                             </TableHead>
-                                            <TableHead className="text-muted-foreground">
+                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                                 Expires
                                             </TableHead>
-                                            <TableHead className="text-muted-foreground text-right">
+                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">
                                                 Actions
                                             </TableHead>
                                         </TableRow>
@@ -822,7 +839,7 @@ export default function TeamPage() {
                                         {invitations.map((inv) => (
                                             <TableRow
                                                 key={inv.id}
-                                                className="border-border"
+                                                className="border-border hover:bg-muted/50 transition-colors"
                                             >
                                                 <TableCell className="text-sm text-foreground">
                                                     {inv.email}
@@ -897,6 +914,7 @@ export default function TeamPage() {
                                         ))}
                                     </TableBody>
                                 </Table>
+                                </div>
                                 </div>
                                 {invitationsResponse &&
                                     invitationsResponse.last_page > 1 && (
@@ -978,8 +996,8 @@ export default function TeamPage() {
                         <div>
                             <CardTitle className="text-foreground">Members</CardTitle>
                             <CardDescription className="text-muted-foreground">
-                                {membersResponse
-                                    ? `Showing ${members.length} of ${membersResponse.total} members`
+                                {membersResponse && membersResponse.total != null
+                                    ? `Showing ${((membersResponse.current_page - 1) * membersPerPage) + 1}\u2013${Math.min(membersResponse.current_page * membersPerPage, membersResponse.total)} of ${membersResponse.total} members`
                                     : "All members of your organization"}
                             </CardDescription>
                         </div>
@@ -1041,23 +1059,24 @@ export default function TeamPage() {
                         </div>
                     ) : (
                         <>
+                            <div className="rounded-lg border border-border overflow-hidden">
                             <div className="overflow-x-auto">
                             <Table>
                                 <TableHeader>
                                     <TableRow className="border-border hover:bg-transparent">
-                                        <TableHead className="text-muted-foreground">
+                                        <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                             Member
                                         </TableHead>
-                                        <TableHead className="text-muted-foreground">
+                                        <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                             Role
                                         </TableHead>
-                                        <TableHead className="text-muted-foreground">
+                                        <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                             Status
                                         </TableHead>
-                                        <TableHead className="text-muted-foreground">
+                                        <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                             Last Active
                                         </TableHead>
-                                        <TableHead className="text-muted-foreground text-right">
+                                        <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">
                                             Actions
                                         </TableHead>
                                     </TableRow>
@@ -1074,7 +1093,7 @@ export default function TeamPage() {
                                         return (
                                             <TableRow
                                                 key={member.id}
-                                                className="border-border"
+                                                className="border-border hover:bg-muted/50 transition-colors"
                                             >
                                                 <TableCell>
                                                     <div className="flex items-center gap-3">
@@ -1233,12 +1252,12 @@ export default function TeamPage() {
                                 </TableBody>
                             </Table>
                             </div>
+                            </div>
                             {membersResponse &&
                                 membersResponse.last_page > 1 && (
                                     <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-4 pt-4 border-t border-border">
                                         <p className="text-sm text-muted-foreground">
-                                            Page {membersResponse.current_page} of{" "}
-                                            {membersResponse.last_page} ({membersResponse.total} total)
+                                            Showing {((membersResponse.current_page - 1) * membersPerPage) + 1}&ndash;{Math.min(membersResponse.current_page * membersPerPage, membersResponse.total)} of {membersResponse.total} members
                                         </p>
                                         <Pagination>
                                             <PaginationContent>
@@ -1254,6 +1273,30 @@ export default function TeamPage() {
                                                         className={membersPage <= 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
                                                     />
                                                 </PaginationItem>
+                                                {Array.from({ length: membersResponse.last_page }, (_, i) => i + 1)
+                                                    .filter((p) => p === 1 || p === membersResponse.last_page || Math.abs(p - membersResponse.current_page) <= 1)
+                                                    .reduce((acc, p, idx, arr) => {
+                                                        if (idx > 0 && p - arr[idx - 1] > 1) acc.push(-1);
+                                                        acc.push(p);
+                                                        return acc;
+                                                    }, [] as number[])
+                                                    .map((p, idx) =>
+                                                        p === -1 ? (
+                                                            <PaginationItem key={`ellipsis-${idx}`}>
+                                                                <PaginationEllipsis />
+                                                            </PaginationItem>
+                                                        ) : (
+                                                            <PaginationItem key={p}>
+                                                                <PaginationLink
+                                                                    isActive={p === membersResponse.current_page}
+                                                                    onClick={() => setSearchParam("members_page", String(p))}
+                                                                    className="cursor-pointer"
+                                                                >
+                                                                    {p}
+                                                                </PaginationLink>
+                                                            </PaginationItem>
+                                                        ),
+                                                    )}
                                                 <PaginationItem>
                                                     <PaginationNext
                                                         onClick={() =>
