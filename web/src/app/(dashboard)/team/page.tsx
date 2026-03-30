@@ -13,6 +13,7 @@ import {
     Copy,
     RefreshCw,
     Trash2,
+    Search,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -45,6 +46,13 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import {
+    Pagination,
+    PaginationContent,
+    PaginationItem,
+    PaginationNext,
+    PaginationPrevious,
+} from "@/components/ui/pagination";
 import {
     Dialog,
     DialogContent,
@@ -155,6 +163,18 @@ export default function TeamPage() {
         generate?: string;
     }>({});
 
+    // Search, role, and status filters for the members table
+    const [searchInput, setSearchInput] = useState("");
+    const [memberSearch, setMemberSearch] = useState("");
+    const [roleFilter, setRoleFilter] = useState<string>("all");
+    const [statusFilter, setStatusFilter] = useState<string>("all");
+
+    // Debounced search (300ms)
+    useEffect(() => {
+        const t = setTimeout(() => setMemberSearch(searchInput), 300);
+        return () => clearTimeout(t);
+    }, [searchInput]);
+
     // Team is for owner/admin/manager only; redirect employees so they don't hit 403
     useEffect(() => {
         if (user?.role === "employee") {
@@ -168,7 +188,7 @@ export default function TeamPage() {
     const membersPage = parsePositiveInt(searchParams.get("members_page"), 1);
     const membersPerPage = parsePositiveInt(
         searchParams.get("members_per_page"),
-        50,
+        15,
     );
     const invitesPage = parsePositiveInt(searchParams.get("invites_page"), 1);
     const invitesPerPage = parsePositiveInt(
@@ -182,6 +202,16 @@ export default function TeamPage() {
         router.replace(`/team?${next.toString()}`);
     };
 
+    // Reset to page 1 when filters change
+    useEffect(() => {
+        const next = new URLSearchParams(searchParams.toString());
+        if (next.get("members_page") && next.get("members_page") !== "1") {
+            next.set("members_page", "1");
+            router.replace(`/team?${next.toString()}`);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [memberSearch, roleFilter, statusFilter]);
+
     const {
         data: membersResponse,
         isLoading,
@@ -189,12 +219,17 @@ export default function TeamPage() {
     } = useQuery<LaravelPaginator<TeamMember>>({
         queryKey: [
             "team-members",
-            { page: membersPage, per_page: membersPerPage },
+            { page: membersPage, per_page: membersPerPage, search: memberSearch, role: roleFilter, status: statusFilter },
         ],
         queryFn: async () => {
-            const res = await api.get("/users", {
-                params: { page: membersPage, per_page: membersPerPage },
-            });
+            const params: Record<string, string | number> = {
+                page: membersPage,
+                per_page: membersPerPage,
+            };
+            if (memberSearch) params.search = memberSearch;
+            if (roleFilter !== "all") params.role = roleFilter;
+            if (statusFilter !== "all") params.status = statusFilter;
+            const res = await api.get("/users", { params });
             return res.data;
         },
         enabled: user?.role !== "employee",
@@ -939,10 +974,49 @@ export default function TeamPage() {
 
             <Card className="border-border bg-card">
                 <CardHeader>
-                    <CardTitle className="text-foreground">Members</CardTitle>
-                    <CardDescription className="text-muted-foreground">
-                        All members of your organization
-                    </CardDescription>
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                        <div>
+                            <CardTitle className="text-foreground">Members</CardTitle>
+                            <CardDescription className="text-muted-foreground">
+                                {membersResponse
+                                    ? `Showing ${members.length} of ${membersResponse.total} members`
+                                    : "All members of your organization"}
+                            </CardDescription>
+                        </div>
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-3 mt-4">
+                        <div className="relative flex-1 max-w-sm">
+                            <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                            <Input
+                                placeholder="Search by name or email..."
+                                value={searchInput}
+                                onChange={(e) => setSearchInput(e.target.value)}
+                                className="pl-10 bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                            />
+                        </div>
+                        <Select value={roleFilter} onValueChange={(val) => setRoleFilter(val ?? "all")}>
+                            <SelectTrigger className="w-[160px] bg-muted border-border">
+                                <SelectValue placeholder="All Roles" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Roles</SelectItem>
+                                <SelectItem value="owner">Owner</SelectItem>
+                                <SelectItem value="admin">Admin</SelectItem>
+                                <SelectItem value="manager">Manager</SelectItem>
+                                <SelectItem value="employee">Employee</SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <Select value={statusFilter} onValueChange={(val) => setStatusFilter(val ?? "all")}>
+                            <SelectTrigger className="w-[160px] bg-muted border-border">
+                                <SelectValue placeholder="All Status" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Status</SelectItem>
+                                <SelectItem value="active">Active</SelectItem>
+                                <SelectItem value="inactive">Inactive</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
                 </CardHeader>
                 <CardContent>
                     {isLoading ? (
@@ -1164,50 +1238,39 @@ export default function TeamPage() {
                             </div>
                             {membersResponse &&
                                 membersResponse.last_page > 1 && (
-                                    <div className="flex items-center justify-between mt-4">
-                                        <Button
-                                            variant="outline"
-                                            size="sm"
-                                            className="border-border text-foreground"
-                                            disabled={
-                                                membersResponse.current_page <=
-                                                1
-                                            }
-                                            onClick={() =>
-                                                setSearchParam(
-                                                    "members_page",
-                                                    String(
-                                                        Math.max(
-                                                            1,
-                                                            membersPage - 1,
-                                                        ),
-                                                    ),
-                                                )
-                                            }
-                                        >
-                                            Previous
-                                        </Button>
-                                        <div className="text-sm text-muted-foreground">
-                                            Page {membersResponse.current_page}{" "}
-                                            of {membersResponse.last_page}
-                                        </div>
-                                        <Button
-                                            variant="outline"
-                                            size="sm"
-                                            className="border-border text-foreground"
-                                            disabled={
-                                                membersResponse.current_page >=
-                                                membersResponse.last_page
-                                            }
-                                            onClick={() =>
-                                                setSearchParam(
-                                                    "members_page",
-                                                    String(membersPage + 1),
-                                                )
-                                            }
-                                        >
-                                            Next
-                                        </Button>
+                                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-4 pt-4 border-t border-border">
+                                        <p className="text-sm text-muted-foreground">
+                                            Page {membersResponse.current_page} of{" "}
+                                            {membersResponse.last_page} ({membersResponse.total} total)
+                                        </p>
+                                        <Pagination>
+                                            <PaginationContent>
+                                                <PaginationItem>
+                                                    <PaginationPrevious
+                                                        onClick={() =>
+                                                            setSearchParam(
+                                                                "members_page",
+                                                                String(Math.max(1, membersPage - 1)),
+                                                            )
+                                                        }
+                                                        aria-disabled={membersPage <= 1}
+                                                        className={membersPage <= 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                                                    />
+                                                </PaginationItem>
+                                                <PaginationItem>
+                                                    <PaginationNext
+                                                        onClick={() =>
+                                                            setSearchParam(
+                                                                "members_page",
+                                                                String(membersPage + 1),
+                                                            )
+                                                        }
+                                                        aria-disabled={membersPage >= membersResponse.last_page}
+                                                        className={membersPage >= membersResponse.last_page ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                                                    />
+                                                </PaginationItem>
+                                            </PaginationContent>
+                                        </Pagination>
                                     </div>
                                 )}
                         </>
