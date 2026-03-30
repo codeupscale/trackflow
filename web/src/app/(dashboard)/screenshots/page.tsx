@@ -10,7 +10,6 @@ import {
   Monitor,
   ChevronLeft,
   ChevronRight,
-  Info,
   Download,
   Trash2,
 } from 'lucide-react';
@@ -85,6 +84,8 @@ export default function ScreenshotsPage() {
   const [timeTypeFilter, setTimeTypeFilter] = useState<string>('all');
   const [selectedScreenshot, setSelectedScreenshot] = useState<Screenshot | null>(null);
   const [page, setPage] = useState(1);
+  // Track which screenshot IDs have broken images so we can show fallback UI
+  const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
 
   const { data: teamUsers } = useQuery<TeamUser[]>({
     queryKey: ['team-users'],
@@ -114,9 +115,9 @@ export default function ScreenshotsPage() {
       const res = await api.get('/screenshots', { params });
       return res.data;
     },
-    // S3 signed URLs expire after 1 hour. Refetch before they expire.
-    staleTime: 45 * 60 * 1000, // Consider data stale after 45 min
-    refetchInterval: 50 * 60 * 1000, // Auto-refetch every 50 min (before 1hr expiry)
+    // Screenshot URLs have HMAC signatures that expire after 2 hours. Refetch before expiry.
+    staleTime: 60 * 60 * 1000, // Consider data stale after 60 min
+    refetchInterval: 90 * 60 * 1000, // Auto-refetch every 90 min (before 2hr expiry)
     refetchOnWindowFocus: true, // Refetch when user returns to tab (gets fresh URLs)
   });
 
@@ -176,16 +177,14 @@ export default function ScreenshotsPage() {
     return () => window.removeEventListener('keydown', handler);
   }, [selectedScreenshot, screenshotsData]);
 
-  // SS-9: Broken image handler
-  const handleImageError = (e: React.SyntheticEvent<HTMLImageElement>) => {
-    const target = e.currentTarget;
-    target.style.display = 'none';
-    const fallback = target.parentElement?.querySelector('[data-fallback]') as HTMLElement | null;
-    if (fallback) fallback.classList.remove('hidden');
+  // SS-9: Broken image handler — track by screenshot ID in React state
+  const handleImageError = (screenshotId: string) => {
+    setBrokenImages((prev) => new Set(prev).add(screenshotId));
   };
 
-  // Refetch screenshots to get fresh S3 signed URLs
+  // Refetch screenshots to get fresh signed URLs and clear broken image state
   const handleRefreshUrls = () => {
+    setBrokenImages(new Set());
     queryClient.invalidateQueries({ queryKey: ['screenshots'] });
   };
 
@@ -323,27 +322,26 @@ export default function ScreenshotsPage() {
                 onClick={() => setSelectedScreenshot(screenshot)}
               >
                 <div className="aspect-video bg-muted relative flex items-center justify-center overflow-hidden">
-                  {screenshot.thumbnail_url ? (
-                    <>
-                      <Image
-                        src={screenshot.thumbnail_url}
-                        alt={`Screenshot from ${screenshot.project_name || 'unknown project'} at ${format(new Date(screenshot.captured_at), 'HH:mm')}, ${screenshot.activity_score}% activity`}
-                        className="w-full h-full object-cover"
-                        fill
-                        sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
-                        unoptimized
-                        onError={handleImageError}
-                      />
-                      {/* SS-9: Broken image fallback — click to refresh */}
-                      <div
-                        data-fallback
-                        className="hidden absolute inset-0 flex flex-col items-center justify-center bg-muted/80 gap-2 cursor-pointer hover:bg-muted/80 transition-colors"
-                        onClick={(e) => { e.stopPropagation(); handleRefreshUrls(); }}
-                      >
-                        <Monitor className="h-8 w-8 text-muted-foreground" />
-                        <span className="text-xs text-muted-foreground">Click to reload images</span>
-                      </div>
-                    </>
+                  {screenshot.thumbnail_url && !brokenImages.has(screenshot.id) ? (
+                    <Image
+                      key={screenshot.thumbnail_url}
+                      src={screenshot.thumbnail_url}
+                      alt={`Screenshot from ${screenshot.project_name || 'unknown project'} at ${format(new Date(screenshot.captured_at), 'HH:mm')}, ${screenshot.activity_score}% activity`}
+                      className="w-full h-full object-cover"
+                      fill
+                      sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
+                      unoptimized
+                      onError={() => handleImageError(screenshot.id)}
+                    />
+                  ) : screenshot.thumbnail_url && brokenImages.has(screenshot.id) ? (
+                    /* SS-9: Broken image fallback — click to refresh and get fresh URLs */
+                    <div
+                      className="absolute inset-0 flex flex-col items-center justify-center bg-muted gap-2 cursor-pointer hover:bg-muted/80 transition-colors"
+                      onClick={(e) => { e.stopPropagation(); handleRefreshUrls(); }}
+                    >
+                      <Monitor className="h-8 w-8 text-muted-foreground" />
+                      <span className="text-xs text-muted-foreground">Click to reload images</span>
+                    </div>
                   ) : (
                     <div className="flex flex-col items-center gap-2 text-muted-foreground">
                       <Monitor className="h-8 w-8" />
@@ -474,27 +472,26 @@ export default function ScreenshotsPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="aspect-video bg-muted rounded-lg relative flex items-center justify-center overflow-hidden">
-            {selectedScreenshot?.url ? (
-              <>
-                <Image
-                  src={selectedScreenshot.url}
-                  alt={`Screenshot from ${selectedScreenshot.project_name || 'unknown project'} at ${format(new Date(selectedScreenshot.captured_at), 'HH:mm')}, ${selectedScreenshot.activity_score}% activity`}
-                  className="w-full h-full object-contain"
-                  fill
-                  sizes="(max-width: 768px) 100vw, 768px"
-                  unoptimized
-                  onError={handleImageError}
-                />
-                {/* SS-9: Broken image fallback for lightbox */}
-                <div
-                  data-fallback
-                  className="hidden absolute inset-0 flex flex-col items-center justify-center bg-muted/80 gap-2 cursor-pointer hover:bg-muted/80 transition-colors"
-                  onClick={handleRefreshUrls}
-                >
-                  <Monitor className="h-8 w-8 text-muted-foreground" />
-                  <span className="text-xs text-muted-foreground">Click to reload images</span>
-                </div>
-              </>
+            {selectedScreenshot?.url && !brokenImages.has(`lightbox-${selectedScreenshot.id}`) ? (
+              <Image
+                key={selectedScreenshot.url}
+                src={selectedScreenshot.url}
+                alt={`Screenshot from ${selectedScreenshot.project_name || 'unknown project'} at ${format(new Date(selectedScreenshot.captured_at), 'HH:mm')}, ${selectedScreenshot.activity_score}% activity`}
+                className="w-full h-full object-contain"
+                fill
+                sizes="(max-width: 768px) 100vw, 768px"
+                unoptimized
+                onError={() => handleImageError(`lightbox-${selectedScreenshot.id}`)}
+              />
+            ) : selectedScreenshot?.url && brokenImages.has(`lightbox-${selectedScreenshot.id}`) ? (
+              /* SS-9: Broken image fallback for lightbox */
+              <div
+                className="absolute inset-0 flex flex-col items-center justify-center bg-muted gap-2 cursor-pointer hover:bg-muted/80 transition-colors"
+                onClick={handleRefreshUrls}
+              >
+                <Monitor className="h-8 w-8 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground">Click to reload images</span>
+              </div>
             ) : (
               <div className="flex flex-col items-center gap-3 text-muted-foreground">
                 <Monitor className="h-16 w-16" />
