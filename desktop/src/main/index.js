@@ -249,6 +249,22 @@ function getScreenPermissionStatePath() {
   }
 }
 
+// Get the modification time of the app's main executable / directory.
+// On macOS, rebuilding the app changes __dirname's mtime even when the
+// version string stays the same. Comparing this value detects ad-hoc
+// rebuilds that invalidate Screen Recording permission.
+function getAppBinaryMtime() {
+  try {
+    // In packaged builds, use the app's executable path
+    // In dev, use __dirname (src/main/) which changes on rebuild
+    const targetPath = app.isPackaged ? app.getPath('exe') : __dirname;
+    const stat = fs.statSync(targetPath);
+    return stat.mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
 function loadScreenPermissionState() {
   try {
     const p = getScreenPermissionStatePath();
@@ -258,6 +274,16 @@ function loadScreenPermissionState() {
     if (data.appVersion !== app.getVersion()) {
       console.log('[Permission] Persisted state is for a different app version — ignoring');
       return null;
+    }
+    // Invalidate if the app binary has been rebuilt since permission was confirmed.
+    // On macOS, ad-hoc signed rebuilds change the code signature and macOS
+    // silently revokes Screen Recording permission.
+    if (process.platform === 'darwin' && data.appBinaryMtime != null) {
+      const currentMtime = getAppBinaryMtime();
+      if (currentMtime != null && currentMtime !== data.appBinaryMtime) {
+        console.log(`[Permission] App binary changed since permission was confirmed (stored=${data.appBinaryMtime}, current=${currentMtime}) — re-probing`);
+        return null;
+      }
     }
     return data;
   } catch {
@@ -273,9 +299,10 @@ function saveScreenPermissionState(granted) {
       granted: !!granted,
       grantedAt: granted ? new Date().toISOString() : null,
       appVersion: app.getVersion(),
+      appBinaryMtime: getAppBinaryMtime(),
     };
     fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
-    console.log(`[Permission] Saved screen permission state: granted=${granted}`);
+    console.log(`[Permission] Saved screen permission state: granted=${granted}, mtime=${data.appBinaryMtime}`);
   } catch (e) {
     console.error('[Permission] Failed to save screen permission state:', e.message);
   }
@@ -605,6 +632,13 @@ async function initializeApp() {
   const getIsAppVisible = () => popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible();
   screenshotService = new ScreenshotService(apiClient, config, offlineQueue, getIsAppVisible, activityMonitor);
   screenshotService.setRestartStateSaver(() => saveRestartState());
+  screenshotService.setWallpaperDetectedCallback(() => {
+    console.log('[Permission] Wallpaper-only capture detected — notifying renderer');
+    notifyPopup('screenshot-permission-issue', {
+      type: 'wallpaper-detected',
+      message: 'Screenshots may only show your wallpaper. Screen Recording permission needs to be refreshed.',
+    });
+  });
   idleDetector = new IdleDetector(config);
 
   // Wire idle detection events
@@ -1280,6 +1314,7 @@ function setupIPC() {
   ipcMain.removeHandler('open-dashboard');
   ipcMain.removeHandler('check-screen-permission');
   ipcMain.removeHandler('request-screen-permission');
+  ipcMain.removeHandler('open-screen-recording-settings');
 
   ipcMain.handle('check-screen-permission', async () => {
     if (process.platform !== 'darwin') return { granted: true, platform: process.platform };
@@ -1301,6 +1336,14 @@ function setupIPC() {
     }
     const result = await showScreenPermissionOnboarding({ isPreStart: true, wasTracking: isTimerRunning });
     return { result, granted: _screenPermissionGranted === true };
+  });
+
+  // Opens Screen Recording settings directly — used by the wallpaper warning banner
+  ipcMain.handle('open-screen-recording-settings', async () => {
+    if (process.platform !== 'darwin') return { opened: false };
+    console.log('[Permission] User clicked Fix — opening Screen Recording settings');
+    shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+    return { opened: true };
   });
 
   ipcMain.handle('get-theme', () => {
