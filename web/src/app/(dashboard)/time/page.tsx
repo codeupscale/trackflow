@@ -35,7 +35,9 @@ import {
 import {
   Pagination,
   PaginationContent,
+  PaginationEllipsis,
   PaginationItem,
+  PaginationLink,
   PaginationNext,
   PaginationPrevious,
 } from '@/components/ui/pagination';
@@ -356,6 +358,7 @@ export default function TimePage() {
             </div>
           ) : (
             <>
+              <div className="rounded-lg border border-border overflow-hidden">
               <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
@@ -373,12 +376,12 @@ export default function TimePage() {
                         />
                       </TableHead>
                     )}
-                    <TableHead className="text-muted-foreground">Date</TableHead>
-                    <TableHead className="text-muted-foreground">Type</TableHead>
-                    <TableHead className="text-muted-foreground">Project</TableHead>
-                    <TableHead className="text-muted-foreground">Task</TableHead>
-                    <TableHead className="text-muted-foreground text-right">Duration</TableHead>
-                    <TableHead className="text-muted-foreground text-right">
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Date</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Type</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Project</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Task</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">Duration</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">
                       <span className="inline-flex items-center gap-1">
                         Activity
                         <Tooltip>
@@ -395,12 +398,12 @@ export default function TimePage() {
                         </Tooltip>
                       </span>
                     </TableHead>
-                    <TableHead className="text-muted-foreground text-center">Status</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center">Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {entries.map((entry) => (
-                    <TableRow key={entry.id} className="border-border">
+                    <TableRow key={entry.id} className="border-border hover:bg-muted/50 transition-colors">
                       {canApprove && (
                         <TableCell>
                           {entry.status === 'pending' && (
@@ -491,12 +494,13 @@ export default function TimePage() {
                 </TableBody>
               </Table>
               </div>
+              </div>
 
               {/* Pagination */}
               {meta && meta.last_page > 1 && (
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-4 pt-4 border-t border-border">
                   <p className="text-sm text-muted-foreground">
-                    Page {meta.current_page} of {meta.last_page} ({meta.total} total)
+                    Showing {((meta.current_page - 1) * 20) + 1}&ndash;{Math.min(meta.current_page * 20, meta.total)} of {meta.total} entries
                   </p>
                   <Pagination>
                     <PaginationContent>
@@ -507,9 +511,33 @@ export default function TimePage() {
                           className={page <= 1 ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
                         />
                       </PaginationItem>
+                      {Array.from({ length: meta.last_page }, (_, i) => i + 1)
+                        .filter((p) => p === 1 || p === meta.last_page || Math.abs(p - meta.current_page) <= 1)
+                        .reduce((acc, p, idx, arr) => {
+                          if (idx > 0 && p - arr[idx - 1] > 1) acc.push(-1);
+                          acc.push(p);
+                          return acc;
+                        }, [] as number[])
+                        .map((p, idx) =>
+                          p === -1 ? (
+                            <PaginationItem key={`ellipsis-${idx}`}>
+                              <PaginationEllipsis />
+                            </PaginationItem>
+                          ) : (
+                            <PaginationItem key={p}>
+                              <PaginationLink
+                                isActive={p === meta.current_page}
+                                onClick={() => setPage(p)}
+                                className="cursor-pointer"
+                              >
+                                {p}
+                              </PaginationLink>
+                            </PaginationItem>
+                          ),
+                        )}
                       <PaginationItem>
                         <PaginationNext
-                          onClick={() => setPage((p) => p + 1)}
+                          onClick={() => setPage((p) => Math.min(meta.last_page, p + 1))}
                           aria-disabled={page >= (meta.last_page || 1)}
                           className={page >= (meta.last_page || 1) ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
                         />

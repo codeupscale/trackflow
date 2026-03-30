@@ -31,6 +31,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import {
   Pagination,
   PaginationContent,
+  PaginationEllipsis,
   PaginationItem,
   PaginationLink,
   PaginationNext,
@@ -460,7 +461,7 @@ export default function ProjectsPage() {
       {totalPages > 1 && (
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
           <p className="text-sm text-muted-foreground">
-            Showing {from}–{to} of {totalCount} projects
+            Showing {from}&ndash;{to} of {totalCount} projects
           </p>
           <Pagination>
             <PaginationContent>
@@ -471,17 +472,30 @@ export default function ProjectsPage() {
                   className={currentPage === 1 ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
                 />
               </PaginationItem>
-              {Array.from({ length: totalPages }, (_, i) => i + 1).map((pg) => (
-                <PaginationItem key={pg}>
-                  <PaginationLink
-                    isActive={pg === currentPage}
-                    onClick={() => setCurrentPage(pg)}
-                    className="cursor-pointer"
-                  >
-                    {pg}
-                  </PaginationLink>
-                </PaginationItem>
-              ))}
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                .reduce((acc, p, idx, arr) => {
+                  if (idx > 0 && p - arr[idx - 1] > 1) acc.push(-1);
+                  acc.push(p);
+                  return acc;
+                }, [] as number[])
+                .map((p, idx) =>
+                  p === -1 ? (
+                    <PaginationItem key={`ellipsis-${idx}`}>
+                      <PaginationEllipsis />
+                    </PaginationItem>
+                  ) : (
+                    <PaginationItem key={p}>
+                      <PaginationLink
+                        isActive={p === currentPage}
+                        onClick={() => setCurrentPage(p)}
+                        className="cursor-pointer"
+                      >
+                        {p}
+                      </PaginationLink>
+                    </PaginationItem>
+                  ),
+                )}
               <PaginationItem>
                 <PaginationNext
                   onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}

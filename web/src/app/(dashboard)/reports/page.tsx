@@ -536,28 +536,32 @@ export default function ReportsPage() {
                 )}
 
                 {/* Data Table */}
-                <Table>
-                  <TableHeader>
-                    <TableRow className="border-border hover:bg-transparent">
-                      {reportData.columns.map((col) => (
-                        <TableHead key={col} className="text-muted-foreground">
-                          {formatColumnName(col)}
-                        </TableHead>
-                      ))}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {reportData.rows.map((row, idx) => (
-                      <TableRow key={idx} className="border-border">
-                        {reportData.columns.map((col) => (
-                          <TableCell key={col} className="text-sm text-foreground">
-                            {formatCellValue(col, row[col])}
-                          </TableCell>
+                <div className="rounded-lg border border-border overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="border-border hover:bg-transparent">
+                          {reportData.columns.map((col) => (
+                            <TableHead key={col} className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                              {formatColumnName(col)}
+                            </TableHead>
+                          ))}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {reportData.rows.map((row, idx) => (
+                          <TableRow key={idx} className="border-border hover:bg-muted/50 transition-colors">
+                            {reportData.columns.map((col) => (
+                              <TableCell key={col} className="text-sm text-foreground">
+                                {formatCellValue(col, row[col])}
+                              </TableCell>
+                            ))}
+                          </TableRow>
                         ))}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
               </div>
             )}
           </CardContent>
