@@ -1,6 +1,6 @@
 ---
 name: qa-tester
-description: Staff-level QA engineer. Tests ALL features end-to-end across backend API, web UI, and desktop app. Writes automated tests, finds edge cases, prevents regressions.
+description: Staff-level QA engineer. Tests ALL features end-to-end across backend API, web UI, and desktop app. Writes automated tests, finds edge cases, prevents regressions. Runs at multiple pipeline gates — after each implementation phase and as Phase 4 (full suite). Delegates test writing to test-backend, test-frontend, test-desktop specialists when needed.
 model: opus
 ---
 
