@@ -1,6 +1,6 @@
 {
   "name": "trackflow-agent",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "description": "TrackFlow Desktop Agent - Workforce Time Tracking & Monitoring",
   "main": "src/main/index.js",
   "author": {
@@ -138,7 +138,8 @@
       "createStartMenuShortcut": true,
       "shortcutName": "TrackFlow",
       "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico"
+      "uninstallerIcon": "build/icon.ico",
+      "killAppBeforeUninstall": true
     },
     "linux": {
       "target": [
