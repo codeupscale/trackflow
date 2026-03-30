@@ -13,7 +13,6 @@ import {
     Copy,
     RefreshCw,
     Trash2,
-    Search,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -26,6 +25,7 @@ import {
     CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { SearchInput } from "@/components/ui/search-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -985,15 +985,12 @@ export default function TeamPage() {
                         </div>
                     </div>
                     <div className="flex flex-col sm:flex-row gap-3 mt-4">
-                        <div className="relative flex-1 max-w-sm">
-                            <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                            <Input
-                                placeholder="Search by name or email..."
-                                value={searchInput}
-                                onChange={(e) => setSearchInput(e.target.value)}
-                                className="pl-10 bg-muted border-border text-foreground placeholder:text-muted-foreground"
-                            />
-                        </div>
+                        <SearchInput
+                            value={searchInput}
+                            onChange={setSearchInput}
+                            placeholder="Search by name or email..."
+                            className="flex-1 max-w-sm"
+                        />
                         <Select value={roleFilter} onValueChange={(val) => setRoleFilter(val ?? "all")}>
                             <SelectTrigger className="w-[160px] bg-muted border-border">
                                 <SelectValue placeholder="All Roles" />

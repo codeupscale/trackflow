@@ -29,6 +29,7 @@ import { Input } from '@/components/ui/input';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { DatePicker } from '@/components/ui/date-picker';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
@@ -610,23 +611,19 @@ export default function SettingsPage() {
             <CardContent>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="grid gap-2">
-                  <Label htmlFor="profile-dob">Date of Birth</Label>
-                  <Input
-                    id="profile-dob"
-                    type="date"
+                  <Label>Date of Birth</Label>
+                  <DatePicker
                     value={profileDob}
-                    onChange={(e) => setProfileDob(e.target.value)}
-                    className="bg-background/50"
+                    onChange={setProfileDob}
+                    placeholder="Select date of birth"
                   />
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="profile-doj">Date of Joining</Label>
-                  <Input
-                    id="profile-doj"
-                    type="date"
+                  <Label>Date of Joining</Label>
+                  <DatePicker
                     value={profileDoj}
-                    onChange={(e) => setProfileDoj(e.target.value)}
-                    className="bg-background/50"
+                    onChange={setProfileDoj}
+                    placeholder="Select date of joining"
                   />
                 </div>
               </div>

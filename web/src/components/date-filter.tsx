@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Calendar, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { DatePicker } from '@/components/ui/date-picker';
 
 type FilterPreset = 'today' | 'yesterday' | 'week' | 'last-week' | 'this-month' | 'last-month' | 'custom';
 
@@ -32,7 +33,6 @@ export function DateFilter({
     if (!open) return;
     function handleClick(e: MouseEvent) {
       const target = e.target as HTMLElement;
-      if (target instanceof HTMLInputElement && target.type === 'date') return;
       if (ref.current && !ref.current.contains(target)) {
         setOpen(false);
       }
@@ -106,18 +106,18 @@ export function DateFilter({
           <div className="p-3 space-y-3">
             <span className="text-xs text-muted-foreground font-medium">Custom range</span>
             <div className="flex items-center gap-2">
-              <input
-                type="date"
+              <DatePicker
                 value={localFrom}
-                onChange={(e) => setLocalFrom(e.target.value)}
-                className="h-8 flex-1 min-w-0 rounded-md border border-border bg-muted px-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
+                onChange={setLocalFrom}
+                placeholder="From"
+                className="flex-1 min-w-0"
               />
-              <span className="text-muted-foreground shrink-0">–</span>
-              <input
-                type="date"
+              <span className="text-muted-foreground shrink-0">--</span>
+              <DatePicker
                 value={localTo}
-                onChange={(e) => setLocalTo(e.target.value)}
-                className="h-8 flex-1 min-w-0 rounded-md border border-border bg-muted px-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
+                onChange={setLocalTo}
+                placeholder="To"
+                className="flex-1 min-w-0"
               />
             </div>
             <Button

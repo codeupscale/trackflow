@@ -5,7 +5,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import {
   Camera,
-  CalendarIcon,
   Search,
   Monitor,
   ChevronLeft,
@@ -20,8 +19,8 @@ import {
   Card,
   CardContent,
 } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { DatePicker } from '@/components/ui/date-picker';
 import {
   Select,
   SelectContent,
@@ -210,34 +209,24 @@ export default function ScreenshotsPage() {
         <CardContent className="pt-6">
           <div className="flex flex-col sm:flex-row gap-4 items-end">
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-foreground" htmlFor="ss-date-from">
+              <label className="text-sm font-medium text-foreground">
                 From
               </label>
-              <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="ss-date-from"
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
-                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
-                />
-              </div>
+              <DatePicker
+                value={dateFrom}
+                onChange={(val) => { setDateFrom(val); setPage(1); }}
+                placeholder="Start date"
+              />
             </div>
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-foreground" htmlFor="ss-date-to">
+              <label className="text-sm font-medium text-foreground">
                 To
               </label>
-              <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="ss-date-to"
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
-                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
-                />
-              </div>
+              <DatePicker
+                value={dateTo}
+                onChange={(val) => { setDateTo(val); setPage(1); }}
+                placeholder="End date"
+              />
             </div>
             {isManager && (
               <div className="grid gap-1.5">
