@@ -93,6 +93,7 @@ export default function ProjectsPage() {
   const [membersDialogOpen, setMembersDialogOpen] = useState(false);
   const [membersProject, setMembersProject] = useState<Project | null>(null);
   const [memberIds, setMemberIds] = useState<string[]>([]);
+  const [initialMemberIds, setInitialMemberIds] = useState<string[]>([]);
   const [memberSearch, setMemberSearch] = useState('');
   const [formName, setFormName] = useState('');
   const [formColor, setFormColor] = useState('#3B82F6');
@@ -224,11 +225,14 @@ export default function ProjectsPage() {
     setMembersProject(project);
     setMembersDialogOpen(true);
     setMemberIds([]);
+    setInitialMemberIds([]);
     setMemberSearch('');
     api.get(`/projects/${project.id}/members`)
       .then((res) => {
         const members = (res.data?.members || []) as MemberUser[];
-        setMemberIds(members.map((m) => m.id));
+        const ids = members.map((m) => m.id);
+        setMemberIds(ids);
+        setInitialMemberIds(ids);
       })
       .catch((err: unknown) => {
         toast.error((err as { message?: string })?.message || 'Failed to load project members');
@@ -606,7 +610,7 @@ export default function ProjectsPage() {
 
             {/* Stats bar */}
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>{memberIds.length} selected of {orgUsers?.length ?? 0} members</span>
+              <span>{memberIds.length} assigned of {orgUsers?.length ?? 0} members</span>
               {orgUsers && orgUsers.length > 0 && (
                 <button
                   type="button"
@@ -731,15 +735,25 @@ export default function ProjectsPage() {
             </Button>
             <Button
               type="button"
-              className=""
-              disabled={!membersProject?.id || syncMembersMutation.isPending}
+              disabled={!membersProject?.id || syncMembersMutation.isPending || (
+                memberIds.length === initialMemberIds.length &&
+                memberIds.every((id) => initialMemberIds.includes(id))
+              )}
               onClick={() => {
                 if (!membersProject?.id) return;
                 syncMembersMutation.mutate({ projectId: membersProject.id, userIds: memberIds });
               }}
             >
               {syncMembersMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Save ({memberIds.length})
+              {(() => {
+                const added = memberIds.filter((id) => !initialMemberIds.includes(id)).length;
+                const removed = initialMemberIds.filter((id) => !memberIds.includes(id)).length;
+                if (added === 0 && removed === 0) return 'No changes';
+                const parts = [];
+                if (added > 0) parts.push(`+${added}`);
+                if (removed > 0) parts.push(`-${removed}`);
+                return `Save (${parts.join(', ')})`;
+              })()}
             </Button>
           </DialogFooter>
         </DialogContent>
