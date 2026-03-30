@@ -588,17 +588,17 @@ export default function ProjectsPage() {
           }
         }}
       >
-        <DialogContent className="bg-card border-border sm:max-w-md">
-          <DialogHeader>
+        <DialogContent className="bg-card border-border sm:max-w-md flex flex-col max-h-[90vh]">
+          <DialogHeader className="shrink-0">
             <DialogTitle className="text-foreground">Project Members</DialogTitle>
             <DialogDescription className="text-muted-foreground">
               Assign team members to <span className="font-medium text-foreground">{membersProject?.name}</span>
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3">
+          <div className="flex flex-col gap-3 min-h-0 flex-1">
             {/* Search */}
-            <div className="relative">
+            <div className="relative shrink-0">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder="Search members..."
@@ -609,7 +609,7 @@ export default function ProjectsPage() {
             </div>
 
             {/* Stats bar */}
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <div className="flex items-center justify-between text-xs text-muted-foreground shrink-0">
               <span>{memberIds.length} assigned of {orgUsers?.length ?? 0} members</span>
               {orgUsers && orgUsers.length > 0 && (
                 <button
@@ -643,7 +643,7 @@ export default function ProjectsPage() {
             </div>
 
             {/* Members list */}
-            <ScrollArea className="max-h-[360px] rounded-lg border border-border">
+            <div className="flex-1 min-h-0 overflow-y-auto rounded-lg border border-border">
               {!orgUsers ? (
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -654,13 +654,8 @@ export default function ProjectsPage() {
                 const filtered = orgUsers.filter((u) =>
                   !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q) || u.role.includes(q)
                 );
-                // Sort: selected first, then alphabetically
-                const sorted = [...filtered].sort((a, b) => {
-                  const aChecked = memberIds.includes(a.id) ? 0 : 1;
-                  const bChecked = memberIds.includes(b.id) ? 0 : 1;
-                  if (aChecked !== bChecked) return aChecked - bChecked;
-                  return a.name.localeCompare(b.name);
-                });
+                // Sort alphabetically only — stable, no jumping when checking/unchecking
+                const sorted = [...filtered].sort((a, b) => a.name.localeCompare(b.name));
 
                 if (sorted.length === 0) {
                   return (
@@ -682,9 +677,7 @@ export default function ProjectsPage() {
                     <label
                       key={u.id}
                       className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors border-b border-border last:border-b-0 ${
-                        checked
-                          ? 'bg-primary/10 hover:bg-primary/15'
-                          : 'hover:bg-muted/50'
+                        checked ? 'bg-primary/8 hover:bg-primary/12' : 'hover:bg-muted/50'
                       }`}
                     >
                       <Checkbox
@@ -699,10 +692,8 @@ export default function ProjectsPage() {
                         aria-label={`Select ${u.name}`}
                       />
                       <div
-                        className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-medium shrink-0 ${
-                          checked
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-muted text-muted-foreground'
+                        className={`size-8 rounded-full flex items-center justify-center text-xs font-medium shrink-0 ${
+                          checked ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
                         }`}
                       >
                         {initials}
@@ -721,10 +712,10 @@ export default function ProjectsPage() {
                   );
                 });
               })()}
-            </ScrollArea>
+            </div>
           </div>
 
-          <DialogFooter className="gap-2 sm:gap-0">
+          <DialogFooter className="gap-2 sm:gap-0 shrink-0 pt-2">
             <Button
               type="button"
               variant="outline"
