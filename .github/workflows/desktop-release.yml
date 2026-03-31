@@ -153,56 +153,125 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="v${{ steps.version.outputs.version }}"
-          gh release edit "$VERSION" --notes "$(cat <<'EOF'
-          ## TrackFlow Desktop ${{ steps.version.outputs.version }}
+          VER="${{ steps.version.outputs.version }}"
+          gh release edit "$VERSION" --notes "## TrackFlow Desktop ${VER}
 
           ### Downloads
 
           | Platform | File | Notes |
           |----------|------|-------|
-          | **macOS (Apple Silicon)** | `TrackFlow-${{ steps.version.outputs.version }}-mac-arm64.dmg` | M1/M2/M3/M4 |
-          | **macOS (Intel)** | `TrackFlow-${{ steps.version.outputs.version }}-mac-x64.dmg` | 2020 and older |
-          | **Windows** | `TrackFlow-Setup-${{ steps.version.outputs.version }}.exe` | Windows 10+ |
-          | **Linux (.deb)** | `trackflow-agent_${{ steps.version.outputs.version }}_amd64.deb` | Ubuntu/Debian |
-          | **Linux (AppImage)** | `TrackFlow-${{ steps.version.outputs.version }}-x64.AppImage` | Universal Linux |
+          | **macOS (Apple Silicon)** | \`TrackFlow-${VER}-mac-arm64.dmg\` | M1/M2/M3/M4 |
+          | **macOS (Intel)** | \`TrackFlow-${VER}-mac-x64.dmg\` | 2020 and older |
+          | **Windows** | \`TrackFlow-${VER}-win-x64.exe\` | Windows 10+ |
+          | **Linux (.deb)** | \`TrackFlow-${VER}-linux-amd64.deb\` | Ubuntu/Debian |
+          | **Linux (AppImage)** | \`TrackFlow-${VER}-x86_64.AppImage\` | Universal Linux |
+
+          ---
+
+          ### What's New
+
+          **Bug Fixes**
+          - Fixed empty project list after logout and re-login
+          - Fixed empty project list after laptop restart
+          - Fixed password reset through web causing empty projects on desktop
+          - Fixed Windows installer error \"Failed to uninstall old application files\" — app is now killed before install/uninstall
+          - Fixed tray timer text showing blue/purple artifacts on macOS — now uses clean system color
+          - Fixed timer window appearing with dark background instead of white
+
+          **Improvements**
+          - Added TrackFlow logo branding to login screen, titlebar, and idle alert
+          - Added hide-to-tray button (X) in titlebar — minimizes to tray instead of quitting
+          - Timer text turns green when actively tracking
+          - Light theme enforced on timer window for better readability
+          - Monospaced digits for timer display (no layout shift)
+
+          ---
 
           ### Installation
 
           **macOS:**
-          1. Download the `.dmg` for your chip (Apple Silicon or Intel)
+          1. Download the \`.dmg\` for your chip (Apple Silicon or Intel)
           2. Open the DMG and drag TrackFlow to Applications
-          3. Open Terminal and run: `xattr -cr /Applications/TrackFlow.app`
+          3. **First launch only** — open Terminal and run:
+             \`\`\`
+             xattr -cr /Applications/TrackFlow.app
+             \`\`\`
           4. Launch TrackFlow from Applications
+          5. Grant **Screen Recording** permission when prompted (System Settings → Privacy & Security → Screen Recording)
 
           **Windows:**
-          1. Download the `.exe` installer
-          2. Run the installer — choose install location
+          1. Download the \`.exe\` installer
+          2. Run the installer — choose install location if needed
           3. Launch TrackFlow from Start Menu or Desktop shortcut
+          4. If upgrading: the installer automatically closes the running app before updating
 
           **Linux (deb):**
-          ```bash
-          sudo dpkg -i trackflow-agent_${{ steps.version.outputs.version }}_amd64.deb
-          ```
+          \`\`\`bash
+          sudo dpkg -i TrackFlow-${VER}-linux-amd64.deb
+          \`\`\`
 
           **Linux (AppImage):**
-          ```bash
-          chmod +x TrackFlow-${{ steps.version.outputs.version }}-x64.AppImage
-          ./TrackFlow-${{ steps.version.outputs.version }}-x64.AppImage
-          ```
+          \`\`\`bash
+          chmod +x TrackFlow-${VER}-x86_64.AppImage
+          ./TrackFlow-${VER}-x86_64.AppImage
+          \`\`\`
+
+          ---
+
+          ### Uninstallation
+
+          **macOS:**
+          1. Quit TrackFlow (right-click tray icon → Quit)
+          2. Drag TrackFlow from Applications to Trash
+          3. To remove data: \`rm -rf ~/Library/Application\ Support/trackflow-agent\`
+
+          **Windows:**
+          1. Open Settings → Apps → Installed Apps
+          2. Find TrackFlow → Uninstall
+          3. Or run the uninstaller from Start Menu → TrackFlow → Uninstall
+          4. To remove data: delete \`%APPDATA%/trackflow-agent\`
+
+          **Linux:**
+          \`\`\`bash
+          # deb
+          sudo dpkg -r trackflow-agent
+
+          # AppImage — just delete the file
+          rm TrackFlow-*.AppImage
+
+          # Remove data
+          rm -rf ~/.config/trackflow-agent
+          \`\`\`
+
+          ---
 
           ### Troubleshooting
 
-          **macOS "app is damaged" error:**
-          ```bash
+          **macOS: \"app is damaged\" or won't open**
+          \`\`\`bash
           xattr -cr /Applications/TrackFlow.app
-          ```
+          \`\`\`
 
-          **macOS Screen Recording permission:**
-          Go to System Settings → Privacy & Security → Screen Recording → Enable TrackFlow
+          **macOS: Screen Recording permission**
+          System Settings → Privacy & Security → Screen Recording → Enable TrackFlow.
+          If TrackFlow is not listed, restart the app.
 
-          **View logs (all platforms):**
-          - macOS: `~/Library/Logs/trackflow-agent/main.log`
-          - Windows: `%APPDATA%/trackflow-agent/logs/main.log`
-          - Linux: `~/.config/trackflow-agent/logs/main.log`
-          EOF
-          )"
+          **All platforms: \"Cannot reach the server\"**
+          The server is likely reachable but your DNS cache is stale. Fix:
+          - **macOS:** \`sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder\`
+          - **Windows:** Run \`ipconfig /flushdns\` in Command Prompt (as Administrator)
+          - **Linux:** \`sudo systemd-resolve --flush-caches\`
+          Then retry login — no app restart needed.
+
+          **Windows: \"Failed to uninstall old application files\"**
+          This is fixed in v${VER}. The installer now automatically closes the running app.
+          If you still see this on older versions, close TrackFlow from the system tray before running the installer.
+
+          **Empty project list after login**
+          Fixed in v${VER}. If you still experience this, try: Sign out → close app completely → reopen → sign in.
+
+          **View logs:**
+          - macOS: \`~/Library/Application Support/trackflow-agent/trackflow.log\`
+          - Windows: \`%APPDATA%/trackflow-agent/trackflow.log\`
+          - Linux: \`~/.config/trackflow-agent/trackflow.log\`
+          "
