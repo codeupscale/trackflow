@@ -451,6 +451,10 @@ app.on('ready', async () => {
   console.log('app.ready fired — initializing...');
   await initializeApp();
   console.log('initializeApp() complete');
+  // In dev mode, auto-show the popup so CDP remote debugging can connect to it
+  if (process.env.NODE_ENV === 'development') {
+    setTimeout(() => showPopup(), 500);
+  }
 });
 
 app.on('window-all-closed', () => {
@@ -1171,7 +1175,8 @@ function showPopup() {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: process.env.NODE_ENV !== 'development',
+      devTools: true,
     },
   });
 
@@ -1179,6 +1184,9 @@ function showPopup() {
 
   popupWindow.once('ready-to-show', () => {
     popupWindow.show();
+    if (process.env.NODE_ENV === 'development') {
+      popupWindow.webContents.openDevTools({ mode: 'detach' });
+    }
   });
 
   // Hide on blur — with debounce for Linux DEs that fire spurious blur events
@@ -1899,7 +1907,8 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: process.env.NODE_ENV !== 'development',
+      devTools: true,
     },
   });
 
@@ -2075,7 +2084,8 @@ function createLoginWindow() {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: process.env.NODE_ENV !== 'development',
+      devTools: true,
     },
   });
 
