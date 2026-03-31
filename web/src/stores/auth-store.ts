@@ -11,6 +11,13 @@ interface User {
   organization_id: string;
   timezone: string;
   avatar_url: string | null;
+  job_title?: string | null;
+  phone?: string | null;
+  linkedin_url?: string | null;
+  github_url?: string | null;
+  date_of_birth?: string | null;
+  date_of_joining?: string | null;
+  bio?: string | null;
   is_active: boolean;
   organization: {
     id: string;

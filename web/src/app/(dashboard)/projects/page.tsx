@@ -14,6 +14,7 @@ import {
   Search,
   DollarSign,
 } from 'lucide-react';
+import { SearchInput } from '@/components/ui/search-input';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -30,6 +31,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import {
   Pagination,
   PaginationContent,
+  PaginationEllipsis,
   PaginationItem,
   PaginationLink,
   PaginationNext,
@@ -290,15 +292,11 @@ export default function ProjectsPage() {
       </div>
 
       {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Search projects..."
-          value={searchQuery}
-          onChange={(e) => handleSearch(e.target.value)}
-          className="pl-9 bg-card border-border text-foreground placeholder:text-muted-foreground"
-        />
-      </div>
+      <SearchInput
+        value={searchQuery}
+        onChange={handleSearch}
+        placeholder="Search projects..."
+      />
 
       {/* Projects Grid */}
       {isProjectsError ? (
@@ -463,7 +461,7 @@ export default function ProjectsPage() {
       {totalPages > 1 && (
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
           <p className="text-sm text-muted-foreground">
-            Showing {from}–{to} of {totalCount} projects
+            Showing {from}&ndash;{to} of {totalCount} projects
           </p>
           <Pagination>
             <PaginationContent>
@@ -474,17 +472,30 @@ export default function ProjectsPage() {
                   className={currentPage === 1 ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
                 />
               </PaginationItem>
-              {Array.from({ length: totalPages }, (_, i) => i + 1).map((pg) => (
-                <PaginationItem key={pg}>
-                  <PaginationLink
-                    isActive={pg === currentPage}
-                    onClick={() => setCurrentPage(pg)}
-                    className="cursor-pointer"
-                  >
-                    {pg}
-                  </PaginationLink>
-                </PaginationItem>
-              ))}
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                .reduce((acc, p, idx, arr) => {
+                  if (idx > 0 && p - arr[idx - 1] > 1) acc.push(-1);
+                  acc.push(p);
+                  return acc;
+                }, [] as number[])
+                .map((p, idx) =>
+                  p === -1 ? (
+                    <PaginationItem key={`ellipsis-${idx}`}>
+                      <PaginationEllipsis />
+                    </PaginationItem>
+                  ) : (
+                    <PaginationItem key={p}>
+                      <PaginationLink
+                        isActive={p === currentPage}
+                        onClick={() => setCurrentPage(p)}
+                        className="cursor-pointer"
+                      >
+                        {p}
+                      </PaginationLink>
+                    </PaginationItem>
+                  ),
+                )}
               <PaginationItem>
                 <PaginationNext
                   onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
@@ -598,15 +609,12 @@ export default function ProjectsPage() {
 
           <div className="flex flex-col gap-3 min-h-0 flex-1">
             {/* Search */}
-            <div className="relative shrink-0">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search members..."
-                value={memberSearch}
-                onChange={(e) => setMemberSearch(e.target.value)}
-                className="pl-9 bg-background border-border text-foreground placeholder:text-muted-foreground"
-              />
-            </div>
+            <SearchInput
+              value={memberSearch}
+              onChange={setMemberSearch}
+              placeholder="Search members..."
+              className="shrink-0"
+            />
 
             {/* Stats bar */}
             <div className="flex items-center justify-between text-xs text-muted-foreground shrink-0">

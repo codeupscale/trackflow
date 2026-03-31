@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
-import { CalendarIcon, CheckCircle, Clock, Info, Loader2 } from 'lucide-react';
+import { CheckCircle, ChevronsUpDown, Clock, Info, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -18,11 +18,26 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
+import { DatePicker } from '@/components/ui/date-picker';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import {
   Pagination,
   PaginationContent,
+  PaginationEllipsis,
   PaginationItem,
+  PaginationLink,
   PaginationNext,
   PaginationPrevious,
 } from '@/components/ui/pagination';
@@ -99,6 +114,7 @@ export default function TimePage() {
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
   const [page, setPage] = useState(1);
+  const [projectComboboxOpen, setProjectComboboxOpen] = useState(false);
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ['projects-list'],
@@ -199,62 +215,87 @@ export default function TimePage() {
       {/* Filters */}
       <Card className="border-border bg-card">
         <CardContent className="pt-6">
-          <div className="flex flex-col sm:flex-row gap-4 items-end">
+          <div className="flex flex-col sm:flex-row gap-4 items-end flex-wrap">
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-foreground" htmlFor="date-from">
+              <label className="text-sm font-medium text-foreground">
                 From
               </label>
-              <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="date-from"
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
-                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
-                />
-              </div>
+              <DatePicker
+                value={dateFrom}
+                onChange={(val) => { setDateFrom(val); setPage(1); }}
+                placeholder="Start date"
+              />
             </div>
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-foreground" htmlFor="date-to">
+              <label className="text-sm font-medium text-foreground">
                 To
               </label>
-              <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="date-to"
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
-                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
-                />
-              </div>
+              <DatePicker
+                value={dateTo}
+                onChange={(val) => { setDateTo(val); setPage(1); }}
+                placeholder="End date"
+              />
             </div>
             <div className="grid gap-1.5">
               <label className="text-sm font-medium text-foreground">Project</label>
-              <Select value={projectFilter} onValueChange={(val) => { setProjectFilter(val ?? 'all'); setPage(1); }}>
-                <SelectTrigger className="w-[200px] bg-muted border-border">
-                  <SelectValue placeholder="All projects">
+              <Popover open={projectComboboxOpen} onOpenChange={setProjectComboboxOpen}>
+                <PopoverTrigger
+                  render={
+                    <Button
+                      variant="outline"
+                      className="w-[200px] justify-between font-normal"
+                    />
+                  }
+                >
+                  <span className="truncate">
                     {projectFilter === 'all'
                       ? 'All Projects'
                       : projects?.find((p) => p.id === projectFilter)?.name ?? 'All Projects'}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Projects</SelectItem>
-                  {projects?.map((project) => (
-                    <SelectItem key={project.id} value={project.id}>
-                      <div className="flex items-center gap-2">
-                        <div
-                          className="h-2 w-2 rounded-full"
-                          style={{ backgroundColor: project.color || '#6366f1' }}
-                        />
-                        {project.name}
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                  </span>
+                  <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+                </PopoverTrigger>
+                <PopoverContent className="w-[200px] p-0">
+                  <Command>
+                    <CommandInput placeholder="Search projects..." />
+                    <CommandList>
+                      <CommandEmpty>No projects found.</CommandEmpty>
+                      <CommandGroup>
+                        <CommandItem
+                          value="all"
+                          data-checked={projectFilter === 'all' ? true : undefined}
+                          onSelect={() => {
+                            setProjectFilter('all');
+                            setPage(1);
+                            setProjectComboboxOpen(false);
+                          }}
+                        >
+                          All Projects
+                        </CommandItem>
+                        {projects?.map((project) => (
+                          <CommandItem
+                            key={project.id}
+                            value={project.name}
+                            data-checked={projectFilter === project.id ? true : undefined}
+                            onSelect={() => {
+                              setProjectFilter(project.id);
+                              setPage(1);
+                              setProjectComboboxOpen(false);
+                            }}
+                          >
+                            <div className="flex items-center gap-2">
+                              <div
+                                className="h-2 w-2 rounded-full shrink-0"
+                                style={{ backgroundColor: project.color || '#6366f1' }}
+                              />
+                              {project.name}
+                            </div>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
             <div className="grid gap-1.5">
               <label className="text-sm font-medium text-foreground">Time type</label>
@@ -317,6 +358,7 @@ export default function TimePage() {
             </div>
           ) : (
             <>
+              <div className="rounded-lg border border-border overflow-hidden">
               <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
@@ -334,12 +376,12 @@ export default function TimePage() {
                         />
                       </TableHead>
                     )}
-                    <TableHead className="text-muted-foreground">Date</TableHead>
-                    <TableHead className="text-muted-foreground">Type</TableHead>
-                    <TableHead className="text-muted-foreground">Project</TableHead>
-                    <TableHead className="text-muted-foreground">Task</TableHead>
-                    <TableHead className="text-muted-foreground text-right">Duration</TableHead>
-                    <TableHead className="text-muted-foreground text-right">
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Date</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Type</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Project</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Task</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">Duration</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">
                       <span className="inline-flex items-center gap-1">
                         Activity
                         <Tooltip>
@@ -356,12 +398,12 @@ export default function TimePage() {
                         </Tooltip>
                       </span>
                     </TableHead>
-                    <TableHead className="text-muted-foreground text-center">Status</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center">Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {entries.map((entry) => (
-                    <TableRow key={entry.id} className="border-border">
+                    <TableRow key={entry.id} className="border-border hover:bg-muted/50 transition-colors">
                       {canApprove && (
                         <TableCell>
                           {entry.status === 'pending' && (
@@ -452,12 +494,13 @@ export default function TimePage() {
                 </TableBody>
               </Table>
               </div>
+              </div>
 
               {/* Pagination */}
               {meta && meta.last_page > 1 && (
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-4 pt-4 border-t border-border">
                   <p className="text-sm text-muted-foreground">
-                    Page {meta.current_page} of {meta.last_page} ({meta.total} total)
+                    Showing {((meta.current_page - 1) * 20) + 1}&ndash;{Math.min(meta.current_page * 20, meta.total)} of {meta.total} entries
                   </p>
                   <Pagination>
                     <PaginationContent>
@@ -468,9 +511,33 @@ export default function TimePage() {
                           className={page <= 1 ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
                         />
                       </PaginationItem>
+                      {Array.from({ length: meta.last_page }, (_, i) => i + 1)
+                        .filter((p) => p === 1 || p === meta.last_page || Math.abs(p - meta.current_page) <= 1)
+                        .reduce((acc, p, idx, arr) => {
+                          if (idx > 0 && p - arr[idx - 1] > 1) acc.push(-1);
+                          acc.push(p);
+                          return acc;
+                        }, [] as number[])
+                        .map((p, idx) =>
+                          p === -1 ? (
+                            <PaginationItem key={`ellipsis-${idx}`}>
+                              <PaginationEllipsis />
+                            </PaginationItem>
+                          ) : (
+                            <PaginationItem key={p}>
+                              <PaginationLink
+                                isActive={p === meta.current_page}
+                                onClick={() => setPage(p)}
+                                className="cursor-pointer"
+                              >
+                                {p}
+                              </PaginationLink>
+                            </PaginationItem>
+                          ),
+                        )}
                       <PaginationItem>
                         <PaginationNext
-                          onClick={() => setPage((p) => p + 1)}
+                          onClick={() => setPage((p) => Math.min(meta.last_page, p + 1))}
                           aria-disabled={page >= (meta.last_page || 1)}
                           className={page >= (meta.last_page || 1) ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
                         />
