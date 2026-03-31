@@ -1387,6 +1387,7 @@ function setupIPC() {
   ipcMain.removeHandler('hide-window');
   ipcMain.removeHandler('toggle-pin');
   ipcMain.removeHandler('get-pin-state');
+  ipcMain.removeHandler('install-update');
 
   ipcMain.handle('hide-window', () => {
     if (popupWindow && !popupWindow.isDestroyed()) {
@@ -1506,6 +1507,7 @@ function setupIPC() {
   });
 
   ipcMain.handle('get-projects', async () => {
+    if (!apiClient) return [];
     try {
       return await apiClient.getProjects();
     } catch {
