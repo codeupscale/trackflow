@@ -220,6 +220,80 @@ Offline/Stopped:  #64748b + static dot
 Error:            #ef4444 + exclamation icon
 ```
 
+## HR Module UX Patterns
+
+### Leave Management
+
+**Leave Balance Card** — compact, scannable, emotional
+```
+┌─────────────────────────┐
+│ 🏖️ Annual Leave          │
+│ ████████░░ 18/25 days   │
+│ 7 remaining · 0 pending │
+└─────────────────────────┘
+```
+- Green progress bar when > 50% remaining
+- Amber when 25-50% remaining
+- Red when < 25% remaining
+- Show pending days as lighter fill (not yet consumed)
+
+**Leave Request Form** — step-by-step, not a wall of fields
+1. Select leave type (with balance shown inline)
+2. Pick dates (calendar that shows team leaves + public holidays)
+3. Add reason + upload document (if required)
+4. Review summary → Submit
+
+**Manager Approval Queue** — action-first design
+- Cards not table rows — each card has Approve / Reject actions visible immediately
+- Employee photo + leave type + date range + days count
+- Team calendar thumbnail showing impact on team
+- Bulk approve for non-overlapping requests
+
+### Payroll
+
+**Payslip View** — simple, trusted, printable
+```
+┌─────────────────────────────────────┐
+│ PAYSLIP — March 2026                │
+│ John Smith · Senior Engineer        │
+├──────────────────┬──────────────────┤
+│ EARNINGS          │ DEDUCTIONS       │
+│ Base Salary  5000 │ Tax         -850 │
+│ HRA          1000 │ Insurance   -200 │
+│ Transport     200 │ PF          -600 │
+├──────────────────┴──────────────────┤
+│ GROSS: $6,200   NET PAY: $4,550     │
+└─────────────────────────────────────┘
+```
+- Clear separation of earnings vs deductions
+- Net pay prominently displayed
+- Download as PDF button
+- DO NOT show salary to peers — employee sees own only
+
+### Employee Directory
+
+**Directory Grid** — not a table, a people browser
+- Card per employee: avatar + name + title + department + status dot
+- Filter by department, location, employment type
+- Search by name, email, title
+- Click → profile drawer (Sheet) opens from right
+
+**Org Chart** — interactive tree, not static image
+- Collapsible nodes (click to expand/collapse subtree)
+- Color-coded by department
+- Search highlights matching nodes
+- Zoom + pan
+- Click node → employee card tooltip
+
+### Form Design Principles for HR
+
+- **Never show all fields at once** for long forms (onboarding, performance reviews) — use steps/sections
+- **Show remaining balance inline** in leave form — don't make user navigate away to check
+- **Date range selection** always shows: working days count, public holidays in range, team members already on leave
+- **Sensitive fields** (salary, bank) should have a **Show / Hide** toggle — hidden by default
+- **Approval actions** (approve/reject) must require confirmation for rejection (need rejection reason)
+- **Empty states in HR** are actionable: "No employees" → "+ Invite Employee" button
+
 ## Anti-Patterns to Reject
 
 | Anti-Pattern | Why | Fix |
