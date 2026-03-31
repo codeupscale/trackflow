@@ -9,6 +9,7 @@ use App\Support\TimezoneAwareDateRange;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 
 class DashboardController extends Controller
@@ -71,28 +72,30 @@ class DashboardController extends Controller
             }
         }
 
-        // Time entries in range (completed, tracked) — team sum + duration-weighted activity
-        // Duration-weighted average: only entries with meaningful activity (score > 0) contribute
-        // to the activity percentage. Entries with NULL or 0 score (idle/no heartbeats) still
-        // count toward total hours but don't drag down the activity average.
-        // This matches Hubstaff: idle time counts as hours worked but doesn't affect activity %.
+        // Hours per user in range
         $rangeEntries = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('organization_id', $orgId)
             ->where('started_at', '>=', $dateFrom)
             ->where('started_at', '<', $dateTo)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked')
-            ->selectRaw('
-                user_id,
-                SUM(duration_seconds) as total_seconds,
-                CASE
-                    WHEN SUM(CASE WHEN activity_score IS NOT NULL AND activity_score > 0 THEN duration_seconds ELSE 0 END) > 0
-                    THEN SUM(CASE WHEN activity_score IS NOT NULL AND activity_score > 0 THEN activity_score * duration_seconds ELSE 0 END)
-                         / SUM(CASE WHEN activity_score IS NOT NULL AND activity_score > 0 THEN duration_seconds ELSE 0 END)
-                    ELSE 0
-                END as avg_activity
-            ')
+            ->selectRaw('user_id, SUM(duration_seconds) as total_seconds')
             ->groupBy('user_id')
+            ->get()
+            ->keyBy('user_id');
+
+        // Activity % per user from activity_logs (accurate keyboard/mouse data per 30s window).
+        // Single query for all users in the org — no N+1.
+        // Formula: SUM(active_seconds) / (COUNT(*) * 30s) * 100
+        $activityByUser = DB::table('activity_logs')
+            ->join('time_entries', 'activity_logs.time_entry_id', '=', 'time_entries.id')
+            ->where('activity_logs.organization_id', $orgId)
+            ->where('time_entries.started_at', '>=', $dateFrom)
+            ->where('time_entries.started_at', '<', $dateTo)
+            ->where('time_entries.type', 'tracked')
+            ->whereNotNull('time_entries.ended_at')
+            ->selectRaw('activity_logs.user_id, SUM(activity_logs.active_seconds) as active_secs, COUNT(*) as log_count')
+            ->groupBy('activity_logs.user_id')
             ->get()
             ->keyBy('user_id');
 
@@ -111,16 +114,24 @@ class DashboardController extends Controller
         $rangeIncludesNow = $now >= Carbon::parse($dateFrom) && $now < Carbon::parse($dateTo);
         $onlineByUserId = collect($onlineUsers)->keyBy(fn ($o) => $o['user']->id);
 
-        $teamSummary = $users->map(function ($u) use ($rangeEntries, $rangeIncludesNow, $onlineByUserId) {
+        $teamSummary = $users->map(function ($u) use ($rangeEntries, $activityByUser, $rangeIncludesNow, $onlineByUserId) {
             $entry = $rangeEntries->get($u->id);
             $seconds = $entry ? (int) $entry->total_seconds : 0;
             if ($rangeIncludesNow && $onlineByUserId->has($u->id)) {
                 $seconds += (int) $onlineByUserId->get($u->id)['elapsed_seconds'];
             }
+
+            $al = $activityByUser->get($u->id);
+            $logCount = $al ? (int) $al->log_count : 0;
+            $activeSecs = $al ? (int) $al->active_secs : 0;
+            $activityScore = $logCount > 0
+                ? (int) round(($activeSecs / ($logCount * 30)) * 100)
+                : 0;
+
             return [
-                'user' => $u,
-                'today_seconds' => $seconds,
-                'activity_score' => $entry ? (int) $entry->avg_activity : 0,
+                'user'           => $u,
+                'today_seconds'  => $seconds,
+                'activity_score' => $activityScore,
             ];
         });
 
@@ -173,6 +184,25 @@ class DashboardController extends Controller
         if ($now >= Carbon::parse($dateFrom) && $now < Carbon::parse($dateTo) && $timer) {
             $rangeSeconds += (int) $timer['elapsed_seconds'];
         }
+
+        // Activity % from activity_logs (accurate keyboard/mouse data per 30s window)
+        // Formula: SUM(active_seconds) / (COUNT(*) * 30s) * 100
+        $alStats = DB::table('activity_logs')
+            ->join('time_entries', 'activity_logs.time_entry_id', '=', 'time_entries.id')
+            ->where('activity_logs.organization_id', $user->organization_id)
+            ->where('activity_logs.user_id', $user->id)
+            ->where('time_entries.started_at', '>=', $dateFrom)
+            ->where('time_entries.started_at', '<', $dateTo)
+            ->where('time_entries.type', 'tracked')
+            ->whereNotNull('time_entries.ended_at')
+            ->selectRaw('SUM(activity_logs.active_seconds) as active_secs, COUNT(*) as log_count')
+            ->first();
+
+        $alLogCount   = (int) ($alStats->log_count ?? 0);
+        $alActiveSecs = (int) ($alStats->active_secs ?? 0);
+        $activityPercentage = $alLogCount > 0
+            ? (int) round(($alActiveSecs / ($alLogCount * 30)) * 100)
+            : null;
 
         // Week range uses the user's timezone so the boundaries align with their calendar week
         $weekStart = Carbon::now($tz)->startOfWeek(); // Monday 00:00 local
@@ -230,13 +260,14 @@ class DashboardController extends Controller
         }
 
         return response()->json([
-            'timer' => $timer,
-            'today_seconds' => (int) $rangeSeconds,
-            'week_seconds' => (int) $weekSeconds,
+            'timer'               => $timer,
+            'today_seconds'       => (int) $rangeSeconds,
+            'week_seconds'        => (int) $weekSeconds,
             'weekly_hours_target' => $weeklyTarget,
-            'daily_breakdown' => $dailyBreakdown,
-            'date_from' => $responseDateFrom,
-            'date_to' => $responseDateTo,
+            'daily_breakdown'     => $dailyBreakdown,
+            'activity_percentage' => $activityPercentage,
+            'date_from'           => $responseDateFrom,
+            'date_to'             => $responseDateTo,
         ]);
     }
 }
