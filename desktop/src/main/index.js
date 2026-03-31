@@ -1811,19 +1811,16 @@ function updateTrayIcon(running) {
 }
 
 // Cross-platform tray text:
-//   macOS: tray.setTitle() shows text next to icon in menu bar
-//            Uses ANSI escape codes to color the timer green when tracking
-//   Windows/Linux: tray.setTitle() is not visible — use tooltip instead
+//   macOS: tray.setTitle() shows text next to icon in menu bar.
+//            Text color is system-controlled (white in dark mode, black in light mode).
+//            The green/gray dot in the template icon indicates tracking state.
+//   Windows/Linux: tray.setTitle() is not visible — tooltip used instead.
 function setTrayText(text) {
   if (!tray) return;
   if (process.platform === 'darwin') {
-    if (text && isTimerRunning) {
-      // ANSI RGB escape: green (#22c55e = rgb(34,197,94)) when actively tracking
-      tray.setTitle(`\x1b[38;2;34;197;94m${text}\x1b[0m`, { fontType: 'monospacedDigit' });
-    } else {
-      // Default system color when stopped / no text
-      tray.setTitle(text, { fontType: 'monospacedDigit' });
-    }
+    // Use plain system color — macOS auto-adapts to menu bar (white/dark, black/light).
+    // State is indicated by the colored dot in the tray icon, not text color.
+    tray.setTitle(text || '', { fontType: 'monospacedDigit' });
   }
   // All platforms: update tooltip so hover shows the time
   if (text) {
