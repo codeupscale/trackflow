@@ -1,0 +1,260 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# TrackFlow — Build & Deploy Pipeline
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Builds Docker images on GitHub Actions runners and deploys to production
+# via SSH. Images are pushed to GitHub Container Registry (ghcr.io).
+#
+# Triggers:
+#   - Push to main (auto-deploy, only changed services)
+#   - Manual dispatch (choose which services to build/deploy)
+#
+# Required secrets:
+#   DEPLOY_SSH_KEY       — SSH private key for production server
+#   DEPLOY_HOST          — Production server IP/hostname
+#   DEPLOY_USER          — SSH user (e.g. ubuntu)
+#
+# Optional secrets:
+#   NEXT_PUBLIC_POSTHOG_KEY      — PostHog analytics key
+#   NEXT_PUBLIC_GOOGLE_CLIENT_ID — Google OAuth client ID
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'web/**'
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Which service to build and deploy'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - backend
+          - web
+
+env:
+  REGISTRY: ghcr.io
+  API_IMAGE: ghcr.io/codeupscale/trackflow-api
+  WEB_IMAGE: ghcr.io/codeupscale/trackflow-web
+
+# Only one deploy at a time. Queue new runs, don't cancel in-flight deploys.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+
+  # ─── CHANGE DETECTION ─────────────────────────────────────────────────────
+  # Determines which services need building based on file changes.
+  # Skipped for workflow_dispatch (user picks explicitly).
+
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            web:
+              - 'web/**'
+
+  # ─── BUILD BACKEND IMAGE ──────────────────────────────────────────────────
+
+  build-api:
+    name: Build API image
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: |
+      always() &&
+      (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'backend')) ||
+      (needs.changes.result == 'success' && needs.changes.outputs.backend == 'true')
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile.production
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:latest
+            ${{ env.API_IMAGE }}:${{ github.sha }}
+          platforms: linux/amd64
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+  # ─── BUILD WEB IMAGE ─────────────────────────────────────────────────────
+
+  build-web:
+    name: Build Web image
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: |
+      always() &&
+      (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'web')) ||
+      (needs.changes.result == 'success' && needs.changes.outputs.web == 'true')
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Web image
+        uses: docker/build-push-action@v6
+        with:
+          context: web
+          file: web/Dockerfile.production
+          push: true
+          tags: |
+            ${{ env.WEB_IMAGE }}:latest
+            ${{ env.WEB_IMAGE }}:${{ github.sha }}
+          platforms: linux/amd64
+          build-args: |
+            NEXT_PUBLIC_API_URL=https://trackflow.codeupscale.com/api/v1
+            NEXT_PUBLIC_REVERB_APP_KEY=trackflow-key
+            NEXT_PUBLIC_REVERB_HOST=trackflow.codeupscale.com
+            NEXT_PUBLIC_REVERB_PORT=8081
+            NEXT_PUBLIC_POSTHOG_KEY=${{ secrets.NEXT_PUBLIC_POSTHOG_KEY }}
+            NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+            NEXT_PUBLIC_GOOGLE_CLIENT_ID=${{ secrets.NEXT_PUBLIC_GOOGLE_CLIENT_ID }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+  # ─── DEPLOY TO PRODUCTION ────────────────────────────────────────────────
+  # SSHs to the server, pulls new images, and recreates only affected
+  # containers. Infrastructure (postgres, redis) is never touched.
+
+  deploy:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    needs: [changes, build-api, build-web]
+    if: |
+      always() &&
+      (needs.build-api.result == 'success' || needs.build-api.result == 'skipped') &&
+      (needs.build-web.result == 'success' || needs.build-web.result == 'skipped') &&
+      !(needs.build-api.result == 'skipped' && needs.build-web.result == 'skipped')
+    environment: production
+    steps:
+      - name: Determine which services changed
+        id: services
+        run: |
+          # For workflow_dispatch, use the input. For push, use change detection.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            case "${{ github.event.inputs.service }}" in
+              all)     echo "api=true" >> $GITHUB_OUTPUT; echo "web=true" >> $GITHUB_OUTPUT ;;
+              backend) echo "api=true" >> $GITHUB_OUTPUT; echo "web=false" >> $GITHUB_OUTPUT ;;
+              web)     echo "api=false" >> $GITHUB_OUTPUT; echo "web=true" >> $GITHUB_OUTPUT ;;
+            esac
+          else
+            echo "api=${{ needs.changes.outputs.backend }}" >> $GITHUB_OUTPUT
+            echo "web=${{ needs.changes.outputs.web }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd /home/ubuntu/infra
+
+            echo "==> Logging in to GitHub Container Registry"
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            DEPLOY_API="${{ steps.services.outputs.api }}"
+            DEPLOY_WEB="${{ steps.services.outputs.web }}"
+
+            # ── Pull new images first (zero-downtime: old containers keep running) ──
+
+            if [ "$DEPLOY_API" = "true" ]; then
+              echo "==> Pulling API image"
+              docker pull ghcr.io/codeupscale/trackflow-api:latest
+            fi
+
+            if [ "$DEPLOY_WEB" = "true" ]; then
+              echo "==> Pulling Web image"
+              docker pull ghcr.io/codeupscale/trackflow-web:latest
+            fi
+
+            # ── Recreate containers with new images ──
+
+            if [ "$DEPLOY_API" = "true" ]; then
+              echo "==> Recreating API containers"
+              docker compose up -d --no-deps --force-recreate tf-app
+              docker compose up -d --no-deps --force-recreate tf-horizon
+              docker compose up -d --no-deps --force-recreate tf-reverb
+              docker compose up -d --no-deps --force-recreate tf-scheduler
+
+              echo "==> Gracefully terminating old Horizon workers"
+              docker compose exec tf-horizon php artisan horizon:terminate || true
+
+              echo "==> Running migrations"
+              docker compose exec tf-app php artisan migrate --force || true
+            fi
+
+            if [ "$DEPLOY_WEB" = "true" ]; then
+              echo "==> Recreating Web container"
+              docker compose up -d --no-deps --force-recreate tf-web
+            fi
+
+            # ── Health check ──
+
+            echo "==> Waiting for containers to stabilize..."
+            sleep 15
+
+            echo "==> Container status"
+            docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}" | grep "tf-"
+
+            echo "==> Resource usage"
+            docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" | grep "tf-"
+
+            # ── Prune old images to reclaim disk ──
+
+            echo "==> Pruning dangling images"
+            docker image prune -f
+
+            echo "==> Deploy complete"

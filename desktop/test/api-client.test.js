@@ -36,7 +36,7 @@ describe('ApiClient', () => {
         headers: expect.objectContaining({
           'Content-Type': 'application/json',
           'Accept': 'application/json',
-          'X-Agent-Version': '1.0.0',
+          'X-Agent-Version': require('../package.json').version,
         }),
       })
     );

@@ -164,9 +164,31 @@ body {
 .titlebar-title {
   font-size: 12px;
   font-weight: 600;
-  color: var(--accent-blue);
+  color: var(--text-primary);
   pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
+.titlebar-logo {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+/* ── Logo (login / org selector) ─────────────────────────────────────── */
+.logo {
+  text-align: center;
+  margin-bottom: 8px;
+}
+.logo svg {
+  width: 160px;
+  height: auto;
+}
+.logo-light { display: none; }
+.logo-dark { display: inline-block; }
+[data-theme="light"] .logo-light { display: inline-block; }
+[data-theme="light"] .logo-dark { display: none; }
 .titlebar-controls {
   display: flex;
   gap: 4px;
@@ -196,6 +218,27 @@ body {
 .titlebar-btn.close:hover {
   background: var(--close-btn-bg);
   color: white;
+}
+
+/* ── Pin (Always on Top) Button ───────────────────────────────────────── */
+.titlebar-btn.pin-btn {
+  color: var(--text-muted);
+  transition: all 0.15s ease;
+}
+.titlebar-btn.pin-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+.titlebar-btn.pin-btn.pinned {
+  color: var(--accent-blue);
+}
+.titlebar-btn.pin-btn.pinned:hover {
+  background: var(--accent-blue-ring);
+  color: var(--accent-blue);
+}
+.titlebar-btn.pin-btn.pinned svg {
+  fill: var(--accent-blue);
+  fill-opacity: 0.2;
 }
 
 /* ── Buttons — Unified Cross-Platform ──────────────────────────────────── */

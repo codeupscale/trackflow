@@ -71,6 +71,12 @@ class IdleDetector {
     this.isIdle = false;
     this.idleStartedAt = null;
     this.alertShownAt = null;
+    // BUG-002: Reset cooldown on start() so a fresh timer session begins with
+    // clean state. Without this, _lastResolvedAt from a previous idle cycle
+    // (e.g., auto-stop) can persist across timer restarts and suppress idle
+    // detection until the user provides new input — which may never happen if
+    // the user starts a timer and immediately walks away.
+    this._lastResolvedAt = null;
 
     this.checkInterval = setInterval(() => this._check(), this.checkIntervalMs);
   }

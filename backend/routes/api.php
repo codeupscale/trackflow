@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\DataPrivacyController;
 use App\Http\Controllers\Api\V1\InvitationController;
+use App\Http\Controllers\Api\V1\ProfileController;
 use App\Http\Controllers\Api\V1\SsoController;
 use App\Http\Controllers\Api\V1\UserPasswordController;
 use Illuminate\Support\Facades\Route;
@@ -45,6 +46,11 @@ Route::prefix('v1')->group(function () {
     // Authenticated routes
     Route::middleware('auth:sanctum')->group(function () {
 
+        // Profile
+        Route::get('profile', [ProfileController::class, 'show']);
+        Route::put('profile', [ProfileController::class, 'update']);
+        Route::post('profile/avatar', [ProfileController::class, 'uploadAvatar']);
+
         // Auth
         Route::post('auth/refresh', [AuthController::class, 'refresh']);
         Route::post('auth/logout', [AuthController::class, 'logout']);
@@ -54,18 +60,18 @@ Route::prefix('v1')->group(function () {
         Route::get('auth/organizations', [AuthController::class, 'organizations']);
         Route::post('auth/switch-organization', [AuthController::class, 'switchOrganization']);
 
-        // Invitations (owner/admin only)
+        // Invitations (owner/admin/manager)
         Route::get('invitations', [InvitationController::class, 'index'])
-            ->middleware('role:owner,admin');
+            ->middleware('role:owner,admin,manager');
         Route::post('invitations', [InvitationController::class, 'store'])
-            ->middleware('role:owner,admin');
+            ->middleware('role:owner,admin,manager');
         Route::post('invitations/{id}/resend', [InvitationController::class, 'resend'])
-            ->middleware('role:owner,admin');
+            ->middleware('role:owner,admin,manager');
         Route::delete('invitations/{id}', [InvitationController::class, 'destroy'])
-            ->middleware('role:owner,admin');
+            ->middleware('role:owner,admin,manager');
         // Backward-compatible alias used by older frontend builds
         Route::post('users/invite', [InvitationController::class, 'store'])
-            ->middleware('role:owner,admin');
+            ->middleware('role:owner,admin,manager');
 
         // Timer
         Route::post('timer/start', [\App\Http\Controllers\Api\V1\TimerController::class, 'start']);

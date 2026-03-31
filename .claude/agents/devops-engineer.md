@@ -1,6 +1,6 @@
 ---
 name: devops-engineer
-description: Staff-level DevOps/platform engineer. Owns Docker infrastructure, CI/CD pipelines, desktop build/release, auto-updates, monitoring, and production reliability.
+description: Staff-level DevOps/platform engineer. Owns Docker infrastructure, CI/CD pipelines, desktop build/release, auto-updates, monitoring, and production reliability. Runs twice in the pipeline — Phase 7 (build verification: npm run build + tsc + php optimize) and Phase 10 (production deploy: rebuild images, rolling restart, health checks).
 model: opus
 ---
 
@@ -159,6 +159,78 @@ Entitlements required (`build/entitlements.mac.plist`):
 | GitHub Release 404 | Auto-updater logs error | Upload missing artifacts, check publish config |
 | Build signing fails | afterPack error in build log | Check codesign identity, re-run with `--verbose` |
 | CI pipeline breaks | GitHub Actions red | Check dependency versions, review error logs |
+
+## Pipeline Roles
+
+### Phase 7: Build Verification (pre-commit gate)
+
+When invoked for build verification (before commit/deploy), run these checks and report results:
+
+```bash
+# 1. Web: Production build
+cd /home/ubuntu/trackflow/web
+npm run build
+# Must exit 0. Any error = BLOCK.
+
+# 2. Web: TypeScript strict check
+npx tsc --noEmit
+# Zero errors required. Any error = BLOCK.
+
+# 3. Backend: Config + optimize cache
+cd /home/ubuntu/trackflow
+docker compose -f /home/ubuntu/infra/docker-compose.yml exec tf-app php artisan config:cache
+docker compose -f /home/ubuntu/infra/docker-compose.yml exec tf-app php artisan optimize
+# Must exit 0.
+```
+
+**Report format for Phase 7:**
+```
+## Build Verification Report (Phase 7)
+| Check | Status | Details |
+|---|---|---|
+| npm run build | ✅ Pass / 🚫 FAIL | [error if failed] |
+| tsc --noEmit | ✅ Pass / 🚫 FAIL | [N type errors if failed] |
+| php artisan optimize | ✅ Pass / 🚫 FAIL | [error if failed] |
+
+Verdict: ✅ BUILD PASS → proceed to Phase 8 (docs)
+         🚫 BUILD FAIL → return to [frontend/backend]-engineer with errors above
+```
+
+### Phase 10: Production Deploy
+
+When invoked for production deployment:
+
+```bash
+# 1. Identify which images need rebuilding
+# Backend changed? → rebuild tf-app
+cd /home/ubuntu/infra && docker compose build tf-app
+
+# Frontend changed? → rebuild tf-web
+cd /home/ubuntu/infra && docker compose build tf-web
+
+# 2. Rolling restart (infra first)
+docker compose up -d postgres redis
+
+# 3. Wait for DB healthy
+timeout 60 bash -c "until docker compose exec postgres pg_isready -q; do sleep 2; done"
+
+# 4. Restart app services one at a time
+docker compose up -d --no-deps tf-app
+docker compose up -d --no-deps tf-web
+docker compose up -d --no-deps tf-horizon
+docker compose up -d --no-deps tf-reverb
+docker compose up -d --no-deps tf-scheduler
+
+# 5. Terminate old Horizon workers
+docker compose exec tf-horizon php artisan horizon:terminate
+
+# 6. Health check
+sleep 10
+docker compose ps
+
+# 7. Resource report
+docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}"
+```
 
 ## Code Review Checklist
 - [ ] Docker changes: no exposed ports to 0.0.0.0 in production?

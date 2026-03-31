@@ -12,10 +12,11 @@ import {
   Trash2,
   Users,
   Search,
-  ChevronLeft,
-  ChevronRight,
   DollarSign,
+  ChevronsUpDown,
+  Shield,
 } from 'lucide-react';
+import { SearchInput } from '@/components/ui/search-input';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -28,6 +29,17 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { Switch } from '@/components/ui/switch';
 import {
   Dialog,
@@ -44,6 +56,19 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 
@@ -69,6 +94,12 @@ interface Project {
   is_archived: boolean;
   tasks: Task[];
   created_at: string;
+  manager_id: string | null;
+  manager?: {
+    id: string;
+    name: string;
+    email: string;
+  } | null;
 }
 
 const COLORS = [
@@ -85,11 +116,15 @@ export default function ProjectsPage() {
   const [membersDialogOpen, setMembersDialogOpen] = useState(false);
   const [membersProject, setMembersProject] = useState<Project | null>(null);
   const [memberIds, setMemberIds] = useState<string[]>([]);
+  const [initialMemberIds, setInitialMemberIds] = useState<string[]>([]);
   const [memberSearch, setMemberSearch] = useState('');
   const [formName, setFormName] = useState('');
   const [formColor, setFormColor] = useState('#3B82F6');
   const [formBillable, setFormBillable] = useState(false);
   const [formRate, setFormRate] = useState('');
+  const [formManagerId, setFormManagerId] = useState<string | null>(null);
+  const [formMemberIds, setFormMemberIds] = useState<string[]>([]);
+  const [managerComboboxOpen, setManagerComboboxOpen] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -131,7 +166,7 @@ export default function ProjectsPage() {
 
   const { data: orgUsers } = useQuery<MemberUser[]>({
     queryKey: ['org-users'],
-    enabled: canManageMembers && membersDialogOpen,
+    enabled: canManageMembers && (membersDialogOpen || dialogOpen),
     queryFn: async () => {
       const res = await api.get('/users', { params: { per_page: 200 } });
       // backend is apiResource paginate; normalize
@@ -140,7 +175,7 @@ export default function ProjectsPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: { name: string; color: string; billable: boolean; hourly_rate?: number }) => {
+    mutationFn: async (data: Record<string, unknown>) => {
       return api.post('/projects', data);
     },
     onSuccess: () => {
@@ -163,7 +198,7 @@ export default function ProjectsPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, ...data }: { id: string; name?: string; color?: string; billable?: boolean; hourly_rate?: number | null; is_archived?: boolean }) => {
+    mutationFn: async ({ id, ...data }: { id: string; [key: string]: unknown }) => {
       return api.put(`/projects/${id}`, data);
     },
     onSuccess: () => {
@@ -210,17 +245,22 @@ export default function ProjectsPage() {
     setFormColor('#3B82F6');
     setFormBillable(false);
     setFormRate('');
+    setFormManagerId(null);
+    setFormMemberIds([]);
   };
 
   const openMembers = (project: Project) => {
     setMembersProject(project);
     setMembersDialogOpen(true);
     setMemberIds([]);
+    setInitialMemberIds([]);
     setMemberSearch('');
     api.get(`/projects/${project.id}/members`)
       .then((res) => {
         const members = (res.data?.members || []) as MemberUser[];
-        setMemberIds(members.map((m) => m.id));
+        const ids = members.map((m) => m.id);
+        setMemberIds(ids);
+        setInitialMemberIds(ids);
       })
       .catch((err: unknown) => {
         toast.error((err as { message?: string })?.message || 'Failed to load project members');
@@ -233,6 +273,8 @@ export default function ProjectsPage() {
     setFormColor('#3B82F6');
     setFormBillable(false);
     setFormRate('');
+    setFormManagerId(null);
+    setFormMemberIds([]);
     setDialogOpen(true);
   };
 
@@ -242,16 +284,27 @@ export default function ProjectsPage() {
     setFormColor(project.color);
     setFormBillable(project.billable);
     setFormRate(project.hourly_rate?.toString() || '');
+    setFormManagerId(project.manager_id);
+    // Load current members for editing
+    setFormMemberIds([]);
+    api.get(`/projects/${project.id}/members`)
+      .then((res) => {
+        const members = (res.data?.members || []) as MemberUser[];
+        setFormMemberIds(members.map((m) => m.id));
+      })
+      .catch(() => {});
     setDialogOpen(true);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const data = {
+    const data: Record<string, unknown> = {
       name: formName,
       color: formColor,
       billable: formBillable,
       hourly_rate: formBillable && formRate ? parseFloat(formRate) : undefined,
+      manager_id: formManagerId || null,
+      member_ids: formMemberIds.length > 0 ? formMemberIds : undefined,
     };
     if (editingProject) {
       updateMutation.mutate({ id: editingProject.id, ...data });
@@ -270,7 +323,7 @@ export default function ProjectsPage() {
           <p className="text-muted-foreground text-sm mt-1">Manage your projects and tasks</p>
         </div>
         {canCreateProjects && (
-          <Button onClick={openCreate} className="bg-blue-600 hover:bg-blue-700 text-foreground">
+          <Button onClick={openCreate}>
             <Plus className="mr-2 h-4 w-4" />
             New Project
           </Button>
@@ -278,15 +331,11 @@ export default function ProjectsPage() {
       </div>
 
       {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Search projects..."
-          value={searchQuery}
-          onChange={(e) => handleSearch(e.target.value)}
-          className="pl-9 bg-card border-border text-foreground placeholder:text-muted-foreground"
-        />
-      </div>
+      <SearchInput
+        value={searchQuery}
+        onChange={handleSearch}
+        placeholder="Search projects..."
+      />
 
       {/* Projects Grid */}
       {isProjectsError ? (
@@ -398,7 +447,7 @@ export default function ProjectsPage() {
                 </div>
               </CardHeader>
               <CardContent className="pt-0">
-                <div className="flex items-center gap-4 text-sm">
+                <div className="flex items-center gap-4 text-sm flex-wrap">
                   <div className="flex items-center gap-1.5 text-muted-foreground">
                     <FolderOpen className="h-3.5 w-3.5" />
                     <span>{project.tasks?.length || 0} tasks</span>
@@ -407,21 +456,27 @@ export default function ProjectsPage() {
                     <Users className="h-3.5 w-3.5" />
                     <span>{String((project as unknown as { members_count?: number }).members_count ?? 0)} members</span>
                   </div>
+                  {project.manager && (
+                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                      <Shield className="h-3.5 w-3.5" />
+                      <span>{project.manager.name}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2 mt-3">
                   {project.billable ? (
-                    <Badge className="bg-green-500/10 text-green-400 border-green-500/20 text-xs">
+                    <Badge variant="default" className="text-xs">
                       <DollarSign className="h-3 w-3 mr-0.5" />
                       {project.hourly_rate ? `$${project.hourly_rate}/hr` : 'Billable'}
                     </Badge>
                   ) : (
-                    <Badge className="bg-muted text-muted-foreground border-border text-xs">
+                    <Badge variant="secondary" className="text-xs">
                       Non-billable
                     </Badge>
                   )}
                   {project.is_archived && (
-                    <Badge className="bg-amber-500/10 text-amber-400 border-amber-500/20 text-xs">
+                    <Badge variant="outline" className="text-xs">
                       Archived
                     </Badge>
                   )}
@@ -449,41 +504,52 @@ export default function ProjectsPage() {
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
           <p className="text-sm text-muted-foreground">
-            Showing {from}–{to} of {totalCount} projects
+            Showing {from}&ndash;{to} of {totalCount} projects
           </p>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-              className="border-border text-foreground"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-              <Button
-                key={page}
-                variant={page === currentPage ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setCurrentPage(page)}
-                className={page === currentPage ? 'bg-blue-600 text-white' : 'border-border text-foreground'}
-              >
-                {page}
-              </Button>
-            ))}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
-              className="border-border text-foreground"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
+          <Pagination>
+            <PaginationContent>
+              <PaginationItem>
+                <PaginationPrevious
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  aria-disabled={currentPage === 1}
+                  className={currentPage === 1 ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                />
+              </PaginationItem>
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                .reduce((acc, p, idx, arr) => {
+                  if (idx > 0 && p - arr[idx - 1] > 1) acc.push(-1);
+                  acc.push(p);
+                  return acc;
+                }, [] as number[])
+                .map((p, idx) =>
+                  p === -1 ? (
+                    <PaginationItem key={`ellipsis-${idx}`}>
+                      <PaginationEllipsis />
+                    </PaginationItem>
+                  ) : (
+                    <PaginationItem key={p}>
+                      <PaginationLink
+                        isActive={p === currentPage}
+                        onClick={() => setCurrentPage(p)}
+                        className="cursor-pointer"
+                      >
+                        {p}
+                      </PaginationLink>
+                    </PaginationItem>
+                  ),
+                )}
+              <PaginationItem>
+                <PaginationNext
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  aria-disabled={currentPage === totalPages}
+                  className={currentPage === totalPages ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                />
+              </PaginationItem>
+            </PaginationContent>
+          </Pagination>
         </div>
       )}
 
@@ -552,12 +618,125 @@ export default function ProjectsPage() {
                   />
                 </div>
               )}
+
+              {/* Manager */}
+              {canManageMembers && (
+                <div className="grid gap-2">
+                  <Label className="text-foreground">Manager</Label>
+                  <Popover open={managerComboboxOpen} onOpenChange={setManagerComboboxOpen}>
+                    <PopoverTrigger
+                      render={
+                        <Button
+                          variant="outline"
+                          className="w-full justify-between font-normal"
+                        />
+                      }
+                    >
+                      <span className="truncate">
+                        {formManagerId
+                          ? orgUsers?.find((u) => u.id === formManagerId)?.name ?? 'Select manager...'
+                          : 'No manager'}
+                      </span>
+                      <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[300px] p-0">
+                      <Command>
+                        <CommandInput placeholder="Search members..." />
+                        <CommandList>
+                          <CommandEmpty>No members found.</CommandEmpty>
+                          <CommandGroup>
+                            <CommandItem
+                              value="none"
+                              data-checked={!formManagerId ? true : undefined}
+                              onSelect={() => {
+                                setFormManagerId(null);
+                                setManagerComboboxOpen(false);
+                              }}
+                            >
+                              No manager
+                            </CommandItem>
+                            {orgUsers
+                              ?.filter((u) => u.role !== 'employee')
+                              .map((u) => (
+                                <CommandItem
+                                  key={u.id}
+                                  value={u.name}
+                                  data-checked={formManagerId === u.id ? true : undefined}
+                                  onSelect={() => {
+                                    setFormManagerId(u.id);
+                                    setManagerComboboxOpen(false);
+                                  }}
+                                >
+                                  <div className="flex flex-col">
+                                    <span>{u.name}</span>
+                                    <span className="text-xs text-muted-foreground">{u.email}</span>
+                                  </div>
+                                </CommandItem>
+                              ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              )}
+
+              {/* Members Multi-select */}
+              {canManageMembers && (
+                <div className="grid gap-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-foreground">Members</Label>
+                    <span className="text-xs text-muted-foreground">{formMemberIds.length} selected</span>
+                  </div>
+                  <div className="rounded-lg border border-border max-h-[180px] overflow-y-auto">
+                    {!orgUsers ? (
+                      <div className="flex items-center justify-center py-4">
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                        <span className="ml-2 text-sm text-muted-foreground">Loading...</span>
+                      </div>
+                    ) : (
+                      [...orgUsers].sort((a, b) => a.name.localeCompare(b.name)).map((u) => {
+                        const checked = formMemberIds.includes(u.id);
+                        return (
+                          <label
+                            key={u.id}
+                            className={`flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors border-b border-border last:border-b-0 ${
+                              checked ? 'bg-primary/8 hover:bg-primary/12' : 'hover:bg-muted/50'
+                            }`}
+                          >
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={(val) => {
+                                setFormMemberIds(
+                                  val
+                                    ? [...formMemberIds, u.id]
+                                    : formMemberIds.filter((id) => id !== u.id)
+                                );
+                              }}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-medium text-foreground truncate">{u.name}</div>
+                              <div className="text-xs text-muted-foreground truncate">{u.email}</div>
+                            </div>
+                            <Badge
+                              variant={u.role === 'owner' ? 'default' : 'secondary'}
+                              className="text-[10px] shrink-0"
+                            >
+                              {u.role}
+                            </Badge>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={closeDialog} className="border-border text-foreground">
                 Cancel
               </Button>
-              <Button type="submit" disabled={isPending} className="bg-blue-600 hover:bg-blue-700 text-foreground">
+              <Button type="submit" disabled={isPending}>
                 {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {editingProject ? 'Save Changes' : 'Create Project'}
               </Button>
@@ -578,33 +757,30 @@ export default function ProjectsPage() {
           }
         }}
       >
-        <DialogContent className="bg-card border-border sm:max-w-md">
-          <DialogHeader>
+        <DialogContent className="bg-card border-border sm:max-w-md flex flex-col max-h-[90vh]">
+          <DialogHeader className="shrink-0">
             <DialogTitle className="text-foreground">Project Members</DialogTitle>
             <DialogDescription className="text-muted-foreground">
               Assign team members to <span className="font-medium text-foreground">{membersProject?.name}</span>
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3">
+          <div className="flex flex-col gap-3 min-h-0 flex-1">
             {/* Search */}
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search members..."
-                value={memberSearch}
-                onChange={(e) => setMemberSearch(e.target.value)}
-                className="pl-9 bg-background border-border text-foreground placeholder:text-muted-foreground"
-              />
-            </div>
+            <SearchInput
+              value={memberSearch}
+              onChange={setMemberSearch}
+              placeholder="Search members..."
+              className="shrink-0"
+            />
 
             {/* Stats bar */}
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>{memberIds.length} selected of {orgUsers?.length ?? 0} members</span>
+            <div className="flex items-center justify-between text-xs text-muted-foreground shrink-0">
+              <span>{memberIds.length} assigned of {orgUsers?.length ?? 0} members</span>
               {orgUsers && orgUsers.length > 0 && (
                 <button
                   type="button"
-                  className="text-blue-500 hover:text-blue-400 font-medium transition-colors"
+                  className="text-primary hover:text-primary/80 font-medium transition-colors"
                   onClick={() => {
                     const filtered = (orgUsers || []).filter((u) => {
                       if (!memberSearch.trim()) return true;
@@ -633,7 +809,7 @@ export default function ProjectsPage() {
             </div>
 
             {/* Members list */}
-            <div className="max-h-[360px] overflow-y-auto rounded-lg border border-border">
+            <div className="flex-1 min-h-0 overflow-y-auto rounded-lg border border-border">
               {!orgUsers ? (
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -644,13 +820,8 @@ export default function ProjectsPage() {
                 const filtered = orgUsers.filter((u) =>
                   !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q) || u.role.includes(q)
                 );
-                // Sort: selected first, then alphabetically
-                const sorted = [...filtered].sort((a, b) => {
-                  const aChecked = memberIds.includes(a.id) ? 0 : 1;
-                  const bChecked = memberIds.includes(b.id) ? 0 : 1;
-                  if (aChecked !== bChecked) return aChecked - bChecked;
-                  return a.name.localeCompare(b.name);
-                });
+                // Sort alphabetically only — stable, no jumping when checking/unchecking
+                const sorted = [...filtered].sort((a, b) => a.name.localeCompare(b.name));
 
                 if (sorted.length === 0) {
                   return (
@@ -672,28 +843,23 @@ export default function ProjectsPage() {
                     <label
                       key={u.id}
                       className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors border-b border-border last:border-b-0 ${
-                        checked
-                          ? 'bg-blue-500/10 hover:bg-blue-500/15'
-                          : 'hover:bg-muted/50'
+                        checked ? 'bg-primary/8 hover:bg-primary/12' : 'hover:bg-muted/50'
                       }`}
                     >
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={checked}
-                        onChange={(e) => {
+                        onCheckedChange={(val) => {
                           setMemberIds(
-                            e.target.checked
+                            val
                               ? [...memberIds, u.id]
                               : memberIds.filter((id) => id !== u.id)
                           );
                         }}
-                        className="h-4 w-4 rounded border-border accent-blue-600 shrink-0"
+                        aria-label={`Select ${u.name}`}
                       />
                       <div
-                        className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-medium shrink-0 ${
-                          checked
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-muted text-muted-foreground'
+                        className={`size-8 rounded-full flex items-center justify-center text-xs font-medium shrink-0 ${
+                          checked ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
                         }`}
                       >
                         {initials}
@@ -703,11 +869,8 @@ export default function ProjectsPage() {
                         <div className="text-xs text-muted-foreground truncate">{u.email}</div>
                       </div>
                       <Badge
-                        className={`text-[10px] shrink-0 ${
-                          u.role === 'owner'
-                            ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
-                            : 'bg-muted text-muted-foreground border-border'
-                        }`}
+                        variant={u.role === 'owner' ? 'default' : 'secondary'}
+                        className="text-[10px] shrink-0"
                       >
                         {u.role}
                       </Badge>
@@ -718,7 +881,7 @@ export default function ProjectsPage() {
             </div>
           </div>
 
-          <DialogFooter className="gap-2 sm:gap-0">
+          <DialogFooter className="gap-2 sm:gap-0 shrink-0 pt-2">
             <Button
               type="button"
               variant="outline"
@@ -729,15 +892,25 @@ export default function ProjectsPage() {
             </Button>
             <Button
               type="button"
-              className="bg-blue-600 hover:bg-blue-700 text-white"
-              disabled={!membersProject?.id || syncMembersMutation.isPending}
+              disabled={!membersProject?.id || syncMembersMutation.isPending || (
+                memberIds.length === initialMemberIds.length &&
+                memberIds.every((id) => initialMemberIds.includes(id))
+              )}
               onClick={() => {
                 if (!membersProject?.id) return;
                 syncMembersMutation.mutate({ projectId: membersProject.id, userIds: memberIds });
               }}
             >
               {syncMembersMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Save ({memberIds.length})
+              {(() => {
+                const added = memberIds.filter((id) => !initialMemberIds.includes(id)).length;
+                const removed = initialMemberIds.filter((id) => !memberIds.includes(id)).length;
+                if (added === 0 && removed === 0) return 'No changes';
+                const parts = [];
+                if (added > 0) parts.push(`+${added}`);
+                if (removed > 0) parts.push(`-${removed}`);
+                return `Save (${parts.join(', ')})`;
+              })()}
             </Button>
           </DialogFooter>
         </DialogContent>

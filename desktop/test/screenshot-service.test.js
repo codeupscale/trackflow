@@ -64,6 +64,7 @@ describe('ScreenshotService', () => {
       getActiveApp: jest.fn().mockResolvedValue('VS Code'),
       getActiveWindowTitle: jest.fn().mockResolvedValue('index.js - trackflow'),
       getCurrentScore: jest.fn().mockReturnValue(75),
+      getScoreForScreenshot: jest.fn().mockReturnValue(75),
     };
 
     // Default: one screen source with realistic 50KB JPEG

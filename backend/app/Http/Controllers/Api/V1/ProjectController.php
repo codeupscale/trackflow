@@ -13,7 +13,7 @@ class ProjectController extends Controller
     {
         $user = $request->user();
         $query = $user->organization->projects()
-            ->with('tasks')
+            ->with(['tasks', 'manager:id,name,email'])
             ->withCount('members');
 
         // Search
@@ -50,7 +50,15 @@ class ProjectController extends Controller
             'color' => ['sometimes', 'string', 'max:7', 'regex:/^#[0-9A-Fa-f]{6}$/'],
             'billable' => 'sometimes|boolean',
             'hourly_rate' => 'nullable|numeric|min:0',
+            'manager_id' => 'nullable|uuid|exists:users,id',
+            'member_ids' => 'sometimes|array',
+            'member_ids.*' => 'uuid|exists:users,id',
         ]);
+
+        // Validate manager belongs to the same organization
+        if ($request->manager_id) {
+            $request->user()->organization->users()->findOrFail($request->manager_id);
+        }
 
         $project = Project::create([
             'organization_id' => $request->user()->organization_id,
@@ -59,15 +67,24 @@ class ProjectController extends Controller
             'billable' => $request->billable ?? false,
             'hourly_rate' => $request->hourly_rate,
             'created_by' => $request->user()->id,
+            'manager_id' => $request->manager_id,
         ]);
 
-        return response()->json(['project' => $project], 201);
+        if ($request->has('member_ids')) {
+            $orgUserIds = $request->user()->organization->users()
+                ->whereIn('id', $request->input('member_ids', []))
+                ->pluck('id')
+                ->toArray();
+            $project->members()->sync($orgUserIds);
+        }
+
+        return response()->json(['project' => $project->load('manager:id,name,email')], 201);
     }
 
     public function show(Request $request, string $id): JsonResponse
     {
         $project = Project::where('organization_id', $request->user()->organization_id)
-            ->with('tasks')
+            ->with(['tasks', 'manager:id,name,email'])
             ->withSum('timeEntries as total_duration_seconds', 'duration_seconds')
             ->findOrFail($id);
         $this->authorize('view', $project);
@@ -85,11 +102,27 @@ class ProjectController extends Controller
             'billable' => 'sometimes|boolean',
             'hourly_rate' => 'nullable|numeric|min:0',
             'is_archived' => 'sometimes|boolean',
+            'manager_id' => 'nullable|uuid|exists:users,id',
+            'member_ids' => 'sometimes|array',
+            'member_ids.*' => 'uuid|exists:users,id',
         ]);
 
-        $project->update($request->only(['name', 'color', 'billable', 'hourly_rate', 'is_archived']));
+        // Validate manager belongs to the same organization
+        if ($request->has('manager_id') && $request->manager_id) {
+            $request->user()->organization->users()->findOrFail($request->manager_id);
+        }
 
-        return response()->json(['project' => $project->fresh()]);
+        $project->update($request->only(['name', 'color', 'billable', 'hourly_rate', 'is_archived', 'manager_id']));
+
+        if ($request->has('member_ids')) {
+            $orgUserIds = $request->user()->organization->users()
+                ->whereIn('id', $request->input('member_ids', []))
+                ->pluck('id')
+                ->toArray();
+            $project->members()->sync($orgUserIds);
+        }
+
+        return response()->json(['project' => $project->fresh()->load('manager:id,name,email')]);
     }
 
     public function destroy(string $id): JsonResponse

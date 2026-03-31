@@ -24,16 +24,21 @@ You MUST delegate this task to the `master-orchestrator` agent using the Agent t
 ## Full Pipeline the Master Runs
 
 ```
-Phase 0: architect-agent → implementation plan + API contracts
-Phase 1: database-architect → schema/migrations
-  └─ QA GATE: qa-tester validates schema
-Phase 2: backend-engineer → API/services
-  └─ QA GATE: qa-tester validates API
-Phase 3: frontend-engineer + desktop-engineer (parallel) → UI
-  └─ QA GATE: qa-tester runs full test suite
-Phase 4: reviewer-agent → security + quality review (PASS/BLOCK verdict)
-Phase 5: docs-agent → update CLAUDE.md + inline docs
-Phase 6: devops-engineer → deploy preview → production
+Phase 0:  architect-agent              → Plan: schema, API contracts, execution order
+Phase 1:  database-architect           → Schema/migrations (if needed)
+          qa-tester                    → GATE: migrations clean + rollback works
+Phase 2:  backend-engineer             → API, services, controllers, jobs, policies
+          test-backend                 → GATE: PHPUnit tests written + passing
+Phase 3:  frontend-engineer (shadcn)   → Next.js pages, components, stores
+          desktop-engineer             → Electron IPC, services (parallel with frontend)
+          test-frontend + test-desktop → GATE: all tests written + passing
+Phase 4:  qa-tester                    → GATE: full suite (backend + web + desktop)
+Phase 5:  security-engineer            → GATE: OWASP scan, multi-tenancy, Electron
+Phase 6:  reviewer-agent               → GATE: code quality, architecture, performance
+Phase 7:  devops-engineer (build)      → GATE: npm run build + tsc --noEmit clean
+Phase 8:  docs-agent                   → CLAUDE.md + inline docs updated
+Phase 9:  git commit + push            → Conventional commit, specific files staged
+Phase 10: devops-engineer (deploy)     → Rebuild images, rolling restart, health checks
 ```
 
 ## Invocation
@@ -45,14 +50,20 @@ Phase 6: devops-engineer → deploy preview → production
 ## Available Slash Commands for Individual Agents
 
 ```
-/architect  → Plan a feature before building
-/reviewer   → Review code changes after implementation
-/docs       → Update documentation after changes
-/backend    → Backend-only changes
-/frontend   → Frontend-only changes
-/desktop    → Desktop-only changes
-/qa         → Run tests and QA
-/security   → Security review
-/devops     → Deploy / infrastructure
-/database   → Schema design / migrations
+/pipeline   → Full 10-phase pipeline (same as /master but explicit)
+/architect  → Phase 0: plan a feature before building
+/database   → Phase 1: schema design / migrations
+/backend    → Phase 2: backend-only changes
+/frontend   → Phase 3: frontend-only changes
+/desktop    → Phase 3: desktop-only changes
+/qa         → Phase 4: run full test suite
+/security   → Phase 5: security audit
+/reviewer   → Phase 6: code quality review
+/devops     → Phase 7 or 10: build verify or deploy
+/docs       → Phase 8: update documentation
+/shadcn     → Add/customize shadcn components (used inside Phase 3)
+/ux         → UI/UX design (used inside Phase 3)
+/test-backend   → Write PHPUnit tests (used inside Phase 2 gate)
+/test-frontend  → Write React tests (used inside Phase 3 gate)
+/test-desktop   → Write Electron tests (used inside Phase 3 gate)
 ```
