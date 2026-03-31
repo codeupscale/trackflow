@@ -201,7 +201,7 @@ describe('IdleDetector callback integration', () => {
     expect(showIdleAlert).toHaveBeenCalledWith(300, expect.any(Number));
   });
 
-  test('after resolveIdle + start, callback fires again on next idle cycle once user provides input', () => {
+  test('after resolveIdle + start, callback fires again on next idle cycle', () => {
     detector = new IdleDetector({ idle_timeout: 1, idle_check_interval_sec: 10 });
     const onIdle = jest.fn();
     detector.onIdleDetected(onIdle);
@@ -217,19 +217,21 @@ describe('IdleDetector callback integration', () => {
     detector.stop();
     detector.start();
 
-    // User is still idle — should NOT re-fire (BUG-001 cooldown)
+    // start() resets cooldown — if user is still idle, fires immediately
+    // (BUG-002 fix: fresh start = clean state)
     powerMonitor.getSystemIdleTime.mockReturnValue(120);
     jest.advanceTimersByTime(10000);
-    expect(onIdle).toHaveBeenCalledTimes(1); // still 1
+    expect(onIdle).toHaveBeenCalledTimes(2); // fires again after fresh start
 
-    // User provides input (idle time drops below threshold)
+    // Resolve the second idle, user provides input
+    detector.resolveIdle();
     powerMonitor.getSystemIdleTime.mockReturnValue(5);
     jest.advanceTimersByTime(10000);
-    expect(onIdle).toHaveBeenCalledTimes(1); // cooldown cleared
+    expect(onIdle).toHaveBeenCalledTimes(2); // no change — user active
 
-    // User goes idle again
+    // User goes idle again — should fire a third time
     powerMonitor.getSystemIdleTime.mockReturnValue(60);
     jest.advanceTimersByTime(10000);
-    expect(onIdle).toHaveBeenCalledTimes(2); // fires again
+    expect(onIdle).toHaveBeenCalledTimes(3); // fires again
   });
 });

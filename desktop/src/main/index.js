@@ -1957,8 +1957,36 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
   // Use did-finish-load as a safety net.
   win.webContents.once('did-finish-load', showAndSendData);
 
+  // BUG-002: If the idle alert window is closed without the user clicking an
+  // action button (e.g., Cmd+W on macOS, dock close, OS memory pressure), the
+  // idle detector stays in isIdle=true state forever, preventing all future
+  // idle detection. We must treat unexpected closure as "keep" (safest default
+  // — does not discard tracked time) and re-arm the detector.
+  // Track whether the window was dismissed programmatically via dismissIdleAlert().
+  win._dismissedProgrammatically = false;
+
   win.on('closed', () => {
     idleAlertWindow = null;
+    if (!win._dismissedProgrammatically) {
+      console.log('[IdleAlert] Window closed without user action — treating as "keep" and re-arming idle detector');
+      // Resolve idle state so isIdle resets to false
+      idleDetector?.resolveIdle();
+      // Restart activity monitor and screenshots that were paused when idle was detected
+      activityMonitor?.start();
+      if (isTimerRunning && currentEntry) {
+        screenshotService?.start(currentEntry.id, {
+          immediateCapture: config.screenshot_capture_immediate_after_idle === true,
+        });
+      }
+      // Re-arm idle detector so future idle periods are detected
+      idleDetector?.start();
+      // Restore tray
+      updateTrayIcon(isTimerRunning);
+      if (isTimerRunning) {
+        updateTrayTitle();
+        startTrayTimer();
+      }
+    }
   });
 
   win.loadFile(path.join(__dirname, '..', 'renderer', 'idle-alert.html')).catch((err) => {
@@ -1969,6 +1997,9 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
 
 function dismissIdleAlert() {
   if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
+    // Mark as programmatic dismissal so the 'closed' handler doesn't
+    // re-arm the idle detector (handleIdleAction already did that).
+    idleAlertWindow._dismissedProgrammatically = true;
     idleAlertWindow.destroy();
   }
   idleAlertWindow = null;
