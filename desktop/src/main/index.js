@@ -1118,7 +1118,7 @@ function buildTrayContextMenu() {
       click: (menuItem) => {
         isAlwaysOnTop = menuItem.checked;
         if (popupWindow && !popupWindow.isDestroyed()) {
-          popupWindow.setAlwaysOnTop(isAlwaysOnTop);
+          popupWindow.setAlwaysOnTop(isAlwaysOnTop, isAlwaysOnTop ? 'floating' : 'normal');
           popupWindow.webContents.send('pin-state-changed', { pinned: isAlwaysOnTop });
         }
         saveAlwaysOnTop(isAlwaysOnTop);
@@ -1227,6 +1227,11 @@ function showPopup() {
       devTools: true,
     },
   });
+
+  // Set floating level on macOS for reliable always-on-top behavior
+  if (isAlwaysOnTop) {
+    popupWindow.setAlwaysOnTop(true, 'floating');
+  }
 
   popupWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
@@ -1399,7 +1404,7 @@ function setupIPC() {
     // If forceState is provided (boolean), use it; otherwise toggle
     isAlwaysOnTop = typeof forceState === 'boolean' ? forceState : !isAlwaysOnTop;
     if (popupWindow && !popupWindow.isDestroyed()) {
-      popupWindow.setAlwaysOnTop(isAlwaysOnTop);
+      popupWindow.setAlwaysOnTop(isAlwaysOnTop, isAlwaysOnTop ? 'floating' : 'normal');
       popupWindow.webContents.send('pin-state-changed', { pinned: isAlwaysOnTop });
     }
     saveAlwaysOnTop(isAlwaysOnTop);
