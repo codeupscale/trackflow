@@ -153,6 +153,11 @@ These are non-negotiable for every plan you produce:
 - Every query MUST be scoped. New Eloquent models use `GlobalOrganizationScope` trait.
 - Any raw query MUST have explicit `WHERE organization_id = ?`
 
+### Sensitive Data (HR)
+- Salary, bank details, tax IDs MUST use Laravel `encrypted` cast
+- Never log PII fields in any log statement
+- Payroll calculations MUST run in background jobs, never in request lifecycle
+
 ### API Design
 - All list endpoints use `->paginate()` — NEVER `->get()`
 - Response: `{ "data": [...], "meta": { "current_page", "last_page", "total" } }`
@@ -161,9 +166,12 @@ These are non-negotiable for every plan you produce:
 
 ### Frontend Patterns
 - Data fetching: TanStack Query `useQuery`/`useMutation` — never raw `useEffect + fetch`
-- State: Zustand stores
+- Custom hooks: business logic extracted to `hooks/hr/use-*.ts` — not in components
+- Forms: react-hook-form + Zod with schema in `lib/validations/` — never inline
+- State: Zustand stores for UI state only — server state in TanStack Query
 - SSR safety: `typeof window !== 'undefined'` guard on browser APIs
-- Always handle: loading, error, empty, and success states
+- Always handle: loading (Skeleton), error (ErrorCard), empty (EmptyState), and success states
+- Reusable components: StatusBadge, DataTable, PageHeader, EmployeeCombobox — always check before creating new
 
 ### Desktop Security
 - `contextIsolation: true`, `nodeIntegration: false` on ALL BrowserWindows
@@ -174,6 +182,12 @@ These are non-negotiable for every plan you produce:
 - API p95 < 200ms (flag if new endpoint will be slow — prescribe indexes)
 - Dashboard first paint < 2s
 - Desktop memory < 250MB tracking
+- HR list pages < 200ms with stale-time caching
+
+### HR Plan Reference
+- Always reference `.claude/plans/hr-management-plan.md` for HR module designs
+- Follow the phase roadmap: Phase 1 (Org Structure + Employee Records + Leave) before Phase 2 (Payroll + Attendance)
+- HR module dependencies: Leave needs Departments → Payroll needs Leave + Attendance → Performance needs Employees
 
 ## When to Escalate
 

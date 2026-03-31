@@ -183,6 +183,19 @@ For each changed frontend page/component:
 | ⚠️ **PASS WITH WARNINGS** | No blockers, but improvement opportunities exist. Can merge, should track. |
 | 🚫 **BLOCK** | Critical security issue, multi-tenancy violation, no tests on new features, or major architecture violation |
 
+## HR Module Review Checklist (Additional)
+
+When reviewing HR module changes:
+- [ ] **Salary/bank data uses `encrypted` cast** — never stored as plaintext
+- [ ] **Payroll endpoints require `hr_manager` or `admin` role** — employee cannot access
+- [ ] **Leave approval verifies approver !== requestor** — employee cannot approve own leave
+- [ ] **Leave balance deduction is in same DB transaction as approval** — no partial state
+- [ ] **Pay run calculation is a background job** — never in request lifecycle
+- [ ] **Payslip list scoped to requesting user** (unless HR role) — `where('user_id', $user->id)`
+- [ ] **Employee profile sensitive fields not in list endpoint** — bank/tax only in detail view with role check
+- [ ] **Document downloads use signed URLs** — never expose raw S3 path
+- [ ] **Org chart endpoint does not leak salary/personal data** — only name, title, department
+
 ## The Most Common Issues in TrackFlow (Watch for These)
 
 1. **Missing org scope**: New raw query without `WHERE organization_id = ?` — P0 security issue

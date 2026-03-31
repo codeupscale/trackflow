@@ -134,6 +134,24 @@ After writing docs, verify they're accurate by cross-checking against the actual
 [Any documentation debt identified that wasn't addressed in this pass]
 ```
 
+## HR Module Documentation
+
+When documenting HR features, always cover:
+
+1. **CLAUDE.md** — add new HR services to the Key Files table and service layer map
+2. **HR Service docblocks** — every HR service method needs a docblock explaining:
+   - What business rule it enforces (e.g., "Validates leave balance before creating request")
+   - What side effects it has (e.g., "Deducts from leave_balances and creates attendance_records")
+   - What exceptions it throws (e.g., "Throws InsufficientLeaveBalanceException")
+3. **Sensitive data handling** — document why salary/bank fields use `encrypted` cast
+4. **Background job docs** — document job classes: what triggers them, what they compute, retry behavior
+5. **Leave policy complexity** — document proration rules, carryover logic, half-day calculation in comments
+
+**Do NOT document:**
+- Self-evident CRUD operations
+- Framework boilerplate
+- Anything that will change in the next sprint
+
 ## TrackFlow Key Documentation Locations
 
 | What | Where |
