@@ -13,6 +13,8 @@ import {
   Users,
   Search,
   DollarSign,
+  ChevronsUpDown,
+  Shield,
 } from 'lucide-react';
 import { SearchInput } from '@/components/ui/search-input';
 import { toast } from 'sonner';
@@ -54,6 +56,19 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 
@@ -79,6 +94,12 @@ interface Project {
   is_archived: boolean;
   tasks: Task[];
   created_at: string;
+  manager_id: string | null;
+  manager?: {
+    id: string;
+    name: string;
+    email: string;
+  } | null;
 }
 
 const COLORS = [
@@ -101,6 +122,9 @@ export default function ProjectsPage() {
   const [formColor, setFormColor] = useState('#3B82F6');
   const [formBillable, setFormBillable] = useState(false);
   const [formRate, setFormRate] = useState('');
+  const [formManagerId, setFormManagerId] = useState<string | null>(null);
+  const [formMemberIds, setFormMemberIds] = useState<string[]>([]);
+  const [managerComboboxOpen, setManagerComboboxOpen] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -142,7 +166,7 @@ export default function ProjectsPage() {
 
   const { data: orgUsers } = useQuery<MemberUser[]>({
     queryKey: ['org-users'],
-    enabled: canManageMembers && membersDialogOpen,
+    enabled: canManageMembers && (membersDialogOpen || dialogOpen),
     queryFn: async () => {
       const res = await api.get('/users', { params: { per_page: 200 } });
       // backend is apiResource paginate; normalize
@@ -151,7 +175,7 @@ export default function ProjectsPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: { name: string; color: string; billable: boolean; hourly_rate?: number }) => {
+    mutationFn: async (data: Record<string, unknown>) => {
       return api.post('/projects', data);
     },
     onSuccess: () => {
@@ -174,7 +198,7 @@ export default function ProjectsPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, ...data }: { id: string; name?: string; color?: string; billable?: boolean; hourly_rate?: number | null; is_archived?: boolean }) => {
+    mutationFn: async ({ id, ...data }: { id: string; [key: string]: unknown }) => {
       return api.put(`/projects/${id}`, data);
     },
     onSuccess: () => {
@@ -221,6 +245,8 @@ export default function ProjectsPage() {
     setFormColor('#3B82F6');
     setFormBillable(false);
     setFormRate('');
+    setFormManagerId(null);
+    setFormMemberIds([]);
   };
 
   const openMembers = (project: Project) => {
@@ -247,6 +273,8 @@ export default function ProjectsPage() {
     setFormColor('#3B82F6');
     setFormBillable(false);
     setFormRate('');
+    setFormManagerId(null);
+    setFormMemberIds([]);
     setDialogOpen(true);
   };
 
@@ -256,16 +284,27 @@ export default function ProjectsPage() {
     setFormColor(project.color);
     setFormBillable(project.billable);
     setFormRate(project.hourly_rate?.toString() || '');
+    setFormManagerId(project.manager_id);
+    // Load current members for editing
+    setFormMemberIds([]);
+    api.get(`/projects/${project.id}/members`)
+      .then((res) => {
+        const members = (res.data?.members || []) as MemberUser[];
+        setFormMemberIds(members.map((m) => m.id));
+      })
+      .catch(() => {});
     setDialogOpen(true);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const data = {
+    const data: Record<string, unknown> = {
       name: formName,
       color: formColor,
       billable: formBillable,
       hourly_rate: formBillable && formRate ? parseFloat(formRate) : undefined,
+      manager_id: formManagerId || null,
+      member_ids: formMemberIds.length > 0 ? formMemberIds : undefined,
     };
     if (editingProject) {
       updateMutation.mutate({ id: editingProject.id, ...data });
@@ -408,7 +447,7 @@ export default function ProjectsPage() {
                 </div>
               </CardHeader>
               <CardContent className="pt-0">
-                <div className="flex items-center gap-4 text-sm">
+                <div className="flex items-center gap-4 text-sm flex-wrap">
                   <div className="flex items-center gap-1.5 text-muted-foreground">
                     <FolderOpen className="h-3.5 w-3.5" />
                     <span>{project.tasks?.length || 0} tasks</span>
@@ -417,6 +456,12 @@ export default function ProjectsPage() {
                     <Users className="h-3.5 w-3.5" />
                     <span>{String((project as unknown as { members_count?: number }).members_count ?? 0)} members</span>
                   </div>
+                  {project.manager && (
+                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                      <Shield className="h-3.5 w-3.5" />
+                      <span>{project.manager.name}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2 mt-3">
@@ -571,6 +616,119 @@ export default function ProjectsPage() {
                     placeholder="0.00"
                     className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
                   />
+                </div>
+              )}
+
+              {/* Manager */}
+              {canManageMembers && (
+                <div className="grid gap-2">
+                  <Label className="text-foreground">Manager</Label>
+                  <Popover open={managerComboboxOpen} onOpenChange={setManagerComboboxOpen}>
+                    <PopoverTrigger
+                      render={
+                        <Button
+                          variant="outline"
+                          className="w-full justify-between font-normal"
+                        />
+                      }
+                    >
+                      <span className="truncate">
+                        {formManagerId
+                          ? orgUsers?.find((u) => u.id === formManagerId)?.name ?? 'Select manager...'
+                          : 'No manager'}
+                      </span>
+                      <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[300px] p-0">
+                      <Command>
+                        <CommandInput placeholder="Search members..." />
+                        <CommandList>
+                          <CommandEmpty>No members found.</CommandEmpty>
+                          <CommandGroup>
+                            <CommandItem
+                              value="none"
+                              data-checked={!formManagerId ? true : undefined}
+                              onSelect={() => {
+                                setFormManagerId(null);
+                                setManagerComboboxOpen(false);
+                              }}
+                            >
+                              No manager
+                            </CommandItem>
+                            {orgUsers
+                              ?.filter((u) => u.role !== 'employee')
+                              .map((u) => (
+                                <CommandItem
+                                  key={u.id}
+                                  value={u.name}
+                                  data-checked={formManagerId === u.id ? true : undefined}
+                                  onSelect={() => {
+                                    setFormManagerId(u.id);
+                                    setManagerComboboxOpen(false);
+                                  }}
+                                >
+                                  <div className="flex flex-col">
+                                    <span>{u.name}</span>
+                                    <span className="text-xs text-muted-foreground">{u.email}</span>
+                                  </div>
+                                </CommandItem>
+                              ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              )}
+
+              {/* Members Multi-select */}
+              {canManageMembers && (
+                <div className="grid gap-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-foreground">Members</Label>
+                    <span className="text-xs text-muted-foreground">{formMemberIds.length} selected</span>
+                  </div>
+                  <div className="rounded-lg border border-border max-h-[180px] overflow-y-auto">
+                    {!orgUsers ? (
+                      <div className="flex items-center justify-center py-4">
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                        <span className="ml-2 text-sm text-muted-foreground">Loading...</span>
+                      </div>
+                    ) : (
+                      [...orgUsers].sort((a, b) => a.name.localeCompare(b.name)).map((u) => {
+                        const checked = formMemberIds.includes(u.id);
+                        return (
+                          <label
+                            key={u.id}
+                            className={`flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors border-b border-border last:border-b-0 ${
+                              checked ? 'bg-primary/8 hover:bg-primary/12' : 'hover:bg-muted/50'
+                            }`}
+                          >
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={(val) => {
+                                setFormMemberIds(
+                                  val
+                                    ? [...formMemberIds, u.id]
+                                    : formMemberIds.filter((id) => id !== u.id)
+                                );
+                              }}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-medium text-foreground truncate">{u.name}</div>
+                              <div className="text-xs text-muted-foreground truncate">{u.email}</div>
+                            </div>
+                            <Badge
+                              variant={u.role === 'owner' ? 'default' : 'secondary'}
+                              className="text-[10px] shrink-0"
+                            >
+                              {u.role}
+                            </Badge>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
               )}
             </div>

@@ -22,6 +22,7 @@ class Project extends Model
         'hourly_rate',
         'is_archived',
         'created_by',
+        'manager_id',
     ];
 
     protected $appends = ['total_hours'];
@@ -47,6 +48,11 @@ class Project extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function manager(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'manager_id');
     }
 
     public function tasks(): HasMany

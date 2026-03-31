@@ -185,7 +185,7 @@ export default function TeamPage() {
         }
     }, [user?.role, router]);
 
-    const canManageInvites = user?.role === "owner" || user?.role === "admin";
+    const canManageInvites = user?.role === "owner" || user?.role === "admin" || user?.role === "manager";
 
     const membersPage = parsePositiveInt(searchParams.get("members_page"), 1);
     const membersPerPage = parsePositiveInt(
