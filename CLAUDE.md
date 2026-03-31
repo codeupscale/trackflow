@@ -114,18 +114,50 @@ Users can belong to multiple organizations (same email, different `organization_
 - Pending invitations are auto-accepted: user is added to those orgs with the invited role
 - A personal org is also created so the user always has at least one
 
+## HR Module (Phase 1)
+
+Adds department/position org structure and leave management under `/api/v1/hr/`.
+
+### Multi-Tenancy Rules for HR
+- All 6 HR tables (`departments`, `positions`, `leave_types`, `leave_balances`, `leave_requests`, `public_holidays`) carry `organization_id` and are covered by `GlobalOrganizationScope` — no exception.
+- `positions.min_salary` and `positions.max_salary` are **AES-256-GCM encrypted at rest**. Never expose raw cipher values in API responses; decryption happens inside `OrganizationStructureService`.
+- **Self-approval is prevented at the service layer**: `LeaveService::approveLeave()` rejects if `approved_by === leave_request.user_id`. Do not bypass this check in controllers.
+- Leave list endpoints are **role-scoped**: employees see only their own requests; managers see their direct reports; admins see the full org. This scoping lives in `LeaveService`, not in the controller.
+
+### HR API Routes (all under `/api/v1/hr/`, Sanctum required)
+| Route | Notes |
+|---|---|
+| `GET/POST /hr/departments` | Paginated list + create |
+| `GET /hr/departments/tree` | Recursive org tree — no pagination, O(n) recursive builder in `OrganizationStructureService::getOrgTree()` |
+| `GET/PUT/DELETE /hr/departments/{id}` | CRUD; DELETE archives (soft delete) |
+| `GET/POST /hr/positions` | Paginated; filterable by `dept_id` and `level` query params |
+| `GET/PUT/DELETE /hr/positions/{id}` | CRUD |
+| `GET/POST /hr/leave-types` | Admin only for POST |
+| `GET /hr/leave-balances` | Own balances; pass `?user_id=` for manager/admin view |
+| `GET/POST /hr/leave-requests` | Role-scoped list + apply |
+| `PUT /hr/leave-requests/{id}/approve` | Manager/admin only |
+| `PUT /hr/leave-requests/{id}/reject` | Manager/admin only |
+| `DELETE /hr/leave-requests/{id}` | Cancel (own request only) |
+| `GET /hr/leave-calendar` | Team calendar; requires `month` + `year` query params |
+| `GET/POST /hr/public-holidays` | Admin only for POST |
+
 ## Quick Reference — Key Files
 
 | What | Where |
 |---|---|
 | API routes | `backend/routes/api.php` |
 | Controllers | `backend/app/Http/Controllers/Api/V1/` |
-| Services | `backend/app/Services/` (Timer, Report, Billing, Audit, Permission) |
+| Services | `backend/app/Services/` (Timer, Report, Billing, Audit, Permission, OrganizationStructure, Leave) |
 | Models | `backend/app/Models/` |
 | Migrations | `backend/database/migrations/` |
 | Frontend pages | `web/src/app/(dashboard)/*/page.tsx` |
 | API client | `web/src/lib/api.ts` (axios + token refresh mutex) |
 | Zustand stores | `web/src/stores/` (auth-store, timer-store) |
+| HR controllers | `backend/app/Http/Controllers/Api/V1/Hr/` (Department, Position, LeaveType, LeaveBalance, LeaveRequest, PublicHoliday) |
+| HR services | `backend/app/Services/OrganizationStructureService.php`, `backend/app/Services/LeaveService.php` |
+| HR pages | `web/src/app/(dashboard)/hr/` (departments, positions, leave, leave/apply, leave/approvals, leave/calendar, leave/types) |
+| HR components | `web/src/components/hr/` (DepartmentSelect, PositionSelect, LeaveBalanceCard, LeaveCalendar, LeaveApprovalCard, etc.) |
+| HR hooks | `web/src/hooks/hr/` (use-departments, use-positions, use-leave-requests, use-leave-balance, use-apply-leave, etc.) |
 | Org selector | `web/src/components/org-selector.tsx` |
 | Org switcher | `web/src/components/org-switcher.tsx` |
 | Sidebar primitive | `web/src/components/ui/sidebar.tsx` (shadcn Sidebar with collapsible icon mode) |
