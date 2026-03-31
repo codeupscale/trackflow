@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { ShieldAlert, Loader2, CheckCheck } from 'lucide-react';
 
@@ -32,6 +32,12 @@ export default function LeaveApprovalsPage() {
 
   const isManager = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'owner';
 
+  useEffect(() => {
+    if (user && !isManager) {
+      router.push('/hr/leave');
+    }
+  }, [user, isManager, router]);
+
   const { data, isLoading, isError } = useLeaveRequests({
     status: statusFilter,
     page: currentPage,
@@ -47,14 +53,13 @@ export default function LeaveApprovalsPage() {
     return 0;
   }, [data, statusFilter]);
 
-  // Role gate: redirect non-managers/admins
-  if (!isManager) {
-    router.push('/hr/leave');
+  // Role gate: show loading until auth resolves, redirect handled in useEffect above
+  if (!user || !isManager) {
     return (
       <div className="flex items-center justify-center min-h-[50vh]">
         <div className="flex items-center gap-2 text-muted-foreground">
           <div className="size-5 animate-spin rounded-full border-2 border-muted border-t-primary" />
-          Redirecting...
+          {!user ? 'Loading...' : 'Redirecting...'}
         </div>
       </div>
     );
@@ -68,12 +73,11 @@ export default function LeaveApprovalsPage() {
     rejectMutation.mutate({ id, rejection_reason: reason });
   };
 
-  const handleBulkApprove = () => {
+  const handleBulkApprove = async () => {
     const pendingRequests = requests.filter((r) => r.status === 'pending');
-    // Approve sequentially to avoid race conditions
-    pendingRequests.forEach((req) => {
-      approveMutation.mutate(req.id);
-    });
+    for (const req of pendingRequests) {
+      await approveMutation.mutateAsync(req.id);
+    }
   };
 
   return (
