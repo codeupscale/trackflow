@@ -91,6 +91,7 @@ interface DashboardData {
   weekSeconds: number;
   weeklyHoursTarget: number; // 0 = disabled
   dailyBreakdown: DailyBreakdown[];
+  activityPercentage: number | null; // null = no activity_logs data yet
 }
 
 type FilterPreset = 'today' | 'yesterday' | 'week' | 'last-week' | 'this-month' | 'last-month' | 'custom';
@@ -256,6 +257,7 @@ export default function DashboardPage() {
           weekSeconds: raw.week_seconds || 0,
           weeklyHoursTarget: raw.weekly_hours_target || 0,
           dailyBreakdown: raw.daily_breakdown || [],
+          activityPercentage: raw.activity_percentage ?? null,
         };
       }
 
@@ -297,6 +299,7 @@ export default function DashboardPage() {
         weekSeconds: 0,
         weeklyHoursTarget: 0,
         dailyBreakdown: [],
+        activityPercentage: null,
       };
     },
     refetchInterval: 30000,
@@ -379,14 +382,8 @@ export default function DashboardPage() {
     }));
   }, [isEmployeeView, data?.dailyBreakdown]);
 
-  // ── Compute employee activity score ──
-  const employeeActivityScore = useMemo(() => {
-    if (!data?.dailyBreakdown?.length) return null;
-    const totalHours = data.dailyBreakdown.reduce((s, d) => s + d.hours, 0);
-    if (totalHours === 0) return null;
-    // Use a simple heuristic: hours worked vs 8h target = activity proxy
-    return Math.min(100, Math.round((totalHours / 8) * 100));
-  }, [data?.dailyBreakdown]);
+  // ── Employee activity score — real value from activity_logs via API ──
+  const employeeActivityScore = data?.activityPercentage ?? null;
 
   const maxEntries = isEmployeeView ? 5 : 10;
 
