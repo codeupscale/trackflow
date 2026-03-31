@@ -54,22 +54,33 @@ class DailyActivitySummaryService
             ->selectRaw("
                 COALESCE(SUM({$dur}), 0) as total_seconds,
                 COALESCE(SUM(CASE WHEN type = 'tracked' THEN {$dur} ELSE 0 END), 0) as tracked_seconds,
-                COALESCE(SUM(CASE WHEN type = 'idle' THEN {$dur} ELSE 0 END), 0) as idle_seconds,
-                CASE
-                    WHEN SUM(CASE WHEN activity_score IS NOT NULL AND activity_score > 0
-                         THEN {$dur} ELSE 0 END) > 0
-                    THEN SUM(COALESCE(activity_score, 0) * {$dur})
-                         / SUM(CASE WHEN activity_score IS NOT NULL AND activity_score > 0
-                               THEN {$dur} ELSE 0 END)
-                    ELSE 0
-                END as activity_avg
+                COALESCE(SUM(CASE WHEN type = 'idle' THEN {$dur} ELSE 0 END), 0) as idle_seconds
             ")
             ->first();
 
         $totalSeconds = (int) ($totals->total_seconds ?? 0);
         $trackedSeconds = (int) ($totals->tracked_seconds ?? 0);
         $idleSeconds = (int) ($totals->idle_seconds ?? 0);
-        $activityPercentage = (int) round($totals->activity_avg ?? 0);
+
+        // Compute activity % from activity_logs (accurate keyboard/mouse data) rather than
+        // time_entries.activity_score, which can be artificially low for long sessions
+        // stopped by the idle detector (the desktop only counted the last active window).
+        // Formula: total active_seconds / (total log windows × 30s) × 100
+        $activityStats = DB::table('activity_logs')
+            ->join('time_entries', 'activity_logs.time_entry_id', '=', 'time_entries.id')
+            ->where('activity_logs.organization_id', $organizationId)
+            ->where('activity_logs.user_id', $userId)
+            ->where('time_entries.started_at', '>=', $dateStart)
+            ->where('time_entries.started_at', '<=', $dateEnd)
+            ->where('time_entries.type', 'tracked')
+            ->selectRaw('SUM(activity_logs.active_seconds) as active_secs, COUNT(*) as log_count')
+            ->first();
+
+        $activeSecs = (int) ($activityStats->active_secs ?? 0);
+        $logCount   = (int) ($activityStats->log_count ?? 0);
+        $activityPercentage = $logCount > 0
+            ? (int) round(($activeSecs / ($logCount * 30)) * 100)
+            : 0;
 
         // Project breakdown, scoped by organization_id
         $teDur = self::durationExpr('time_entries');

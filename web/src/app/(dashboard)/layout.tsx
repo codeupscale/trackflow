@@ -63,7 +63,7 @@ const navGroups: { label: string; items: NavItem[] }[] = [
     label: 'Main',
     items: [
       { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['owner', 'admin', 'manager', 'employee'] },
-      { name: 'Time', href: '/time', icon: Clock, roles: ['owner', 'admin', 'manager', 'employee'] },
+      { name: 'Time Entries', href: '/time', icon: Clock, roles: ['owner', 'admin', 'manager', 'employee'] },
       { name: 'Screenshots', href: '/screenshots', icon: Camera, roles: ['owner', 'admin', 'manager', 'employee'] },
     ],
   },
@@ -88,6 +88,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuthStore();
   const router = useRouter();
   const pathname = usePathname();
+
+  // Derive current page title from pathname
+  const allNavItems = navGroups.flatMap((g) => g.items);
+  const currentPage = allNavItems.find(
+    (item) => pathname === item.href || pathname.startsWith(item.href + '/')
+  );
 
   const queryClient = useQueryClient();
   const isTimerRunning = useTimerStore((s) => s.isRunning);
@@ -134,7 +140,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     <SidebarProvider className="h-screen overflow-hidden">
       {/* Sidebar */}
       <Sidebar collapsible="icon">
-        <SidebarHeader className="border-b border-sidebar-border px-3 py-3">
+        <SidebarHeader className="h-14 border-b border-sidebar-border px-3 flex items-center">
           <Link href="/dashboard" className="flex items-center">
             <TrackFlowLogo size={28} showText={true} className="group-data-[collapsible=icon]:[&>span]:hidden" />
           </Link>
@@ -202,15 +208,22 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       {/* Main Content */}
       <SidebarInset className="flex flex-col overflow-hidden">
         {/* Top Header */}
-        <header className="flex items-center justify-between h-14 px-4 md:px-6 border-b border-border bg-background">
-          <div className="flex items-center gap-2">
-            <SidebarTrigger className="hover:bg-muted" />
-            <Separator orientation="vertical" className="h-5 hidden md:block" />
+        <header className="flex items-center justify-between h-14 px-4 md:px-6 border-b border-border bg-background shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <SidebarTrigger className="hover:bg-muted shrink-0" />
+            <Separator orientation="vertical" className="h-5 hidden md:block shrink-0" />
+            {/* Page title — shown on md+ screens */}
+            {currentPage && (
+              <span className="hidden md:block text-sm font-semibold text-foreground truncate">
+                {currentPage.name}
+              </span>
+            )}
+            <Separator orientation="vertical" className="h-5 hidden md:block shrink-0" />
             <OrgSwitcher />
           </div>
 
           {/* Center: Timer Widget */}
-          <div className="flex items-center">
+          <div className="flex items-center shrink-0">
             <TimerWidget />
           </div>
 

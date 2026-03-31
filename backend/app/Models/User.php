@@ -26,6 +26,13 @@ class User extends Authenticatable
         'role',
         'timezone',
         'avatar_url',
+        'job_title',
+        'phone',
+        'linkedin_url',
+        'github_url',
+        'date_of_birth',
+        'date_of_joining',
+        'bio',
         'is_active',
         'last_active_at',
         'settings',
@@ -50,6 +57,8 @@ class User extends Authenticatable
             'password' => 'hashed',
             'is_active' => 'boolean',
             'settings' => 'array',
+            'date_of_birth' => 'date',
+            'date_of_joining' => 'date',
         ];
     }
 

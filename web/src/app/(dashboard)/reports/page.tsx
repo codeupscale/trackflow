@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
   BarChart3,
-  CalendarIcon,
   Download,
   FileText,
   Loader2,
@@ -20,7 +19,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
+import { DatePicker } from '@/components/ui/date-picker';
 import {
   Select,
   SelectContent,
@@ -348,34 +347,24 @@ export default function ReportsPage() {
           {/* Date Range, User Filter & Generate */}
           <div className="flex flex-col sm:flex-row gap-4 items-end">
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-foreground" htmlFor="rpt-date-from">
+              <label className="text-sm font-medium text-foreground">
                 From
               </label>
-              <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="rpt-date-from"
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => { setDateFrom(e.target.value); setShouldFetch(false); }}
-                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
-                />
-              </div>
+              <DatePicker
+                value={dateFrom}
+                onChange={(val) => { setDateFrom(val); setShouldFetch(false); }}
+                placeholder="Start date"
+              />
             </div>
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-foreground" htmlFor="rpt-date-to">
+              <label className="text-sm font-medium text-foreground">
                 To
               </label>
-              <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="rpt-date-to"
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => { setDateTo(e.target.value); setShouldFetch(false); }}
-                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
-                />
-              </div>
+              <DatePicker
+                value={dateTo}
+                onChange={(val) => { setDateTo(val); setShouldFetch(false); }}
+                placeholder="End date"
+              />
             </div>
 
             {!isEmployee && (
@@ -547,28 +536,32 @@ export default function ReportsPage() {
                 )}
 
                 {/* Data Table */}
-                <Table>
-                  <TableHeader>
-                    <TableRow className="border-border hover:bg-transparent">
-                      {reportData.columns.map((col) => (
-                        <TableHead key={col} className="text-muted-foreground">
-                          {formatColumnName(col)}
-                        </TableHead>
-                      ))}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {reportData.rows.map((row, idx) => (
-                      <TableRow key={idx} className="border-border">
-                        {reportData.columns.map((col) => (
-                          <TableCell key={col} className="text-sm text-foreground">
-                            {formatCellValue(col, row[col])}
-                          </TableCell>
+                <div className="rounded-lg border border-border overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="border-border hover:bg-transparent">
+                          {reportData.columns.map((col) => (
+                            <TableHead key={col} className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                              {formatColumnName(col)}
+                            </TableHead>
+                          ))}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {reportData.rows.map((row, idx) => (
+                          <TableRow key={idx} className="border-border hover:bg-muted/50 transition-colors">
+                            {reportData.columns.map((col) => (
+                              <TableCell key={col} className="text-sm text-foreground">
+                                {formatCellValue(col, row[col])}
+                              </TableCell>
+                            ))}
+                          </TableRow>
                         ))}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
               </div>
             )}
           </CardContent>

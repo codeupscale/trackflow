@@ -32,10 +32,36 @@ class UserController extends Controller
         $perPage = (int) $request->query('per_page', 50);
         $perPage = max(1, min($perPage, 100));
 
-        $users = User::with('teams')
-            ->where('organization_id', $request->user()->organization_id)
-            ->orderBy('name')
-            ->paginate($perPage);
+        $query = User::with('teams')
+            ->where('organization_id', $request->user()->organization_id);
+
+        // Search by name or email
+        if ($request->filled('search')) {
+            $search = $request->input('search');
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'ilike', '%' . $search . '%')
+                  ->orWhere('email', 'ilike', '%' . $search . '%');
+            });
+        }
+
+        // Filter by role
+        if ($request->filled('role') && $request->input('role') !== 'all') {
+            $query->where('role', $request->input('role'));
+        }
+
+        // Filter by status (active = last_active within 24h, inactive = older or null)
+        if ($request->filled('status') && $request->input('status') !== 'all') {
+            if ($request->input('status') === 'active') {
+                $query->where('last_active_at', '>=', now()->subHours(24));
+            } else {
+                $query->where(function ($q) {
+                    $q->whereNull('last_active_at')
+                      ->orWhere('last_active_at', '<', now()->subHours(24));
+                });
+            }
+        }
+
+        $users = $query->orderBy('name')->paginate($perPage);
 
         return $this->paginatedResponse($users);
     }

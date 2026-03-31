@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\DataPrivacyController;
 use App\Http\Controllers\Api\V1\InvitationController;
+use App\Http\Controllers\Api\V1\ProfileController;
 use App\Http\Controllers\Api\V1\SsoController;
 use App\Http\Controllers\Api\V1\UserPasswordController;
 use Illuminate\Support\Facades\Route;
@@ -44,6 +45,11 @@ Route::prefix('v1')->group(function () {
 
     // Authenticated routes
     Route::middleware('auth:sanctum')->group(function () {
+
+        // Profile
+        Route::get('profile', [ProfileController::class, 'show']);
+        Route::put('profile', [ProfileController::class, 'update']);
+        Route::post('profile/avatar', [ProfileController::class, 'uploadAvatar']);
 
         // Auth
         Route::post('auth/refresh', [AuthController::class, 'refresh']);

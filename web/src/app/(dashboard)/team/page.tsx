@@ -25,6 +25,7 @@ import {
     CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { SearchInput } from "@/components/ui/search-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -45,6 +46,15 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import {
+    Pagination,
+    PaginationContent,
+    PaginationEllipsis,
+    PaginationItem,
+    PaginationLink,
+    PaginationNext,
+    PaginationPrevious,
+} from "@/components/ui/pagination";
 import {
     Dialog,
     DialogContent,
@@ -155,6 +165,18 @@ export default function TeamPage() {
         generate?: string;
     }>({});
 
+    // Search, role, and status filters for the members table
+    const [searchInput, setSearchInput] = useState("");
+    const [memberSearch, setMemberSearch] = useState("");
+    const [roleFilter, setRoleFilter] = useState<string>("all");
+    const [statusFilter, setStatusFilter] = useState<string>("all");
+
+    // Debounced search (300ms)
+    useEffect(() => {
+        const t = setTimeout(() => setMemberSearch(searchInput), 300);
+        return () => clearTimeout(t);
+    }, [searchInput]);
+
     // Team is for owner/admin/manager only; redirect employees so they don't hit 403
     useEffect(() => {
         if (user?.role === "employee") {
@@ -168,7 +190,7 @@ export default function TeamPage() {
     const membersPage = parsePositiveInt(searchParams.get("members_page"), 1);
     const membersPerPage = parsePositiveInt(
         searchParams.get("members_per_page"),
-        50,
+        15,
     );
     const invitesPage = parsePositiveInt(searchParams.get("invites_page"), 1);
     const invitesPerPage = parsePositiveInt(
@@ -182,6 +204,16 @@ export default function TeamPage() {
         router.replace(`/team?${next.toString()}`);
     };
 
+    // Reset to page 1 when filters change
+    useEffect(() => {
+        const next = new URLSearchParams(searchParams.toString());
+        if (next.get("members_page") && next.get("members_page") !== "1") {
+            next.set("members_page", "1");
+            router.replace(`/team?${next.toString()}`);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [memberSearch, roleFilter, statusFilter]);
+
     const {
         data: membersResponse,
         isLoading,
@@ -189,13 +221,32 @@ export default function TeamPage() {
     } = useQuery<LaravelPaginator<TeamMember>>({
         queryKey: [
             "team-members",
-            { page: membersPage, per_page: membersPerPage },
+            { page: membersPage, per_page: membersPerPage, search: memberSearch, role: roleFilter, status: statusFilter },
         ],
         queryFn: async () => {
-            const res = await api.get("/users", {
-                params: { page: membersPage, per_page: membersPerPage },
-            });
-            return res.data;
+            const params: Record<string, string | number> = {
+                page: membersPage,
+                per_page: membersPerPage,
+            };
+            if (memberSearch) params.search = memberSearch;
+            if (roleFilter !== "all") params.role = roleFilter;
+            if (statusFilter !== "all") params.status = statusFilter;
+            const res = await api.get("/users", { params });
+            const raw = res.data;
+            // Backend returns { data, meta: { current_page, last_page, total, per_page }, users }
+            // Normalize to flat LaravelPaginator shape the UI expects
+            if (raw.meta) {
+                return {
+                    data: raw.data || raw.users || [],
+                    current_page: raw.meta.current_page,
+                    last_page: raw.meta.last_page,
+                    total: raw.meta.total,
+                    per_page: raw.meta.per_page,
+                    from: raw.from ?? ((raw.meta.current_page - 1) * raw.meta.per_page + 1),
+                    to: raw.to ?? Math.min(raw.meta.current_page * raw.meta.per_page, raw.meta.total),
+                } as LaravelPaginator<TeamMember>;
+            }
+            return raw;
         },
         enabled: user?.role !== "employee",
     });
@@ -762,23 +813,24 @@ export default function TeamPage() {
                             </div>
                         ) : (
                             <>
+                                <div className="rounded-lg border border-border overflow-hidden">
                                 <div className="overflow-x-auto">
                                 <Table>
                                     <TableHeader>
                                         <TableRow className="border-border hover:bg-transparent">
-                                            <TableHead className="text-muted-foreground">
+                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                                 Email
                                             </TableHead>
-                                            <TableHead className="text-muted-foreground">
+                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                                 Role
                                             </TableHead>
-                                            <TableHead className="text-muted-foreground">
+                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                                 Invited by
                                             </TableHead>
-                                            <TableHead className="text-muted-foreground">
+                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                                 Expires
                                             </TableHead>
-                                            <TableHead className="text-muted-foreground text-right">
+                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">
                                                 Actions
                                             </TableHead>
                                         </TableRow>
@@ -787,7 +839,7 @@ export default function TeamPage() {
                                         {invitations.map((inv) => (
                                             <TableRow
                                                 key={inv.id}
-                                                className="border-border"
+                                                className="border-border hover:bg-muted/50 transition-colors"
                                             >
                                                 <TableCell className="text-sm text-foreground">
                                                     {inv.email}
@@ -862,6 +914,7 @@ export default function TeamPage() {
                                         ))}
                                     </TableBody>
                                 </Table>
+                                </div>
                                 </div>
                                 {invitationsResponse &&
                                     invitationsResponse.last_page > 1 && (
@@ -939,10 +992,46 @@ export default function TeamPage() {
 
             <Card className="border-border bg-card">
                 <CardHeader>
-                    <CardTitle className="text-foreground">Members</CardTitle>
-                    <CardDescription className="text-muted-foreground">
-                        All members of your organization
-                    </CardDescription>
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                        <div>
+                            <CardTitle className="text-foreground">Members</CardTitle>
+                            <CardDescription className="text-muted-foreground">
+                                {membersResponse && membersResponse.total != null
+                                    ? `Showing ${((membersResponse.current_page - 1) * membersPerPage) + 1}\u2013${Math.min(membersResponse.current_page * membersPerPage, membersResponse.total)} of ${membersResponse.total} members`
+                                    : "All members of your organization"}
+                            </CardDescription>
+                        </div>
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-3 mt-4">
+                        <SearchInput
+                            value={searchInput}
+                            onChange={setSearchInput}
+                            placeholder="Search by name or email..."
+                            className="flex-1 max-w-sm"
+                        />
+                        <Select value={roleFilter} onValueChange={(val) => setRoleFilter(val ?? "all")}>
+                            <SelectTrigger className="w-[160px] bg-muted border-border">
+                                <SelectValue placeholder="All Roles" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Roles</SelectItem>
+                                <SelectItem value="owner">Owner</SelectItem>
+                                <SelectItem value="admin">Admin</SelectItem>
+                                <SelectItem value="manager">Manager</SelectItem>
+                                <SelectItem value="employee">Employee</SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <Select value={statusFilter} onValueChange={(val) => setStatusFilter(val ?? "all")}>
+                            <SelectTrigger className="w-[160px] bg-muted border-border">
+                                <SelectValue placeholder="All Status" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Status</SelectItem>
+                                <SelectItem value="active">Active</SelectItem>
+                                <SelectItem value="inactive">Inactive</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
                 </CardHeader>
                 <CardContent>
                     {isLoading ? (
@@ -970,23 +1059,24 @@ export default function TeamPage() {
                         </div>
                     ) : (
                         <>
+                            <div className="rounded-lg border border-border overflow-hidden">
                             <div className="overflow-x-auto">
                             <Table>
                                 <TableHeader>
                                     <TableRow className="border-border hover:bg-transparent">
-                                        <TableHead className="text-muted-foreground">
+                                        <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                             Member
                                         </TableHead>
-                                        <TableHead className="text-muted-foreground">
+                                        <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                             Role
                                         </TableHead>
-                                        <TableHead className="text-muted-foreground">
+                                        <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                             Status
                                         </TableHead>
-                                        <TableHead className="text-muted-foreground">
+                                        <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                                             Last Active
                                         </TableHead>
-                                        <TableHead className="text-muted-foreground text-right">
+                                        <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">
                                             Actions
                                         </TableHead>
                                     </TableRow>
@@ -1003,7 +1093,7 @@ export default function TeamPage() {
                                         return (
                                             <TableRow
                                                 key={member.id}
-                                                className="border-border"
+                                                className="border-border hover:bg-muted/50 transition-colors"
                                             >
                                                 <TableCell>
                                                     <div className="flex items-center gap-3">
@@ -1162,52 +1252,65 @@ export default function TeamPage() {
                                 </TableBody>
                             </Table>
                             </div>
+                            </div>
                             {membersResponse &&
                                 membersResponse.last_page > 1 && (
-                                    <div className="flex items-center justify-between mt-4">
-                                        <Button
-                                            variant="outline"
-                                            size="sm"
-                                            className="border-border text-foreground"
-                                            disabled={
-                                                membersResponse.current_page <=
-                                                1
-                                            }
-                                            onClick={() =>
-                                                setSearchParam(
-                                                    "members_page",
-                                                    String(
-                                                        Math.max(
-                                                            1,
-                                                            membersPage - 1,
+                                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-4 pt-4 border-t border-border">
+                                        <p className="text-sm text-muted-foreground">
+                                            Showing {((membersResponse.current_page - 1) * membersPerPage) + 1}&ndash;{Math.min(membersResponse.current_page * membersPerPage, membersResponse.total)} of {membersResponse.total} members
+                                        </p>
+                                        <Pagination>
+                                            <PaginationContent>
+                                                <PaginationItem>
+                                                    <PaginationPrevious
+                                                        onClick={() =>
+                                                            setSearchParam(
+                                                                "members_page",
+                                                                String(Math.max(1, membersPage - 1)),
+                                                            )
+                                                        }
+                                                        aria-disabled={membersPage <= 1}
+                                                        className={membersPage <= 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                                                    />
+                                                </PaginationItem>
+                                                {Array.from({ length: membersResponse.last_page }, (_, i) => i + 1)
+                                                    .filter((p) => p === 1 || p === membersResponse.last_page || Math.abs(p - membersResponse.current_page) <= 1)
+                                                    .reduce((acc, p, idx, arr) => {
+                                                        if (idx > 0 && p - arr[idx - 1] > 1) acc.push(-1);
+                                                        acc.push(p);
+                                                        return acc;
+                                                    }, [] as number[])
+                                                    .map((p, idx) =>
+                                                        p === -1 ? (
+                                                            <PaginationItem key={`ellipsis-${idx}`}>
+                                                                <PaginationEllipsis />
+                                                            </PaginationItem>
+                                                        ) : (
+                                                            <PaginationItem key={p}>
+                                                                <PaginationLink
+                                                                    isActive={p === membersResponse.current_page}
+                                                                    onClick={() => setSearchParam("members_page", String(p))}
+                                                                    className="cursor-pointer"
+                                                                >
+                                                                    {p}
+                                                                </PaginationLink>
+                                                            </PaginationItem>
                                                         ),
-                                                    ),
-                                                )
-                                            }
-                                        >
-                                            Previous
-                                        </Button>
-                                        <div className="text-sm text-muted-foreground">
-                                            Page {membersResponse.current_page}{" "}
-                                            of {membersResponse.last_page}
-                                        </div>
-                                        <Button
-                                            variant="outline"
-                                            size="sm"
-                                            className="border-border text-foreground"
-                                            disabled={
-                                                membersResponse.current_page >=
-                                                membersResponse.last_page
-                                            }
-                                            onClick={() =>
-                                                setSearchParam(
-                                                    "members_page",
-                                                    String(membersPage + 1),
-                                                )
-                                            }
-                                        >
-                                            Next
-                                        </Button>
+                                                    )}
+                                                <PaginationItem>
+                                                    <PaginationNext
+                                                        onClick={() =>
+                                                            setSearchParam(
+                                                                "members_page",
+                                                                String(membersPage + 1),
+                                                            )
+                                                        }
+                                                        aria-disabled={membersPage >= membersResponse.last_page}
+                                                        className={membersPage >= membersResponse.last_page ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                                                    />
+                                                </PaginationItem>
+                                            </PaginationContent>
+                                        </Pagination>
                                     </div>
                                 )}
                         </>
