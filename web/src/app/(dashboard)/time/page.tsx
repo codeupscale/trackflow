@@ -80,6 +80,17 @@ interface TimeEntry {
     id: string;
     title: string;
   };
+  user?: {
+    id: string;
+    name: string;
+    email: string;
+  };
+}
+
+interface TeamUser {
+  id: string;
+  name: string;
+  email: string;
 }
 
 interface Project {
@@ -108,13 +119,17 @@ export default function TimePage() {
   const searchParams = useSearchParams();
   const canApprove = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
 
+  const isManagerOrAbove = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
+
   const [dateFrom, setDateFrom] = useState(() => searchParams.get('from') || format(new Date(), 'yyyy-MM-dd'));
   const [dateTo, setDateTo] = useState(() => searchParams.get('to') || format(new Date(), 'yyyy-MM-dd'));
   const [projectFilter, setProjectFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [memberFilter, setMemberFilter] = useState<string>('all');
   const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [projectComboboxOpen, setProjectComboboxOpen] = useState(false);
+  const [memberComboboxOpen, setMemberComboboxOpen] = useState(false);
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ['projects-list'],
@@ -124,8 +139,17 @@ export default function TimePage() {
     },
   });
 
+  const { data: teamUsers } = useQuery<TeamUser[]>({
+    queryKey: ['team-users'],
+    queryFn: async () => {
+      const res = await api.get('/users', { params: { per_page: 100 } });
+      return res.data.users || res.data.data || (Array.isArray(res.data) ? res.data : []);
+    },
+    enabled: isManagerOrAbove,
+  });
+
   const { data: entriesData, isLoading } = useQuery<PaginatedResponse>({
-    queryKey: ['time-entries', dateFrom, dateTo, projectFilter, typeFilter, page],
+    queryKey: ['time-entries', dateFrom, dateTo, projectFilter, typeFilter, memberFilter, page],
     queryFn: async () => {
       const params: Record<string, string | number> = {
         date_from: dateFrom,
@@ -138,6 +162,9 @@ export default function TimePage() {
       }
       if (typeFilter && typeFilter !== 'all') {
         params.type = typeFilter;
+      }
+      if (isManagerOrAbove && memberFilter && memberFilter !== 'all') {
+        params.user_id = memberFilter;
       }
       const res = await api.get('/time-entries', { params });
       // Backend returns is_approved boolean, map to status string for UI
@@ -312,6 +339,67 @@ export default function TimePage() {
               </Select>
             </div>
 
+            {isManagerOrAbove && (
+              <div className="grid gap-1.5">
+                <label className="text-sm font-medium text-foreground">Member</label>
+                <Popover open={memberComboboxOpen} onOpenChange={setMemberComboboxOpen}>
+                  <PopoverTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        className="w-[200px] justify-between font-normal"
+                      />
+                    }
+                  >
+                    <span className="truncate">
+                      {memberFilter === 'all'
+                        ? 'All Members'
+                        : teamUsers?.find((u) => u.id === memberFilter)?.name ?? 'All Members'}
+                    </span>
+                    <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[200px] p-0">
+                    <Command>
+                      <CommandInput placeholder="Search members..." />
+                      <CommandList>
+                        <CommandEmpty>No members found.</CommandEmpty>
+                        <CommandGroup>
+                          <CommandItem
+                            value="all"
+                            data-checked={memberFilter === 'all' ? true : undefined}
+                            onSelect={() => {
+                              setMemberFilter('all');
+                              setPage(1);
+                              setMemberComboboxOpen(false);
+                            }}
+                          >
+                            All Members
+                          </CommandItem>
+                          {teamUsers?.map((member) => (
+                            <CommandItem
+                              key={member.id}
+                              value={member.name}
+                              data-checked={memberFilter === member.id ? true : undefined}
+                              onSelect={() => {
+                                setMemberFilter(member.id);
+                                setPage(1);
+                                setMemberComboboxOpen(false);
+                              }}
+                            >
+                              <div className="flex flex-col">
+                                <span>{member.name}</span>
+                                <span className="text-xs text-muted-foreground">{member.email}</span>
+                              </div>
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            )}
+
             {canApprove && selectedEntries.length > 0 && (
               <Button
                 onClick={() => approveMutation.mutate(selectedEntries)}
@@ -377,6 +465,9 @@ export default function TimePage() {
                       </TableHead>
                     )}
                     <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Date</TableHead>
+                    {isManagerOrAbove && (
+                      <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Member</TableHead>
+                    )}
                     <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Type</TableHead>
                     <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Project</TableHead>
                     <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Task</TableHead>
@@ -431,6 +522,14 @@ export default function TimePage() {
                           })()}
                         </div>
                       </TableCell>
+                      {isManagerOrAbove && (
+                        <TableCell>
+                          <div className="flex flex-col">
+                            <span className="text-sm text-foreground">{entry.user?.name || '—'}</span>
+                            <span className="text-xs text-muted-foreground">{entry.user?.email || ''}</span>
+                          </div>
+                        </TableCell>
+                      )}
                       <TableCell>
                         <Badge variant={
                           entry.type === 'idle'

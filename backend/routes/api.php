@@ -60,18 +60,18 @@ Route::prefix('v1')->group(function () {
         Route::get('auth/organizations', [AuthController::class, 'organizations']);
         Route::post('auth/switch-organization', [AuthController::class, 'switchOrganization']);
 
-        // Invitations (owner/admin only)
+        // Invitations (owner/admin/manager)
         Route::get('invitations', [InvitationController::class, 'index'])
-            ->middleware('role:owner,admin');
+            ->middleware('role:owner,admin,manager');
         Route::post('invitations', [InvitationController::class, 'store'])
-            ->middleware('role:owner,admin');
+            ->middleware('role:owner,admin,manager');
         Route::post('invitations/{id}/resend', [InvitationController::class, 'resend'])
-            ->middleware('role:owner,admin');
+            ->middleware('role:owner,admin,manager');
         Route::delete('invitations/{id}', [InvitationController::class, 'destroy'])
-            ->middleware('role:owner,admin');
+            ->middleware('role:owner,admin,manager');
         // Backward-compatible alias used by older frontend builds
         Route::post('users/invite', [InvitationController::class, 'store'])
-            ->middleware('role:owner,admin');
+            ->middleware('role:owner,admin,manager');
 
         // Timer
         Route::post('timer/start', [\App\Http\Controllers\Api\V1\TimerController::class, 'start']);
