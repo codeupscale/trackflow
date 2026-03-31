@@ -177,6 +177,10 @@ jobs:
           - Fixed Windows installer error \"Failed to uninstall old application files\" — app is now killed before install/uninstall
           - Fixed tray timer text showing blue/purple artifacts on macOS — now uses clean system color
           - Fixed timer window appearing with dark background instead of white
+          - Fixed idle alert popup not showing after first idle cycle on macOS — window closure without action no longer breaks idle detection permanently
+
+          **New Features**
+          - **Pin / Always on Top** — thumbtack button in titlebar to keep the timer visible on top of other windows. Also available in tray right-click menu. State persists across restarts.
 
           **Improvements**
           - Added TrackFlow logo branding to login screen, titlebar, and idle alert
