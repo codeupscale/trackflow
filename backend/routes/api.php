@@ -133,6 +133,10 @@ Route::prefix('v1')->group(function () {
             Route::get('timeline', [\App\Http\Controllers\Api\V1\ReportController::class, 'timeline']);
             Route::post('export', [\App\Http\Controllers\Api\V1\ReportController::class, 'export'])
                 ->middleware('throttle:10,60'); // 10 exports per hour
+            Route::get('analytics', [\App\Http\Controllers\Api\V1\ReportController::class, 'analytics']);
+            Route::get('detailed-logs', [\App\Http\Controllers\Api\V1\ReportController::class, 'detailedLogs']);
+            Route::get('activity-by-day', [\App\Http\Controllers\Api\V1\ReportController::class, 'activityByDay']);
+            Route::get('time-logs', [\App\Http\Controllers\Api\V1\ReportController::class, 'timeLogs']);
             Route::get('payroll', [\App\Http\Controllers\Api\V1\ReportController::class, 'payroll']);
             Route::get('attendance', [\App\Http\Controllers\Api\V1\ReportController::class, 'attendance']);
         });
