@@ -3,6 +3,13 @@
 use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\DataPrivacyController;
+use App\Http\Controllers\Api\V1\Hr\DepartmentController;
+use App\Http\Controllers\Api\V1\Hr\LeaveBalanceController;
+use App\Http\Controllers\Api\V1\Hr\LeaveCalendarController;
+use App\Http\Controllers\Api\V1\Hr\LeaveRequestController;
+use App\Http\Controllers\Api\V1\Hr\LeaveTypeController;
+use App\Http\Controllers\Api\V1\Hr\PositionController;
+use App\Http\Controllers\Api\V1\Hr\PublicHolidayController;
 use App\Http\Controllers\Api\V1\InvitationController;
 use App\Http\Controllers\Api\V1\ProfileController;
 use App\Http\Controllers\Api\V1\SsoController;
@@ -126,6 +133,10 @@ Route::prefix('v1')->group(function () {
             Route::get('timeline', [\App\Http\Controllers\Api\V1\ReportController::class, 'timeline']);
             Route::post('export', [\App\Http\Controllers\Api\V1\ReportController::class, 'export'])
                 ->middleware('throttle:10,60'); // 10 exports per hour
+            Route::get('analytics', [\App\Http\Controllers\Api\V1\ReportController::class, 'analytics']);
+            Route::get('detailed-logs', [\App\Http\Controllers\Api\V1\ReportController::class, 'detailedLogs']);
+            Route::get('activity-by-day', [\App\Http\Controllers\Api\V1\ReportController::class, 'activityByDay']);
+            Route::get('time-logs', [\App\Http\Controllers\Api\V1\ReportController::class, 'timeLogs']);
             Route::get('payroll', [\App\Http\Controllers\Api\V1\ReportController::class, 'payroll']);
             Route::get('attendance', [\App\Http\Controllers\Api\V1\ReportController::class, 'attendance']);
         });
@@ -177,6 +188,22 @@ Route::prefix('v1')->group(function () {
             Route::delete('account', [DataPrivacyController::class, 'deleteAccount']);
             Route::get('data-processing', [DataPrivacyController::class, 'dataProcessingInfo']);
             Route::post('consent', [DataPrivacyController::class, 'recordConsent']);
+        });
+
+        // HR - Org Structure
+        Route::prefix('hr')->group(function () {
+            Route::get('departments/tree', [DepartmentController::class, 'tree']);
+            Route::apiResource('departments', DepartmentController::class);
+            Route::apiResource('positions', PositionController::class);
+
+            // Leave Management
+            Route::get('leave-calendar', [LeaveCalendarController::class, 'index']);
+            Route::get('leave-balances', [LeaveBalanceController::class, 'index']);
+            Route::apiResource('leave-types', LeaveTypeController::class)->only(['index', 'store']);
+            Route::apiResource('leave-requests', LeaveRequestController::class)->except(['update']);
+            Route::put('leave-requests/{leaveRequest}/approve', [LeaveRequestController::class, 'approve']);
+            Route::put('leave-requests/{leaveRequest}/reject', [LeaveRequestController::class, 'reject']);
+            Route::apiResource('public-holidays', PublicHolidayController::class)->only(['index', 'store']);
         });
 
         // Permissions (owner/admin only)

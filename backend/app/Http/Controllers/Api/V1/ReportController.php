@@ -216,6 +216,123 @@ class ReportController extends Controller
         return response()->json(['attendance' => $data]);
     }
 
+    // REPT-11: Activity by day of week
+    public function activityByDay(Request $request): JsonResponse
+    {
+        $request->validate([
+            'date_from' => 'required|date',
+            'date_to' => 'required|date|after_or_equal:date_from',
+            'user_id' => 'nullable|uuid',
+        ]);
+
+        $user = $request->user();
+        $userId = $request->user_id;
+
+        if ($user->isEmployee()) {
+            $userId = $user->id;
+        }
+
+        [$dateFrom, $dateTo] = $this->parseDateRange($request);
+
+        $data = $this->reportService->activityByDay(
+            $user->organization_id,
+            $userId,
+            $dateFrom,
+            $dateTo
+        );
+
+        return response()->json(['data' => $data]);
+    }
+
+    // REPT-12: Detailed time logs (paginated)
+    public function timeLogs(Request $request): JsonResponse
+    {
+        $request->validate([
+            'date_from' => 'required|date',
+            'date_to' => 'required|date|after_or_equal:date_from',
+            'user_id' => 'nullable|uuid',
+            'page' => 'nullable|integer|min:1',
+        ]);
+
+        $user = $request->user();
+        $userId = $request->user_id;
+
+        if ($user->isEmployee()) {
+            $userId = $user->id;
+        }
+
+        [$dateFrom, $dateTo] = $this->parseDateRange($request);
+
+        $paginator = $this->reportService->timeLogs(
+            $user->organization_id,
+            $userId,
+            $dateFrom,
+            $dateTo,
+            15
+        );
+
+        return response()->json($paginator);
+    }
+
+    // REPT-09: Analytics
+    public function analytics(Request $request): JsonResponse
+    {
+        $request->validate([
+            'date_from' => 'required|date',
+            'date_to' => 'required|date|after_or_equal:date_from',
+            'user_id' => 'nullable|uuid',
+        ]);
+
+        $user = $request->user();
+        $userId = $request->user_id;
+
+        if ($user->isEmployee()) {
+            $userId = $user->id;
+        }
+
+        [$dateFrom, $dateTo] = $this->parseDateRange($request);
+
+        $data = $this->reportService->analytics(
+            $user->organization_id,
+            $userId,
+            $dateFrom,
+            $dateTo
+        );
+
+        return response()->json($data);
+    }
+
+    // REPT-10: Detailed Logs
+    public function detailedLogs(Request $request): JsonResponse
+    {
+        $request->validate([
+            'date_from' => 'required|date',
+            'date_to' => 'required|date|after_or_equal:date_from',
+            'user_id' => 'nullable|uuid',
+            'per_page' => 'nullable|integer|min:1|max:50',
+        ]);
+
+        $user = $request->user();
+        $userId = $request->user_id;
+
+        if ($user->isEmployee()) {
+            $userId = $user->id;
+        }
+
+        [$dateFrom, $dateTo] = $this->parseDateRange($request);
+
+        $data = $this->reportService->detailedLogs(
+            $user->organization_id,
+            $userId,
+            $dateFrom,
+            $dateTo,
+            (int) ($request->per_page ?? 10),
+            (int) ($request->page ?? 1)
+        );
+
+        return response()->json($data);
+    }
+
     // Job status check
     public function jobStatus(string $id): JsonResponse
     {
