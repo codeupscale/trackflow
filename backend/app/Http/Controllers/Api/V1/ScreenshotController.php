@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Models\ActivityLog;
 use App\Models\Screenshot;
 use App\Jobs\ProcessScreenshotJob;
 use App\Support\TimezoneAwareDateRange;
@@ -132,21 +133,54 @@ class ScreenshotController extends Controller
             min((int) $request->input('per_page', 50), 100)
         );
 
+        // Pre-load activity logs closest to each screenshot's capture time (within 10 min window).
+        // We batch-query all relevant activity logs to avoid N+1.
+        $screenshotIds = $screenshots->getCollection()->pluck('id')->all();
+        $screenshotMap = $screenshots->getCollection()->keyBy('id');
+
+        // Build a map of time_entry_id => captured_at for lookup
+        $activityData = [];
+        if (count($screenshotIds) > 0) {
+            // For each screenshot, find the closest activity log within its time entry
+            foreach ($screenshots->getCollection() as $ss) {
+                if (!$ss->time_entry_id || !$ss->captured_at) continue;
+                $log = ActivityLog::where('time_entry_id', $ss->time_entry_id)
+                    ->where('organization_id', $ss->organization_id)
+                    ->whereBetween('logged_at', [
+                        $ss->captured_at->copy()->subMinutes(10),
+                        $ss->captured_at->copy()->addMinutes(10),
+                    ])
+                    ->orderByRaw('ABS(EXTRACT(EPOCH FROM (logged_at - ?)))', [$ss->captured_at])
+                    ->first();
+                if ($log) {
+                    $activityData[$ss->id] = $log;
+                }
+            }
+        }
+
         // Add URLs for viewing — serve through HMAC-signed API endpoint for reliability
         // (avoids CORS, expired S3 signed URLs, and storage driver mismatches)
-        $screenshots->getCollection()->transform(function ($screenshot) {
+        $screenshots->getCollection()->transform(function ($screenshot) use ($activityData) {
             $screenshot->thumbnail_url = $this->getSignedFileUrl($screenshot->id, 'thumbnail');
             $screenshot->url = $this->getSignedFileUrl($screenshot->id, 'display');
             $screenshot->original_url = $this->getSignedFileUrl($screenshot->id, 'original');
             $screenshot->user_name = $screenshot->user?->name ?? 'Unknown';
+            $screenshot->user_avatar_color = substr(md5($screenshot->user_id ?? ''), 0, 6);
             // Prefer point-in-time score captured with the screenshot (Hubstaff-style),
             // fall back to the time entry's overall score for older screenshots
             $screenshot->activity_score = $screenshot->activity_score_at_capture
                 ?? $screenshot->timeEntry?->activity_score
                 ?? 0;
             $screenshot->project_name = $screenshot->timeEntry?->project?->name ?? null;
+            $screenshot->project_id = $screenshot->timeEntry?->project_id ?? null;
             $screenshot->app_name = $screenshot->app_name;
             $screenshot->window_title = $screenshot->window_title;
+
+            // Attach keyboard/mouse event counts from closest activity log
+            $log = $activityData[$screenshot->id] ?? null;
+            $screenshot->keyboard_events = $log?->keyboard_events ?? null;
+            $screenshot->mouse_events = $log?->mouse_events ?? null;
+
             return $screenshot;
         });
 
