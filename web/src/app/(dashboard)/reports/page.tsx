@@ -90,7 +90,7 @@ interface DetailedLog {
   member_role: string;
   project_name: string;
   project_color: string;
-  task_description: string;
+  task_name: string;
   duration_seconds: number;
   activity_percent: number;
   billable_amount: number;
@@ -337,7 +337,23 @@ export default function ReportsPage() {
       const res = await api.get('/reports/analytics', {
         params: { date_from: dateFrom, date_to: dateTo },
       });
-      return res.data;
+      const raw = res.data;
+      const kpis = raw.kpis ?? {};
+      return {
+        total_hours: kpis.total_tracked_hours?.value ?? 0,
+        hours_change_percent: kpis.total_tracked_hours?.change_percent ?? 0,
+        average_activity: kpis.avg_activity_percent?.value ?? 0,
+        total_budget_used: kpis.total_budget_used?.value ?? 0,
+        budget_change_percent: kpis.total_budget_used?.change_percent ?? 0,
+        billable_ratio: kpis.billable_ratio?.billable ?? 0,
+        non_billable_ratio: kpis.billable_ratio?.non_billable ?? 0,
+        time_per_project: raw.time_per_project ?? [],
+        team_activity_levels: (raw.team_activity_levels ?? []).map((d: Record<string, unknown>) => ({
+          day: String(d.day ?? ''),
+          avg_activity: Number(d.avg_activity ?? 0),
+          is_weekend: d.day_num === 0 || d.day_num === 6,
+        })),
+      } as AnalyticsData;
     },
     enabled: !isEmployee,
   });
@@ -910,10 +926,10 @@ export default function ReportsPage() {
                         </TableCell>
                         {/* Task */}
                         <TableCell className="text-sm text-foreground max-w-[200px]">
-                          <span className="truncate block" title={row.task_description}>
-                            {row.task_description && row.task_description.length > 35
-                              ? row.task_description.slice(0, 35) + '\u2026'
-                              : row.task_description || '--'}
+                          <span className="truncate block" title={row.task_name}>
+                            {row.task_name && row.task_name.length > 35
+                              ? row.task_name.slice(0, 35) + '\u2026'
+                              : row.task_name || '--'}
                           </span>
                         </TableCell>
                         {/* Duration */}
