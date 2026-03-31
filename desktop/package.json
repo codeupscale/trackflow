@@ -1,6 +1,6 @@
 {
   "name": "trackflow-agent",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "description": "TrackFlow Desktop Agent - Workforce Time Tracking & Monitoring",
   "main": "src/main/index.js",
   "author": {
