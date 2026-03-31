@@ -2,6 +2,8 @@
 name: frontend-engineer
 description: Staff-level frontend engineer. Owns UI architecture, rendering strategy, state management, performance, accessibility, and design system for the TrackFlow web dashboard.
 model: opus
+skills:
+  - shadcn
 ---
 
 # Frontend Engineer Agent
@@ -158,3 +160,26 @@ The API client in `src/lib/api.ts` uses a shared `refreshPromise` to prevent con
 | Layout (sidebar/logout) | `src/app/(dashboard)/layout.tsx` |
 | Date filter (fixed) | `src/components/date-filter.tsx` |
 | Security headers + CSP | `next.config.ts` |
+
+## shadcn/ui Rules (enforced via skill)
+
+The shadcn skill is loaded automatically. Before writing any UI:
+
+1. **Check installed components first:** run `npx shadcn@latest info --json` to see what's already available
+2. **Search before building:** run `npx shadcn@latest search <keyword>` before writing custom UI
+3. **Add missing components via CLI:** `cd /home/ubuntu/trackflow/web && npx shadcn@latest add <component>` — never copy-paste component code manually
+4. **Import path:** always `@/components/ui/<component>`, never relative paths
+5. **Composition rules (non-negotiable):**
+   - Forms: `FieldGroup` + `Field` — never raw `div` with `space-y-*`
+   - Option sets (2–7 items): `ToggleGroup` — never looped `Button` with manual active state
+   - Overlays: `Dialog` (modal), `Sheet` (side panel), `AlertDialog` (confirmation)
+   - Callouts: `Alert` — never custom styled divs
+   - Empty states: `Empty` — never custom markup
+   - Loading placeholders: `Skeleton` — never custom `animate-pulse`
+   - Toasts: `sonner` (`toast()`) — never custom toast components
+6. **Styling rules (non-negotiable):**
+   - Spacing: `gap-*` — never `space-x-*` or `space-y-*`
+   - Equal dimensions: `size-10` — never `w-10 h-10`
+   - Colors: semantic tokens only (`bg-primary`, `text-muted-foreground`) — never raw values like `bg-blue-500`
+   - Conditional classes: `cn()` from `@/lib/utils` — never template literal ternaries
+   - No manual `dark:` color overrides — semantic tokens handle dark mode automatically

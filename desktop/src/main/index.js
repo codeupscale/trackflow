@@ -143,6 +143,37 @@ function saveLastProjectId(projectId) {
   }
 }
 
+// ── Always-on-Top (Pin) Persistence ──────────────────────────────────────────
+// Persists the "always on top" / "pin" state so it survives app restarts.
+// Uses the same user-prefs.json file as lastSelectedProjectId.
+function loadAlwaysOnTop() {
+  try {
+    const p = getPrefsPath();
+    if (!p || !fs.existsSync(p)) return true; // default: pinned
+    const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return data.alwaysOnTop !== undefined ? !!data.alwaysOnTop : true;
+  } catch {
+    return true;
+  }
+}
+
+function saveAlwaysOnTop(pinned) {
+  try {
+    const p = getPrefsPath();
+    if (!p) return;
+    let data = {};
+    if (fs.existsSync(p)) {
+      try { data = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { data = {}; }
+    }
+    data.alwaysOnTop = !!pinned;
+    fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) {
+    console.error('Failed to save always-on-top state:', e);
+  }
+}
+
+let isAlwaysOnTop = true; // will be loaded from prefs in app.whenReady
+
 // ── Restart State Persistence ────────────────────────────────────────────────
 // Saves tracking state before a forced restart (e.g., after granting Screen
 // Recording permission on macOS). On next launch, the app auto-resumes.
@@ -451,6 +482,10 @@ app.on('ready', async () => {
   console.log('app.ready fired — initializing...');
   await initializeApp();
   console.log('initializeApp() complete');
+  // In dev mode, auto-show the popup so CDP remote debugging can connect to it
+  if (process.env.NODE_ENV === 'development') {
+    setTimeout(() => showPopup(), 500);
+  }
 });
 
 app.on('window-all-closed', () => {
@@ -606,6 +641,9 @@ async function initializeApp() {
   }
 
   isAuthenticated = true;
+
+  // Load persisted always-on-top preference
+  isAlwaysOnTop = loadAlwaysOnTop();
 
   // Identify user in PostHog
   if (user) {
@@ -1072,7 +1110,21 @@ function buildTrayContextMenu() {
   // ── Navigation ─────────────────────────────────────────────────────────
   template.push(
     { label: 'Open App Window', click: () => showPopup() },
-    { label: 'Open Dashboard', click: () => openDashboardInBrowser() }
+    { label: 'Open Dashboard', click: () => openDashboardInBrowser() },
+    {
+      label: 'Always on Top',
+      type: 'checkbox',
+      checked: isAlwaysOnTop,
+      click: (menuItem) => {
+        isAlwaysOnTop = menuItem.checked;
+        if (popupWindow && !popupWindow.isDestroyed()) {
+          _applyAlwaysOnTop(popupWindow, isAlwaysOnTop);
+          popupWindow.webContents.send('pin-state-changed', { pinned: isAlwaysOnTop });
+        }
+        saveAlwaysOnTop(isAlwaysOnTop);
+        console.log(`[Pin] Always on top (tray): ${isAlwaysOnTop}`);
+      },
+    }
   );
 
   template.push({ type: 'separator' });
@@ -1091,6 +1143,53 @@ function buildTrayContextMenu() {
   );
 
   return Menu.buildFromTemplate(template);
+}
+
+/**
+ * Apply always-on-top state to a BrowserWindow.
+ * On macOS, uses 'floating' level (NSFloatingWindowLevel) so the window
+ * stays above normal app windows. moveTop() is called every 300ms to keep
+ * the window at the front of its level — this is needed because Electron 28
+ * on macOS Sequoia loses z-order after another app gains focus even when
+ * isAlwaysOnTop() still returns true.
+ */
+// Interval reference for the pin keepalive (macOS workaround)
+let _pinKeepalive = null;
+
+function _applyAlwaysOnTop(win, pinned) {
+  if (!win || win.isDestroyed()) return;
+
+  // Clear any existing keepalive
+  if (_pinKeepalive) {
+    clearInterval(_pinKeepalive);
+    _pinKeepalive = null;
+  }
+
+  if (pinned) {
+    // 'floating' = NSFloatingWindowLevel — sits above all normal app windows.
+    // relativeLevel 1 puts it one layer above other floating windows.
+    win.setAlwaysOnTop(true, 'floating', 1);
+    win.moveTop();
+    console.log(`[Pin] setAlwaysOnTop(true,'floating',1) + moveTop(). isAlwaysOnTop()=${win.isAlwaysOnTop()}`);
+
+    // macOS Sequoia + Electron 28 regression: the window visually slips
+    // behind other apps after focus changes even though isAlwaysOnTop()
+    // returns true. Re-assert the level and call moveTop() every 300ms.
+    // NOTE: we do NOT toggle off→on here — that creates a gap where another
+    // window can jump in. We only re-assert the true state.
+    _pinKeepalive = setInterval(() => {
+      if (!win || win.isDestroyed() || !isAlwaysOnTop) {
+        clearInterval(_pinKeepalive);
+        _pinKeepalive = null;
+        return;
+      }
+      win.setAlwaysOnTop(true, 'floating', 1);
+      win.moveTop();
+    }, 300);
+  } else {
+    win.setAlwaysOnTop(false);
+    console.log(`[Pin] setAlwaysOnTop(false) called. isAlwaysOnTop()=${win.isAlwaysOnTop()}`);
+  }
 }
 
 function showPopup() {
@@ -1163,22 +1262,41 @@ function showPopup() {
     frame: false,
     resizable: false,
     skipTaskbar: true,
-    alwaysOnTop: true,
     show: false,
     backgroundColor: '#0a0a0a',   // Prevent white flash on all platforms
-    ...(process.platform === 'linux' && { visibleOnAllWorkspaces: true }),
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: process.env.NODE_ENV !== 'development',
+      devTools: true,
     },
   });
+
+  // Apply always-on-top AFTER window creation (not in constructor options).
+  // On macOS, use 'floating' level + relativeLevel 1 for reliable z-order.
+  _applyAlwaysOnTop(popupWindow, isAlwaysOnTop);
 
   popupWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
   popupWindow.once('ready-to-show', () => {
     popupWindow.show();
+    if (process.env.NODE_ENV === 'development') {
+      popupWindow.webContents.openDevTools({ mode: 'detach' });
+    }
+  });
+
+  // After the renderer finishes loading, ensure projects are loaded and
+  // send projects-ready + sync-timer signals. This fixes the race where
+  // the renderer's own loadProjects() fires before the API client has a
+  // valid token (e.g. after logout/re-login or password reset).
+  popupWindow.webContents.once('did-finish-load', () => {
+    loadProjects().then(() => {
+      if (popupWindow && !popupWindow.isDestroyed()) {
+        popupWindow.webContents.send('projects-ready');
+        popupWindow.webContents.send('sync-timer');
+      }
+    });
   });
 
   // Hide on blur — with debounce for Linux DEs that fire spurious blur events
@@ -1315,6 +1433,32 @@ function setupIPC() {
   ipcMain.removeHandler('check-screen-permission');
   ipcMain.removeHandler('request-screen-permission');
   ipcMain.removeHandler('open-screen-recording-settings');
+  ipcMain.removeHandler('hide-window');
+  ipcMain.removeHandler('toggle-pin');
+  ipcMain.removeHandler('get-pin-state');
+  ipcMain.removeHandler('install-update');
+
+  ipcMain.handle('hide-window', () => {
+    if (popupWindow && !popupWindow.isDestroyed()) {
+      popupWindow.hide();
+    }
+  });
+
+  ipcMain.handle('toggle-pin', (_, forceState) => {
+    // If forceState is provided (boolean), use it; otherwise toggle
+    isAlwaysOnTop = typeof forceState === 'boolean' ? forceState : !isAlwaysOnTop;
+    if (popupWindow && !popupWindow.isDestroyed()) {
+      _applyAlwaysOnTop(popupWindow, isAlwaysOnTop);
+      popupWindow.webContents.send('pin-state-changed', { pinned: isAlwaysOnTop });
+    }
+    saveAlwaysOnTop(isAlwaysOnTop);
+    console.log(`[Pin] Always on top: ${isAlwaysOnTop}`);
+    return { pinned: isAlwaysOnTop };
+  });
+
+  ipcMain.handle('get-pin-state', () => {
+    return { pinned: isAlwaysOnTop };
+  });
 
   ipcMain.handle('check-screen-permission', async () => {
     if (process.platform !== 'darwin') return { granted: true, platform: process.platform };
@@ -1412,6 +1556,7 @@ function setupIPC() {
   });
 
   ipcMain.handle('get-projects', async () => {
+    if (!apiClient) return [];
     try {
       return await apiClient.getProjects();
     } catch {
@@ -1783,19 +1928,16 @@ function updateTrayIcon(running) {
 }
 
 // Cross-platform tray text:
-//   macOS: tray.setTitle() shows text next to icon in menu bar
-//            Uses ANSI escape codes to color the timer green when tracking
-//   Windows/Linux: tray.setTitle() is not visible — use tooltip instead
+//   macOS: tray.setTitle() shows text next to icon in menu bar.
+//            Text color is system-controlled (white in dark mode, black in light mode).
+//            The green/gray dot in the template icon indicates tracking state.
+//   Windows/Linux: tray.setTitle() is not visible — tooltip used instead.
 function setTrayText(text) {
   if (!tray) return;
   if (process.platform === 'darwin') {
-    if (text && isTimerRunning) {
-      // ANSI RGB escape: green (#22c55e = rgb(34,197,94)) when actively tracking
-      tray.setTitle(`\x1b[38;2;34;197;94m${text}\x1b[0m`, { fontType: 'monospacedDigit' });
-    } else {
-      // Default system color when stopped / no text
-      tray.setTitle(text, { fontType: 'monospacedDigit' });
-    }
+    // Use plain system color — macOS auto-adapts to menu bar (white/dark, black/light).
+    // State is indicated by the colored dot in the tray icon, not text color.
+    tray.setTitle(text || '', { fontType: 'monospacedDigit' });
   }
   // All platforms: update tooltip so hover shows the time
   if (text) {
@@ -1899,7 +2041,8 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: process.env.NODE_ENV !== 'development',
+      devTools: true,
     },
   });
 
@@ -1931,8 +2074,36 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
   // Use did-finish-load as a safety net.
   win.webContents.once('did-finish-load', showAndSendData);
 
+  // BUG-002: If the idle alert window is closed without the user clicking an
+  // action button (e.g., Cmd+W on macOS, dock close, OS memory pressure), the
+  // idle detector stays in isIdle=true state forever, preventing all future
+  // idle detection. We must treat unexpected closure as "keep" (safest default
+  // — does not discard tracked time) and re-arm the detector.
+  // Track whether the window was dismissed programmatically via dismissIdleAlert().
+  win._dismissedProgrammatically = false;
+
   win.on('closed', () => {
     idleAlertWindow = null;
+    if (!win._dismissedProgrammatically) {
+      console.log('[IdleAlert] Window closed without user action — treating as "keep" and re-arming idle detector');
+      // Resolve idle state so isIdle resets to false
+      idleDetector?.resolveIdle();
+      // Restart activity monitor and screenshots that were paused when idle was detected
+      activityMonitor?.start();
+      if (isTimerRunning && currentEntry) {
+        screenshotService?.start(currentEntry.id, {
+          immediateCapture: config.screenshot_capture_immediate_after_idle === true,
+        });
+      }
+      // Re-arm idle detector so future idle periods are detected
+      idleDetector?.start();
+      // Restore tray
+      updateTrayIcon(isTimerRunning);
+      if (isTimerRunning) {
+        updateTrayTitle();
+        startTrayTimer();
+      }
+    }
   });
 
   win.loadFile(path.join(__dirname, '..', 'renderer', 'idle-alert.html')).catch((err) => {
@@ -1943,6 +2114,9 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
 
 function dismissIdleAlert() {
   if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
+    // Mark as programmatic dismissal so the 'closed' handler doesn't
+    // re-arm the idle detector (handleIdleAction already did that).
+    idleAlertWindow._dismissedProgrammatically = true;
     idleAlertWindow.destroy();
   }
   idleAlertWindow = null;
@@ -2075,7 +2249,8 @@ function createLoginWindow() {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: process.env.NODE_ENV !== 'development',
+      devTools: true,
     },
   });
 
@@ -2118,6 +2293,8 @@ function createLoginWindow() {
 
         BrowserWindow.getAllWindows().forEach((w) => w.close());
         await initializeApp();
+        // Show the popup immediately after login so the user sees the timer
+        showPopup();
         return { success: true };
       } catch (e) {
         return { error: _friendlyLoginError(e) };
@@ -2255,6 +2432,8 @@ function createLoginWindow() {
 
         BrowserWindow.getAllWindows().forEach((w) => w.close());
         await initializeApp();
+        // Show the popup immediately after login so the user sees the timer
+        showPopup();
         return { success: true };
       } catch (e) {
         return { error: _friendlyLoginError(e) };
@@ -2277,6 +2456,8 @@ function createLoginWindow() {
 
         BrowserWindow.getAllWindows().forEach((w) => w.close());
         await initializeApp();
+        // Show the popup immediately after login so the user sees the timer
+        showPopup();
         return { success: true };
       } catch (e) {
         return { error: _friendlyLoginError(e) };

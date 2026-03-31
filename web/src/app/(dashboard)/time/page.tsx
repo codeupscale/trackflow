@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
-import { CalendarIcon, CheckCircle, Clock, Info, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { CheckCircle, ChevronsUpDown, Clock, Info, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -17,7 +17,30 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
+import { DatePicker } from '@/components/ui/date-picker';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
 import {
   Select,
   SelectContent,
@@ -57,6 +80,17 @@ interface TimeEntry {
     id: string;
     title: string;
   };
+  user?: {
+    id: string;
+    name: string;
+    email: string;
+  };
+}
+
+interface TeamUser {
+  id: string;
+  name: string;
+  email: string;
 }
 
 interface Project {
@@ -85,12 +119,17 @@ export default function TimePage() {
   const searchParams = useSearchParams();
   const canApprove = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
 
+  const isManagerOrAbove = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
+
   const [dateFrom, setDateFrom] = useState(() => searchParams.get('from') || format(new Date(), 'yyyy-MM-dd'));
   const [dateTo, setDateTo] = useState(() => searchParams.get('to') || format(new Date(), 'yyyy-MM-dd'));
   const [projectFilter, setProjectFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [memberFilter, setMemberFilter] = useState<string>('all');
   const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
   const [page, setPage] = useState(1);
+  const [projectComboboxOpen, setProjectComboboxOpen] = useState(false);
+  const [memberComboboxOpen, setMemberComboboxOpen] = useState(false);
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ['projects-list'],
@@ -100,8 +139,17 @@ export default function TimePage() {
     },
   });
 
+  const { data: teamUsers } = useQuery<TeamUser[]>({
+    queryKey: ['team-users'],
+    queryFn: async () => {
+      const res = await api.get('/users', { params: { per_page: 100 } });
+      return res.data.users || res.data.data || (Array.isArray(res.data) ? res.data : []);
+    },
+    enabled: isManagerOrAbove,
+  });
+
   const { data: entriesData, isLoading } = useQuery<PaginatedResponse>({
-    queryKey: ['time-entries', dateFrom, dateTo, projectFilter, typeFilter, page],
+    queryKey: ['time-entries', dateFrom, dateTo, projectFilter, typeFilter, memberFilter, page],
     queryFn: async () => {
       const params: Record<string, string | number> = {
         date_from: dateFrom,
@@ -114,6 +162,9 @@ export default function TimePage() {
       }
       if (typeFilter && typeFilter !== 'all') {
         params.type = typeFilter;
+      }
+      if (isManagerOrAbove && memberFilter && memberFilter !== 'all') {
+        params.user_id = memberFilter;
       }
       const res = await api.get('/time-entries', { params });
       // Backend returns is_approved boolean, map to status string for UI
@@ -191,62 +242,87 @@ export default function TimePage() {
       {/* Filters */}
       <Card className="border-border bg-card">
         <CardContent className="pt-6">
-          <div className="flex flex-col sm:flex-row gap-4 items-end">
+          <div className="flex flex-col sm:flex-row gap-4 items-end flex-wrap">
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-foreground" htmlFor="date-from">
+              <label className="text-sm font-medium text-foreground">
                 From
               </label>
-              <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="date-from"
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
-                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
-                />
-              </div>
+              <DatePicker
+                value={dateFrom}
+                onChange={(val) => { setDateFrom(val); setPage(1); }}
+                placeholder="Start date"
+              />
             </div>
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-foreground" htmlFor="date-to">
+              <label className="text-sm font-medium text-foreground">
                 To
               </label>
-              <div className="relative">
-                <CalendarIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="date-to"
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
-                  className="pl-10 w-[160px] bg-muted border-border text-foreground"
-                />
-              </div>
+              <DatePicker
+                value={dateTo}
+                onChange={(val) => { setDateTo(val); setPage(1); }}
+                placeholder="End date"
+              />
             </div>
             <div className="grid gap-1.5">
               <label className="text-sm font-medium text-foreground">Project</label>
-              <Select value={projectFilter} onValueChange={(val) => { setProjectFilter(val ?? 'all'); setPage(1); }}>
-                <SelectTrigger className="w-[200px] bg-muted border-border">
-                  <SelectValue placeholder="All projects">
+              <Popover open={projectComboboxOpen} onOpenChange={setProjectComboboxOpen}>
+                <PopoverTrigger
+                  render={
+                    <Button
+                      variant="outline"
+                      className="w-[200px] justify-between font-normal"
+                    />
+                  }
+                >
+                  <span className="truncate">
                     {projectFilter === 'all'
                       ? 'All Projects'
                       : projects?.find((p) => p.id === projectFilter)?.name ?? 'All Projects'}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Projects</SelectItem>
-                  {projects?.map((project) => (
-                    <SelectItem key={project.id} value={project.id}>
-                      <div className="flex items-center gap-2">
-                        <div
-                          className="h-2 w-2 rounded-full"
-                          style={{ backgroundColor: project.color || '#6366f1' }}
-                        />
-                        {project.name}
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                  </span>
+                  <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+                </PopoverTrigger>
+                <PopoverContent className="w-[200px] p-0">
+                  <Command>
+                    <CommandInput placeholder="Search projects..." />
+                    <CommandList>
+                      <CommandEmpty>No projects found.</CommandEmpty>
+                      <CommandGroup>
+                        <CommandItem
+                          value="all"
+                          data-checked={projectFilter === 'all' ? true : undefined}
+                          onSelect={() => {
+                            setProjectFilter('all');
+                            setPage(1);
+                            setProjectComboboxOpen(false);
+                          }}
+                        >
+                          All Projects
+                        </CommandItem>
+                        {projects?.map((project) => (
+                          <CommandItem
+                            key={project.id}
+                            value={project.name}
+                            data-checked={projectFilter === project.id ? true : undefined}
+                            onSelect={() => {
+                              setProjectFilter(project.id);
+                              setPage(1);
+                              setProjectComboboxOpen(false);
+                            }}
+                          >
+                            <div className="flex items-center gap-2">
+                              <div
+                                className="h-2 w-2 rounded-full shrink-0"
+                                style={{ backgroundColor: project.color || '#6366f1' }}
+                              />
+                              {project.name}
+                            </div>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
             <div className="grid gap-1.5">
               <label className="text-sm font-medium text-foreground">Time type</label>
@@ -263,11 +339,72 @@ export default function TimePage() {
               </Select>
             </div>
 
+            {isManagerOrAbove && (
+              <div className="grid gap-1.5">
+                <label className="text-sm font-medium text-foreground">Member</label>
+                <Popover open={memberComboboxOpen} onOpenChange={setMemberComboboxOpen}>
+                  <PopoverTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        className="w-[200px] justify-between font-normal"
+                      />
+                    }
+                  >
+                    <span className="truncate">
+                      {memberFilter === 'all'
+                        ? 'All Members'
+                        : teamUsers?.find((u) => u.id === memberFilter)?.name ?? 'All Members'}
+                    </span>
+                    <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[200px] p-0">
+                    <Command>
+                      <CommandInput placeholder="Search members..." />
+                      <CommandList>
+                        <CommandEmpty>No members found.</CommandEmpty>
+                        <CommandGroup>
+                          <CommandItem
+                            value="all"
+                            data-checked={memberFilter === 'all' ? true : undefined}
+                            onSelect={() => {
+                              setMemberFilter('all');
+                              setPage(1);
+                              setMemberComboboxOpen(false);
+                            }}
+                          >
+                            All Members
+                          </CommandItem>
+                          {teamUsers?.map((member) => (
+                            <CommandItem
+                              key={member.id}
+                              value={member.name}
+                              data-checked={memberFilter === member.id ? true : undefined}
+                              onSelect={() => {
+                                setMemberFilter(member.id);
+                                setPage(1);
+                                setMemberComboboxOpen(false);
+                              }}
+                            >
+                              <div className="flex flex-col">
+                                <span>{member.name}</span>
+                                <span className="text-xs text-muted-foreground">{member.email}</span>
+                              </div>
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            )}
+
             {canApprove && selectedEntries.length > 0 && (
               <Button
                 onClick={() => approveMutation.mutate(selectedEntries)}
                 disabled={approveMutation.isPending}
-                className="ml-auto bg-blue-600 hover:bg-blue-700"
+                className="ml-auto"
               >
                 {approveMutation.isPending ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -309,29 +446,33 @@ export default function TimePage() {
             </div>
           ) : (
             <>
+              <div className="rounded-lg border border-border overflow-hidden">
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow className="border-border hover:bg-transparent">
                     {canApprove && (
                       <TableHead className="w-[40px]">
-                        <input
-                          type="checkbox"
+                        <Checkbox
                           checked={
                             selectedEntries.length ===
                             entries.filter((e) => e.status === 'pending').length &&
                             entries.filter((e) => e.status === 'pending').length > 0
                           }
-                          onChange={toggleAll}
-                          className="rounded border-border"
+                          onCheckedChange={toggleAll}
+                          aria-label="Select all pending entries"
                         />
                       </TableHead>
                     )}
-                    <TableHead className="text-muted-foreground">Date</TableHead>
-                    <TableHead className="text-muted-foreground">Type</TableHead>
-                    <TableHead className="text-muted-foreground">Project</TableHead>
-                    <TableHead className="text-muted-foreground">Task</TableHead>
-                    <TableHead className="text-muted-foreground text-right">Duration</TableHead>
-                    <TableHead className="text-muted-foreground text-right">
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Date</TableHead>
+                    {isManagerOrAbove && (
+                      <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Member</TableHead>
+                    )}
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Type</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Project</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Task</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">Duration</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">
                       <span className="inline-flex items-center gap-1">
                         Activity
                         <Tooltip>
@@ -348,20 +489,19 @@ export default function TimePage() {
                         </Tooltip>
                       </span>
                     </TableHead>
-                    <TableHead className="text-muted-foreground text-center">Status</TableHead>
+                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center">Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {entries.map((entry) => (
-                    <TableRow key={entry.id} className="border-border">
+                    <TableRow key={entry.id} className="border-border hover:bg-muted/50 transition-colors">
                       {canApprove && (
                         <TableCell>
                           {entry.status === 'pending' && (
-                            <input
-                              type="checkbox"
+                            <Checkbox
                               checked={selectedEntries.includes(entry.id)}
-                              onChange={() => toggleEntry(entry.id)}
-                              className="rounded border-border"
+                              onCheckedChange={() => toggleEntry(entry.id)}
+                              aria-label={`Select entry ${entry.id}`}
                             />
                           )}
                         </TableCell>
@@ -382,16 +522,24 @@ export default function TimePage() {
                           })()}
                         </div>
                       </TableCell>
+                      {isManagerOrAbove && (
+                        <TableCell>
+                          <div className="flex flex-col">
+                            <span className="text-sm text-foreground">{entry.user?.name || '—'}</span>
+                            <span className="text-xs text-muted-foreground">{entry.user?.email || ''}</span>
+                          </div>
+                        </TableCell>
+                      )}
                       <TableCell>
-                        <span className={
+                        <Badge variant={
                           entry.type === 'idle'
-                            ? 'bg-amber-400/10 text-amber-400 border border-amber-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
+                            ? 'outline'
                             : entry.type === 'manual'
-                            ? 'bg-slate-400/10 text-muted-foreground border border-muted-foreground/20 rounded-full px-2 py-0.5 text-xs font-medium'
-                            : 'bg-blue-400/10 text-blue-400 border border-blue-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
+                            ? 'secondary'
+                            : 'default'
                         }>
                           {entry.type === 'idle' ? 'Idle' : entry.type === 'manual' ? 'Manual' : 'Tracked'}
-                        </span>
+                        </Badge>
                       </TableCell>
                       <TableCell>
                         {entry.project ? (
@@ -430,49 +578,71 @@ export default function TimePage() {
                         </div>
                       </TableCell>
                       <TableCell className="text-center">
-                        <span
-                          className={
-                            entry.status === 'approved'
-                              ? 'bg-green-400/10 text-green-400 border border-green-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
-                              : entry.status === 'rejected'
-                              ? 'bg-red-400/10 text-red-400 border border-red-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
-                              : 'bg-amber-400/10 text-amber-400 border border-amber-400/20 rounded-full px-2 py-0.5 text-xs font-medium'
-                          }
-                        >
+                        <Badge variant={
+                          entry.status === 'approved'
+                            ? 'default'
+                            : entry.status === 'rejected'
+                            ? 'destructive'
+                            : 'secondary'
+                        }>
                           {entry.status.charAt(0).toUpperCase() + entry.status.slice(1)}
-                        </span>
+                        </Badge>
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
+              </div>
+              </div>
 
               {/* Pagination */}
               {meta && meta.last_page > 1 && (
-                <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-4 pt-4 border-t border-border">
                   <p className="text-sm text-muted-foreground">
-                    Page {meta.current_page} of {meta.last_page} ({meta.total} total)
+                    Showing {((meta.current_page - 1) * 20) + 1}&ndash;{Math.min(meta.current_page * 20, meta.total)} of {meta.total} entries
                   </p>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPage((p) => Math.max(1, p - 1))}
-                      disabled={page <= 1}
-                      className="border-border text-foreground"
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPage((p) => p + 1)}
-                      disabled={page >= (meta.last_page || 1)}
-                      className="border-border text-foreground"
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </Button>
-                  </div>
+                  <Pagination>
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious
+                          onClick={() => setPage((p) => Math.max(1, p - 1))}
+                          aria-disabled={page <= 1}
+                          className={page <= 1 ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                        />
+                      </PaginationItem>
+                      {Array.from({ length: meta.last_page }, (_, i) => i + 1)
+                        .filter((p) => p === 1 || p === meta.last_page || Math.abs(p - meta.current_page) <= 1)
+                        .reduce((acc, p, idx, arr) => {
+                          if (idx > 0 && p - arr[idx - 1] > 1) acc.push(-1);
+                          acc.push(p);
+                          return acc;
+                        }, [] as number[])
+                        .map((p, idx) =>
+                          p === -1 ? (
+                            <PaginationItem key={`ellipsis-${idx}`}>
+                              <PaginationEllipsis />
+                            </PaginationItem>
+                          ) : (
+                            <PaginationItem key={p}>
+                              <PaginationLink
+                                isActive={p === meta.current_page}
+                                onClick={() => setPage(p)}
+                                className="cursor-pointer"
+                              >
+                                {p}
+                              </PaginationLink>
+                            </PaginationItem>
+                          ),
+                        )}
+                      <PaginationItem>
+                        <PaginationNext
+                          onClick={() => setPage((p) => Math.min(meta.last_page, p + 1))}
+                          aria-disabled={page >= (meta.last_page || 1)}
+                          className={page >= (meta.last_page || 1) ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
                 </div>
               )}
             </>

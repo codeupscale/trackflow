@@ -1,6 +1,6 @@
 ---
 name: security
-description: "Delegate security tasks to the security-engineer agent. Use for auth issues, CORS/CSP, input validation, vulnerability assessment, secrets management, or security audits across all codebases."
+description: "Delegate security tasks to the security-engineer agent. Phase 5 in the pipeline — runs AFTER all tests pass, BEFORE code review. Produces PASS or NEEDS_FIX verdict. Use for OWASP audits, auth issues, multi-tenancy checks, CORS/CSP, secrets management, Electron security, or dependency vulnerability scanning."
 ---
 
 # Security Engineer

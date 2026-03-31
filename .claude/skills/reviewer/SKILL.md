@@ -1,5 +1,6 @@
 ---
-description: "Delegate code review to the reviewer agent. Runs AFTER implementation is complete. Reviews all changed files for security vulnerabilities, multi-tenancy violations, code quality issues, performance problems, and test coverage. Returns PASS / PASS WITH WARNINGS / BLOCK verdict."
+name: reviewer
+description: "Delegate code quality review to the reviewer agent. Phase 6 in the pipeline — runs AFTER security-engineer clears (Phase 5). Focuses on code quality, architecture compliance, performance, and regression risk. Does NOT redo security checks. Returns PASS / PASS WITH WARNINGS / BLOCK verdict."
 ---
 
 # Reviewer Skill

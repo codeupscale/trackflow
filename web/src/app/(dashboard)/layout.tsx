@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useTimerStore } from '@/stores/timer-store';
 import { useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
@@ -13,12 +13,10 @@ import {
   Users,
   FolderOpen,
   Settings,
-  Menu,
-  ChevronLeft,
   LogOut,
 } from 'lucide-react';
+import { TrackFlowLogo } from '@/components/ui/trackflow-logo';
 
-import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   DropdownMenu,
@@ -30,12 +28,21 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Separator } from '@/components/ui/separator';
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from '@/components/ui/sheet';
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
+} from '@/components/ui/sidebar';
 import { TimerWidget } from '@/components/timer-widget';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -43,67 +50,50 @@ import { OfflineBanner } from '@/components/offline-banner';
 import { OrgSwitcher } from '@/components/org-switcher';
 import { useAuthStore } from '@/stores/auth-store';
 import { useAuthGuard } from '@/hooks/use-auth-guard';
-import { cn } from '@/lib/utils';
 
-const allNavItems = [
-  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['owner', 'admin', 'manager', 'employee'] },
-  { name: 'Time', href: '/time', icon: Clock, roles: ['owner', 'admin', 'manager', 'employee'] },
-  { name: 'Screenshots', href: '/screenshots', icon: Camera, roles: ['owner', 'admin', 'manager', 'employee'] },
-  { name: 'Reports', href: '/reports', icon: BarChart3, roles: ['owner', 'admin', 'manager'] },
-  { name: 'Team', href: '/team', icon: Users, roles: ['owner', 'admin', 'manager'] },
-  { name: 'Projects', href: '/projects', icon: FolderOpen, roles: ['owner', 'admin', 'manager', 'employee'] },
-  { name: 'Settings', href: '/settings', icon: Settings, roles: ['owner', 'admin', 'manager', 'employee'] },
+type NavItem = {
+  name: string;
+  href: string;
+  icon: typeof LayoutDashboard;
+  roles: string[];
+};
+
+const navGroups: { label: string; items: NavItem[] }[] = [
+  {
+    label: 'Main',
+    items: [
+      { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['owner', 'admin', 'manager', 'employee'] },
+      { name: 'Time Entries', href: '/time', icon: Clock, roles: ['owner', 'admin', 'manager', 'employee'] },
+      { name: 'Screenshots', href: '/screenshots', icon: Camera, roles: ['owner', 'admin', 'manager', 'employee'] },
+    ],
+  },
+  {
+    label: 'Analytics',
+    items: [
+      { name: 'Reports', href: '/reports', icon: BarChart3, roles: ['owner', 'admin', 'manager'] },
+      { name: 'Projects', href: '/projects', icon: FolderOpen, roles: ['owner', 'admin', 'manager', 'employee'] },
+    ],
+  },
+  {
+    label: 'Team',
+    items: [
+      { name: 'Team', href: '/team', icon: Users, roles: ['owner', 'admin', 'manager'] },
+      { name: 'Settings', href: '/settings', icon: Settings, roles: ['owner', 'admin', 'manager', 'employee'] },
+    ],
+  },
 ];
-
-function SidebarNav({
-  collapsed,
-  onNavClick,
-  role,
-}: {
-  collapsed: boolean;
-  onNavClick?: () => void;
-  role?: string;
-}) {
-  const pathname = usePathname();
-  const navigation = role
-    ? allNavItems.filter((item) => item.roles.includes(role))
-    : allNavItems;
-
-  return (
-    <nav className="flex flex-col gap-1 px-3">
-      {navigation.map((item) => {
-        const Icon = item.icon;
-        const isActive =
-          pathname === item.href || pathname.startsWith(item.href + '/');
-        return (
-          <Link
-            key={item.name}
-            href={item.href}
-            onClick={onNavClick}
-            title={collapsed ? item.name : undefined}
-            className={cn(
-              'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-              isActive
-                ? 'bg-blue-600/10 text-blue-400'
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-              collapsed && 'justify-center px-2'
-            )}
-          >
-            <Icon className={cn('h-4 w-4 shrink-0', isActive && 'text-blue-400')} />
-            {!collapsed && <span>{item.name}</span>}
-          </Link>
-        );
-      })}
-    </nav>
-  );
-}
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const { isAuthenticated } = useAuthGuard();
   const { user, logout } = useAuthStore();
   const router = useRouter();
-  const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const pathname = usePathname();
+
+  // Derive current page title from pathname
+  const allNavItems = navGroups.flatMap((g) => g.items);
+  const currentPage = allNavItems.find(
+    (item) => pathname === item.href || pathname.startsWith(item.href + '/')
+  );
 
   const queryClient = useQueryClient();
   const isTimerRunning = useTimerStore((s) => s.isRunning);
@@ -133,11 +123,13 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       .toUpperCase()
       .slice(0, 2) || '??';
 
+  const userRole = user?.role || '';
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex items-center gap-2 text-muted-foreground">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-muted border-t-blue-500" />
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-muted border-t-primary" />
           Loading...
         </div>
       </div>
@@ -145,91 +137,98 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
-      {/* Desktop Sidebar */}
-      <aside
-        className={cn(
-          'hidden lg:flex flex-col border-r border-border bg-muted/50 transition-all duration-300',
-          collapsed ? 'w-16' : 'w-64'
-        )}
-      >
-        {/* Logo */}
-        <div
-          className={cn(
-            'flex items-center h-14 px-4 border-b border-border',
-            collapsed ? 'justify-center' : 'justify-between'
-          )}
-        >
-          {!collapsed && (
-            <Link href="/dashboard" className="text-lg font-bold text-foreground tracking-tight">
-              TrackFlow
-            </Link>
-          )}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setCollapsed(!collapsed)}
-            className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
-            aria-label="Toggle sidebar"
-          >
-            <ChevronLeft
-              className={cn(
-                'h-4 w-4 transition-transform',
-                collapsed && 'rotate-180'
-              )}
-            />
-          </Button>
-        </div>
+    <SidebarProvider className="h-screen overflow-hidden">
+      {/* Sidebar */}
+      <Sidebar collapsible="icon">
+        <SidebarHeader className="h-14 border-b border-sidebar-border px-3 flex items-center">
+          <Link href="/dashboard" className="flex items-center">
+            <TrackFlowLogo size={28} showText={true} className="group-data-[collapsible=icon]:[&>span]:hidden" />
+          </Link>
+        </SidebarHeader>
 
-        {/* Navigation */}
-        <div className="flex-1 py-4 overflow-y-auto">
-          <SidebarNav collapsed={collapsed} role={user?.role} />
-        </div>
+        <SidebarContent>
+          {navGroups.map((group) => {
+            const visibleItems = userRole
+              ? group.items.filter((item) => item.roles.includes(userRole))
+              : group.items;
 
-        {/* Sidebar footer */}
-        {!collapsed && (
-          <div className="p-4 border-t border-border">
-            <p className="text-xs text-muted-foreground">
-              {user?.organization?.name || 'Organization'}
-            </p>
-          </div>
-        )}
-      </aside>
+            if (visibleItems.length === 0) return null;
+
+            return (
+              <SidebarGroup key={group.label}>
+                <SidebarGroupLabel className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{group.label}</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {visibleItems.map((item) => {
+                      const Icon = item.icon;
+                      const isActive =
+                        pathname === item.href || pathname.startsWith(item.href + '/');
+                      return (
+                        <SidebarMenuItem key={item.name}>
+                          <SidebarMenuButton
+                            isActive={isActive}
+                            tooltip={item.name}
+                            render={<Link href={item.href} />}
+                          >
+                            <Icon className="h-4 w-4 shrink-0" />
+                            <span>{item.name}</span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      );
+                    })}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            );
+          })}
+        </SidebarContent>
+
+        <SidebarFooter className="border-t border-sidebar-border">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <div className="flex items-center gap-2 px-2 py-1.5 group-data-[collapsible=icon]:justify-center">
+                <Avatar className="h-7 w-7 border border-border">
+                  <AvatarImage src={user?.avatar_url || undefined} alt={user?.name || 'User'} />
+                  <AvatarFallback className="bg-blue-600 text-white text-xs font-medium">
+                    {userInitials}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex flex-col group-data-[collapsible=icon]:hidden">
+                  <span className="text-sm font-medium text-sidebar-foreground leading-none">{user?.name}</span>
+                  <span className="text-xs text-muted-foreground mt-0.5">{user?.organization?.name || 'Organization'}</span>
+                </div>
+              </div>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarFooter>
+
+        <SidebarRail />
+      </Sidebar>
 
       {/* Main Content */}
-      <div className="flex flex-col flex-1 overflow-hidden">
+      <SidebarInset className="flex flex-col overflow-hidden">
         {/* Top Header */}
-        <header className="flex items-center justify-between h-14 px-4 lg:px-6 border-b border-border bg-card/50">
-          <div className="flex items-center gap-3">
-            {/* Mobile Sidebar Toggle */}
-            <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-              <SheetTrigger
-                className="lg:hidden inline-flex items-center justify-center rounded-md h-8 w-8 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                aria-label="Toggle sidebar"
-              >
-                <Menu className="h-5 w-5" />
-              </SheetTrigger>
-              <SheetContent side="left" className="w-64 bg-background border-border p-0">
-                <SheetHeader className="px-4 py-4 border-b border-border">
-                  <SheetTitle className="text-foreground text-lg font-bold">TrackFlow</SheetTitle>
-                </SheetHeader>
-                <div className="py-4">
-                  <SidebarNav collapsed={false} onNavClick={() => setMobileOpen(false)} role={user?.role} />
-                </div>
-              </SheetContent>
-            </Sheet>
-
-            {/* Organization Switcher — only visible when user has multiple orgs */}
+        <header className="flex items-center justify-between h-14 px-4 md:px-6 border-b border-border bg-background shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <SidebarTrigger className="hover:bg-muted shrink-0" />
+            <Separator orientation="vertical" className="h-5 hidden md:block shrink-0" />
+            {/* Page title — shown on md+ screens */}
+            {currentPage && (
+              <span className="hidden md:block text-sm font-semibold text-foreground truncate">
+                {currentPage.name}
+              </span>
+            )}
+            <Separator orientation="vertical" className="h-5 hidden md:block shrink-0" />
             <OrgSwitcher />
           </div>
 
-          {/* Center: Timer Widget (single instance, responsive via flex order) */}
-          <div className="flex items-center">
+          {/* Center: Timer Widget */}
+          <div className="flex items-center shrink-0">
             <TimerWidget />
           </div>
 
           {/* Right side */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <ThemeToggle />
             <Separator orientation="vertical" className="h-6 hidden md:block" />
 
@@ -279,12 +278,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         <OfflineBanner />
 
         {/* Page Content */}
-        <main className="flex-1 overflow-y-auto p-4 lg:p-6">
+        <main className="flex-1 overflow-y-auto p-4 md:p-6">
           <ErrorBoundary>
             {children}
           </ErrorBoundary>
         </main>
-      </div>
-    </div>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }

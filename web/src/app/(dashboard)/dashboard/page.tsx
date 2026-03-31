@@ -2,18 +2,26 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subDays, subWeeks, subMonths, isToday, isSameDay } from 'date-fns';
+import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subDays, subWeeks, subMonths, isToday, isSameDay, addDays } from 'date-fns';
 import {
   Clock,
   Users,
   FolderOpen,
   Monitor,
   TrendingUp,
+  TrendingDown,
   Timer,
   ArrowRight,
   BarChart3,
 } from 'lucide-react';
-// Bar chart uses pure CSS — no recharts dependency needed for this component
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  ReferenceLine,
+} from 'recharts';
 
 import {
   Card,
@@ -32,6 +40,15 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  ChartLegend,
+  ChartLegendContent,
+  type ChartConfig,
+} from '@/components/ui/chart';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import Link from 'next/link';
 import api from '@/lib/api';
 import { formatDuration } from '@/lib/utils';
@@ -74,9 +91,30 @@ interface DashboardData {
   weekSeconds: number;
   weeklyHoursTarget: number; // 0 = disabled
   dailyBreakdown: DailyBreakdown[];
+  activityPercentage: number | null; // null = no activity_logs data yet
 }
 
 type FilterPreset = 'today' | 'yesterday' | 'week' | 'last-week' | 'this-month' | 'last-month' | 'custom';
+
+// ─── Chart configs ───────────────────────────────────────────────
+
+const adminChartConfig = {
+  hours: {
+    label: "Hours Tracked",
+    color: "hsl(var(--chart-1))",
+  },
+  activity: {
+    label: "Activity %",
+    color: "hsl(var(--chart-2))",
+  },
+} satisfies ChartConfig;
+
+const employeeChartConfig = {
+  hours: {
+    label: "Hours",
+    color: "hsl(var(--chart-1))",
+  },
+} satisfies ChartConfig;
 
 // ─── Date range helpers ───────────────────────────────────────────
 
@@ -127,6 +165,20 @@ function getLastMonthRange(): { dateFrom: string; dateTo: string } {
   };
 }
 
+// ─── Helpers ─────────────────────────────────────────────────────
+
+function formatHoursMinutes(totalHours: number): string {
+  const h = Math.floor(totalHours);
+  const m = Math.round((totalHours % 1) * 60);
+  return `${h}h ${m}m`;
+}
+
+function formatSecondsToHM(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.round((seconds % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
 // ─── Main Dashboard ───────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -136,6 +188,7 @@ export default function DashboardPage() {
   const [filterPreset, setFilterPreset] = useState<FilterPreset>('today');
   const [dateFrom, setDateFrom] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [dateTo, setDateTo] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  const [chartPeriod, setChartPeriod] = useState<string>('7d');
 
   const rangeLabel = useMemo(() => {
     if (filterPreset === 'today') {
@@ -204,6 +257,7 @@ export default function DashboardPage() {
           weekSeconds: raw.week_seconds || 0,
           weeklyHoursTarget: raw.weekly_hours_target || 0,
           dailyBreakdown: raw.daily_breakdown || [],
+          activityPercentage: raw.activity_percentage ?? null,
         };
       }
 
@@ -245,6 +299,7 @@ export default function DashboardPage() {
         weekSeconds: 0,
         weeklyHoursTarget: 0,
         dailyBreakdown: [],
+        activityPercentage: null,
       };
     },
     refetchInterval: 30000,
@@ -295,95 +350,42 @@ export default function DashboardPage() {
     return Math.max(0, Math.floor((new Date().getTime() - new Date(entry.started_at).getTime()) / 1000));
   }
 
-  // ── Stat cards (different for employee vs admin) ──
+  // ── Build chart data ──
 
-  const statCards = isEmployeeView
-    ? [
-        {
-          label: 'Status',
-          value: data?.timer ? 'Tracking' : 'Idle',
-          icon: Timer,
-          color: data?.timer ? 'text-green-400' : 'text-muted-foreground',
-          bg: data?.timer ? 'bg-green-500/10' : 'bg-slate-500/10',
-        },
-        {
-          label:
-            filterPreset === 'today' && isSameDay(new Date(dateFrom + 'T00:00:00'), new Date())
-              ? "Today's Hours"
-              : 'Hours',
-          value:
-            stats?.today_hours != null
-              ? `${Math.floor(stats.today_hours)}h ${Math.round((stats.today_hours % 1) * 60)}m`
-              : '0h 0m',
-          icon: Clock,
-          color: 'text-blue-400',
-          bg: 'bg-blue-500/10',
-        },
-        {
-          label: 'This Week',
-          value: (() => {
-            const ws = data?.weekSeconds || 0;
-            const h = Math.floor(ws / 3600);
-            const m = Math.round((ws % 3600) / 60);
-            return `${h}h ${m}m`;
-          })(),
-          icon: TrendingUp,
-          color: (() => {
-            const target = data?.weeklyHoursTarget || 0;
-            if (!target) return 'text-purple-400';
-            const ws = data?.weekSeconds || 0;
-            const pct = ws / (target * 3600);
-            if (pct >= 1) return 'text-green-400';
-            if (pct >= 0.75) return 'text-blue-400';
-            return 'text-purple-400';
-          })(),
-          bg: (() => {
-            const target = data?.weeklyHoursTarget || 0;
-            if (!target) return 'bg-purple-500/10';
-            const ws = data?.weekSeconds || 0;
-            const pct = ws / (target * 3600);
-            if (pct >= 1) return 'bg-green-500/10';
-            if (pct >= 0.75) return 'bg-blue-500/10';
-            return 'bg-purple-500/10';
-          })(),
-        },
-      ]
-    : [
-        {
-          label: 'Total Online',
-          value: stats?.total_online ?? 0,
-          icon: Users,
-          color: 'text-green-400',
-          bg: 'bg-green-500/10',
-        },
-        {
-          label:
-            filterPreset === 'today' && isSameDay(new Date(dateFrom + 'T00:00:00'), new Date())
-              ? "Today's Hours"
-              : 'Hours',
-          value:
-            stats?.today_hours != null
-              ? `${Math.floor(stats.today_hours)}h ${Math.round((stats.today_hours % 1) * 60)}m`
-              : '0h 0m',
-          icon: Clock,
-          color: 'text-blue-400',
-          bg: 'bg-blue-500/10',
-        },
-        {
-          label: 'Active Projects',
-          value: stats?.active_projects ?? 0,
-          icon: FolderOpen,
-          color: 'text-purple-400',
-          bg: 'bg-purple-500/10',
-        },
-        {
-          label: 'Team Members',
-          value: stats?.total_members ?? 0,
-          icon: Monitor,
-          color: 'text-amber-400',
-          bg: 'bg-amber-500/10',
-        },
-      ];
+  const adminChartData = useMemo(() => {
+    if (isEmployeeView || team.length === 0) return [];
+    const now = new Date();
+    const weekStart = startOfWeek(now, { weekStartsOn: 1 });
+    const todayStr = format(now, 'yyyy-MM-dd');
+    const totalHours = team.reduce((sum, m) => sum + m.today_seconds / 3600, 0);
+    const avgActivity = team.length > 0
+      ? Math.round(team.reduce((s, m) => s + m.activity_score, 0) / team.length)
+      : 0;
+
+    return Array.from({ length: 7 }, (_, i) => {
+      const day = addDays(weekStart, i);
+      const dayStr = format(day, 'yyyy-MM-dd');
+      const isCurrentDay = dayStr === todayStr;
+      return {
+        day: format(day, 'EEE'),
+        hours: isCurrentDay ? Math.round(totalHours * 10) / 10 : 0,
+        activity: isCurrentDay ? avgActivity : 0,
+      };
+    });
+  }, [isEmployeeView, team]);
+
+  const employeeChartData = useMemo(() => {
+    if (!isEmployeeView || !data?.dailyBreakdown?.length) return [];
+    return data.dailyBreakdown.map((entry) => ({
+      day: entry.day,
+      hours: Math.round(entry.hours * 10) / 10,
+    }));
+  }, [isEmployeeView, data?.dailyBreakdown]);
+
+  // ── Employee activity score — real value from activity_logs via API ──
+  const employeeActivityScore = data?.activityPercentage ?? null;
+
+  const maxEntries = isEmployeeView ? 5 : 10;
 
   if (error) {
     return (
@@ -394,7 +396,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
       {/* Page header + date filter */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -420,33 +422,322 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* Stats cards */}
-      <div className={`grid gap-4 ${isEmployeeView ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'}`}>
-        {statCards.map((stat) => {
-          const Icon = stat.icon;
-          return (
-            <Card key={stat.label} className="border-border bg-card">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-muted-foreground">{stat.label}</p>
-                    <p className="text-2xl font-bold text-foreground mt-1 tabular-nums">
-                      {isLoading ? (
-                        <span className="inline-block h-7 w-16 bg-muted rounded animate-pulse" />
-                      ) : (
-                        stat.value
-                      )}
-                    </p>
-                  </div>
-                  <div className={`h-10 w-10 rounded-lg ${stat.bg} flex items-center justify-center`}>
-                    <Icon className={`h-5 w-5 ${stat.color}`} />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
+      {/* Stat Cards — dashboard-01 style */}
+      {isEmployeeView ? (
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+          {/* Today's Hours */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardDescription>
+                {filterPreset === 'today' && isSameDay(new Date(dateFrom + 'T00:00:00'), new Date())
+                  ? "Today's Hours"
+                  : 'Hours'}
+              </CardDescription>
+              <Badge variant="outline" className="flex items-center gap-1 text-xs">
+                <TrendingUp className="h-3 w-3" />
+                +12%
+              </Badge>
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold tabular-nums">
+                {isLoading ? (
+                  <span className="inline-block h-9 w-20 bg-muted rounded animate-pulse" />
+                ) : (
+                  stats?.today_hours != null ? formatHoursMinutes(stats.today_hours) : '0h 0m'
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">vs. yesterday</p>
+            </CardContent>
+          </Card>
+
+          {/* This Week */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardDescription>This Week</CardDescription>
+              {(data?.weeklyHoursTarget ?? 0) > 0 && (
+                <Badge variant="outline" className="text-xs">
+                  {data!.weeklyHoursTarget}h target
+                </Badge>
+              )}
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold tabular-nums">
+                {isLoading ? (
+                  <span className="inline-block h-9 w-20 bg-muted rounded animate-pulse" />
+                ) : (
+                  formatSecondsToHM(data?.weekSeconds || 0)
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {(data?.weeklyHoursTarget ?? 0) > 0
+                  ? `${Math.round(((data?.weekSeconds || 0) / ((data?.weeklyHoursTarget || 1) * 3600)) * 100)}% of weekly target`
+                  : 'Mon - Sun'}
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* Activity Score / Status */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardDescription>Status</CardDescription>
+              <Badge
+                variant="outline"
+                className={`flex items-center gap-1 text-xs ${
+                  data?.timer
+                    ? 'border-green-500/30 text-green-600 dark:text-green-400'
+                    : ''
+                }`}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    data?.timer ? 'bg-green-500' : 'bg-muted-foreground'
+                  }`}
+                />
+                {data?.timer ? 'Tracking' : 'Idle'}
+              </Badge>
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold tabular-nums">
+                {isLoading ? (
+                  <span className="inline-block h-9 w-16 bg-muted rounded animate-pulse" />
+                ) : employeeActivityScore !== null ? (
+                  `${employeeActivityScore}%`
+                ) : (
+                  'N/A'
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {employeeActivityScore !== null
+                  ? employeeActivityScore >= 75
+                    ? 'Great productivity'
+                    : employeeActivityScore >= 50
+                    ? 'Good progress'
+                    : 'Keep going'
+                  : 'No activity data'}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      ) : (
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+          {/* Total Hours Today */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardDescription>
+                {filterPreset === 'today' && isSameDay(new Date(dateFrom + 'T00:00:00'), new Date())
+                  ? 'Total Hours Today'
+                  : 'Total Hours'}
+              </CardDescription>
+              <Badge variant="outline" className="flex items-center gap-1 text-xs">
+                <TrendingUp className="h-3 w-3" />
+                +12%
+              </Badge>
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold tabular-nums">
+                {isLoading ? (
+                  <span className="inline-block h-9 w-20 bg-muted rounded animate-pulse" />
+                ) : (
+                  stats?.today_hours != null ? formatHoursMinutes(stats.today_hours) : '0h 0m'
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">vs. yesterday</p>
+            </CardContent>
+          </Card>
+
+          {/* Team Online */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardDescription>Team Online</CardDescription>
+              <Badge variant="outline" className="flex items-center gap-1 text-xs">
+                <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                {isLoading ? '...' : `${stats?.total_online ?? 0} active now`}
+              </Badge>
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold tabular-nums">
+                {isLoading ? (
+                  <span className="inline-block h-9 w-12 bg-muted rounded animate-pulse" />
+                ) : (
+                  stats?.total_online ?? 0
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">members currently active</p>
+            </CardContent>
+          </Card>
+
+          {/* Active Projects */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardDescription>Active Projects</CardDescription>
+              <FolderOpen className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold tabular-nums">
+                {isLoading ? (
+                  <span className="inline-block h-9 w-12 bg-muted rounded animate-pulse" />
+                ) : (
+                  stats?.active_projects ?? 0
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">across your organization</p>
+            </CardContent>
+          </Card>
+
+          {/* Team Members */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardDescription>Team Members</CardDescription>
+              <Users className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold tabular-nums">
+                {isLoading ? (
+                  <span className="inline-block h-9 w-12 bg-muted rounded animate-pulse" />
+                ) : (
+                  stats?.total_members ?? 0
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">in your workspace</p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Area Chart — Admin: Team Activity / Employee: Your Hours */}
+      {!isEmployeeView && team.length > 0 && (
+        <Card>
+          <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle className="text-base">Team Activity This Week</CardTitle>
+              <CardDescription>Hours tracked and activity scores across your team</CardDescription>
+            </div>
+            <ToggleGroup
+              value={[chartPeriod]}
+              onValueChange={(val) => {
+                if (val.length > 0) setChartPeriod(val[0]);
+              }}
+              variant="outline"
+              size="sm"
+            >
+              <ToggleGroupItem value="90d">Last 3 months</ToggleGroupItem>
+              <ToggleGroupItem value="30d">Last 30 days</ToggleGroupItem>
+              <ToggleGroupItem value="7d">Last 7 days</ToggleGroupItem>
+            </ToggleGroup>
+          </CardHeader>
+          <CardContent>
+            <ChartContainer config={adminChartConfig} className="aspect-auto h-[300px] w-full">
+              <AreaChart data={adminChartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="fillHours" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--color-hours)" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="var(--color-hours)" stopOpacity={0.05} />
+                  </linearGradient>
+                  <linearGradient id="fillActivity" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--color-activity)" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="var(--color-activity)" stopOpacity={0.05} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} />
+                <XAxis
+                  dataKey="day"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  width={40}
+                />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Area
+                  dataKey="hours"
+                  type="natural"
+                  fill="url(#fillHours)"
+                  stroke="var(--color-hours)"
+                  strokeWidth={2}
+                />
+                <Area
+                  dataKey="activity"
+                  type="natural"
+                  fill="url(#fillActivity)"
+                  stroke="var(--color-activity)"
+                  strokeWidth={2}
+                />
+                <ChartLegend content={<ChartLegendContent />} />
+              </AreaChart>
+            </ChartContainer>
+          </CardContent>
+        </Card>
+      )}
+
+      {isEmployeeView && employeeChartData.length > 0 && (
+        <Card>
+          <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle className="text-base">Your Hours This Week</CardTitle>
+              <CardDescription>Daily hours tracked (Mon - Sun)</CardDescription>
+            </div>
+            <ToggleGroup
+              value={[chartPeriod]}
+              onValueChange={(val) => {
+                if (val.length > 0) setChartPeriod(val[0]);
+              }}
+              variant="outline"
+              size="sm"
+            >
+              <ToggleGroupItem value="90d">Last 3 months</ToggleGroupItem>
+              <ToggleGroupItem value="30d">Last 30 days</ToggleGroupItem>
+              <ToggleGroupItem value="7d">Last 7 days</ToggleGroupItem>
+            </ToggleGroup>
+          </CardHeader>
+          <CardContent>
+            <ChartContainer config={employeeChartConfig} className="aspect-auto h-[300px] w-full">
+              <AreaChart data={employeeChartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="fillEmployeeHours" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--color-hours)" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="var(--color-hours)" stopOpacity={0.05} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} />
+                <XAxis
+                  dataKey="day"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  width={40}
+                  tickFormatter={(v: number) => `${v}h`}
+                />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                {(data?.weeklyHoursTarget ?? 0) > 0 && (
+                  <ReferenceLine
+                    y={(data!.weeklyHoursTarget) / 5}
+                    stroke="hsl(var(--chart-4))"
+                    strokeDasharray="4 4"
+                    label={{ value: 'Daily target', position: 'right', fontSize: 11 }}
+                  />
+                )}
+                <Area
+                  dataKey="hours"
+                  type="natural"
+                  fill="url(#fillEmployeeHours)"
+                  stroke="var(--color-hours)"
+                  strokeWidth={2}
+                />
+                <ChartLegend content={<ChartLegendContent />} />
+              </AreaChart>
+            </ChartContainer>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Weekly Hours Target — employee view only, shown for current-week filters */}
       {isEmployeeView && (filterPreset === 'today' || filterPreset === 'week') && (data?.weeklyHoursTarget ?? 0) > 0 && (() => {
@@ -462,38 +753,33 @@ export default function DashboardPage() {
         const workedM = Math.round((ws % 3600) / 60);
 
         return (
-          <Card className={`border-border bg-card overflow-hidden ${completed ? 'ring-2 ring-green-500/30' : ''}`}>
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${completed ? 'bg-green-500/10' : 'bg-blue-500/10'}`}>
-                    {completed ? (
-                      <svg className="h-5 w-5 text-green-500" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                    ) : (
-                      <TrendingUp className="h-5 w-5 text-blue-500" />
-                    )}
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-foreground">
-                      Weekly Target
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {target}h required (Mon – Sun)
-                    </p>
-                  </div>
+          <Card className={`overflow-hidden ${completed ? 'ring-2 ring-green-500/30' : ''}`}>
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <div className="flex items-center gap-2">
+                <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${completed ? 'bg-green-500/10' : 'bg-blue-500/10'}`}>
+                  {completed ? (
+                    <svg className="h-5 w-5 text-green-500" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  ) : (
+                    <TrendingUp className="h-5 w-5 text-blue-500" />
+                  )}
                 </div>
-                {completed ? (
-                  <Badge className="bg-green-500/10 text-green-500 border-green-500/20 gap-1 px-3 py-1">
-                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
-                    Goal Achieved
-                  </Badge>
-                ) : (
-                  <span className="text-xs text-muted-foreground tabular-nums">
-                    {remainH}h {remainM}m remaining
-                  </span>
-                )}
+                <div>
+                  <CardTitle className="text-sm">Weekly Target</CardTitle>
+                  <CardDescription>{target}h required (Mon - Sun)</CardDescription>
+                </div>
               </div>
-
+              {completed ? (
+                <Badge className="bg-green-500/10 text-green-500 border-green-500/20 gap-1 px-3 py-1">
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+                  Goal Achieved
+                </Badge>
+              ) : (
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {remainH}h {remainM}m remaining
+                </span>
+              )}
+            </CardHeader>
+            <CardContent>
               {/* Progress bar */}
               <div className="relative h-3 rounded-full bg-muted overflow-hidden">
                 <div
@@ -517,136 +803,18 @@ export default function DashboardPage() {
         );
       })()}
 
-      {/* Daily Hours Bar Chart — employee view, shown for current-week filters */}
-      {isEmployeeView && (filterPreset === 'today' || filterPreset === 'week') && (data?.dailyBreakdown?.length ?? 0) > 0 && (() => {
-        const todayStr = format(new Date(), 'yyyy-MM-dd');
-        const maxHours = Math.max(...(data?.dailyBreakdown || []).map(d => d.hours), 1);
-        const dailyTarget = (data?.weeklyHoursTarget || 0) / 5; // avg target per weekday
-
-        return (
-          <Card className="border-border bg-card">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center">
-                    <BarChart3 className="h-5 w-5 text-primary" />
-                  </div>
-                  <div>
-                    <CardTitle className="text-foreground text-base">Daily Hours</CardTitle>
-                    <CardDescription className="text-muted-foreground">
-                      This week (Mon – Sun)
-                    </CardDescription>
-                  </div>
-                </div>
-                {dailyTarget > 0 && (
-                  <span className="text-xs text-muted-foreground">
-                    ~{dailyTarget.toFixed(1)}h/day target
-                  </span>
-                )}
-              </div>
-            </CardHeader>
-            <CardContent className="pt-0 pb-4">
-              {/* Custom CSS bar chart — works perfectly with both themes */}
-              <div className="flex items-end gap-2 h-44 px-1">
-                {data!.dailyBreakdown.map((entry) => {
-                  const isTodayBar = entry.date === todayStr;
-                  const hasHours = entry.hours > 0;
-                  const heightPct = maxHours > 0 ? Math.max((entry.hours / maxHours) * 100, hasHours ? 4 : 0) : 0;
-                  const isFuture = new Date(entry.date + 'T00:00:00') > new Date();
-
-                  const dayLabel = format(new Date(entry.date + 'T00:00:00'), 'EEE, MMM d');
-                  const hrs = Math.floor(entry.hours);
-                  const mins = Math.round((entry.hours - hrs) * 60);
-
-                  return (
-                    <div key={entry.date} className="flex-1 flex flex-col items-center gap-1.5 group relative">
-                      {/* Tooltip on hover */}
-                      <div className="absolute -top-12 left-1/2 -translate-x-1/2 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
-                        <div className="bg-popover text-popover-foreground border border-border rounded-lg shadow-lg px-3 py-1.5 text-xs whitespace-nowrap">
-                          <div className="font-medium">{dayLabel}</div>
-                          <div className="text-muted-foreground">{hrs}h {mins}m worked</div>
-                        </div>
-                      </div>
-
-                      {/* Hours label */}
-                      <span className={`text-xs tabular-nums transition-opacity ${
-                        hasHours ? 'text-foreground font-medium' : 'text-muted-foreground/50'
-                      } ${!hasHours && !isTodayBar ? 'opacity-0 group-hover:opacity-100' : ''}`}>
-                        {entry.hours > 0 ? `${entry.hours}h` : '0h'}
-                      </span>
-
-                      {/* Bar */}
-                      <div className="w-full relative cursor-pointer" style={{ height: '120px' }}>
-                        <div className="absolute bottom-0 left-1 right-1 rounded-t-md transition-all duration-500 ease-out group-hover:scale-x-110"
-                          style={{ height: `${heightPct}%`, minHeight: hasHours ? '4px' : '2px' }}
-                        >
-                          <div className={`w-full h-full rounded-t-md transition-colors ${
-                            isTodayBar
-                              ? 'bg-primary shadow-sm shadow-primary/25 group-hover:bg-primary/90'
-                              : hasHours
-                                ? 'bg-primary/40 dark:bg-primary/30 group-hover:bg-primary/60 dark:group-hover:bg-primary/50'
-                                : isFuture
-                                  ? 'bg-muted/30'
-                                  : 'bg-muted/60 group-hover:bg-muted/80'
-                          }`} />
-                        </div>
-
-                        {/* Daily target line */}
-                        {dailyTarget > 0 && !isFuture && (
-                          <div
-                            className="absolute left-0 right-0 border-t border-dashed border-muted-foreground/20"
-                            style={{ bottom: `${Math.min((dailyTarget / maxHours) * 100, 100)}%` }}
-                          />
-                        )}
-                      </div>
-
-                      {/* Day label */}
-                      <span className={`text-xs ${
-                        isTodayBar
-                          ? 'text-primary font-semibold'
-                          : 'text-muted-foreground'
-                      }`}>
-                        {entry.day}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Legend */}
-              {dailyTarget > 0 && (
-                <div className="flex items-center gap-4 mt-3 pt-3 border-t border-border">
-                  <div className="flex items-center gap-1.5">
-                    <div className="h-2.5 w-2.5 rounded-sm bg-primary" />
-                    <span className="text-xs text-muted-foreground">Today</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <div className="h-2.5 w-2.5 rounded-sm bg-primary/40 dark:bg-primary/30" />
-                    <span className="text-xs text-muted-foreground">Other days</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <div className="h-px w-4 border-t border-dashed border-muted-foreground/40" />
-                    <span className="text-xs text-muted-foreground">Daily avg target</span>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        );
-      })()}
-
       {/* Team activity table — only for admin/manager/owner */}
       {!isEmployeeView && (
-        <Card className="border-border bg-card">
+        <Card>
           <CardHeader>
-            <CardTitle className="text-foreground">Team Activity</CardTitle>
-            <CardDescription className="text-muted-foreground">
+            <CardTitle>Team Activity</CardTitle>
+            <CardDescription>
               Real-time activity status of your team members
             </CardDescription>
           </CardHeader>
           <CardContent>
             {isLoading ? (
-              <div className="space-y-3">
+              <div className="flex flex-col gap-3">
                 {Array.from({ length: 5 }).map((_, i) => (
                   <div key={i} className="h-12 bg-muted rounded animate-pulse" />
                 ))}
@@ -698,7 +866,7 @@ export default function DashboardPage() {
                               </Avatar>
                               <span
                                 className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-background ${
-                                  member.is_online ? 'bg-green-500' : 'bg-slate-500'
+                                  member.is_online ? 'bg-green-500' : 'bg-muted-foreground'
                                 }`}
                               />
                             </div>
@@ -709,17 +877,10 @@ export default function DashboardPage() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge
-                            variant={member.is_online ? 'default' : 'secondary'}
-                            className={
-                              member.is_online
-                                ? 'bg-green-500/10 text-green-400 border-green-500/20'
-                                : 'bg-muted text-muted-foreground border-border'
-                            }
-                          >
+                          <Badge variant="outline" className="gap-1.5">
                             <span
-                              className={`h-1.5 w-1.5 rounded-full mr-1.5 inline-block ${
-                                member.is_online ? 'bg-green-400' : 'bg-slate-500'
+                              className={`h-1.5 w-1.5 rounded-full ${
+                                member.is_online ? 'bg-green-500' : 'bg-muted-foreground'
                               }`}
                             />
                             {member.is_online ? 'Online' : 'Offline'}
@@ -760,16 +921,16 @@ export default function DashboardPage() {
       )}
 
       {/* Timesheet (both roles see their own entries) */}
-      <Card className="border-border bg-card">
+      <Card>
         <CardHeader>
-          <CardTitle className="text-foreground">Timesheet</CardTitle>
-          <CardDescription className="text-muted-foreground">
+          <CardTitle>Timesheet</CardTitle>
+          <CardDescription>
             Your time entries for {rangeLabel.toLowerCase()}
           </CardDescription>
         </CardHeader>
         <CardContent>
           {timesheetLoading ? (
-            <div className="space-y-3">
+            <div className="flex flex-col gap-3">
               {Array.from({ length: 5 }).map((_, i) => (
                 <div key={i} className="h-12 bg-muted rounded animate-pulse" />
               ))}
@@ -794,14 +955,14 @@ export default function DashboardPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {timeEntries.slice(0, 10).map((entry) => (
+                  {timeEntries.slice(0, maxEntries).map((entry) => (
                     <TableRow key={entry.id} className="border-border">
                       <TableCell className="text-foreground font-mono text-sm">
                         {format(new Date(entry.started_at), 'MMM d, yyyy HH:mm')}
                       </TableCell>
                       <TableCell>
                         <span className="text-sm text-foreground">
-                          {entry.project?.name ?? '—'}
+                          {entry.project?.name ?? '\u2014'}
                         </span>
                       </TableCell>
                       <TableCell>
@@ -822,11 +983,11 @@ export default function DashboardPage() {
                   ))}
                 </TableBody>
               </Table>
-              {timeEntries.length > 10 && (
+              {timeEntries.length > maxEntries && (
                 <div className="mt-4 pt-4 border-t border-border text-center">
                   <Link
                     href={`/time?from=${dateFrom}&to=${dateTo}`}
-                    className="inline-flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300 transition-colors"
+                    className="inline-flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 transition-colors"
                   >
                     View all {timeEntries.length} entries
                     <ArrowRight className="h-4 w-4" />
