@@ -34,6 +34,8 @@
     "test": "jest --verbose",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
+    "test:e2e": "jest test/e2e/ --verbose",
+    "dev:inspect": "NODE_ENV=development electron . --remote-debugging-port=9222",
     "icons": "node scripts/generate-icons.js",
     "postinstall": "electron-builder install-app-deps"
   },
@@ -191,6 +193,7 @@
     "@jest/globals": "^29.7.0",
     "electron": "^28.3.3",
     "electron-builder": "^24.0.0",
-    "jest": "^29.7.0"
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^30.3.0"
   }
 }
