@@ -171,6 +171,7 @@ jobs:
           ### What's New
 
           **Bug Fixes**
+          - Fixed pin/always-on-top not keeping window above other apps on macOS Sequoia — now uses NSFloatingWindowLevel + moveTop() re-asserted every 300ms
           - Fixed empty project list after logout and re-login
           - Fixed empty project list after laptop restart
           - Fixed password reset through web causing empty projects on desktop
