@@ -1189,6 +1189,19 @@ function showPopup() {
     }
   });
 
+  // After the renderer finishes loading, ensure projects are loaded and
+  // send projects-ready + sync-timer signals. This fixes the race where
+  // the renderer's own loadProjects() fires before the API client has a
+  // valid token (e.g. after logout/re-login or password reset).
+  popupWindow.webContents.once('did-finish-load', () => {
+    loadProjects().then(() => {
+      if (popupWindow && !popupWindow.isDestroyed()) {
+        popupWindow.webContents.send('projects-ready');
+        popupWindow.webContents.send('sync-timer');
+      }
+    });
+  });
+
   // Hide on blur — with debounce for Linux DEs that fire spurious blur events
   // (e.g. KDE fires blur then immediately re-focuses when clicking tray)
   let blurTimeout = null;
@@ -1323,6 +1336,13 @@ function setupIPC() {
   ipcMain.removeHandler('check-screen-permission');
   ipcMain.removeHandler('request-screen-permission');
   ipcMain.removeHandler('open-screen-recording-settings');
+  ipcMain.removeHandler('hide-window');
+
+  ipcMain.handle('hide-window', () => {
+    if (popupWindow && !popupWindow.isDestroyed()) {
+      popupWindow.hide();
+    }
+  });
 
   ipcMain.handle('check-screen-permission', async () => {
     if (process.platform !== 'darwin') return { granted: true, platform: process.platform };
@@ -2128,6 +2148,8 @@ function createLoginWindow() {
 
         BrowserWindow.getAllWindows().forEach((w) => w.close());
         await initializeApp();
+        // Show the popup immediately after login so the user sees the timer
+        showPopup();
         return { success: true };
       } catch (e) {
         return { error: _friendlyLoginError(e) };
@@ -2265,6 +2287,8 @@ function createLoginWindow() {
 
         BrowserWindow.getAllWindows().forEach((w) => w.close());
         await initializeApp();
+        // Show the popup immediately after login so the user sees the timer
+        showPopup();
         return { success: true };
       } catch (e) {
         return { error: _friendlyLoginError(e) };
@@ -2287,6 +2311,8 @@ function createLoginWindow() {
 
         BrowserWindow.getAllWindows().forEach((w) => w.close());
         await initializeApp();
+        // Show the popup immediately after login so the user sees the timer
+        showPopup();
         return { success: true };
       } catch (e) {
         return { error: _friendlyLoginError(e) };

@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('trackflow', {
   getLastProject: () => ipcRenderer.invoke('get-last-project'),
   setLastProject: (projectId) => ipcRenderer.invoke('set-last-project', projectId),
   logout: () => ipcRenderer.invoke('logout'),
+  hideWindow: () => ipcRenderer.invoke('hide-window'),
   login: (email, password) => ipcRenderer.invoke('login', email, password),
   googleLogin: () => ipcRenderer.invoke('google-login'),
   selectOrganization: (orgId, credentials) => ipcRenderer.invoke('select-organization', orgId, credentials),
