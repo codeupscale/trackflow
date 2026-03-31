@@ -140,8 +140,7 @@
       "createStartMenuShortcut": true,
       "shortcutName": "TrackFlow",
       "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico",
-      "killAppBeforeUninstall": true
+      "uninstallerIcon": "build/icon.ico"
     },
     "linux": {
       "target": [
