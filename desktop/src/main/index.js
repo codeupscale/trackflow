@@ -143,6 +143,37 @@ function saveLastProjectId(projectId) {
   }
 }
 
+// ── Always-on-Top (Pin) Persistence ──────────────────────────────────────────
+// Persists the "always on top" / "pin" state so it survives app restarts.
+// Uses the same user-prefs.json file as lastSelectedProjectId.
+function loadAlwaysOnTop() {
+  try {
+    const p = getPrefsPath();
+    if (!p || !fs.existsSync(p)) return true; // default: pinned
+    const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return data.alwaysOnTop !== undefined ? !!data.alwaysOnTop : true;
+  } catch {
+    return true;
+  }
+}
+
+function saveAlwaysOnTop(pinned) {
+  try {
+    const p = getPrefsPath();
+    if (!p) return;
+    let data = {};
+    if (fs.existsSync(p)) {
+      try { data = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { data = {}; }
+    }
+    data.alwaysOnTop = !!pinned;
+    fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) {
+    console.error('Failed to save always-on-top state:', e);
+  }
+}
+
+let isAlwaysOnTop = true; // will be loaded from prefs in app.whenReady
+
 // ── Restart State Persistence ────────────────────────────────────────────────
 // Saves tracking state before a forced restart (e.g., after granting Screen
 // Recording permission on macOS). On next launch, the app auto-resumes.
@@ -611,6 +642,9 @@ async function initializeApp() {
 
   isAuthenticated = true;
 
+  // Load persisted always-on-top preference
+  isAlwaysOnTop = loadAlwaysOnTop();
+
   // Identify user in PostHog
   if (user) {
     posthog.identify(user.id, {
@@ -1076,7 +1110,21 @@ function buildTrayContextMenu() {
   // ── Navigation ─────────────────────────────────────────────────────────
   template.push(
     { label: 'Open App Window', click: () => showPopup() },
-    { label: 'Open Dashboard', click: () => openDashboardInBrowser() }
+    { label: 'Open Dashboard', click: () => openDashboardInBrowser() },
+    {
+      label: 'Always on Top',
+      type: 'checkbox',
+      checked: isAlwaysOnTop,
+      click: (menuItem) => {
+        isAlwaysOnTop = menuItem.checked;
+        if (popupWindow && !popupWindow.isDestroyed()) {
+          popupWindow.setAlwaysOnTop(isAlwaysOnTop);
+          popupWindow.webContents.send('pin-state-changed', { pinned: isAlwaysOnTop });
+        }
+        saveAlwaysOnTop(isAlwaysOnTop);
+        console.log(`[Pin] Always on top (tray): ${isAlwaysOnTop}`);
+      },
+    }
   );
 
   template.push({ type: 'separator' });
@@ -1167,7 +1215,7 @@ function showPopup() {
     frame: false,
     resizable: false,
     skipTaskbar: true,
-    alwaysOnTop: true,
+    alwaysOnTop: isAlwaysOnTop,
     show: false,
     backgroundColor: '#0a0a0a',   // Prevent white flash on all platforms
     ...(process.platform === 'linux' && { visibleOnAllWorkspaces: true }),
@@ -1337,11 +1385,29 @@ function setupIPC() {
   ipcMain.removeHandler('request-screen-permission');
   ipcMain.removeHandler('open-screen-recording-settings');
   ipcMain.removeHandler('hide-window');
+  ipcMain.removeHandler('toggle-pin');
+  ipcMain.removeHandler('get-pin-state');
 
   ipcMain.handle('hide-window', () => {
     if (popupWindow && !popupWindow.isDestroyed()) {
       popupWindow.hide();
     }
+  });
+
+  ipcMain.handle('toggle-pin', (_, forceState) => {
+    // If forceState is provided (boolean), use it; otherwise toggle
+    isAlwaysOnTop = typeof forceState === 'boolean' ? forceState : !isAlwaysOnTop;
+    if (popupWindow && !popupWindow.isDestroyed()) {
+      popupWindow.setAlwaysOnTop(isAlwaysOnTop);
+      popupWindow.webContents.send('pin-state-changed', { pinned: isAlwaysOnTop });
+    }
+    saveAlwaysOnTop(isAlwaysOnTop);
+    console.log(`[Pin] Always on top: ${isAlwaysOnTop}`);
+    return { pinned: isAlwaysOnTop };
+  });
+
+  ipcMain.handle('get-pin-state', () => {
+    return { pinned: isAlwaysOnTop };
   });
 
   ipcMain.handle('check-screen-permission', async () => {

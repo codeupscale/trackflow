@@ -220,6 +220,27 @@ body {
   color: white;
 }
 
+/* ── Pin (Always on Top) Button ───────────────────────────────────────── */
+.titlebar-btn.pin-btn {
+  color: var(--text-muted);
+  transition: all 0.15s ease;
+}
+.titlebar-btn.pin-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+.titlebar-btn.pin-btn.pinned {
+  color: var(--accent-blue);
+}
+.titlebar-btn.pin-btn.pinned:hover {
+  background: var(--accent-blue-ring);
+  color: var(--accent-blue);
+}
+.titlebar-btn.pin-btn.pinned svg {
+  fill: var(--accent-blue);
+  fill-opacity: 0.2;
+}
+
 /* ── Buttons — Unified Cross-Platform ──────────────────────────────────── */
 .btn {
   display: inline-flex;
