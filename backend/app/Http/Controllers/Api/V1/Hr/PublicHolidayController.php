@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\Hr;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Hr\StorePublicHolidayRequest;
 use App\Models\PublicHoliday;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -23,19 +24,11 @@ class PublicHolidayController extends Controller
         return response()->json($holidays);
     }
 
-    public function store(Request $request): JsonResponse
+    public function store(StorePublicHolidayRequest $request): JsonResponse
     {
-        $this->authorize('create', PublicHoliday::class);
-
-        $validated = $request->validate([
-            'name' => 'required|string|max:255',
-            'date' => 'required|date',
-            'is_recurring' => 'sometimes|boolean',
-        ]);
-
         $holiday = PublicHoliday::create([
             'organization_id' => $request->user()->organization_id,
-            ...$validated,
+            ...$request->validated(),
         ]);
 
         return response()->json(['public_holiday' => $holiday], 201);

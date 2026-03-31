@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v4';
 
 export const leaveRequestSchema = z.object({
   leave_type_id: z.string().uuid('Please select a leave type'),
