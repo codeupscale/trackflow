@@ -14,6 +14,12 @@ import {
   FolderOpen,
   Settings,
   LogOut,
+  Building2,
+  Briefcase,
+  CalendarDays,
+  ClipboardCheck,
+  CalendarRange,
+  ListChecks,
 } from 'lucide-react';
 import { TrackFlowLogo } from '@/components/ui/trackflow-logo';
 
@@ -72,6 +78,17 @@ const navGroups: { label: string; items: NavItem[] }[] = [
     items: [
       { name: 'Reports', href: '/reports', icon: BarChart3, roles: ['owner', 'admin', 'manager'] },
       { name: 'Projects', href: '/projects', icon: FolderOpen, roles: ['owner', 'admin', 'manager', 'employee'] },
+    ],
+  },
+  {
+    label: 'HR',
+    items: [
+      { name: 'Departments', href: '/hr/departments', icon: Building2, roles: ['owner', 'admin', 'manager'] },
+      { name: 'Positions', href: '/hr/positions', icon: Briefcase, roles: ['owner', 'admin', 'manager'] },
+      { name: 'My Leave', href: '/hr/leave', icon: CalendarDays, roles: ['owner', 'admin', 'manager', 'employee'] },
+      { name: 'Leave Approvals', href: '/hr/leave/approvals', icon: ClipboardCheck, roles: ['owner', 'admin', 'manager'] },
+      { name: 'Leave Calendar', href: '/hr/leave/calendar', icon: CalendarRange, roles: ['owner', 'admin', 'manager', 'employee'] },
+      { name: 'Leave Types', href: '/hr/leave/types', icon: ListChecks, roles: ['owner', 'admin'] },
     ],
   },
   {
