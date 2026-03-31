@@ -1118,7 +1118,7 @@ function buildTrayContextMenu() {
       click: (menuItem) => {
         isAlwaysOnTop = menuItem.checked;
         if (popupWindow && !popupWindow.isDestroyed()) {
-          popupWindow.setAlwaysOnTop(isAlwaysOnTop, isAlwaysOnTop ? 'floating' : 'normal');
+          _applyAlwaysOnTop(popupWindow, isAlwaysOnTop);
           popupWindow.webContents.send('pin-state-changed', { pinned: isAlwaysOnTop });
         }
         saveAlwaysOnTop(isAlwaysOnTop);
@@ -1143,6 +1143,53 @@ function buildTrayContextMenu() {
   );
 
   return Menu.buildFromTemplate(template);
+}
+
+/**
+ * Apply always-on-top state to a BrowserWindow.
+ * On macOS, uses 'floating' level (NSFloatingWindowLevel) so the window
+ * stays above normal app windows. moveTop() is called every 300ms to keep
+ * the window at the front of its level — this is needed because Electron 28
+ * on macOS Sequoia loses z-order after another app gains focus even when
+ * isAlwaysOnTop() still returns true.
+ */
+// Interval reference for the pin keepalive (macOS workaround)
+let _pinKeepalive = null;
+
+function _applyAlwaysOnTop(win, pinned) {
+  if (!win || win.isDestroyed()) return;
+
+  // Clear any existing keepalive
+  if (_pinKeepalive) {
+    clearInterval(_pinKeepalive);
+    _pinKeepalive = null;
+  }
+
+  if (pinned) {
+    // 'floating' = NSFloatingWindowLevel — sits above all normal app windows.
+    // relativeLevel 1 puts it one layer above other floating windows.
+    win.setAlwaysOnTop(true, 'floating', 1);
+    win.moveTop();
+    console.log(`[Pin] setAlwaysOnTop(true,'floating',1) + moveTop(). isAlwaysOnTop()=${win.isAlwaysOnTop()}`);
+
+    // macOS Sequoia + Electron 28 regression: the window visually slips
+    // behind other apps after focus changes even though isAlwaysOnTop()
+    // returns true. Re-assert the level and call moveTop() every 300ms.
+    // NOTE: we do NOT toggle off→on here — that creates a gap where another
+    // window can jump in. We only re-assert the true state.
+    _pinKeepalive = setInterval(() => {
+      if (!win || win.isDestroyed() || !isAlwaysOnTop) {
+        clearInterval(_pinKeepalive);
+        _pinKeepalive = null;
+        return;
+      }
+      win.setAlwaysOnTop(true, 'floating', 1);
+      win.moveTop();
+    }, 300);
+  } else {
+    win.setAlwaysOnTop(false);
+    console.log(`[Pin] setAlwaysOnTop(false) called. isAlwaysOnTop()=${win.isAlwaysOnTop()}`);
+  }
 }
 
 function showPopup() {
@@ -1215,10 +1262,8 @@ function showPopup() {
     frame: false,
     resizable: false,
     skipTaskbar: true,
-    alwaysOnTop: isAlwaysOnTop,
     show: false,
     backgroundColor: '#0a0a0a',   // Prevent white flash on all platforms
-    ...(process.platform === 'linux' && { visibleOnAllWorkspaces: true }),
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
@@ -1228,10 +1273,9 @@ function showPopup() {
     },
   });
 
-  // Set floating level on macOS for reliable always-on-top behavior
-  if (isAlwaysOnTop) {
-    popupWindow.setAlwaysOnTop(true, 'floating');
-  }
+  // Apply always-on-top AFTER window creation (not in constructor options).
+  // On macOS, use 'floating' level + relativeLevel 1 for reliable z-order.
+  _applyAlwaysOnTop(popupWindow, isAlwaysOnTop);
 
   popupWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
@@ -1404,7 +1448,7 @@ function setupIPC() {
     // If forceState is provided (boolean), use it; otherwise toggle
     isAlwaysOnTop = typeof forceState === 'boolean' ? forceState : !isAlwaysOnTop;
     if (popupWindow && !popupWindow.isDestroyed()) {
-      popupWindow.setAlwaysOnTop(isAlwaysOnTop, isAlwaysOnTop ? 'floating' : 'normal');
+      _applyAlwaysOnTop(popupWindow, isAlwaysOnTop);
       popupWindow.webContents.send('pin-state-changed', { pinned: isAlwaysOnTop });
     }
     saveAlwaysOnTop(isAlwaysOnTop);
