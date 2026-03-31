@@ -82,12 +82,13 @@ class ReportService
             $totalWithIdle = $totalTrackedSeconds + $totalIdleSeconds;
             $idlePercent = $totalWithIdle > 0 ? round($totalIdleSeconds / $totalWithIdle * 100, 1) : 0;
 
-            // Earnings: single query with join (only if there are tracked entries)
+            $teDur = self::durationExpr('time_entries');
+
+            // Billable breakdown: billable_seconds + earnings in one query
+            $billableSeconds = 0;
             $totalEarnings = 0;
             if ($totalTrackedSeconds > 0) {
-                $teDur = self::durationExpr('time_entries');
-
-                $earningsQuery = DB::table('time_entries')
+                $billableQuery = DB::table('time_entries')
                     ->where('time_entries.organization_id', $orgId)
                     ->where('time_entries.started_at', '>=', $dateFrom)
                     ->where('time_entries.started_at', '<', $dateTo)
@@ -97,12 +98,60 @@ class ReportService
                     ->where('projects.billable', true);
 
                 if ($userId) {
-                    $earningsQuery->where('time_entries.user_id', $userId);
+                    $billableQuery->where('time_entries.user_id', $userId);
                 }
 
-                $totalEarnings = $earningsQuery
+                $billableResult = $billableQuery
+                    ->selectRaw("COALESCE(SUM({$teDur}), 0) as billable_seconds, COALESCE(SUM({$teDur} / 3600.0 * projects.hourly_rate), 0) as total_earnings")
+                    ->first();
+
+                $billableSeconds = (int) ($billableResult->billable_seconds ?? 0);
+                $totalEarnings = (float) ($billableResult->total_earnings ?? 0);
+            }
+
+            $nonBillableSeconds = $totalTrackedSeconds - $billableSeconds;
+            $totalForRatio = $billableSeconds + $nonBillableSeconds;
+            $billablePct = $totalForRatio > 0 ? (int) round($billableSeconds / $totalForRatio * 100) : 0;
+            $nonBillablePct = 100 - $billablePct;
+            $billableRatio = "{$billablePct}:{$nonBillablePct}";
+
+            // Previous period: shift date range backwards by its own length
+            $periodLengthSeconds = strtotime($dateTo) - strtotime($dateFrom);
+            $prevFrom = date('Y-m-d H:i:s', strtotime($dateFrom) - $periodLengthSeconds);
+            $prevTo = $dateFrom;
+
+            $prevQuery = TimeEntry::withoutGlobalScopes()
+                ->where('organization_id', $orgId)
+                ->where('started_at', '>=', $prevFrom)
+                ->where('started_at', '<', $prevTo)
+                ->whereNotNull('ended_at');
+
+            if ($userId) {
+                $prevQuery->where('user_id', $userId);
+            }
+
+            $prevTotalSeconds = (int) ($prevQuery->selectRaw("COALESCE(SUM({$dur}), 0) as total_seconds")->value('total_seconds') ?? 0);
+            $previousPeriodHours = round($prevTotalSeconds / 3600, 2);
+
+            // Previous period budget
+            $previousBudgetUsed = 0;
+            if ($prevTotalSeconds > 0) {
+                $prevBudgetQuery = DB::table('time_entries')
+                    ->where('time_entries.organization_id', $orgId)
+                    ->where('time_entries.started_at', '>=', $prevFrom)
+                    ->where('time_entries.started_at', '<', $prevTo)
+                    ->whereNotNull('time_entries.ended_at')
+                    ->where('time_entries.type', 'tracked')
+                    ->join('projects', 'time_entries.project_id', '=', 'projects.id')
+                    ->where('projects.billable', true);
+
+                if ($userId) {
+                    $prevBudgetQuery->where('time_entries.user_id', $userId);
+                }
+
+                $previousBudgetUsed = (float) ($prevBudgetQuery
                     ->selectRaw("COALESCE(SUM({$teDur} / 3600.0 * projects.hourly_rate), 0) as total_earnings")
-                    ->value('total_earnings') ?? 0;
+                    ->value('total_earnings') ?? 0);
             }
 
             return [
@@ -115,6 +164,12 @@ class ReportService
                 'avg_activity' => $daily->avg('activity_score_avg'),
                 'total_entries' => $daily->sum('entry_count'),
                 'total_earnings' => round($totalEarnings, 2),
+                'previous_period_hours' => $previousPeriodHours,
+                'total_budget_used' => round($totalEarnings, 2),
+                'previous_budget_used' => round($previousBudgetUsed, 2),
+                'billable_seconds' => $billableSeconds,
+                'non_billable_seconds' => $nonBillableSeconds,
+                'billable_ratio' => $billableRatio,
             ];
         });
     }
@@ -183,7 +238,7 @@ class ReportService
         });
     }
 
-    // REPT-03: Projects report
+    // REPT-03: Projects report (project-level aggregation, top 10)
     public function projects(string $orgId, string $dateFrom, string $dateTo): array
     {
         $cacheKey = $this->cacheKey($orgId, 'projects', "{$dateFrom}_{$dateTo}");
@@ -198,40 +253,23 @@ class ReportService
                 ->whereNotNull('time_entries.ended_at')
                 ->whereNotNull('time_entries.project_id')
                 ->join('projects', 'time_entries.project_id', '=', 'projects.id')
-                ->leftJoin('tasks', 'time_entries.task_id', '=', 'tasks.id')
                 ->selectRaw("
                     projects.id as project_id,
                     projects.name as project_name,
                     projects.color as project_color,
-                    projects.billable,
-                    projects.hourly_rate,
-                    tasks.id as task_id,
-                    tasks.name as task_name,
-                    SUM({$dur}) as total_seconds,
-                    COUNT(time_entries.id) as entry_count
+                    SUM({$dur}) as total_seconds
                 ")
-                ->groupBy('projects.id', 'projects.name', 'projects.color', 'projects.billable', 'projects.hourly_rate', 'tasks.id', 'tasks.name')
+                ->groupBy('projects.id', 'projects.name', 'projects.color')
                 ->orderByDesc('total_seconds')
+                ->limit(10)
                 ->get()
-                ->groupBy('project_id')
-                ->map(function ($tasks, $projectId) {
-                    $first = $tasks->first();
-                    return [
-                        'project_id' => $projectId,
-                        'project_name' => $first->project_name,
-                        'color' => $first->project_color,
-                        'billable' => $first->billable,
-                        'hourly_rate' => $first->hourly_rate,
-                        'total_seconds' => (int) $tasks->sum('total_seconds'),
-                        'tasks' => $tasks->map(fn($t) => [
-                            'task_id' => $t->task_id,
-                            'task_name' => $t->task_name,
-                            'total_seconds' => (int) $t->total_seconds,
-                            'entry_count' => (int) $t->entry_count,
-                        ])->values(),
-                    ];
-                })
-                ->values()
+                ->map(fn ($row) => [
+                    'project_id' => $row->project_id,
+                    'name' => $row->project_name,
+                    'color' => $row->project_color,
+                    'total_hours' => round((int) $row->total_seconds / 3600, 1),
+                    'total_seconds' => (int) $row->total_seconds,
+                ])
                 ->all();
         });
     }
@@ -338,6 +376,331 @@ class ReportService
                 ->values()
                 ->all();
         });
+    }
+
+    // REPT-09: Analytics (KPIs + chart data)
+    public function analytics(string $orgId, ?string $userId, string $dateFrom, string $dateTo): array
+    {
+        $cacheKey = $this->cacheKey($orgId, 'analytics', "{$dateFrom}_{$dateTo}", $userId);
+
+        return Cache::remember($cacheKey, 900, function () use ($orgId, $userId, $dateFrom, $dateTo) {
+            $dur = self::durationExpr('te');
+
+            // --- Base conditions for current period ---
+            $baseWhere = function ($q) use ($orgId, $userId, $dateFrom, $dateTo) {
+                $q->where('te.organization_id', $orgId)
+                  ->where('te.started_at', '>=', $dateFrom)
+                  ->where('te.started_at', '<', $dateTo)
+                  ->whereNotNull('te.ended_at');
+                if ($userId) {
+                    $q->where('te.user_id', $userId);
+                }
+            };
+
+            // --- KPI 1: total_tracked_hours + change_percent vs previous period ---
+            $periodLengthSeconds = strtotime($dateTo) - strtotime($dateFrom);
+            $prevFrom = date('Y-m-d H:i:s', strtotime($dateFrom) - $periodLengthSeconds);
+            $prevTo = $dateFrom;
+
+            $currentHoursRow = DB::table('time_entries as te')
+                ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
+                ->selectRaw("COALESCE(SUM({$dur}), 0) as total_seconds")
+                ->first();
+            $currentTotalSeconds = (int) ($currentHoursRow->total_seconds ?? 0);
+            $currentTotalHours = round($currentTotalSeconds / 3600, 1);
+
+            $prevHoursRow = DB::table('time_entries as te')
+                ->where('te.organization_id', $orgId)
+                ->where('te.started_at', '>=', $prevFrom)
+                ->where('te.started_at', '<', $prevTo)
+                ->whereNotNull('te.ended_at')
+                ->when($userId, fn ($q) => $q->where('te.user_id', $userId))
+                ->selectRaw("COALESCE(SUM({$dur}), 0) as total_seconds")
+                ->first();
+            $prevTotalSeconds = (int) ($prevHoursRow->total_seconds ?? 0);
+
+            $changePercent = $prevTotalSeconds > 0
+                ? round(($currentTotalSeconds - $prevTotalSeconds) / $prevTotalSeconds * 100, 1)
+                : null;
+
+            // --- KPI 2: avg_activity_percent (duration-weighted, tracked entries only) ---
+            $activityRow = DB::table('time_entries as te')
+                ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
+                ->where('te.type', 'tracked')
+                ->selectRaw("
+                    CASE
+                        WHEN SUM(CASE WHEN te.activity_score IS NOT NULL AND te.activity_score > 0
+                             THEN {$dur} ELSE 0 END) > 0
+                        THEN SUM(COALESCE(te.activity_score, 0) * {$dur})
+                             / SUM(CASE WHEN te.activity_score IS NOT NULL AND te.activity_score > 0
+                                   THEN {$dur} ELSE 0 END)
+                        ELSE 0
+                    END as avg_activity
+                ")
+                ->first();
+            $avgActivity = round((float) ($activityRow->avg_activity ?? 0), 1);
+
+            // --- KPI 3: total_budget_used + change_percent ---
+            $budgetRow = DB::table('time_entries as te')
+                ->join('projects as p', 'te.project_id', '=', 'p.id')
+                ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
+                ->where('p.billable', true)
+                ->selectRaw("COALESCE(SUM({$dur} / 3600.0 * p.hourly_rate), 0) as total_budget")
+                ->first();
+            $currentBudget = round((float) ($budgetRow->total_budget ?? 0), 2);
+
+            $prevBudgetRow = DB::table('time_entries as te')
+                ->join('projects as p', 'te.project_id', '=', 'p.id')
+                ->where('te.organization_id', $orgId)
+                ->where('te.started_at', '>=', $prevFrom)
+                ->where('te.started_at', '<', $prevTo)
+                ->whereNotNull('te.ended_at')
+                ->where('p.billable', true)
+                ->when($userId, fn ($q) => $q->where('te.user_id', $userId))
+                ->selectRaw("COALESCE(SUM({$dur} / 3600.0 * p.hourly_rate), 0) as total_budget")
+                ->first();
+            $prevBudget = (float) ($prevBudgetRow->total_budget ?? 0);
+
+            $budgetChangePercent = $prevBudget > 0
+                ? round(($currentBudget - $prevBudget) / $prevBudget * 100, 1)
+                : null;
+
+            // --- KPI 4: billable_ratio ---
+            $billableRow = DB::table('time_entries as te')
+                ->leftJoin('projects as p', 'te.project_id', '=', 'p.id')
+                ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
+                ->selectRaw("
+                    COALESCE(SUM(CASE WHEN p.billable = true THEN {$dur} ELSE 0 END), 0) as billable_seconds,
+                    COALESCE(SUM(CASE WHEN p.billable IS NULL OR p.billable = false THEN {$dur} ELSE 0 END), 0) as non_billable_seconds
+                ")
+                ->first();
+            $billableSec = (int) ($billableRow->billable_seconds ?? 0);
+            $nonBillableSec = (int) ($billableRow->non_billable_seconds ?? 0);
+            $totalBillableSec = $billableSec + $nonBillableSec;
+            $billablePercent = $totalBillableSec > 0 ? (int) round($billableSec / $totalBillableSec * 100) : 0;
+
+            // --- Chart 1: time_per_project (top 8) ---
+            $timePerProject = DB::table('time_entries as te')
+                ->join('projects as p', 'te.project_id', '=', 'p.id')
+                ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
+                ->whereNotNull('te.project_id')
+                ->selectRaw("p.name as project_name, p.color, SUM({$dur}) / 3600.0 as total_hours")
+                ->groupBy('p.id', 'p.name', 'p.color')
+                ->orderByDesc('total_hours')
+                ->limit(8)
+                ->get()
+                ->map(fn ($row) => [
+                    'project_name' => $row->project_name,
+                    'color' => $row->color,
+                    'total_hours' => round((float) $row->total_hours, 1),
+                ])
+                ->all();
+
+            // --- Chart 2: team_activity_levels (by day of week) ---
+            $dayNames = [0 => 'Sun', 1 => 'Mon', 2 => 'Tue', 3 => 'Wed', 4 => 'Thu', 5 => 'Fri', 6 => 'Sat'];
+
+            $activityByDay = DB::table('time_entries as te')
+                ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
+                ->where('te.type', 'tracked')
+                ->whereNotNull('te.activity_score')
+                ->where('te.activity_score', '>', 0)
+                ->selectRaw("
+                    EXTRACT(DOW FROM te.started_at AT TIME ZONE 'UTC')::int as day_num,
+                    AVG(te.activity_score) as avg_activity
+                ")
+                ->groupBy(DB::raw("EXTRACT(DOW FROM te.started_at AT TIME ZONE 'UTC')"))
+                ->get()
+                ->keyBy('day_num');
+
+            $teamActivityLevels = [];
+            foreach ([1, 2, 3, 4, 5, 6, 0] as $dayNum) {
+                $row = $activityByDay->get($dayNum);
+                $teamActivityLevels[] = [
+                    'day' => $dayNames[$dayNum],
+                    'day_num' => $dayNum,
+                    'avg_activity' => $row ? round((float) $row->avg_activity, 1) : 0,
+                ];
+            }
+
+            return [
+                'kpis' => [
+                    'total_tracked_hours' => [
+                        'value' => $currentTotalHours,
+                        'change_percent' => $changePercent,
+                    ],
+                    'avg_activity_percent' => [
+                        'value' => $avgActivity,
+                        'change_percent' => null,
+                    ],
+                    'total_budget_used' => [
+                        'value' => $currentBudget,
+                        'change_percent' => $budgetChangePercent,
+                    ],
+                    'billable_ratio' => [
+                        'billable' => $billablePercent,
+                        'non_billable' => 100 - $billablePercent,
+                    ],
+                ],
+                'time_per_project' => $timePerProject,
+                'team_activity_levels' => $teamActivityLevels,
+            ];
+        });
+    }
+
+    // REPT-10: Detailed logs (paginated time entries with joins)
+    public function detailedLogs(string $orgId, ?string $userId, string $dateFrom, string $dateTo, int $perPage = 10, int $page = 1): array
+    {
+        $cacheKey = $this->cacheKey($orgId, 'detailed_logs', "{$dateFrom}_{$dateTo}_{$perPage}_{$page}", $userId);
+
+        return Cache::remember($cacheKey, 900, function () use ($orgId, $userId, $dateFrom, $dateTo, $perPage, $page) {
+            $dur = self::durationExpr('te');
+
+            $baseQuery = DB::table('time_entries as te')
+                ->join('users as u', 'te.user_id', '=', 'u.id')
+                ->leftJoin('projects as p', 'te.project_id', '=', 'p.id')
+                ->leftJoin('tasks as t', 'te.task_id', '=', 't.id')
+                ->where('te.organization_id', $orgId)
+                ->where('te.started_at', '>=', $dateFrom)
+                ->where('te.started_at', '<', $dateTo)
+                ->whereNotNull('te.ended_at');
+
+            if ($userId) {
+                $baseQuery->where('te.user_id', $userId);
+            }
+
+            $total = (clone $baseQuery)->count();
+
+            $offset = ($page - 1) * $perPage;
+
+            $rows = (clone $baseQuery)
+                ->select([
+                    'te.id',
+                    'u.name as member_name',
+                    'u.role as member_role',
+                    'p.name as project_name',
+                    'p.color as project_color',
+                    'p.billable',
+                    'p.hourly_rate',
+                    't.name as task_name',
+                    'te.activity_score',
+                    'te.started_at',
+                ])
+                ->selectRaw("{$dur} as duration_seconds")
+                ->orderByDesc('te.started_at')
+                ->offset($offset)
+                ->limit($perPage)
+                ->get();
+
+            $data = $rows->map(fn ($row) => [
+                'id' => $row->id,
+                'member_name' => $row->member_name,
+                'member_role' => $row->member_role,
+                'project_name' => $row->project_name,
+                'project_color' => $row->project_color,
+                'task_name' => $row->task_name,
+                'duration_seconds' => (int) $row->duration_seconds,
+                'activity_percent' => (int) ($row->activity_score ?? 0),
+                'billable_amount' => $row->billable
+                    ? round(((int) $row->duration_seconds) / 3600 * (float) $row->hourly_rate, 2)
+                    : 0,
+                'started_at' => $row->started_at,
+            ])->all();
+
+            return [
+                'data' => $data,
+                'meta' => [
+                    'current_page' => $page,
+                    'last_page' => (int) ceil($total / $perPage) ?: 1,
+                    'total' => $total,
+                    'per_page' => $perPage,
+                ],
+            ];
+        });
+    }
+
+    // REPT-11: Activity by day of week (weighted average activity per weekday)
+    public function activityByDay(string $orgId, ?string $userId, string $dateFrom, string $dateTo): array
+    {
+        $cacheKey = $this->cacheKey($orgId, 'activity_by_day', "{$dateFrom}_{$dateTo}", $userId);
+
+        return Cache::remember($cacheKey, 900, function () use ($orgId, $userId, $dateFrom, $dateTo) {
+            $dur = self::durationExpr();
+
+            $query = TimeEntry::withoutGlobalScopes()
+                ->where('organization_id', $orgId)
+                ->where('started_at', '>=', $dateFrom)
+                ->where('started_at', '<', $dateTo)
+                ->whereNotNull('ended_at')
+                ->whereNotNull('activity_score')
+                ->where('activity_score', '>', 0);
+
+            if ($userId) {
+                $query->where('user_id', $userId);
+            }
+
+            $rows = $query->selectRaw("
+                    EXTRACT(DOW FROM started_at)::int as day_num,
+                    CASE
+                        WHEN SUM({$dur}) > 0
+                        THEN SUM(COALESCE(activity_score, 0) * {$dur}) / SUM({$dur})
+                        ELSE 0
+                    END as activity_percent
+                ")
+                ->groupBy(DB::raw('EXTRACT(DOW FROM started_at)'))
+                ->get()
+                ->keyBy('day_num');
+
+            // Map DOW numbers to day names, ordered Mon-Sun
+            $dayNames = [0 => 'Sun', 1 => 'Mon', 2 => 'Tue', 3 => 'Wed', 4 => 'Thu', 5 => 'Fri', 6 => 'Sat'];
+            $ordered = [1, 2, 3, 4, 5, 6, 0]; // Mon through Sun
+
+            $result = [];
+            foreach ($ordered as $dayNum) {
+                $row = $rows->get($dayNum);
+                $result[] = [
+                    'day' => $dayNames[$dayNum],
+                    'activity_percent' => $row ? round((float) $row->activity_percent, 1) : 0,
+                ];
+            }
+
+            return $result;
+        });
+    }
+
+    // REPT-12: Detailed time logs (paginated, with user/project/task joins)
+    public function timeLogs(string $orgId, ?string $userId, string $dateFrom, string $dateTo, int $perPage = 15): \Illuminate\Contracts\Pagination\LengthAwarePaginator
+    {
+        $dur = self::durationExpr('time_entries');
+
+        $query = DB::table('time_entries')
+            ->join('users', 'time_entries.user_id', '=', 'users.id')
+            ->leftJoin('projects', 'time_entries.project_id', '=', 'projects.id')
+            ->leftJoin('tasks', 'time_entries.task_id', '=', 'tasks.id')
+            ->where('time_entries.organization_id', $orgId)
+            ->where('time_entries.started_at', '>=', $dateFrom)
+            ->where('time_entries.started_at', '<', $dateTo)
+            ->whereNotNull('time_entries.ended_at');
+
+        if ($userId) {
+            $query->where('time_entries.user_id', $userId);
+        }
+
+        return $query->select([
+                'time_entries.id',
+                'users.name as user_name',
+                'users.role as user_role',
+                'projects.name as project_name',
+                'projects.color as project_color',
+                'projects.billable',
+                'projects.hourly_rate',
+                'tasks.name as task_name',
+                'time_entries.activity_score',
+                'time_entries.started_at',
+            ])
+            ->selectRaw("{$dur} as duration_seconds")
+            ->selectRaw("CASE WHEN projects.billable = true THEN ROUND({$dur} / 3600.0 * projects.hourly_rate, 2) ELSE 0 END as billable_amount")
+            ->orderByDesc('time_entries.started_at')
+            ->paginate($perPage);
     }
 
     // REPT-08: Attendance report
