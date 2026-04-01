@@ -10,7 +10,9 @@ export function useLeaveBalance(userId?: string) {
       const params: Record<string, string> = {};
       if (userId) params.user_id = userId;
       const res = await api.get('/hr/leave-balances', { params });
-      return res.data.data ?? res.data;
+      // API returns {balances: [...]} or {data: [...]} or plain array
+      const raw = res.data;
+      return raw.balances ?? raw.data ?? (Array.isArray(raw) ? raw : []);
     },
   });
 
