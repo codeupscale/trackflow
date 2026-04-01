@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Models\Screenshot;
 use App\Models\User;
+use App\Services\PermissionService;
 
 class ScreenshotPolicy
 {
@@ -18,7 +19,23 @@ class ScreenshotPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin', 'manager') || $user->id === $screenshot->user_id;
+        // Own screenshot
+        if ($user->id === $screenshot->user_id) {
+            return true;
+        }
+
+        $service = app(PermissionService::class);
+        $scope = $service->getScope($user, 'screenshots.view');
+
+        if ($scope === 'organization') {
+            return true;
+        }
+
+        if ($scope === 'team') {
+            return in_array($screenshot->user_id, $service->getTeamUserIds($user));
+        }
+
+        return false;
     }
 
     public function create(User $user): bool
@@ -32,6 +49,6 @@ class ScreenshotPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin');
+        return app(PermissionService::class)->hasPermission($user, 'screenshots.delete');
     }
 }

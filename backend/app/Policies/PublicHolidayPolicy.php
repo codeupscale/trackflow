@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Models\PublicHoliday;
 use App\Models\User;
+use App\Services\PermissionService;
 
 class PublicHolidayPolicy
 {
@@ -17,23 +18,26 @@ class PublicHolidayPolicy
         return $user->organization_id === $publicHoliday->organization_id;
     }
 
-    /**
-     * Only owner/admin can create public holidays for the org.
-     */
     public function create(User $user): bool
     {
-        return $user->hasRole('owner', 'admin');
+        return app(PermissionService::class)->hasPermission($user, 'leave.manage_holidays');
     }
 
     public function update(User $user, PublicHoliday $publicHoliday): bool
     {
-        return $user->organization_id === $publicHoliday->organization_id
-            && $user->hasRole('owner', 'admin');
+        if ($user->organization_id !== $publicHoliday->organization_id) {
+            return false;
+        }
+
+        return app(PermissionService::class)->hasPermission($user, 'leave.manage_holidays');
     }
 
     public function delete(User $user, PublicHoliday $publicHoliday): bool
     {
-        return $user->organization_id === $publicHoliday->organization_id
-            && $user->hasRole('owner', 'admin');
+        if ($user->organization_id !== $publicHoliday->organization_id) {
+            return false;
+        }
+
+        return app(PermissionService::class)->hasPermission($user, 'leave.manage_holidays');
     }
 }

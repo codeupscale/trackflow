@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Models\AttendanceRecord;
 use App\Models\User;
+use App\Services\PermissionService;
 
 class AttendanceRecordPolicy
 {
@@ -16,11 +17,11 @@ class AttendanceRecordPolicy
     }
 
     /**
-     * Manager/admin/owner can view team attendance.
+     * Users with attendance.view at team or org scope can view team attendance.
      */
     public function viewTeam(User $user): bool
     {
-        return $user->hasRole('owner', 'admin', 'manager');
+        return app(PermissionService::class)->hasPermission($user, 'attendance.view', 'team');
     }
 
     /**
@@ -40,10 +41,10 @@ class AttendanceRecordPolicy
     }
 
     /**
-     * Admin/owner can trigger generation, edit overtime rules, etc.
+     * Users with attendance.generate permission can trigger generation, manage rules, etc.
      */
     public function manage(User $user): bool
     {
-        return $user->hasRole('owner', 'admin');
+        return app(PermissionService::class)->hasPermission($user, 'attendance.generate');
     }
 }

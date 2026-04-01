@@ -53,6 +53,7 @@ import Link from 'next/link';
 import api from '@/lib/api';
 import { formatDuration } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 import { DateFilter } from '@/components/date-filter';
 
 // ─── Types ────────────────────────────────────────────────────────
@@ -183,7 +184,8 @@ function formatSecondsToHM(seconds: number): string {
 
 export default function DashboardPage() {
   const user = useAuthStore((s) => s.user);
-  const isEmployee = user?.role === 'employee';
+  const { hasPermission } = usePermissionStore();
+  const isEmployee = !hasPermission('dashboard.view_team_stats');
 
   const [filterPreset, setFilterPreset] = useState<FilterPreset>('today');
   const [dateFrom, setDateFrom] = useState(() => format(new Date(), 'yyyy-MM-dd'));

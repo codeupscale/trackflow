@@ -3,6 +3,7 @@
 namespace App\Policies;
 
 use App\Models\User;
+use App\Services\PermissionService;
 
 class LeaveTypePolicy
 {
@@ -13,6 +14,6 @@ class LeaveTypePolicy
 
     public function create(User $user): bool
     {
-        return $user->hasRole('owner', 'admin');
+        return app(PermissionService::class)->hasPermission($user, 'leave.manage_types');
     }
 }

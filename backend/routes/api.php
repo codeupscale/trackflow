@@ -17,7 +17,9 @@ use App\Http\Controllers\Api\V1\Hr\OvertimeRuleController;
 use App\Http\Controllers\Api\V1\Hr\PositionController;
 use App\Http\Controllers\Api\V1\Hr\PublicHolidayController;
 use App\Http\Controllers\Api\V1\InvitationController;
+use App\Http\Controllers\Api\V1\PermissionController;
 use App\Http\Controllers\Api\V1\ProfileController;
+use App\Http\Controllers\Api\V1\RoleController;
 use App\Http\Controllers\Api\V1\SsoController;
 use App\Http\Controllers\Api\V1\UserPasswordController;
 use Illuminate\Support\Facades\Route;
@@ -73,20 +75,20 @@ Route::prefix('v1')->group(function () {
         Route::get('auth/organizations', [AuthController::class, 'organizations']);
         Route::post('auth/switch-organization', [AuthController::class, 'switchOrganization']);
 
-        // Invitations (owner/admin/manager)
+        // Invitations
         Route::get('invitations', [InvitationController::class, 'index'])
-            ->middleware('role:owner,admin,manager');
+            ->middleware('permission:team.invite');
         Route::post('invitations', [InvitationController::class, 'store'])
-            ->middleware('role:owner,admin,manager');
+            ->middleware('permission:team.invite');
         Route::post('invitations/{id}/resend', [InvitationController::class, 'resend'])
-            ->middleware('role:owner,admin,manager');
+            ->middleware('permission:team.invite');
         Route::delete('invitations/{id}', [InvitationController::class, 'destroy'])
-            ->middleware('role:owner,admin,manager');
+            ->middleware('permission:team.invite');
         // Backward-compatible alias used by older frontend builds
         Route::post('users/invite', [InvitationController::class, 'store'])
-            ->middleware('role:owner,admin,manager');
+            ->middleware('permission:team.invite');
 
-        // Timer
+        // Timer (desktop safety — auth:sanctum only)
         Route::post('timer/start', [\App\Http\Controllers\Api\V1\TimerController::class, 'start']);
         Route::post('timer/stop', [\App\Http\Controllers\Api\V1\TimerController::class, 'stop']);
         Route::post('timer/switch', [\App\Http\Controllers\Api\V1\TimerController::class, 'switch']);
@@ -103,16 +105,16 @@ Route::prefix('v1')->group(function () {
         // Timesheets
         Route::post('timesheets/submit', [\App\Http\Controllers\Api\V1\TimesheetController::class, 'submit']);
         Route::post('timesheets/{id}/review', [\App\Http\Controllers\Api\V1\TimesheetController::class, 'review'])
-            ->middleware('role:owner,admin,manager');
+            ->middleware('permission:time_entries.approve');
 
         // Projects
         Route::apiResource('projects', \App\Http\Controllers\Api\V1\ProjectController::class);
         Route::get('projects/{project}/members', [\App\Http\Controllers\Api\V1\ProjectController::class, 'members'])
-            ->middleware('role:owner,admin,manager');
+            ->middleware('permission:projects.manage_members');
         Route::put('projects/{project}/members', [\App\Http\Controllers\Api\V1\ProjectController::class, 'syncMembers'])
-            ->middleware('role:owner,admin,manager');
+            ->middleware('permission:projects.manage_members');
         Route::delete('projects/{project}/members/{user}', [\App\Http\Controllers\Api\V1\ProjectController::class, 'removeMember'])
-            ->middleware('role:owner,admin,manager')
+            ->middleware('permission:projects.manage_members')
             ->name('projects.members.remove');
 
         // Tasks
@@ -121,11 +123,11 @@ Route::prefix('v1')->group(function () {
         // Dashboard
         Route::get('dashboard', [\App\Http\Controllers\Api\V1\DashboardController::class, 'index']);
 
-        // Agent
+        // Agent (desktop safety — auth:sanctum only)
         Route::get('agent/config', [\App\Http\Controllers\Api\V1\AgentController::class, 'config']);
         Route::post('agent/logs', [\App\Http\Controllers\Api\V1\AgentController::class, 'bulkLogs'])->middleware('throttle:30,1');
 
-        // Screenshots
+        // Screenshots (store + signed-cookies are desktop safety — auth:sanctum only)
         Route::get('screenshots/signed-cookies', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'signedCookies']);
         Route::post('screenshots', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'store'])->middleware('throttle:30,1');
         Route::apiResource('screenshots', \App\Http\Controllers\Api\V1\ScreenshotController::class)->only(['index', 'destroy']);
@@ -150,22 +152,22 @@ Route::prefix('v1')->group(function () {
         // Job status
         Route::get('jobs/{id}', [\App\Http\Controllers\Api\V1\ReportController::class, 'jobStatus']);
 
-        // Teams (owner/admin/manager)
-        Route::apiResource('teams', \App\Http\Controllers\Api\V1\TeamController::class)->middleware('role:owner,admin,manager');
-        Route::post('teams/{id}/members', [\App\Http\Controllers\Api\V1\TeamController::class, 'addMember'])->middleware('role:owner,admin,manager');
-        Route::delete('teams/{id}/members', [\App\Http\Controllers\Api\V1\TeamController::class, 'removeMember'])->middleware('role:owner,admin,manager');
+        // Teams
+        Route::apiResource('teams', \App\Http\Controllers\Api\V1\TeamController::class)->middleware('permission:team.view_members');
+        Route::post('teams/{id}/members', [\App\Http\Controllers\Api\V1\TeamController::class, 'addMember'])->middleware('permission:team.view_members');
+        Route::delete('teams/{id}/members', [\App\Http\Controllers\Api\V1\TeamController::class, 'removeMember'])->middleware('permission:team.view_members');
 
-        // Users (owner/admin/manager)
-        Route::apiResource('users', \App\Http\Controllers\Api\V1\UserController::class)->except(['store'])->middleware('role:owner,admin,manager');
+        // Users
+        Route::apiResource('users', \App\Http\Controllers\Api\V1\UserController::class)->except(['store'])->middleware('permission:team.view_members');
         Route::post('users/{id}/password-reset', [UserPasswordController::class, 'reset'])
-            ->middleware(['role:owner,admin,manager', 'throttle:5,1']);
+            ->middleware(['permission:team.change_role', 'throttle:5,1']);
 
         // Settings
         Route::get('settings', [\App\Http\Controllers\Api\V1\SettingsController::class, 'show']);
-        Route::put('settings', [\App\Http\Controllers\Api\V1\SettingsController::class, 'update'])->middleware('role:owner,admin');
+        Route::put('settings', [\App\Http\Controllers\Api\V1\SettingsController::class, 'update'])->middleware('permission:settings.edit_org');
 
-        // Billing (owner/admin only)
-        Route::prefix('billing')->middleware('role:owner,admin')->group(function () {
+        // Billing
+        Route::prefix('billing')->middleware('permission:settings.manage_billing')->group(function () {
             Route::post('subscribe', [\App\Http\Controllers\Api\V1\BillingController::class, 'subscribe']);
             Route::post('change-plan', [\App\Http\Controllers\Api\V1\BillingController::class, 'changePlan']);
             Route::post('cancel', [\App\Http\Controllers\Api\V1\BillingController::class, 'cancel']);
@@ -175,14 +177,14 @@ Route::prefix('v1')->group(function () {
 
         // --- Enterprise Features ---
 
-        // Audit Logs (owner/admin only)
-        Route::prefix('audit-logs')->middleware('role:owner,admin')->group(function () {
+        // Audit Logs
+        Route::prefix('audit-logs')->middleware('permission:audit_logs.view')->group(function () {
             Route::get('/', [AuditLogController::class, 'index']);
             Route::get('actions', [AuditLogController::class, 'actions']);
         });
 
-        // SSO Configuration (owner/admin only)
-        Route::prefix('sso')->middleware('role:owner,admin')->group(function () {
+        // SSO Configuration
+        Route::prefix('sso')->middleware('permission:settings.edit_org')->group(function () {
             Route::get('/', [SsoController::class, 'show']);
             Route::put('configure', [SsoController::class, 'configure']);
             Route::delete('/', [SsoController::class, 'destroy']);
@@ -205,17 +207,26 @@ Route::prefix('v1')->group(function () {
             // Leave Management
             Route::get('leave-calendar', [LeaveCalendarController::class, 'index']);
             Route::get('leave-balances', [LeaveBalanceController::class, 'index']);
-            Route::apiResource('leave-types', LeaveTypeController::class)->only(['index', 'store', 'update']);
+            Route::get('leave-types', [LeaveTypeController::class, 'index']);
+            Route::post('leave-types', [LeaveTypeController::class, 'store'])
+                ->middleware('permission:leave.manage_types');
+            Route::put('leave-types/{leave_type}', [LeaveTypeController::class, 'update'])
+                ->middleware('permission:leave.manage_types');
             Route::apiResource('leave-requests', LeaveRequestController::class)->except(['update']);
             Route::put('leave-requests/{leaveRequest}/approve', [LeaveRequestController::class, 'approve']);
             Route::put('leave-requests/{leaveRequest}/reject', [LeaveRequestController::class, 'reject']);
-            Route::apiResource('public-holidays', PublicHolidayController::class)->only(['index', 'store', 'destroy']);
+            Route::get('public-holidays', [PublicHolidayController::class, 'index']);
+            Route::post('public-holidays', [PublicHolidayController::class, 'store'])
+                ->middleware('permission:leave.manage_holidays');
+            Route::delete('public-holidays/{public_holiday}', [PublicHolidayController::class, 'destroy'])
+                ->middleware('permission:leave.manage_holidays');
 
             // Attendance
             Route::get('attendance', [AttendanceController::class, 'index']);
             Route::get('attendance/team', [AttendanceController::class, 'teamIndex']);
             Route::get('attendance/summary', [AttendanceController::class, 'summary']);
-            Route::post('attendance/generate', [AttendanceController::class, 'store']);
+            Route::post('attendance/generate', [AttendanceController::class, 'store'])
+                ->middleware('permission:attendance.generate');
 
             // Attendance Regularizations
             Route::get('attendance/regularizations', [AttendanceRegularizationController::class, 'index']);
@@ -225,7 +236,8 @@ Route::prefix('v1')->group(function () {
 
             // Overtime Rules
             Route::get('overtime-rules', [OvertimeRuleController::class, 'show']);
-            Route::put('overtime-rules', [OvertimeRuleController::class, 'update']);
+            Route::put('overtime-rules', [OvertimeRuleController::class, 'update'])
+                ->middleware('permission:attendance.manage_overtime_rules');
 
             // Employee Directory & Profiles
             Route::get('employees', [EmployeeController::class, 'index']);
@@ -244,46 +256,13 @@ Route::prefix('v1')->group(function () {
             Route::delete('employees/{employee}/notes/{note}', [EmployeeNoteController::class, 'destroy']);
         });
 
-        // Permissions (owner/admin only)
-        Route::prefix('permissions')->middleware('role:owner,admin')->group(function () {
-            Route::get('/', function () {
-                return response()->json([
-                    'permissions' => \App\Models\Permission::all()->groupBy('group'),
-                ]);
-            });
-            Route::get('roles/{role}', function (string $role) {
-                return response()->json([
-                    'permissions' => \App\Services\PermissionService::getRolePermissions($role),
-                ]);
-            });
-            Route::get('users/{id}/overrides', function (\Illuminate\Http\Request $request, string $id) {
-                $user = $request->user()->organization->users()->findOrFail($id);
-                return response()->json([
-                    'overrides' => \App\Services\PermissionService::getUserOverrides($user),
-                ]);
-            });
-            Route::put('users/{id}/overrides', function (\Illuminate\Http\Request $request, string $id) {
-                $request->validate([
-                    'permission' => 'required|string|exists:permissions,name',
-                    'granted' => 'required|boolean',
-                ]);
-                $user = $request->user()->organization->users()->findOrFail($id);
-                $permission = \App\Models\Permission::where('name', $request->permission)->firstOrFail();
-
-                \Illuminate\Support\Facades\DB::table('user_permission_overrides')->updateOrInsert(
-                    ['user_id' => $user->id, 'permission_id' => $permission->id],
-                    ['granted' => $request->granted, 'id' => (string) \Illuminate\Support\Str::uuid()],
-                );
-
-                \App\Services\PermissionService::clearCache($user);
-                \App\Services\AuditService::log('user.permission_override', $user, [
-                    'permission' => $request->permission,
-                    'granted' => $request->granted,
-                ]);
-
-                return response()->json(['message' => 'Permission override saved.']);
-            });
-        });
+        // Roles & Permissions
+        Route::get('roles', [RoleController::class, 'index'])
+            ->middleware('permission:roles.view');
+        Route::get('roles/{role}', [RoleController::class, 'show'])
+            ->middleware('permission:roles.view');
+        Route::get('permissions', [PermissionController::class, 'index'])
+            ->middleware('permission:roles.view');
     });
 
     // Stripe webhook (no auth — verified by signature)

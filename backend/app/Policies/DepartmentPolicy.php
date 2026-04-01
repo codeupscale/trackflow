@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Models\Department;
 use App\Models\User;
+use App\Services\PermissionService;
 
 class DepartmentPolicy
 {
@@ -19,7 +20,7 @@ class DepartmentPolicy
 
     public function create(User $user): bool
     {
-        return $user->hasRole('owner', 'admin', 'manager');
+        return app(PermissionService::class)->hasPermission($user, 'departments.create');
     }
 
     public function update(User $user, Department $department): bool
@@ -28,7 +29,7 @@ class DepartmentPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin', 'manager');
+        return app(PermissionService::class)->hasPermission($user, 'departments.edit');
     }
 
     public function delete(User $user, Department $department): bool
@@ -37,6 +38,6 @@ class DepartmentPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin');
+        return app(PermissionService::class)->hasPermission($user, 'departments.delete');
     }
 }
