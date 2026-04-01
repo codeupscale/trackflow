@@ -1,0 +1,14 @@
+node_modules
+.next
+e2e
+playwright.config.ts
+playwright-report
+test-results
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+__tests__
+coverage
+.env*.local
+README.md
