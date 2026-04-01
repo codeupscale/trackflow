@@ -19,7 +19,7 @@ class PublicHolidayController extends Controller
             $query->whereYear('date', $year);
         }
 
-        $holidays = $query->orderBy('date')->paginate(25);
+        $holidays = $query->orderBy('date')->paginate($request->input('per_page', 100));
 
         return response()->json($holidays);
     }
@@ -32,5 +32,19 @@ class PublicHolidayController extends Controller
         ]);
 
         return response()->json(['data' => $holiday], 201);
+    }
+
+    public function destroy(Request $request, string $id): JsonResponse
+    {
+        if (! $request->user()->hasRole('owner', 'admin')) {
+            return response()->json(['message' => 'Unauthorized.'], 403);
+        }
+
+        $holiday = PublicHoliday::where('organization_id', $request->user()->organization_id)
+            ->findOrFail($id);
+
+        $holiday->delete();
+
+        return response()->json(['message' => 'Holiday removed.']);
     }
 }
