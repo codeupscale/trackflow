@@ -75,6 +75,7 @@ import api from "@/lib/api";
 import { formatDate } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import { usePermissionStore } from "@/stores/permission-store";
+import { useRoles, useAssignRole } from "@/hooks/use-roles";
 
 interface TeamMember {
     id: string;
@@ -188,6 +189,9 @@ export default function TeamPage() {
     }, [user, hasPermission, router]);
 
     const canManageInvites = hasPermission('team.invite');
+    const canChangeRole = hasPermission('team.change_role');
+    const { data: orgRoles } = useRoles();
+    const assignRoleMutation = useAssignRole();
 
     const membersPage = parsePositiveInt(searchParams.get("members_page"), 1);
     const membersPerPage = parsePositiveInt(
@@ -327,6 +331,7 @@ export default function TeamPage() {
         },
     });
 
+    // Legacy updateRoleMutation kept for backward compatibility with non-RBAC paths
     const updateRoleMutation = useMutation({
         mutationFn: async ({
             userId,
@@ -1168,51 +1173,45 @@ export default function TeamPage() {
                                                                 <MoreHorizontal className="h-4 w-4" />
                                                             </DropdownMenuTrigger>
                                                             <DropdownMenuContent align="end">
-                                                                <DropdownMenuLabel>
-                                                                    Change Role
-                                                                </DropdownMenuLabel>
-                                                                <DropdownMenuSeparator />
-                                                                {[
-                                                                    "admin",
-                                                                    "manager",
-                                                                    "employee",
-                                                                ].map(
-                                                                    (role) => (
-                                                                        <DropdownMenuItem
-                                                                            key={
-                                                                                role
-                                                                            }
-                                                                            disabled={
-                                                                                member.role ===
-                                                                                role
-                                                                            }
-                                                                            onClick={() =>
-                                                                                updateRoleMutation.mutate(
-                                                                                    {
-                                                                                        userId: member.id,
-                                                                                        role,
-                                                                                    },
-                                                                                )
-                                                                            }
-                                                                        >
-                                                                            <span className="capitalize">
-                                                                                {
-                                                                                    role
-                                                                                }
-                                                                            </span>
-                                                                            {member.role ===
-                                                                                role && (
-                                                                                <Badge
-                                                                                    variant="secondary"
-                                                                                    className="ml-auto text-xs"
+                                                                {canChangeRole && orgRoles && orgRoles.length > 0 && (
+                                                                    <>
+                                                                        <DropdownMenuLabel>
+                                                                            Change Role
+                                                                        </DropdownMenuLabel>
+                                                                        <DropdownMenuSeparator />
+                                                                        {orgRoles
+                                                                            .filter((r) => r.priority < 100)
+                                                                            .sort((a, b) => b.priority - a.priority)
+                                                                            .map((r) => (
+                                                                                <DropdownMenuItem
+                                                                                    key={r.id}
+                                                                                    disabled={
+                                                                                        member.role === r.name ||
+                                                                                        assignRoleMutation.isPending
+                                                                                    }
+                                                                                    onClick={() =>
+                                                                                        assignRoleMutation.mutate({
+                                                                                            userId: member.id,
+                                                                                            role_id: r.id,
+                                                                                        })
+                                                                                    }
                                                                                 >
-                                                                                    Current
-                                                                                </Badge>
-                                                                            )}
-                                                                        </DropdownMenuItem>
-                                                                    ),
+                                                                                    <span>
+                                                                                        {r.display_name}
+                                                                                    </span>
+                                                                                    {member.role === r.name && (
+                                                                                        <Badge
+                                                                                            variant="secondary"
+                                                                                            className="ml-auto text-xs"
+                                                                                        >
+                                                                                            Current
+                                                                                        </Badge>
+                                                                                    )}
+                                                                                </DropdownMenuItem>
+                                                                            ))}
+                                                                        <DropdownMenuSeparator />
+                                                                    </>
                                                                 )}
-                                                                <DropdownMenuSeparator />
                                                                 <DropdownMenuItem
                                                                     onClick={() =>
                                                                         openResetPassword(
