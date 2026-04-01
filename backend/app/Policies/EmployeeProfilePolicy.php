@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Models\EmployeeProfile;
 use App\Models\User;
+use App\Services\PermissionService;
 
 class EmployeeProfilePolicy
 {
@@ -24,7 +25,7 @@ class EmployeeProfilePolicy
     }
 
     /**
-     * Same org AND (self OR admin/owner) can update.
+     * Same org AND (self OR has employees.edit_profile at org scope).
      */
     public function update(User $user, EmployeeProfile $profile): bool
     {
@@ -32,11 +33,16 @@ class EmployeeProfilePolicy
             return false;
         }
 
-        return $user->id === $profile->user_id || $user->hasRole('owner', 'admin');
+        // Users can always edit their own profile (personal fields — enforced in service layer)
+        if ($user->id === $profile->user_id) {
+            return true;
+        }
+
+        return app(PermissionService::class)->hasPermission($user, 'employees.edit_profile', 'organization');
     }
 
     /**
-     * Only admin/owner can view financial fields unmasked.
+     * Users with employees.view_financial permission can view financial fields unmasked.
      */
     public function viewFinancial(User $user, EmployeeProfile $profile): bool
     {
@@ -44,6 +50,11 @@ class EmployeeProfilePolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin');
+        // Own profile — users can view their own financial data
+        if ($user->id === $profile->user_id) {
+            return true;
+        }
+
+        return app(PermissionService::class)->hasPermission($user, 'employees.view_financial', 'organization');
     }
 }

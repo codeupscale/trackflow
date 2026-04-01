@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/dialog';
 
 import { LeaveCalendar } from '@/components/hr/LeaveCalendar';
-import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 import { formatDate } from '@/lib/utils';
 import api from '@/lib/api';
 
@@ -38,8 +38,8 @@ export default function LeaveCalendarPage() {
   const now = new Date();
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [year, setYear] = useState(now.getFullYear());
-  const { user } = useAuthStore();
-  const isAdmin = user?.role === 'owner' || user?.role === 'admin';
+  const { hasPermission } = usePermissionStore();
+  const isAdmin = hasPermission('leave.manage_holidays');
   const queryClient = useQueryClient();
 
   // Add holiday form state

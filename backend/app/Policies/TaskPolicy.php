@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Models\Task;
 use App\Models\User;
+use App\Services\PermissionService;
 
 class TaskPolicy
 {
@@ -28,7 +29,7 @@ class TaskPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin', 'manager');
+        return app(PermissionService::class)->hasPermission($user, 'projects.edit');
     }
 
     public function delete(User $user, Task $task): bool
@@ -37,6 +38,6 @@ class TaskPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin', 'manager');
+        return app(PermissionService::class)->hasPermission($user, 'projects.edit');
     }
 }

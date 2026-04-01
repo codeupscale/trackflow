@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Models\Project;
 use App\Models\User;
+use App\Services\PermissionService;
 
 class ProjectPolicy
 {
@@ -17,13 +18,20 @@ class ProjectPolicy
         if ($user->organization_id !== $project->organization_id) {
             return false;
         }
-        // Owner/Admin/Manager: full access. Employee: only if assigned or org allows "see all".
+
+        // If user has org-wide view, allow
+        $scope = app(PermissionService::class)->getScope($user, 'projects.view');
+        if ($scope === 'organization') {
+            return true;
+        }
+
+        // Otherwise, must be assigned to the project
         return $project->isAssignedTo($user);
     }
 
     public function create(User $user): bool
     {
-        return $user->hasRole('owner', 'admin', 'manager');
+        return app(PermissionService::class)->hasPermission($user, 'projects.create');
     }
 
     public function update(User $user, Project $project): bool
@@ -32,7 +40,19 @@ class ProjectPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin', 'manager');
+        $service = app(PermissionService::class);
+        $scope = $service->getScope($user, 'projects.edit');
+
+        if ($scope === 'organization') {
+            return true;
+        }
+
+        // Own scope: user is the project manager
+        if ($scope === 'own' && $project->manager_id === $user->id) {
+            return true;
+        }
+
+        return false;
     }
 
     public function delete(User $user, Project $project): bool
@@ -41,6 +61,6 @@ class ProjectPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin');
+        return app(PermissionService::class)->hasPermission($user, 'projects.delete');
     }
 }

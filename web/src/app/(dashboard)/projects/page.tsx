@@ -71,6 +71,7 @@ import {
 } from '@/components/ui/popover';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 
 interface Task {
   id: string;
@@ -131,10 +132,11 @@ export default function ProjectsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const PER_PAGE = 12;
 
-  const canCreateProjects = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
+  const { hasPermission } = usePermissionStore();
+  const canCreateProjects = hasPermission('projects.create');
   const canUpdateProjects = canCreateProjects;
-  const canDeleteProjects = user?.role === 'owner' || user?.role === 'admin';
-  const canManageMembers = canUpdateProjects;
+  const canDeleteProjects = hasPermission('projects.delete');
+  const canManageMembers = hasPermission('projects.manage_members');
 
   // Debounce search to avoid hammering backend
   const debounceTimer = useState<NodeJS.Timeout | null>(null);
@@ -366,10 +368,10 @@ export default function ProjectsPage() {
             <div className="text-center">
               <FolderOpen className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
               <p className="text-muted-foreground font-medium">
-                {user?.role === 'employee' ? 'No projects assigned' : 'No projects yet'}
+                {!canCreateProjects ? 'No projects assigned' : 'No projects yet'}
               </p>
               <p className="text-sm text-muted-foreground mt-1">
-                {user?.role === 'employee'
+                {!canCreateProjects
                   ? 'Ask your manager to assign you to a project.'
                   : 'Create your first project to start tracking time'}
               </p>

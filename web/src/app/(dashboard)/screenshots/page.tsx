@@ -55,6 +55,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import api from '@/lib/api';
 import { cn, getActivityColor } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 import { toast } from 'sonner';
 
 // --- Types ---
@@ -182,9 +183,9 @@ function getActivityDotColor(score: number): string {
 export default function ScreenshotsPage() {
   const { user } = useAuthStore();
   const queryClient = useQueryClient();
-  const isManager =
-    user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
-  const canDelete = user?.role === 'owner' || user?.role === 'admin';
+  const { hasPermission, hasPermissionWithScope } = usePermissionStore();
+  const isManager = hasPermissionWithScope('screenshots.view', 'team');
+  const canDelete = hasPermission('screenshots.delete');
 
   // Filter state
   const [datePreset, setDatePreset] = useState<DatePreset>('today');

@@ -2,143 +2,410 @@
 
 namespace Database\Seeders;
 
-use App\Models\Permission;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class PermissionSeeder extends Seeder
 {
+    /**
+     * All 53 permissions in the system.
+     * Format: [key, module, action, description, has_scope]
+     */
+    private function getPermissions(): array
+    {
+        return [
+            // --- time_entries (6) ---
+            ['time_entries.view',   'time_entries', 'view',    'View time entries',                          true],
+            ['time_entries.create', 'time_entries', 'create',  'Create manual time entries',                 true],
+            ['time_entries.edit',   'time_entries', 'edit',    'Edit time entries',                          true],
+            ['time_entries.delete', 'time_entries', 'delete',  'Delete time entries',                        true],
+            ['time_entries.approve','time_entries', 'approve', 'Approve manual/edited time entries',         true],
+            ['time_entries.export', 'time_entries', 'export',  'Export time data',                           true],
+
+            // --- screenshots (3) ---
+            ['screenshots.view',            'screenshots', 'view',            'View screenshot captures',                    true],
+            ['screenshots.delete',          'screenshots', 'delete',          'Delete screenshots',                          true],
+            ['screenshots.manage_settings', 'screenshots', 'manage_settings', 'Configure blur, frequency, capture mode',     false],
+
+            // --- projects (5) ---
+            ['projects.view',           'projects', 'view',           'View project list and details',          true],
+            ['projects.create',         'projects', 'create',         'Create new projects',                    false],
+            ['projects.edit',           'projects', 'edit',           'Edit project details',                   true],
+            ['projects.delete',         'projects', 'delete',         'Delete or archive projects',             true],
+            ['projects.manage_members', 'projects', 'manage_members', 'Add or remove members to projects',     true],
+
+            // --- reports (2) ---
+            ['reports.view',   'reports', 'view',   'Access reports section',    true],
+            ['reports.export', 'reports', 'export', 'Export reports as CSV/PDF', true],
+
+            // --- dashboard (2) ---
+            ['dashboard.view_own_stats',  'dashboard', 'view_own_stats',  'See own time, activity, projects',        false],
+            ['dashboard.view_team_stats', 'dashboard', 'view_team_stats', 'See team overview cards and charts',      false],
+
+            // --- departments (4) ---
+            ['departments.view',   'departments', 'view',   'View department list and tree', false],
+            ['departments.create', 'departments', 'create', 'Create new departments',       false],
+            ['departments.edit',   'departments', 'edit',   'Edit department details',       false],
+            ['departments.delete', 'departments', 'delete', 'Archive or delete departments', false],
+
+            // --- positions (5) ---
+            ['positions.view',        'positions', 'view',        'View position list',                            false],
+            ['positions.create',      'positions', 'create',      'Create new positions',                          false],
+            ['positions.edit',        'positions', 'edit',        'Edit position details including salary bands',  false],
+            ['positions.delete',      'positions', 'delete',      'Archive or delete positions',                   false],
+            ['positions.view_salary', 'positions', 'view_salary', 'View min/max salary encrypted fields',         false],
+
+            // --- employees (6) ---
+            ['employees.view_directory',   'employees', 'view_directory',   'View employee directory',             false],
+            ['employees.view_profile',     'employees', 'view_profile',     'View full employee profile',          true],
+            ['employees.edit_profile',     'employees', 'edit_profile',     'Edit employee profile fields',        true],
+            ['employees.view_financial',   'employees', 'view_financial',   'View bank details and tax ID',        true],
+            ['employees.manage_documents', 'employees', 'manage_documents', 'Upload, verify, delete documents',    true],
+            ['employees.manage_notes',     'employees', 'manage_notes',     'Create, view, delete notes',          true],
+
+            // --- leave (8) ---
+            ['leave.apply',           'leave', 'apply',           'Apply for leave',                       false],
+            ['leave.view_requests',   'leave', 'view_requests',   'View leave requests',                   true],
+            ['leave.approve',         'leave', 'approve',         'Approve or reject leave requests',      true],
+            ['leave.cancel',          'leave', 'cancel',          'Cancel leave requests',                 true],
+            ['leave.view_calendar',   'leave', 'view_calendar',   'View leave calendar',                   true],
+            ['leave.manage_types',    'leave', 'manage_types',    'Create, edit, delete leave types',      false],
+            ['leave.manage_balances', 'leave', 'manage_balances', 'Adjust leave balances manually',        false],
+            ['leave.manage_holidays', 'leave', 'manage_holidays', 'Create, edit, delete public holidays',  false],
+
+            // --- attendance (5) ---
+            ['attendance.view',                     'attendance', 'view',                     'View attendance records',              true],
+            ['attendance.generate',                 'attendance', 'generate',                 'Trigger daily attendance generation',  false],
+            ['attendance.regularize',               'attendance', 'regularize',               'Submit regularization requests',       false],
+            ['attendance.approve_regularizations',  'attendance', 'approve_regularizations',  'Approve or reject regularizations',   true],
+            ['attendance.manage_overtime_rules',    'attendance', 'manage_overtime_rules',    'Configure overtime rules',            false],
+
+            // --- team (4) ---
+            ['team.view_members', 'team', 'view_members', 'View org member list',          false],
+            ['team.invite',       'team', 'invite',       'Invite new members',             false],
+            ['team.remove',       'team', 'remove',       'Remove members from org',        false],
+            ['team.change_role',  'team', 'change_role',  'Change a member role',           false],
+
+            // --- settings (4) ---
+            ['settings.view_org',       'settings', 'view_org',       'View organization settings',          false],
+            ['settings.edit_org',       'settings', 'edit_org',       'Edit org name, timezone, logo',       false],
+            ['settings.edit_tracking',  'settings', 'edit_tracking',  'Edit screenshot interval, idle thresholds', false],
+            ['settings.manage_billing', 'settings', 'manage_billing', 'View and edit billing, subscription', false],
+
+            // --- audit_logs (1) ---
+            ['audit_logs.view', 'audit_logs', 'view', 'View audit logs', false],
+
+            // --- roles (4) ---
+            ['roles.view',   'roles', 'view',   'View roles and their permissions', false],
+            ['roles.create', 'roles', 'create', 'Create custom roles',             false],
+            ['roles.edit',   'roles', 'edit',   'Edit role permissions',            false],
+            ['roles.delete', 'roles', 'delete', 'Delete custom roles',             false],
+        ];
+    }
+
+    /**
+     * Default permission matrix per role.
+     * Owner gets NO rows (bypass in code).
+     * Format: 'permission.key' => scope
+     * For has_scope=false permissions, scope is 'none'.
+     */
+    private function getAdminPermissions(): array
+    {
+        return [
+            // time_entries — all at organization scope
+            'time_entries.view'   => 'organization',
+            'time_entries.create' => 'organization',
+            'time_entries.edit'   => 'organization',
+            'time_entries.delete' => 'organization',
+            'time_entries.approve'=> 'organization',
+            'time_entries.export' => 'organization',
+
+            // screenshots
+            'screenshots.view'            => 'organization',
+            'screenshots.delete'          => 'organization',
+            'screenshots.manage_settings' => 'none',
+
+            // projects
+            'projects.view'           => 'organization',
+            'projects.create'         => 'none',
+            'projects.edit'           => 'organization',
+            'projects.delete'         => 'organization',
+            'projects.manage_members' => 'organization',
+
+            // reports
+            'reports.view'   => 'organization',
+            'reports.export' => 'organization',
+
+            // dashboard
+            'dashboard.view_own_stats'  => 'none',
+            'dashboard.view_team_stats' => 'none',
+
+            // departments
+            'departments.view'   => 'none',
+            'departments.create' => 'none',
+            'departments.edit'   => 'none',
+            'departments.delete' => 'none',
+
+            // positions
+            'positions.view'        => 'none',
+            'positions.create'      => 'none',
+            'positions.edit'        => 'none',
+            'positions.delete'      => 'none',
+            'positions.view_salary' => 'none',
+
+            // employees
+            'employees.view_directory'   => 'none',
+            'employees.view_profile'     => 'organization',
+            'employees.edit_profile'     => 'organization',
+            'employees.view_financial'   => 'organization',
+            'employees.manage_documents' => 'organization',
+            'employees.manage_notes'     => 'organization',
+
+            // leave
+            'leave.apply'           => 'none',
+            'leave.view_requests'   => 'organization',
+            'leave.approve'         => 'organization',
+            'leave.cancel'          => 'organization',
+            'leave.view_calendar'   => 'organization',
+            'leave.manage_types'    => 'none',
+            'leave.manage_balances' => 'none',
+            'leave.manage_holidays' => 'none',
+
+            // attendance
+            'attendance.view'                    => 'organization',
+            'attendance.generate'                => 'none',
+            'attendance.regularize'              => 'none',
+            'attendance.approve_regularizations' => 'organization',
+            'attendance.manage_overtime_rules'   => 'none',
+
+            // team
+            'team.view_members' => 'none',
+            'team.invite'       => 'none',
+            'team.remove'       => 'none',
+            'team.change_role'  => 'none',
+
+            // settings
+            'settings.view_org'       => 'none',
+            'settings.edit_org'       => 'none',
+            'settings.edit_tracking'  => 'none',
+            'settings.manage_billing' => 'none',
+
+            // audit_logs
+            'audit_logs.view' => 'none',
+
+            // roles — admin can only view, not create/edit/delete
+            'roles.view' => 'none',
+        ];
+    }
+
+    private function getManagerPermissions(): array
+    {
+        return [
+            // time_entries — team scope
+            'time_entries.view'   => 'team',
+            'time_entries.create' => 'team',
+            'time_entries.edit'   => 'team',
+            'time_entries.delete' => 'team',
+            'time_entries.approve'=> 'team',
+            'time_entries.export' => 'team',
+
+            // screenshots — team view only
+            'screenshots.view' => 'team',
+
+            // projects
+            'projects.view'           => 'organization',
+            'projects.edit'           => 'own',
+            'projects.manage_members' => 'own',
+
+            // reports — team
+            'reports.view'   => 'team',
+            'reports.export' => 'team',
+
+            // dashboard
+            'dashboard.view_own_stats'  => 'none',
+            'dashboard.view_team_stats' => 'none',
+
+            // departments & positions — view only
+            'departments.view' => 'none',
+            'positions.view'   => 'none',
+
+            // employees
+            'employees.view_directory'   => 'none',
+            'employees.view_profile'     => 'team',
+            'employees.manage_documents' => 'team',
+            'employees.manage_notes'     => 'team',
+
+            // leave
+            'leave.apply'         => 'none',
+            'leave.view_requests' => 'team',
+            'leave.approve'       => 'team',
+            'leave.cancel'        => 'team',
+            'leave.view_calendar' => 'team',
+
+            // attendance
+            'attendance.view'                    => 'team',
+            'attendance.regularize'              => 'none',
+            'attendance.approve_regularizations' => 'team',
+
+            // team — view + invite
+            'team.view_members' => 'none',
+            'team.invite'       => 'none',
+        ];
+    }
+
+    private function getEmployeePermissions(): array
+    {
+        return [
+            // time_entries — own scope, no delete, no approve
+            'time_entries.view'   => 'own',
+            'time_entries.create' => 'own',
+            'time_entries.edit'   => 'own',
+            'time_entries.export' => 'own',
+
+            // screenshots — own view only
+            'screenshots.view' => 'own',
+
+            // projects — own (assigned) view only
+            'projects.view' => 'own',
+
+            // reports — own
+            'reports.view'   => 'own',
+            'reports.export' => 'own',
+
+            // dashboard — own stats only
+            'dashboard.view_own_stats' => 'none',
+
+            // departments & positions — view only
+            'departments.view' => 'none',
+            'positions.view'   => 'none',
+
+            // employees — own profile
+            'employees.view_directory'   => 'none',
+            'employees.view_profile'     => 'own',
+            'employees.edit_profile'     => 'own',
+            'employees.view_financial'   => 'own',
+            'employees.manage_documents' => 'own',
+
+            // leave — own requests, team calendar
+            'leave.apply'         => 'none',
+            'leave.view_requests' => 'own',
+            'leave.cancel'        => 'own',
+            'leave.view_calendar' => 'team',
+
+            // attendance — own view, can regularize
+            'attendance.view'       => 'own',
+            'attendance.regularize' => 'none',
+        ];
+    }
+
     public function run(): void
     {
-        $permissions = [
-            // Timer
-            ['name' => 'timer.start', 'group' => 'timer', 'description' => 'Start timer'],
-            ['name' => 'timer.stop', 'group' => 'timer', 'description' => 'Stop timer'],
-            ['name' => 'timer.view-others', 'group' => 'timer', 'description' => 'View other users active timers'],
+        DB::transaction(function () {
+            // ---------------------------------------------------------
+            // Step 1: Clear and re-seed permissions
+            // ---------------------------------------------------------
+            // Delete role_permissions first (FK dependency), then permissions
+            DB::table('role_permissions')->delete();
+            DB::table('permissions')->delete();
 
-            // Time Entries
-            ['name' => 'time-entries.create', 'group' => 'time-entries', 'description' => 'Create time entries'],
-            ['name' => 'time-entries.read', 'group' => 'time-entries', 'description' => 'View own time entries'],
-            ['name' => 'time-entries.read-all', 'group' => 'time-entries', 'description' => 'View all time entries'],
-            ['name' => 'time-entries.update', 'group' => 'time-entries', 'description' => 'Update own time entries'],
-            ['name' => 'time-entries.update-all', 'group' => 'time-entries', 'description' => 'Update any time entry'],
-            ['name' => 'time-entries.delete', 'group' => 'time-entries', 'description' => 'Delete own time entries'],
-            ['name' => 'time-entries.delete-all', 'group' => 'time-entries', 'description' => 'Delete any time entry'],
-            ['name' => 'time-entries.approve', 'group' => 'time-entries', 'description' => 'Approve time entries'],
+            $permissionMap = []; // key => id
+            $now = now();
 
-            // Projects
-            ['name' => 'projects.create', 'group' => 'projects', 'description' => 'Create projects'],
-            ['name' => 'projects.read', 'group' => 'projects', 'description' => 'View projects'],
-            ['name' => 'projects.update', 'group' => 'projects', 'description' => 'Update projects'],
-            ['name' => 'projects.delete', 'group' => 'projects', 'description' => 'Delete projects'],
+            foreach ($this->getPermissions() as [$key, $module, $action, $description, $hasScope]) {
+                $id = Str::uuid()->toString();
+                DB::table('permissions')->insert([
+                    'id'          => $id,
+                    'key'         => $key,
+                    'module'      => $module,
+                    'action'      => $action,
+                    'description' => $description,
+                    'has_scope'   => $hasScope,
+                ]);
+                $permissionMap[$key] = $id;
+            }
 
-            // Tasks
-            ['name' => 'tasks.create', 'group' => 'tasks', 'description' => 'Create tasks'],
-            ['name' => 'tasks.read', 'group' => 'tasks', 'description' => 'View tasks'],
-            ['name' => 'tasks.update', 'group' => 'tasks', 'description' => 'Update tasks'],
-            ['name' => 'tasks.delete', 'group' => 'tasks', 'description' => 'Delete tasks'],
+            // ---------------------------------------------------------
+            // Step 2: For each organization, create system roles + assign permissions
+            // ---------------------------------------------------------
+            $organizations = DB::table('organizations')->select('id')->get();
 
-            // Screenshots
-            ['name' => 'screenshots.view', 'group' => 'screenshots', 'description' => 'View own screenshots'],
-            ['name' => 'screenshots.view-all', 'group' => 'screenshots', 'description' => 'View all screenshots'],
-            ['name' => 'screenshots.upload', 'group' => 'screenshots', 'description' => 'Upload screenshots'],
-            ['name' => 'screenshots.delete', 'group' => 'screenshots', 'description' => 'Delete screenshots'],
+            $roleDefinitions = [
+                ['name' => 'owner',    'display_name' => 'Owner',    'priority' => 100, 'is_default' => false],
+                ['name' => 'admin',    'display_name' => 'Admin',    'priority' => 75,  'is_default' => false],
+                ['name' => 'manager',  'display_name' => 'Manager',  'priority' => 50,  'is_default' => false],
+                ['name' => 'employee', 'display_name' => 'Employee', 'priority' => 10,  'is_default' => true],
+            ];
 
-            // Reports
-            ['name' => 'reports.view', 'group' => 'reports', 'description' => 'View reports'],
-            ['name' => 'reports.export', 'group' => 'reports', 'description' => 'Export reports'],
+            $adminPerms    = $this->getAdminPermissions();
+            $managerPerms  = $this->getManagerPermissions();
+            $employeePerms = $this->getEmployeePermissions();
 
-            // Team
-            ['name' => 'teams.view', 'group' => 'teams', 'description' => 'View teams'],
-            ['name' => 'teams.manage', 'group' => 'teams', 'description' => 'Create, update, delete teams'],
+            foreach ($organizations as $org) {
+                $orgRoleIds = [];
 
-            // Users
-            ['name' => 'users.view', 'group' => 'users', 'description' => 'View users'],
-            ['name' => 'users.create', 'group' => 'users', 'description' => 'Create/invite users'],
-            ['name' => 'users.update', 'group' => 'users', 'description' => 'Update users'],
-            ['name' => 'users.delete', 'group' => 'users', 'description' => 'Deactivate users'],
-            ['name' => 'users.manage-roles', 'group' => 'users', 'description' => 'Change user roles'],
+                // Delete existing system roles for this org (idempotent re-run)
+                DB::table('roles')
+                    ->where('organization_id', $org->id)
+                    ->where('is_system', true)
+                    ->delete();
 
-            // Settings
-            ['name' => 'settings.view', 'group' => 'settings', 'description' => 'View organization settings'],
-            ['name' => 'settings.update', 'group' => 'settings', 'description' => 'Update organization settings'],
+                // Create 4 system roles
+                foreach ($roleDefinitions as $def) {
+                    $roleId = Str::uuid()->toString();
+                    DB::table('roles')->insert([
+                        'id'              => $roleId,
+                        'organization_id' => $org->id,
+                        'name'            => $def['name'],
+                        'display_name'    => $def['display_name'],
+                        'is_system'       => true,
+                        'is_default'      => $def['is_default'],
+                        'priority'        => $def['priority'],
+                        'created_at'      => $now,
+                        'updated_at'      => $now,
+                    ]);
+                    $orgRoleIds[$def['name']] = $roleId;
+                }
 
-            // Billing
-            ['name' => 'billing.view', 'group' => 'billing', 'description' => 'View billing info'],
-            ['name' => 'billing.manage', 'group' => 'billing', 'description' => 'Manage subscriptions'],
+                // Owner: NO role_permissions rows (bypass in code)
 
-            // Audit
-            ['name' => 'audit-logs.view', 'group' => 'audit', 'description' => 'View audit logs'],
+                // Admin permissions
+                $this->insertRolePermissions($orgRoleIds['admin'], $adminPerms, $permissionMap);
 
-            // Timesheets
-            ['name' => 'timesheets.submit', 'group' => 'timesheets', 'description' => 'Submit timesheets'],
-            ['name' => 'timesheets.review', 'group' => 'timesheets', 'description' => 'Review timesheets'],
+                // Manager permissions
+                $this->insertRolePermissions($orgRoleIds['manager'], $managerPerms, $permissionMap);
 
-            // Invitations
-            ['name' => 'invitations.send', 'group' => 'invitations', 'description' => 'Send invitations'],
+                // Employee permissions
+                $this->insertRolePermissions($orgRoleIds['employee'], $employeePerms, $permissionMap);
+            }
+        });
+    }
 
-            // SSO
-            ['name' => 'sso.configure', 'group' => 'sso', 'description' => 'Configure SSO settings'],
-        ];
+    /**
+     * Bulk-insert role_permissions rows for a single role.
+     */
+    private function insertRolePermissions(string $roleId, array $permScopes, array $permissionMap): void
+    {
+        $rows = [];
+        $now = now();
 
-        foreach ($permissions as $perm) {
-            Permission::firstOrCreate(['name' => $perm['name']], $perm);
+        foreach ($permScopes as $key => $scope) {
+            if (! isset($permissionMap[$key])) {
+                continue; // Safety: skip if permission key not found
+            }
+
+            $rows[] = [
+                'id'            => Str::uuid()->toString(),
+                'role_id'       => $roleId,
+                'permission_id' => $permissionMap[$key],
+                'scope'         => $scope,
+                'created_at'    => $now,
+            ];
         }
 
-        // Role-permission mappings
-        $rolePermissions = [
-            'employee' => [
-                'timer.start', 'timer.stop',
-                'time-entries.create', 'time-entries.read', 'time-entries.update', 'time-entries.delete',
-                'projects.read', 'tasks.read', 'tasks.create',
-                'screenshots.view', 'screenshots.upload',
-                'timesheets.submit',
-                'settings.view',
-            ],
-            'manager' => [
-                'timer.start', 'timer.stop', 'timer.view-others',
-                'time-entries.create', 'time-entries.read', 'time-entries.read-all',
-                'time-entries.update', 'time-entries.update-all',
-                'time-entries.delete', 'time-entries.approve',
-                'projects.create', 'projects.read', 'projects.update',
-                'tasks.create', 'tasks.read', 'tasks.update', 'tasks.delete',
-                'screenshots.view', 'screenshots.view-all', 'screenshots.upload', 'screenshots.delete',
-                'reports.view', 'reports.export',
-                'teams.view', 'teams.manage',
-                'users.view',
-                'timesheets.submit', 'timesheets.review',
-                'settings.view',
-            ],
-            'admin' => [
-                'timer.start', 'timer.stop', 'timer.view-others',
-                'time-entries.create', 'time-entries.read', 'time-entries.read-all',
-                'time-entries.update', 'time-entries.update-all',
-                'time-entries.delete', 'time-entries.delete-all', 'time-entries.approve',
-                'projects.create', 'projects.read', 'projects.update', 'projects.delete',
-                'tasks.create', 'tasks.read', 'tasks.update', 'tasks.delete',
-                'screenshots.view', 'screenshots.view-all', 'screenshots.upload', 'screenshots.delete',
-                'reports.view', 'reports.export',
-                'teams.view', 'teams.manage',
-                'users.view', 'users.create', 'users.update', 'users.delete', 'users.manage-roles',
-                'settings.view', 'settings.update',
-                'billing.view', 'billing.manage',
-                'audit-logs.view',
-                'timesheets.submit', 'timesheets.review',
-                'invitations.send',
-            ],
-            'owner' => [], // Owner bypasses all checks
-        ];
-
-        foreach ($rolePermissions as $role => $permNames) {
-            foreach ($permNames as $permName) {
-                $permission = Permission::where('name', $permName)->first();
-                if ($permission) {
-                    DB::table('role_permissions')->insertOrIgnore([
-                        'role' => $role,
-                        'permission_id' => $permission->id,
-                    ]);
-                }
-            }
+        // Insert in chunks to avoid exceeding parameter limits
+        foreach (array_chunk($rows, 50) as $chunk) {
+            DB::table('role_permissions')->insert($chunk);
         }
     }
 }

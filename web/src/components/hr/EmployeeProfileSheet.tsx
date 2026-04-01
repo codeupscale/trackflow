@@ -35,7 +35,7 @@ import { Separator } from '@/components/ui/separator';
 import { DepartmentSelect } from '@/components/hr/DepartmentSelect';
 import { PositionSelect } from '@/components/hr/PositionSelect';
 import { useUpdateEmployeeProfile } from '@/hooks/hr/use-employees';
-import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 import {
   employeeProfileSchema,
   type EmployeeProfileInput,
@@ -75,8 +75,8 @@ export function EmployeeProfileSheet({
   onOpenChange,
   employee,
 }: EmployeeProfileSheetProps) {
-  const { user } = useAuthStore();
-  const isAdmin = user?.role === 'owner' || user?.role === 'admin';
+  const { hasPermission } = usePermissionStore();
+  const isAdmin = hasPermission('employees.edit_all_fields');
   const updateMutation = useUpdateEmployeeProfile();
 
   const form = useForm<EmployeeProfileInput>({

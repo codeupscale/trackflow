@@ -34,7 +34,7 @@ import {
 } from '@/components/ui/sheet';
 
 import { useLeaveTypes } from '@/hooks/hr/use-leave-types';
-import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 import api from '@/lib/api';
 import {
   leaveTypeFormSchema,
@@ -44,12 +44,12 @@ import {
 
 export default function LeaveTypesPage() {
   const router = useRouter();
-  const { user } = useAuthStore();
   const queryClient = useQueryClient();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingType, setEditingType] = useState<LeaveType | null>(null);
 
-  const isAdmin = user?.role === 'admin' || user?.role === 'owner';
+  const { hasPermission } = usePermissionStore();
+  const isAdmin = hasPermission('leave.manage_types');
 
   const { data: leaveTypes, isLoading, isError } = useLeaveTypes();
 
