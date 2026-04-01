@@ -241,6 +241,86 @@ class EmployeeTest extends TestCase
             ->assertJsonPath('data.blood_group', 'B+');
     }
 
+    // ── Employee ID Auto-Generation ───────────────────
+
+    public function test_employee_id_auto_generated_on_profile_view(): void
+    {
+        $org = $this->createOrganization();
+        $admin = $this->createUser($org, 'admin');
+        $employee = $this->createUser($org, 'employee');
+        $this->actingAs($admin, 'sanctum');
+
+        // No EmployeeProfile exists yet — the show endpoint lazy-creates it
+        $response = $this->getJson("/api/v1/hr/employees/{$employee->id}");
+
+        $response->assertOk();
+        // The auto-generated employee_id should follow EMP-NNN pattern
+        $this->assertMatchesRegularExpression('/^EMP-\d{3,}$/', $response->json('data.employee_id'));
+    }
+
+    // ── Search by Employee ID ───────────────────────────
+
+    public function test_can_search_employees_by_employee_id(): void
+    {
+        $user = $this->actingAsUser('owner');
+
+        $emp = $this->createUser($user->organization, 'employee');
+        EmployeeProfile::factory()->create([
+            'organization_id' => $user->organization_id,
+            'user_id' => $emp->id,
+            'employee_id' => 'EMP-042',
+        ]);
+
+        $this->createUser($user->organization, 'employee');
+
+        $response = $this->getJson('/api/v1/hr/employees?search=EMP-042');
+
+        $response->assertOk();
+        $this->assertEquals(1, $response->json('total'));
+    }
+
+    // ── LIKE Wildcard Characters in Search ──────────────
+
+    public function test_search_with_sql_wildcard_characters_does_not_break(): void
+    {
+        $user = $this->actingAsUser('owner');
+
+        $this->createUser($user->organization, 'employee', ['name' => 'Normal User']);
+
+        // Search containing SQL LIKE wildcards — should not match everything
+        $response = $this->getJson('/api/v1/hr/employees?search=test%25user');
+
+        $response->assertOk();
+        // Should not match "Normal User" — the % should be escaped
+        $this->assertEquals(0, $response->json('total'));
+    }
+
+    // ── Employment Status Filter ────────────────────────
+
+    public function test_employment_status_filter_works(): void
+    {
+        $user = $this->actingAsUser('owner');
+
+        $emp1 = $this->createUser($user->organization, 'employee');
+        $emp2 = $this->createUser($user->organization, 'employee');
+
+        EmployeeProfile::factory()->create([
+            'organization_id' => $user->organization_id,
+            'user_id' => $emp1->id,
+            'employment_status' => 'active',
+        ]);
+        EmployeeProfile::factory()->create([
+            'organization_id' => $user->organization_id,
+            'user_id' => $emp2->id,
+            'employment_status' => 'probation',
+        ]);
+
+        $response = $this->getJson('/api/v1/hr/employees?employment_status=probation');
+
+        $response->assertOk();
+        $this->assertEquals(1, $response->json('total'));
+    }
+
     // ── Cross-Org Isolation ─────────────────────────────
 
     public function test_cross_org_isolation(): void

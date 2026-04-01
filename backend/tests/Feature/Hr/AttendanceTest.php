@@ -395,4 +395,327 @@ class AttendanceTest extends TestCase
         ]);
         $response->assertStatus(404);
     }
+
+    // ── Regularization Rejection ────────────────────────
+
+    public function test_manager_can_reject_regularization_with_review_note(): void
+    {
+        $org = $this->createOrganization();
+        $manager = $this->createUser($org, 'manager');
+        $employee = $this->createUser($org, 'employee');
+
+        $record = AttendanceRecord::factory()->absent()->create([
+            'organization_id' => $org->id,
+            'user_id' => $employee->id,
+            'date' => now()->subDay()->toDateString(),
+        ]);
+
+        $reg = AttendanceRegularization::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $employee->id,
+            'attendance_record_id' => $record->id,
+            'requested_status' => 'present',
+            'status' => 'pending',
+        ]);
+
+        $this->actingAs($manager, 'sanctum');
+
+        $response = $this->putJson("/api/v1/hr/attendance/regularizations/{$reg->id}/reject", [
+            'review_note' => 'No evidence of remote work found.',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('data.status', 'rejected');
+
+        $this->assertDatabaseHas('attendance_regularizations', [
+            'id' => $reg->id,
+            'status' => 'rejected',
+            'reviewed_by' => $manager->id,
+            'review_note' => 'No evidence of remote work found.',
+        ]);
+
+        // Attendance record should NOT be updated on rejection
+        $this->assertDatabaseHas('attendance_records', [
+            'id' => $record->id,
+            'status' => 'absent',
+            'is_regularized' => false,
+        ]);
+    }
+
+    public function test_reject_regularization_requires_review_note(): void
+    {
+        $org = $this->createOrganization();
+        $manager = $this->createUser($org, 'manager');
+        $employee = $this->createUser($org, 'employee');
+
+        $record = AttendanceRecord::factory()->absent()->create([
+            'organization_id' => $org->id,
+            'user_id' => $employee->id,
+            'date' => now()->subDay()->toDateString(),
+        ]);
+
+        $reg = AttendanceRegularization::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $employee->id,
+            'attendance_record_id' => $record->id,
+            'status' => 'pending',
+        ]);
+
+        $this->actingAs($manager, 'sanctum');
+
+        $response = $this->putJson("/api/v1/hr/attendance/regularizations/{$reg->id}/reject", []);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['review_note']);
+    }
+
+    // ── Duplicate Regularization Prevention ─────────────
+
+    public function test_duplicate_pending_regularization_returns_422(): void
+    {
+        $org = $this->createOrganization();
+        $employee = $this->createUser($org, 'employee');
+        $this->actingAs($employee, 'sanctum');
+
+        $record = AttendanceRecord::factory()->absent()->create([
+            'organization_id' => $org->id,
+            'user_id' => $employee->id,
+            'date' => now()->subDay()->toDateString(),
+        ]);
+
+        // First regularization request — should succeed
+        $response = $this->postJson("/api/v1/hr/attendance/{$record->id}/regularize", [
+            'requested_status' => 'present',
+            'reason' => 'Was working remotely.',
+        ]);
+        $response->assertStatus(201);
+
+        // Second regularization request on same record — should fail
+        $response = $this->postJson("/api/v1/hr/attendance/{$record->id}/regularize", [
+            'requested_status' => 'half_day',
+            'reason' => 'Actually was half day.',
+        ]);
+        $response->assertStatus(422);
+    }
+
+    // ── Date Filtering ──────────────────────────────────
+
+    public function test_attendance_date_filtering_works(): void
+    {
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        AttendanceRecord::factory()->present()->create([
+            'organization_id' => $org->id,
+            'user_id' => $user->id,
+            'date' => '2026-03-01',
+        ]);
+        AttendanceRecord::factory()->present()->create([
+            'organization_id' => $org->id,
+            'user_id' => $user->id,
+            'date' => '2026-03-15',
+        ]);
+        AttendanceRecord::factory()->present()->create([
+            'organization_id' => $org->id,
+            'user_id' => $user->id,
+            'date' => '2026-03-31',
+        ]);
+
+        // Filter to only March 10-20
+        $response = $this->getJson('/api/v1/hr/attendance?start_date=2026-03-10&end_date=2026-03-20');
+
+        $response->assertOk();
+        $this->assertCount(1, $response->json('data'));
+        $this->assertStringContainsString('2026-03-15', $response->json('data.0.date'));
+    }
+
+    // ── Summary Validation ──────────────────────────────
+
+    public function test_summary_validates_month_and_year_required(): void
+    {
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        // Missing both month and year
+        $response = $this->getJson('/api/v1/hr/attendance/summary');
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['month', 'year']);
+
+        // Missing year
+        $response = $this->getJson('/api/v1/hr/attendance/summary?month=3');
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['year']);
+
+        // Missing month
+        $response = $this->getJson('/api/v1/hr/attendance/summary?year=2026');
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['month']);
+    }
+
+    // ── Team Attendance Filters ─────────────────────────
+
+    public function test_team_attendance_filters_by_user_id(): void
+    {
+        $org = $this->createOrganization();
+        $admin = $this->createUser($org, 'admin');
+        $emp1 = $this->createUser($org, 'employee');
+        $emp2 = $this->createUser($org, 'employee');
+
+        AttendanceRecord::factory()->present()->create([
+            'organization_id' => $org->id,
+            'user_id' => $emp1->id,
+            'date' => now()->subDay()->toDateString(),
+        ]);
+        AttendanceRecord::factory()->present()->create([
+            'organization_id' => $org->id,
+            'user_id' => $emp2->id,
+            'date' => now()->subDay()->toDateString(),
+        ]);
+
+        $this->actingAs($admin, 'sanctum');
+
+        $response = $this->getJson("/api/v1/hr/attendance/team?user_id={$emp1->id}");
+
+        $response->assertOk();
+        $data = $response->json('data');
+        $this->assertCount(1, $data);
+        $this->assertEquals($emp1->id, $data[0]['user_id']);
+    }
+
+    public function test_team_attendance_filters_by_department_id(): void
+    {
+        $org = $this->createOrganization();
+        $admin = $this->createUser($org, 'admin');
+        $emp1 = $this->createUser($org, 'employee');
+        $emp2 = $this->createUser($org, 'employee');
+
+        $dept = \App\Models\Department::factory()->create([
+            'organization_id' => $org->id,
+        ]);
+
+        \App\Models\EmployeeProfile::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $emp1->id,
+            'department_id' => $dept->id,
+        ]);
+        \App\Models\EmployeeProfile::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $emp2->id,
+            'department_id' => null,
+        ]);
+
+        AttendanceRecord::factory()->present()->create([
+            'organization_id' => $org->id,
+            'user_id' => $emp1->id,
+            'date' => now()->subDay()->toDateString(),
+        ]);
+        AttendanceRecord::factory()->present()->create([
+            'organization_id' => $org->id,
+            'user_id' => $emp2->id,
+            'date' => now()->subDay()->toDateString(),
+        ]);
+
+        $this->actingAs($admin, 'sanctum');
+
+        $response = $this->getJson("/api/v1/hr/attendance/team?department_id={$dept->id}");
+
+        $response->assertOk();
+        $data = $response->json('data');
+        $this->assertCount(1, $data);
+        $this->assertEquals($emp1->id, $data[0]['user_id']);
+    }
+
+    // ── Generate Attendance Status Thresholds ───────────
+
+    public function test_generate_attendance_present_for_4_or_more_hours(): void
+    {
+        $org = $this->createOrganization();
+        $admin = $this->createUser($org, 'admin');
+        $employee = $this->createUser($org, 'employee');
+        $this->actingAs($admin, 'sanctum');
+
+        $targetDate = '2026-03-16'; // Monday
+
+        // 5 hours of work => present
+        TimeEntry::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $employee->id,
+            'started_at' => Carbon::parse($targetDate)->setTime(9, 0),
+            'ended_at' => Carbon::parse($targetDate)->setTime(14, 0),
+            'duration_seconds' => 5 * 3600,
+        ]);
+
+        $this->postJson('/api/v1/hr/attendance/generate', ['date' => $targetDate])
+            ->assertOk();
+
+        $record = AttendanceRecord::where('organization_id', $org->id)
+            ->where('user_id', $employee->id)
+            ->whereDate('date', $targetDate)
+            ->first();
+
+        $this->assertNotNull($record);
+        $this->assertEquals('present', $record->status);
+    }
+
+    public function test_generate_attendance_half_day_for_2_to_4_hours(): void
+    {
+        $org = $this->createOrganization();
+        $admin = $this->createUser($org, 'admin');
+        $employee = $this->createUser($org, 'employee');
+        $this->actingAs($admin, 'sanctum');
+
+        $targetDate = '2026-03-16'; // Monday
+
+        // 3 hours of work => half_day
+        TimeEntry::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $employee->id,
+            'started_at' => Carbon::parse($targetDate)->setTime(9, 0),
+            'ended_at' => Carbon::parse($targetDate)->setTime(12, 0),
+            'duration_seconds' => 3 * 3600,
+        ]);
+
+        $this->postJson('/api/v1/hr/attendance/generate', ['date' => $targetDate])
+            ->assertOk();
+
+        $record = AttendanceRecord::where('organization_id', $org->id)
+            ->where('user_id', $employee->id)
+            ->whereDate('date', $targetDate)
+            ->first();
+
+        $this->assertNotNull($record);
+        $this->assertEquals('half_day', $record->status);
+    }
+
+    public function test_generate_attendance_absent_for_less_than_2_hours(): void
+    {
+        $org = $this->createOrganization();
+        $admin = $this->createUser($org, 'admin');
+        $employee = $this->createUser($org, 'employee');
+        $this->actingAs($admin, 'sanctum');
+
+        $targetDate = '2026-03-16'; // Monday
+
+        // 1 hour of work => absent
+        TimeEntry::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $employee->id,
+            'started_at' => Carbon::parse($targetDate)->setTime(9, 0),
+            'ended_at' => Carbon::parse($targetDate)->setTime(10, 0),
+            'duration_seconds' => 1 * 3600,
+        ]);
+
+        $this->postJson('/api/v1/hr/attendance/generate', ['date' => $targetDate])
+            ->assertOk();
+
+        $record = AttendanceRecord::where('organization_id', $org->id)
+            ->where('user_id', $employee->id)
+            ->whereDate('date', $targetDate)
+            ->first();
+
+        $this->assertNotNull($record);
+        $this->assertEquals('absent', $record->status);
+    }
 }
