@@ -44,9 +44,9 @@ class LeaveRequestTest extends TestCase
         ]);
 
         $response->assertStatus(201)
-            ->assertJsonPath('leave_request.status', 'pending')
+            ->assertJsonPath('data.status', 'pending')
             ->assertJsonStructure([
-                'leave_request' => ['id', 'start_date', 'end_date', 'days_count', 'status'],
+                'data' => ['id', 'start_date', 'end_date', 'days_count', 'status'],
             ]);
     }
 
@@ -222,7 +222,7 @@ class LeaveRequestTest extends TestCase
         $response = $this->putJson("/api/v1/hr/leave-requests/{$leaveRequest->id}/approve");
 
         $response->assertOk()
-            ->assertJsonPath('leave_request.status', 'approved');
+            ->assertJsonPath('data.status', 'approved');
     }
 
     public function test_employee_cannot_approve_leave(): void
@@ -286,8 +286,8 @@ class LeaveRequestTest extends TestCase
         ]);
 
         $response->assertOk()
-            ->assertJsonPath('leave_request.status', 'rejected')
-            ->assertJsonPath('leave_request.rejection_reason', 'Team is short-staffed');
+            ->assertJsonPath('data.status', 'rejected')
+            ->assertJsonPath('data.rejection_reason', 'Team is short-staffed');
     }
 
     // ── Cancel (destroy) ─────────────────────────────────
