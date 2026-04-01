@@ -73,7 +73,7 @@ export function DocumentUploadCard({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const form = useForm<EmployeeDocumentInput>({
-    resolver: zodResolver(employeeDocumentSchema),
+    resolver: zodResolver(employeeDocumentSchema) as any,
     defaultValues: {
       title: '',
       category: undefined,

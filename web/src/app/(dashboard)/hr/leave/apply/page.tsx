@@ -49,7 +49,7 @@ export default function ApplyLeavePage() {
   const applyMutation = useApplyLeave();
 
   const form = useForm<LeaveRequestFormData>({
-    resolver: zodResolver(leaveRequestSchema),
+    resolver: zodResolver(leaveRequestSchema) as any,
     defaultValues: {
       leave_type_id: '',
       start_date: '',
