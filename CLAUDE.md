@@ -141,6 +141,22 @@ Adds department/position org structure and leave management under `/api/v1/hr/`.
 | `GET /hr/leave-calendar` | Team calendar; requires `month` + `year` query params |
 | `GET/POST /hr/public-holidays` | Admin only for POST |
 
+### Employee Records & Documents (Module 2)
+- Tables: `employee_profiles` (personal/financial fields, encrypted bank fields), `employee_documents` (S3-backed, signed-URL access), `employee_notes` (confidential filtering)
+- `EmployeeService`: `getDirectory()` (joined query with LIKE-safe escaping), `generateEmployeeId()` (lockForUpdate), `getNotes()` (viewer-based confidential filtering), `maskFinancialField()` (last-4 visible)
+- **Encrypted fields**: `bank_name`, `bank_account_number`, `bank_routing_number`, `tax_id` on `EmployeeProfile` use Laravel `encrypted` cast + `$hidden`. Never expose raw values in API responses.
+- **Signed URLs**: `file_path` is `$hidden` on `EmployeeDocument`; `download_url` accessor generates 15-min S3 `temporaryUrl()`. Never return raw S3 paths.
+- **Field-level auth**: employees can only edit personal fields on their own profile (enforced in `EmployeeService::updateProfile()`); admins can edit all fields
+- Routes: `GET/PUT /hr/employees`, `GET/PUT /hr/employees/{id}/profile`, `GET/POST/DELETE /hr/employees/{id}/documents`, `PUT /hr/employees/{id}/documents/{doc}/verify`, `GET/POST/DELETE /hr/employees/{id}/notes`
+
+### Attendance HR Layer (Module 3)
+- Tables: `attendance_records` (softDeletes, composite indexes), `attendance_regularizations` (softDeletes), `overtime_rules` (softDeletes, one per org)
+- `AttendanceService`: `generateDailyAttendance()` chunks users (200/batch), uses `withoutGlobalScopes()` with explicit org_id for system-context queries; status priority: Holiday > On Leave > Weekend > Present (≥4h) > Half Day (≥2h) > Absent (<2h)
+- `GenerateDailyAttendanceJob`: `$tries=3`, `$timeout=300`, `backoff=[60,120,300]`, `failed()` handler
+- **Date filter params**: both frontend and backend use `start_date`/`end_date` (not `date_from`/`date_to`)
+- **Valid attendance statuses**: `present`, `absent`, `half_day`, `on_leave`, `weekend`, `holiday` — `late` is NOT a status (tracked via `late_minutes` column)
+- Routes: `GET /hr/attendance`, `GET /hr/attendance/team`, `GET /hr/attendance/summary`, `POST /hr/attendance/generate`, `GET/POST /hr/attendance/regularizations`, `POST /hr/attendance/{record}/regularize`, `PUT /hr/attendance/regularizations/{id}/approve`, `PUT /hr/attendance/regularizations/{id}/reject`, `GET/PUT /hr/overtime-rules`
+
 ## Quick Reference — Key Files
 
 | What | Where |
@@ -153,11 +169,11 @@ Adds department/position org structure and leave management under `/api/v1/hr/`.
 | Frontend pages | `web/src/app/(dashboard)/*/page.tsx` |
 | API client | `web/src/lib/api.ts` (axios + token refresh mutex) |
 | Zustand stores | `web/src/stores/` (auth-store, timer-store) |
-| HR controllers | `backend/app/Http/Controllers/Api/V1/Hr/` (Department, Position, LeaveType, LeaveBalance, LeaveRequest, PublicHoliday) |
-| HR services | `backend/app/Services/OrganizationStructureService.php`, `backend/app/Services/LeaveService.php` |
-| HR pages | `web/src/app/(dashboard)/hr/` (departments, positions, leave, leave/apply, leave/approvals, leave/calendar, leave/types) |
-| HR components | `web/src/components/hr/` (DepartmentSelect, PositionSelect, LeaveBalanceCard, LeaveCalendar, LeaveApprovalCard, etc.) |
-| HR hooks | `web/src/hooks/hr/` (use-departments, use-positions, use-leave-requests, use-leave-balance, use-apply-leave, etc.) |
+| HR controllers | `backend/app/Http/Controllers/Api/V1/Hr/` (Department, Position, LeaveType, LeaveBalance, LeaveRequest, PublicHoliday, Employee, EmployeeDocument, EmployeeNote, Attendance, AttendanceRegularization, OvertimeRule) |
+| HR services | `backend/app/Services/OrganizationStructureService.php`, `backend/app/Services/LeaveService.php`, `backend/app/Services/EmployeeService.php`, `backend/app/Services/AttendanceService.php` |
+| HR pages | `web/src/app/(dashboard)/hr/` (departments, positions, leave, leave/apply, leave/approvals, leave/calendar, leave/types, employees, employees/[id], attendance, attendance/team, attendance/regularizations) |
+| HR components | `web/src/components/hr/` (DepartmentSelect, PositionSelect, LeaveBalanceCard, LeaveCalendar, LeaveApprovalCard, EmployeeCard, EmployeeStatusBadge, AttendanceStatusBadge, AttendanceSummaryCard, RegularizationCard, etc.) |
+| HR hooks | `web/src/hooks/hr/` (use-departments, use-positions, use-leave-requests, use-leave-balance, use-apply-leave, use-employees, use-employee-documents, use-attendance, use-regularizations, use-overtime-rules, etc.) |
 | Org selector | `web/src/components/org-selector.tsx` |
 | Org switcher | `web/src/components/org-switcher.tsx` |
 | Sidebar primitive | `web/src/components/ui/sidebar.tsx` (shadcn Sidebar with collapsible icon mode) |
