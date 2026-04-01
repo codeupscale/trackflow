@@ -60,7 +60,7 @@ export function PositionFormSheet({
   const isEditing = !!position;
 
   const form = useForm<PositionInput>({
-    resolver: zodResolver(positionSchema),
+    resolver: zodResolver(positionSchema) as any,
     defaultValues: {
       title: '',
       code: '',
