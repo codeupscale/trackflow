@@ -115,8 +115,9 @@ export function EmployeeProfileSheet({
           permanent_address: data.permanent_address,
         };
 
+    // Use user_id for the API route (PUT /hr/employees/{user_id}/profile)
     updateMutation.mutate(
-      { id: employee.id, data: payload },
+      { id: employee.user_id ?? employee.id, data: payload },
       { onSuccess: () => onOpenChange(false) }
     );
   };
