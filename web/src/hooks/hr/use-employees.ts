@@ -42,7 +42,19 @@ export function useEmployees(params?: UseEmployeesParams) {
       if (params?.employment_type && params.employment_type !== 'all')
         queryParams.employment_type = params.employment_type;
       const res = await api.get('/hr/employees', { params: queryParams });
-      return res.data;
+      const raw = res.data;
+      // Laravel returns flat pagination; normalize to {data, meta} format
+      return {
+        data: raw.data ?? [],
+        meta: raw.meta ?? {
+          current_page: raw.current_page ?? 1,
+          last_page: raw.last_page ?? 1,
+          per_page: raw.per_page ?? 25,
+          total: raw.total ?? 0,
+          from: raw.from ?? null,
+          to: raw.to ?? null,
+        },
+      };
     },
   });
 }
