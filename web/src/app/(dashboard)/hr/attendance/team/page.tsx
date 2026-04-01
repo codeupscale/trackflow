@@ -23,13 +23,14 @@ import { AttendanceStatusBadge } from '@/components/hr/AttendanceStatusBadge';
 import { DepartmentSelect } from '@/components/hr/DepartmentSelect';
 import { useTeamAttendance } from '@/hooks/hr/use-attendance';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 import { formatDate } from '@/lib/utils';
 
 export default function TeamAttendancePage() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const isManager =
-    user?.role === 'admin' || user?.role === 'manager' || user?.role === 'owner';
+  const { hasPermissionWithScope } = usePermissionStore();
+  const isManager = hasPermissionWithScope('attendance.view', 'team');
 
   useEffect(() => {
     if (user && !isManager) {

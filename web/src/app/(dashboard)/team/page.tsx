@@ -74,6 +74,7 @@ import {
 import api from "@/lib/api";
 import { formatDate } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
+import { usePermissionStore } from "@/stores/permission-store";
 
 interface TeamMember {
     id: string;
@@ -142,6 +143,7 @@ export default function TeamPage() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const { user } = useAuthStore();
+    const { hasPermission } = usePermissionStore();
     const queryClient = useQueryClient();
     const [inviteOpen, setInviteOpen] = useState(false);
     const [inviteEmail, setInviteEmail] = useState("");
@@ -179,13 +181,13 @@ export default function TeamPage() {
 
     // Team is for owner/admin/manager only; redirect employees so they don't hit 403
     useEffect(() => {
-        if (user?.role === "employee") {
+        if (user && !hasPermission('team.view_members')) {
             toast.error("You don't have access to the Team page.");
             router.replace("/dashboard");
         }
-    }, [user?.role, router]);
+    }, [user, hasPermission, router]);
 
-    const canManageInvites = user?.role === "owner" || user?.role === "admin" || user?.role === "manager";
+    const canManageInvites = hasPermission('team.invite');
 
     const membersPage = parsePositiveInt(searchParams.get("members_page"), 1);
     const membersPerPage = parsePositiveInt(
@@ -248,7 +250,7 @@ export default function TeamPage() {
             }
             return raw;
         },
-        enabled: user?.role !== "employee",
+        enabled: hasPermission('team.view_members'),
     });
 
     const { data: usage } = useQuery<BillingUsage>({
@@ -257,7 +259,7 @@ export default function TeamPage() {
             const res = await api.get("/billing/usage");
             return res.data;
         },
-        enabled: user?.role !== "employee",
+        enabled: hasPermission('team.view_members'),
     });
 
     const {
@@ -277,7 +279,7 @@ export default function TeamPage() {
             return res.data;
         },
         retry: false,
-        enabled: user?.role !== "employee" && canManageInvites,
+        enabled: canManageInvites,
     });
 
     const inviteMutation = useMutation({
@@ -525,7 +527,7 @@ export default function TeamPage() {
         });
     };
 
-    if (user?.role === "employee") {
+    if (user && !hasPermission('team.view_members')) {
         return (
             <div className="flex items-center justify-center h-64">
                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />

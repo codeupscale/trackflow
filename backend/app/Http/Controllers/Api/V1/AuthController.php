@@ -657,6 +657,7 @@ class AuthController extends Controller
             'is_active' => $user->is_active,
             'last_active_at' => $user->last_active_at,
             'email_verified_at' => $user->email_verified_at,
+            'permissions' => $user->getPermissionMap(),
             'organization' => [
                 'id' => $user->organization->id,
                 'name' => $user->organization->name,

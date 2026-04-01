@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 import { useEmployee } from '@/hooks/hr/use-employees';
 import { useEmployeeDocuments, useUploadDocument, useVerifyDocument, useDeleteDocument } from '@/hooks/hr/use-employee-documents';
 import { useEmployeeNotes, useCreateNote, useDeleteNote } from '@/hooks/hr/use-employee-notes';
@@ -89,8 +90,9 @@ export default function EmployeeDetailPage() {
   const router = useRouter();
   const { user } = useAuthStore();
 
-  const isAdmin = user?.role === 'owner' || user?.role === 'admin';
-  const isManager = user?.role === 'manager';
+  const { hasPermission } = usePermissionStore();
+  const isAdmin = hasPermission('employees.edit_all_fields');
+  const isManager = hasPermission('employees.view_directory') && !isAdmin;
   const canManage = isAdmin || isManager;
 
   const employeeId = params.id;

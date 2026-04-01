@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import api from '@/lib/api';
 import { identifyUser, resetUser } from '@/lib/posthog';
+import { usePermissionStore } from '@/stores/permission-store';
 
 interface User {
   id: string;
@@ -19,6 +20,7 @@ interface User {
   date_of_joining?: string | null;
   bio?: string | null;
   is_active: boolean;
+  permissions?: Record<string, string>;
   organization: {
     id: string;
     name: string;
@@ -114,6 +116,7 @@ export const useAuthStore = create<AuthState>()(
           }
           set({ user: res.data.user, isAuthenticated: true, isLoading: false, pendingOrgSelection: null });
           identifyUser(res.data.user);
+          usePermissionStore.getState().setPermissions(res.data.user?.permissions ?? res.data.permissions ?? {});
           return { success: true };
         } catch (error) {
           set({ isLoading: false });
@@ -131,6 +134,7 @@ export const useAuthStore = create<AuthState>()(
           }
           set({ user: res.data.user, isAuthenticated: true, isLoading: false });
           identifyUser(res.data.user);
+          usePermissionStore.getState().setPermissions(res.data.user?.permissions ?? res.data.permissions ?? {});
         } catch (error) {
           set({ isLoading: false });
           throw error;
@@ -149,6 +153,7 @@ export const useAuthStore = create<AuthState>()(
           localStorage.removeItem('refresh_token');
         }
         set({ user: null, isAuthenticated: false, pendingOrgSelection: null });
+        usePermissionStore.getState().clearPermissions();
       },
 
       fetchUser: async () => {
@@ -156,12 +161,17 @@ export const useAuthStore = create<AuthState>()(
           const res = await api.get('/auth/me');
           set({ user: res.data.user, isAuthenticated: true });
           identifyUser(res.data.user);
+          usePermissionStore.getState().setPermissions(res.data.user?.permissions ?? res.data.permissions ?? {});
         } catch {
           set({ user: null, isAuthenticated: false });
+          usePermissionStore.getState().clearPermissions();
         }
       },
 
-      setUser: (user: User) => set({ user, isAuthenticated: true }),
+      setUser: (user: User) => {
+        set({ user, isAuthenticated: true });
+        usePermissionStore.getState().setPermissions(user.permissions ?? {});
+      },
 
       setTokens: (accessToken: string, refreshToken: string) => {
         if (typeof window !== 'undefined') {
@@ -173,6 +183,7 @@ export const useAuthStore = create<AuthState>()(
           const user = res.data.user;
           identifyUser(user);
           set({ user, isAuthenticated: true, pendingOrgSelection: null });
+          usePermissionStore.getState().setPermissions(user?.permissions ?? res.data.permissions ?? {});
         }).catch(() => {});
       },
 
@@ -204,6 +215,7 @@ export const useAuthStore = create<AuthState>()(
             pendingOrgSelection: null,
           });
           identifyUser(res.data.user);
+          usePermissionStore.getState().setPermissions(res.data.user?.permissions ?? res.data.permissions ?? {});
         } catch (error) {
           set({ isLoading: false });
           throw error;
@@ -227,6 +239,7 @@ export const useAuthStore = create<AuthState>()(
             isLoading: false,
           });
           identifyUser(res.data.user);
+          usePermissionStore.getState().setPermissions(res.data.user?.permissions ?? res.data.permissions ?? {});
         } catch (error) {
           set({ isLoading: false });
           throw error;

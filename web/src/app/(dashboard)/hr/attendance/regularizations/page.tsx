@@ -20,6 +20,7 @@ import {
 import { RegularizationCard } from '@/components/hr/RegularizationCard';
 import { useRegularizations, useApproveRegularization, useRejectRegularization } from '@/hooks/hr/use-regularizations';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 import { cn } from '@/lib/utils';
 
 const STATUS_FILTERS = ['pending', 'approved', 'rejected'] as const;
@@ -27,8 +28,8 @@ const STATUS_FILTERS = ['pending', 'approved', 'rejected'] as const;
 export default function RegularizationsPage() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const isManager =
-    user?.role === 'admin' || user?.role === 'manager' || user?.role === 'owner';
+  const { hasPermission } = usePermissionStore();
+  const isManager = hasPermission('attendance.approve_regularizations');
 
   useEffect(() => {
     if (user && !isManager) {

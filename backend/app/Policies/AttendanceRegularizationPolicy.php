@@ -4,11 +4,12 @@ namespace App\Policies;
 
 use App\Models\AttendanceRegularization;
 use App\Models\User;
+use App\Services\PermissionService;
 
 class AttendanceRegularizationPolicy
 {
     /**
-     * Manager/admin/owner can approve regularization requests (not their own).
+     * Users with attendance.approve_regularizations can approve (not their own).
      */
     public function approve(User $user, AttendanceRegularization $reg): bool
     {
@@ -21,6 +22,21 @@ class AttendanceRegularizationPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin', 'manager');
+        $service = app(PermissionService::class);
+        $scope = $service->getScope($user, 'attendance.approve_regularizations');
+
+        if ($scope === null) {
+            return false;
+        }
+
+        if ($scope === 'organization') {
+            return true;
+        }
+
+        if ($scope === 'team') {
+            return in_array($reg->user_id, $service->getTeamUserIds($user));
+        }
+
+        return false;
     }
 }

@@ -23,6 +23,7 @@ import { LeaveApprovalCard } from '@/components/hr/LeaveApprovalCard';
 import { useLeaveRequests } from '@/hooks/hr/use-leave-requests';
 import { useApproveLeave, useRejectLeave } from '@/hooks/hr/use-leave-actions';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 
 export default function LeaveApprovalsPage() {
   const router = useRouter();
@@ -30,7 +31,8 @@ export default function LeaveApprovalsPage() {
   const [statusFilter, setStatusFilter] = useState('pending');
   const [currentPage, setCurrentPage] = useState(1);
 
-  const isManager = user?.role === 'admin' || user?.role === 'manager' || user?.role === 'owner';
+  const { hasPermission } = usePermissionStore();
+  const isManager = hasPermission('leave.approve');
 
   useEffect(() => {
     if (user && !isManager) {

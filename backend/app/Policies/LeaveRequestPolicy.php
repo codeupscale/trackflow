@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Models\LeaveRequest;
 use App\Models\User;
+use App\Services\PermissionService;
 
 class LeaveRequestPolicy
 {
@@ -16,7 +17,7 @@ class LeaveRequestPolicy
     }
 
     /**
-     * Own request, OR manager of requester's team, OR admin/owner.
+     * Own request, OR has team/org scope for leave.view_requests.
      */
     public function view(User $user, LeaveRequest $leaveRequest): bool
     {
@@ -29,16 +30,15 @@ class LeaveRequestPolicy
             return true;
         }
 
-        // Admin or owner
-        if ($user->hasRole('owner', 'admin')) {
+        $service = app(PermissionService::class);
+        $scope = $service->getScope($user, 'leave.view_requests');
+
+        if ($scope === 'organization') {
             return true;
         }
 
-        // Manager — can view team members' requests
-        if ($user->isManager()) {
-            return $user->managedTeams()
-                ->whereHas('members', fn ($q) => $q->where('users.id', $leaveRequest->user_id))
-                ->exists();
+        if ($scope === 'team') {
+            return in_array($leaveRequest->user_id, $service->getTeamUserIds($user));
         }
 
         return false;
@@ -53,7 +53,7 @@ class LeaveRequestPolicy
     }
 
     /**
-     * Only admin/owner can edit a submitted request.
+     * Only users with leave.approve at org scope can edit a submitted request.
      */
     public function update(User $user, LeaveRequest $leaveRequest): bool
     {
@@ -61,12 +61,12 @@ class LeaveRequestPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin');
+        return app(PermissionService::class)->hasPermission($user, 'leave.approve', 'organization');
     }
 
     /**
-     * Admin/owner or manager can approve, but NOT their own request.
-     * Self-approval would bypass oversight — a manager cannot approve leave they submitted.
+     * Users with leave.approve can approve, but NOT their own request.
+     * Self-approval would bypass oversight.
      */
     public function approve(User $user, LeaveRequest $leaveRequest): bool
     {
@@ -74,16 +74,31 @@ class LeaveRequestPolicy
             return false;
         }
 
-        // Prevent self-approval: no one can approve their own leave request
+        // Prevent self-approval
         if ($user->id === $leaveRequest->user_id) {
             return false;
         }
 
-        return $user->hasRole('owner', 'admin', 'manager');
+        $service = app(PermissionService::class);
+        $scope = $service->getScope($user, 'leave.approve');
+
+        if ($scope === null) {
+            return false;
+        }
+
+        if ($scope === 'organization') {
+            return true;
+        }
+
+        if ($scope === 'team') {
+            return in_array($leaveRequest->user_id, $service->getTeamUserIds($user));
+        }
+
+        return false;
     }
 
     /**
-     * Own request with status pending/approved, OR admin/owner.
+     * Own request with status pending/approved, OR users with leave.cancel at org scope.
      */
     public function delete(User $user, LeaveRequest $leaveRequest): bool
     {
@@ -91,13 +106,18 @@ class LeaveRequestPolicy
             return false;
         }
 
-        // Admin/owner can cancel any request
-        if ($user->hasRole('owner', 'admin')) {
-            return in_array($leaveRequest->status, ['pending', 'approved']);
+        $validStatuses = ['pending', 'approved'];
+
+        // Users with org-wide cancel can cancel any request in valid status
+        $service = app(PermissionService::class);
+        $scope = $service->getScope($user, 'leave.cancel');
+
+        if ($scope === 'organization' && in_array($leaveRequest->status, $validStatuses)) {
+            return true;
         }
 
         // Own request, only if pending or approved
         return $user->id === $leaveRequest->user_id
-            && in_array($leaveRequest->status, ['pending', 'approved']);
+            && in_array($leaveRequest->status, $validStatuses);
     }
 }
