@@ -14,7 +14,7 @@ return new class extends Migration
             $table->string('name', 255);
             $table->string('code', 50);
             $table->text('description')->nullable();
-            $table->foreignUuid('parent_department_id')->nullable()->constrained('departments')->nullOnDelete();
+            $table->uuid('parent_department_id')->nullable();
             $table->foreignUuid('manager_id')->nullable()->constrained('users')->nullOnDelete();
             $table->integer('head_count')->default(0);
             $table->boolean('is_active')->default(true);
@@ -24,6 +24,11 @@ return new class extends Migration
             $table->unique(['organization_id', 'code']);
             $table->index(['organization_id', 'parent_department_id']);
             $table->index(['organization_id', 'is_active']);
+        });
+
+        // Self-referential FK must be added after table exists
+        Schema::table('departments', function (Blueprint $table) {
+            $table->foreign('parent_department_id')->references('id')->on('departments')->nullOnDelete();
         });
     }
 
