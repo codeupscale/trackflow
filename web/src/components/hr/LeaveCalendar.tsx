@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { useLeaveCalendar } from '@/hooks/hr/use-leave-calendar';
-import type { LeaveCalendarDay, PublicHoliday } from '@/lib/validations/leave';
+import type { LeaveCalendarEntry, PublicHoliday } from '@/lib/validations/leave';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -42,6 +42,21 @@ export function LeaveCalendar({ month, year, onMonthChange }: LeaveCalendarProps
     year: 'numeric',
   });
 
+  // Build a Map of holidays keyed by date string
+  const holidayMap = useMemo(() => {
+    const map = new Map<string, PublicHoliday>();
+    if (data?.holidays) {
+      for (const h of data.holidays) {
+        // For recurring holidays, normalize the date to the current calendar year/month
+        const holidayDate = h.is_recurring
+          ? `${year}-${String(month).padStart(2, '0')}-${h.date.slice(8, 10)}`
+          : h.date;
+        map.set(holidayDate, { ...h, date: holidayDate });
+      }
+    }
+    return map;
+  }, [data?.holidays, year, month]);
+
   const calendarDays = useMemo(() => {
     const firstDay = new Date(year, month - 1, 1);
     const lastDay = new Date(year, month, 0);
@@ -51,75 +66,71 @@ export function LeaveCalendar({ month, year, onMonthChange }: LeaveCalendarProps
     let startDayOfWeek = firstDay.getDay() - 1;
     if (startDayOfWeek < 0) startDayOfWeek = 6;
 
-    const leaveMap = new Map<string, LeaveCalendarDay>();
-    if (data?.days) {
-      for (const day of data.days) {
-        leaveMap.set(day.date, day);
-      }
-    }
-
-    const holidayMap = new Map<string, PublicHoliday>();
-    if (data?.holidays) {
-      for (const h of data.holidays) {
-        holidayMap.set(h.date, h);
-      }
-    }
+    const calendarObj = data?.calendar ?? {};
 
     const cells: {
       date: string;
       day: number;
       isCurrentMonth: boolean;
       isToday: boolean;
-      leaves: LeaveCalendarDay['leaves'];
+      isWeekend: boolean;
+      leaves: LeaveCalendarEntry[];
       holiday: PublicHoliday | undefined;
     }[] = [];
 
-    // Fill leading empty cells
+    // Fill leading empty cells (previous month)
     for (let i = 0; i < startDayOfWeek; i++) {
       const prevDate = new Date(year, month - 1, -startDayOfWeek + i + 1);
       const dateStr = formatDateStr(prevDate);
+      const dayOfWeek = prevDate.getDay();
       cells.push({
         date: dateStr,
         day: prevDate.getDate(),
         isCurrentMonth: false,
         isToday: false,
-        leaves: leaveMap.get(dateStr)?.leaves ?? [],
+        isWeekend: dayOfWeek === 0 || dayOfWeek === 6,
+        leaves: calendarObj[dateStr] ?? [],
         holiday: holidayMap.get(dateStr),
       });
     }
 
-    // Fill current month
+    // Fill current month days
     for (let d = 1; d <= daysInMonth; d++) {
       const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const dateObj = new Date(year, month - 1, d);
+      const dayOfWeek = dateObj.getDay();
       cells.push({
         date: dateStr,
         day: d,
         isCurrentMonth: true,
         isToday: dateStr === todayStr,
-        leaves: leaveMap.get(dateStr)?.leaves ?? [],
+        isWeekend: dayOfWeek === 0 || dayOfWeek === 6,
+        leaves: calendarObj[dateStr] ?? [],
         holiday: holidayMap.get(dateStr),
       });
     }
 
-    // Fill trailing to complete the grid
+    // Fill trailing cells to complete the grid
     const remaining = 7 - (cells.length % 7);
     if (remaining < 7) {
       for (let i = 1; i <= remaining; i++) {
         const nextDate = new Date(year, month, i);
         const dateStr = formatDateStr(nextDate);
+        const dayOfWeek = nextDate.getDay();
         cells.push({
           date: dateStr,
           day: nextDate.getDate(),
           isCurrentMonth: false,
           isToday: false,
-          leaves: leaveMap.get(dateStr)?.leaves ?? [],
+          isWeekend: dayOfWeek === 0 || dayOfWeek === 6,
+          leaves: calendarObj[dateStr] ?? [],
           holiday: holidayMap.get(dateStr),
         });
       }
     }
 
     return cells;
-  }, [month, year, data, todayStr]);
+  }, [month, year, data?.calendar, holidayMap, todayStr]);
 
   const handlePrev = () => {
     if (month === 1) {
@@ -137,14 +148,16 @@ export function LeaveCalendar({ month, year, onMonthChange }: LeaveCalendarProps
     }
   };
 
-  // Collect legend items from actual data
+  // Collect legend items from actual calendar data
   const legendItems = useMemo(() => {
-    if (!data?.days) return [];
+    const calendarObj = data?.calendar ?? {};
     const seen = new Map<string, string>();
-    for (const day of data.days) {
-      for (const leave of day.leaves) {
-        if (!seen.has(leave.leave_type.code)) {
-          seen.set(leave.leave_type.code, leave.leave_type.name);
+    for (const entries of Object.values(calendarObj)) {
+      for (const entry of entries) {
+        const code = entry.leave_type_code ?? entry.leave_type?.code;
+        const name = entry.leave_type_name ?? entry.leave_type?.name;
+        if (code && !seen.has(code)) {
+          seen.set(code, name ?? code);
         }
       }
     }
@@ -153,7 +166,7 @@ export function LeaveCalendar({ month, year, onMonthChange }: LeaveCalendarProps
       name,
       color: getLeaveColor(code),
     }));
-  }, [data]);
+  }, [data?.calendar]);
 
   if (isError) {
     return (
@@ -206,90 +219,116 @@ export function LeaveCalendar({ month, year, onMonthChange }: LeaveCalendarProps
         ) : (
           <>
             <div className="grid grid-cols-7 gap-1" role="grid" aria-label="Leave calendar">
-              {WEEKDAYS.map((d) => (
+              {WEEKDAYS.map((d, idx) => (
                 <div
                   key={d}
-                  className="p-2 text-center text-xs font-medium text-muted-foreground"
+                  className={cn(
+                    'p-2 text-center text-xs font-medium',
+                    idx >= 5 ? 'text-muted-foreground/60' : 'text-muted-foreground'
+                  )}
                   role="columnheader"
                 >
                   {d}
                 </div>
               ))}
-              {calendarDays.map((cell) => (
-                <div
-                  key={cell.date}
-                  role="gridcell"
-                  aria-label={`${cell.date}${cell.leaves.length > 0 ? `, ${cell.leaves.length} leave(s)` : ''}${cell.holiday ? `, holiday: ${cell.holiday.name}` : ''}`}
-                  className={cn(
-                    'relative min-h-16 rounded-md border border-transparent p-1 text-xs transition-colors',
-                    cell.isCurrentMonth ? 'text-foreground' : 'text-muted-foreground/50',
-                    cell.isToday && 'border-primary bg-primary/5',
-                    cell.holiday && cell.isCurrentMonth && 'bg-red-50 dark:bg-red-900/10',
-                  )}
-                >
-                  <div className="flex items-center justify-between">
-                    <span
-                      className={cn(
-                        'inline-flex size-5 items-center justify-center rounded-full text-[11px] tabular-nums',
-                        cell.isToday && 'bg-primary text-primary-foreground font-bold'
-                      )}
-                    >
-                      {cell.day}
-                    </span>
-                    {cell.holiday && (
-                      <span
-                        className="size-1.5 rounded-full bg-red-500"
-                        title={cell.holiday.name}
-                        aria-label={`Holiday: ${cell.holiday.name}`}
-                      />
+              {calendarDays.map((cell) => {
+                const leaveCode = cell.leaves[0]?.leave_type_code ?? cell.leaves[0]?.leave_type?.code;
+                return (
+                  <div
+                    key={cell.date}
+                    role="gridcell"
+                    aria-label={`${cell.date}${cell.leaves.length > 0 ? `, ${cell.leaves.length} leave(s)` : ''}${cell.holiday ? `, holiday: ${cell.holiday.name}` : ''}`}
+                    className={cn(
+                      'relative min-h-16 rounded-md border border-transparent p-1 text-xs transition-colors',
+                      // Base text color
+                      cell.isCurrentMonth ? 'text-foreground' : 'text-muted-foreground/40',
+                      // Weekend styling
+                      cell.isWeekend && cell.isCurrentMonth && 'bg-muted/30 text-muted-foreground',
+                      cell.isWeekend && !cell.isCurrentMonth && 'bg-muted/15',
+                      // Holiday styling (overrides weekend)
+                      cell.holiday && cell.isCurrentMonth && 'bg-red-50 dark:bg-red-950/20',
+                      // Today highlight
+                      cell.isToday && 'border-primary ring-1 ring-primary/30 bg-primary/5',
                     )}
-                  </div>
-                  {cell.leaves.length > 0 && (
-                    <div className="mt-0.5 flex flex-col gap-0.5">
-                      {cell.leaves.slice(0, 3).map((leave, idx) => (
-                        <div
-                          key={idx}
-                          className={cn(
-                            'flex items-center gap-1 truncate rounded px-0.5',
-                            leave.status === 'pending' ? 'opacity-60' : 'opacity-100'
-                          )}
-                          title={`${leave.user.name} - ${leave.leave_type.name}${leave.half_day ? ' (half day)' : ''}${leave.status === 'pending' ? ' - Pending' : ''}`}
-                        >
-                          <span
-                            className={cn('size-1.5 shrink-0 rounded-full', getLeaveColor(leave.leave_type.code))}
-                          />
-                          <span className="truncate text-[10px]">
-                            {leave.user.name.split(' ')[0]}
-                          </span>
-                        </div>
-                      ))}
-                      {cell.leaves.length > 3 && (
-                        <span className="text-[10px] text-muted-foreground">
-                          +{cell.leaves.length - 3} more
-                        </span>
+                  >
+                    <div className="flex items-center justify-between">
+                      <span
+                        className={cn(
+                          'inline-flex size-5 items-center justify-center rounded-full text-[11px] tabular-nums',
+                          cell.isToday && 'bg-primary text-primary-foreground font-bold'
+                        )}
+                      >
+                        {cell.day}
+                      </span>
+                      {cell.holiday && (
+                        <span
+                          className="size-1.5 rounded-full bg-red-500"
+                          title={cell.holiday.name}
+                          aria-label={`Holiday: ${cell.holiday.name}`}
+                        />
                       )}
                     </div>
-                  )}
-                </div>
-              ))}
+                    {/* Holiday name */}
+                    {cell.holiday && cell.isCurrentMonth && (
+                      <p className="mt-0.5 truncate text-[9px] font-medium text-red-600 dark:text-red-400">
+                        {cell.holiday.name}
+                      </p>
+                    )}
+                    {/* Leave entries */}
+                    {cell.leaves.length > 0 && (
+                      <div className="mt-0.5 flex flex-col gap-0.5">
+                        {cell.leaves.slice(0, 3).map((leave, idx) => {
+                          const code = leave.leave_type_code ?? leave.leave_type?.code ?? '';
+                          const name = leave.user_name ?? leave.user?.name ?? '';
+                          const typeName = leave.leave_type_name ?? leave.leave_type?.name ?? '';
+                          return (
+                            <div
+                              key={idx}
+                              className={cn(
+                                'flex items-center gap-1 truncate rounded px-0.5',
+                                leave.status === 'pending' ? 'opacity-60' : 'opacity-100'
+                              )}
+                              title={`${name} - ${typeName}${leave.half_day ? ' (half day)' : ''}${leave.status === 'pending' ? ' - Pending' : ''}`}
+                            >
+                              <span
+                                className={cn('size-1.5 shrink-0 rounded-full', getLeaveColor(code))}
+                              />
+                              <span className="truncate text-[10px]">
+                                {name.split(' ')[0]}
+                              </span>
+                            </div>
+                          );
+                        })}
+                        {cell.leaves.length > 3 && (
+                          <span className="text-[10px] text-muted-foreground">
+                            +{cell.leaves.length - 3} more
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             {/* Legend */}
-            {legendItems.length > 0 && (
-              <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border pt-3">
-                <span className="text-xs font-medium text-muted-foreground">Legend:</span>
-                {legendItems.map((item) => (
-                  <div key={item.code} className="flex items-center gap-1.5">
-                    <span className={cn('size-2.5 rounded-full', item.color)} />
-                    <span className="text-xs text-muted-foreground">{item.name}</span>
-                  </div>
-                ))}
-                <div className="flex items-center gap-1.5">
-                  <span className="size-2.5 rounded-full bg-red-500" />
-                  <span className="text-xs text-muted-foreground">Public Holiday</span>
+            <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border pt-3">
+              <span className="text-xs font-medium text-muted-foreground">Legend:</span>
+              {legendItems.map((item) => (
+                <div key={item.code} className="flex items-center gap-1.5">
+                  <span className={cn('size-2.5 rounded-full', item.color)} />
+                  <span className="text-xs text-muted-foreground">{item.name}</span>
                 </div>
+              ))}
+              <div className="flex items-center gap-1.5">
+                <span className="size-2.5 rounded-full bg-red-500" />
+                <span className="text-xs text-muted-foreground">Public Holiday</span>
               </div>
-            )}
+              <div className="flex items-center gap-1.5">
+                <span className="size-2.5 rounded bg-muted/50 border border-border" />
+                <span className="text-xs text-muted-foreground">Weekend</span>
+              </div>
+            </div>
           </>
         )}
       </CardContent>

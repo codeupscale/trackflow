@@ -67,12 +67,11 @@ export interface LeaveRequest {
   leave_type_id: string;
   start_date: string;
   end_date: string;
-  days: number;
-  half_day: boolean;
+  days_count: number;
   reason: string;
   status: 'pending' | 'approved' | 'rejected' | 'cancelled';
   rejection_reason: string | null;
-  document_url: string | null;
+  document_path: string | null;
   user: LeaveRequestUser;
   leave_type: LeaveType;
   approved_by: LeaveRequestUser | null;
@@ -80,6 +79,22 @@ export interface LeaveRequest {
   updated_at: string;
 }
 
+/** A single leave entry within a calendar date bucket (from API) */
+export interface LeaveCalendarEntry {
+  id: string;
+  user: LeaveRequestUser;
+  user_name: string;
+  leave_type: Pick<LeaveType, 'id' | 'name' | 'code'>;
+  leave_type_name: string;
+  leave_type_code: string;
+  status: 'approved' | 'pending';
+  days_count: number;
+  half_day: boolean;
+  start_date: string;
+  end_date: string;
+}
+
+/** @deprecated Use LeaveCalendarEntry with the date-keyed calendar object instead */
 export interface LeaveCalendarDay {
   date: string;
   leaves: {
