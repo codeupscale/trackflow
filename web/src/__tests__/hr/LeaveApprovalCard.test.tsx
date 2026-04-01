@@ -11,12 +11,11 @@ function makeRequest(overrides: Partial<LeaveRequest> = {}): LeaveRequest {
     leave_type_id: 'lt-1',
     start_date: '2026-03-20',
     end_date: '2026-03-22',
-    days: 3,
-    half_day: false,
+    days_count: 3,
     reason: 'Family vacation',
     status: 'pending',
     rejection_reason: null,
-    document_url: null,
+    document_path: null,
     user: {
       id: 'u-1',
       name: 'Jane Doe',
@@ -88,7 +87,7 @@ describe('LeaveApprovalCard', () => {
   });
 
   it('renders number of days', () => {
-    const request = makeRequest({ days: 3 });
+    const request = makeRequest({ days_count: 3 });
     render(
       <LeaveApprovalCard
         request={request}
@@ -101,7 +100,7 @@ describe('LeaveApprovalCard', () => {
   });
 
   it('shows half day indicator when applicable', () => {
-    const request = makeRequest({ days: 1, half_day: true });
+    const request = makeRequest({ days_count: 0.5 });
     render(
       <LeaveApprovalCard
         request={request}
@@ -110,7 +109,7 @@ describe('LeaveApprovalCard', () => {
       />
     );
 
-    expect(screen.getByText('1 (half day)')).toBeInTheDocument();
+    expect(screen.getByText('0.5 (half day)')).toBeInTheDocument();
   });
 
   it('shows approve and reject buttons for pending requests', () => {
