@@ -15,6 +15,7 @@ import {
   CalendarCheck,
   UsersRound,
   FileEdit,
+  Shield,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -68,6 +69,7 @@ export const navigationConfig: NavGroup[] = [
     label: 'Team',
     items: [
       { name: 'Team', href: '/team', icon: Users, requiredPermission: 'team.view_members' },
+      { name: 'Roles', href: '/settings/roles', icon: Shield, requiredPermission: 'roles.view' },
       { name: 'Settings', href: '/settings', icon: Settings, requiredPermission: 'settings.view_org' },
     ],
   },
