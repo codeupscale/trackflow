@@ -97,6 +97,7 @@ export default function EmployeesPage() {
   const params: UseEmployeesParams = useMemo(
     () => ({
       page,
+      per_page: 12,
       search: debouncedSearch || undefined,
       department_id: departmentId ?? undefined,
       employment_status: employmentStatus !== 'all' ? employmentStatus : undefined,
