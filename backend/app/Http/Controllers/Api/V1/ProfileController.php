@@ -57,22 +57,37 @@ class ProfileController extends Controller
         $extension = $file->getClientOriginalExtension();
         $path = "avatars/{$user->id}.{$extension}";
 
-        // Delete old avatar if stored on S3 with a different extension
+        // Use S3 if configured, otherwise fall back to public disk
+        $disk = config('filesystems.disks.s3.key') ? 's3' : 'public';
+
+        // Delete old avatar if it exists
         if ($user->avatar_url) {
-            $oldPath = parse_url($user->avatar_url, PHP_URL_PATH);
-            // Try to extract the S3 key from the URL
-            $bucket = config('filesystems.disks.s3.bucket');
-            if ($oldPath && $bucket) {
-                $oldKey = ltrim(str_replace("/{$bucket}/", '', $oldPath), '/');
-                if ($oldKey !== $path && str_starts_with($oldKey, 'avatars/')) {
-                    Storage::disk('s3')->delete($oldKey);
+            if ($disk === 's3') {
+                $oldPath = parse_url($user->avatar_url, PHP_URL_PATH);
+                $bucket = config('filesystems.disks.s3.bucket');
+                if ($oldPath && $bucket) {
+                    $oldKey = ltrim(str_replace("/{$bucket}/", '', $oldPath), '/');
+                    if ($oldKey !== $path && str_starts_with($oldKey, 'avatars/')) {
+                        Storage::disk('s3')->delete($oldKey);
+                    }
+                }
+            } else {
+                // Local disk: extract path from URL
+                $oldKey = str_replace('/storage/', '', parse_url($user->avatar_url, PHP_URL_PATH) ?? '');
+                if ($oldKey && $oldKey !== $path && str_starts_with($oldKey, 'avatars/')) {
+                    Storage::disk('public')->delete($oldKey);
                 }
             }
         }
 
-        Storage::disk('s3')->put($path, file_get_contents($file->getRealPath()), 'public');
+        Storage::disk($disk)->put($path, file_get_contents($file->getRealPath()), 'public');
 
-        $avatarUrl = Storage::disk('s3')->url($path);
+        if ($disk === 's3') {
+            $avatarUrl = Storage::disk('s3')->url($path);
+        } else {
+            // For local public disk, generate a proper URL
+            $avatarUrl = url('/storage/' . $path);
+        }
 
         $user->update(['avatar_url' => $avatarUrl]);
 
