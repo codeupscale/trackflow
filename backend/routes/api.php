@@ -4,6 +4,9 @@ use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\DataPrivacyController;
 use App\Http\Controllers\Api\V1\Hr\DepartmentController;
+use App\Http\Controllers\Api\V1\Hr\EmployeeController;
+use App\Http\Controllers\Api\V1\Hr\EmployeeDocumentController;
+use App\Http\Controllers\Api\V1\Hr\EmployeeNoteController;
 use App\Http\Controllers\Api\V1\Hr\LeaveBalanceController;
 use App\Http\Controllers\Api\V1\Hr\LeaveCalendarController;
 use App\Http\Controllers\Api\V1\Hr\LeaveRequestController;
@@ -204,6 +207,22 @@ Route::prefix('v1')->group(function () {
             Route::put('leave-requests/{leaveRequest}/approve', [LeaveRequestController::class, 'approve']);
             Route::put('leave-requests/{leaveRequest}/reject', [LeaveRequestController::class, 'reject']);
             Route::apiResource('public-holidays', PublicHolidayController::class)->only(['index', 'store']);
+
+            // Employee Directory & Profiles
+            Route::get('employees', [EmployeeController::class, 'index']);
+            Route::get('employees/{employee}', [EmployeeController::class, 'show']);
+            Route::put('employees/{employee}/profile', [EmployeeController::class, 'updateProfile']);
+
+            // Employee Documents
+            Route::get('employees/{employee}/documents', [EmployeeDocumentController::class, 'index']);
+            Route::post('employees/{employee}/documents', [EmployeeDocumentController::class, 'store']);
+            Route::delete('employees/{employee}/documents/{document}', [EmployeeDocumentController::class, 'destroy']);
+            Route::put('employees/{employee}/documents/{document}/verify', [EmployeeDocumentController::class, 'verify']);
+
+            // Employee Notes
+            Route::get('employees/{employee}/notes', [EmployeeNoteController::class, 'index']);
+            Route::post('employees/{employee}/notes', [EmployeeNoteController::class, 'store']);
+            Route::delete('employees/{employee}/notes/{note}', [EmployeeNoteController::class, 'destroy']);
         });
 
         // Permissions (owner/admin only)
