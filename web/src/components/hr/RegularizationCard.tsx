@@ -54,7 +54,7 @@ export function RegularizationCard({
     reset,
     formState: { errors },
   } = useForm<RejectReviewFormData>({
-    resolver: zodResolver(rejectReviewSchema),
+    resolver: zodResolver(rejectReviewSchema) as any,
   });
 
   const userInitials = regularization.user.name

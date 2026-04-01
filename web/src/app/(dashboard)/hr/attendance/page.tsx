@@ -97,7 +97,7 @@ export default function MyAttendancePage() {
     watch,
     formState: { errors },
   } = useForm<RegularizationFormData>({
-    resolver: zodResolver(regularizationSchema),
+    resolver: zodResolver(regularizationSchema) as any,
   });
 
   const requestedStatus = watch('requested_status');

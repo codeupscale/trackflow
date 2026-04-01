@@ -49,7 +49,7 @@ export function DepartmentFormSheet({
   const isEditing = !!department;
 
   const form = useForm<DepartmentInput>({
-    resolver: zodResolver(departmentSchema),
+    resolver: zodResolver(departmentSchema) as any,
     defaultValues: {
       name: '',
       code: '',
