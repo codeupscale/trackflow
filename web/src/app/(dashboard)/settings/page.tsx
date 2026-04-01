@@ -199,8 +199,9 @@ export default function SettingsPage() {
     mutationFn: async (settings: Record<string, unknown>) => {
       return api.put('/settings', settings);
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       queryClient.invalidateQueries({ queryKey: ['org-settings'] });
+      await fetchUser(); // Refresh auth store so sidebar/header shows updated org name
       toast.success('Settings saved successfully');
     },
     onError: () => toast.error('Failed to save settings'),
