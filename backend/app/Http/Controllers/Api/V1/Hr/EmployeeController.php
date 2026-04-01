@@ -62,6 +62,15 @@ class EmployeeController extends Controller
 
         $data = $profile->toArray();
 
+        // Flatten key user fields to top level for frontend convenience
+        $data['name'] = $employee->name;
+        $data['email'] = $employee->email;
+        $data['role'] = $employee->role;
+        $data['avatar_url'] = $employee->avatar_url;
+        $data['job_title'] = $employee->job_title;
+        $data['phone'] = $employee->phone;
+        $data['is_active'] = $employee->is_active;
+
         // Expose financial fields: masked for non-admin, full for admin/owner
         $canViewFinancial = $request->user()->hasRole('owner', 'admin');
         $data['bank_name'] = $canViewFinancial
