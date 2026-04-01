@@ -8,7 +8,7 @@ import {
   Pencil,
   Archive,
 } from 'lucide-react';
-import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 import { usePositions, useArchivePosition } from '@/hooks/hr/use-positions';
 import {
   positionLevels,
@@ -76,11 +76,8 @@ function formatSalaryRange(
 }
 
 export default function PositionsPage() {
-  const { user } = useAuthStore();
-  const canManage =
-    user?.role === 'owner' ||
-    user?.role === 'admin' ||
-    user?.role === 'manager';
+  const { hasPermission } = usePermissionStore();
+  const canManage = hasPermission('positions.create');
 
   const [page, setPage] = useState(1);
   const [departmentFilter, setDepartmentFilter] = useState<string | null>(

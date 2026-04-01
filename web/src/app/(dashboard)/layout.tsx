@@ -6,23 +6,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  LayoutDashboard,
-  Clock,
-  Camera,
-  BarChart3,
-  Users,
-  FolderOpen,
-  Settings,
   LogOut,
-  Building2,
-  Briefcase,
-  CalendarDays,
-  ClipboardCheck,
-  CalendarRange,
-  ListChecks,
-  CalendarCheck,
-  UsersRound,
-  FileEdit,
+  Settings,
 } from 'lucide-react';
 import { TrackFlowLogo } from '@/components/ui/trackflow-logo';
 
@@ -58,63 +43,19 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { OfflineBanner } from '@/components/offline-banner';
 import { OrgSwitcher } from '@/components/org-switcher';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
+import { navigationConfig } from '@/config/navigation';
 import { useAuthGuard } from '@/hooks/use-auth-guard';
-
-type NavItem = {
-  name: string;
-  href: string;
-  icon: typeof LayoutDashboard;
-  roles: string[];
-};
-
-const navGroups: { label: string; items: NavItem[] }[] = [
-  {
-    label: 'Main',
-    items: [
-      { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['owner', 'admin', 'manager', 'employee'] },
-      { name: 'Time Entries', href: '/time', icon: Clock, roles: ['owner', 'admin', 'manager', 'employee'] },
-      { name: 'Screenshots', href: '/screenshots', icon: Camera, roles: ['owner', 'admin', 'manager', 'employee'] },
-    ],
-  },
-  {
-    label: 'Analytics',
-    items: [
-      { name: 'Reports', href: '/reports', icon: BarChart3, roles: ['owner', 'admin', 'manager'] },
-      { name: 'Projects', href: '/projects', icon: FolderOpen, roles: ['owner', 'admin', 'manager', 'employee'] },
-    ],
-  },
-  {
-    label: 'HR',
-    items: [
-      { name: 'Departments', href: '/hr/departments', icon: Building2, roles: ['owner', 'admin', 'manager'] },
-      { name: 'Positions', href: '/hr/positions', icon: Briefcase, roles: ['owner', 'admin', 'manager'] },
-      { name: 'Employees', href: '/hr/employees', icon: Users, roles: ['owner', 'admin', 'manager', 'employee'] },
-      { name: 'My Leave', href: '/hr/leave', icon: CalendarDays, roles: ['owner', 'admin', 'manager', 'employee'] },
-      { name: 'Leave Approvals', href: '/hr/leave/approvals', icon: ClipboardCheck, roles: ['owner', 'admin', 'manager'] },
-      { name: 'Leave Calendar', href: '/hr/leave/calendar', icon: CalendarRange, roles: ['owner', 'admin', 'manager', 'employee'] },
-      { name: 'Leave Types', href: '/hr/leave/types', icon: ListChecks, roles: ['owner', 'admin'] },
-      { name: 'Attendance', href: '/hr/attendance', icon: CalendarCheck, roles: ['owner', 'admin', 'manager', 'employee'] },
-      { name: 'Team Attendance', href: '/hr/attendance/team', icon: UsersRound, roles: ['owner', 'admin', 'manager'] },
-      { name: 'Regularizations', href: '/hr/attendance/regularizations', icon: FileEdit, roles: ['owner', 'admin', 'manager'] },
-    ],
-  },
-  {
-    label: 'Team',
-    items: [
-      { name: 'Team', href: '/team', icon: Users, roles: ['owner', 'admin', 'manager'] },
-      { name: 'Settings', href: '/settings', icon: Settings, roles: ['owner', 'admin', 'manager', 'employee'] },
-    ],
-  },
-];
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const { isAuthenticated } = useAuthGuard();
   const { user, logout } = useAuthStore();
+  const { hasPermission, hasPermissionWithScope } = usePermissionStore();
   const router = useRouter();
   const pathname = usePathname();
 
   // Derive current page title from pathname
-  const allNavItems = navGroups.flatMap((g) => g.items);
+  const allNavItems = navigationConfig.flatMap((g) => g.items);
   const currentPage = allNavItems.find(
     (item) => pathname === item.href || pathname.startsWith(item.href + '/')
   );
@@ -147,8 +88,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       .toUpperCase()
       .slice(0, 2) || '??';
 
-  const userRole = user?.role || '';
-
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -171,10 +110,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         </SidebarHeader>
 
         <SidebarContent>
-          {navGroups.map((group) => {
-            const visibleItems = userRole
-              ? group.items.filter((item) => item.roles.includes(userRole))
-              : group.items;
+          {navigationConfig.map((group) => {
+            const visibleItems = group.items.filter((item) =>
+              item.requiredScope
+                ? hasPermissionWithScope(item.requiredPermission, item.requiredScope)
+                : hasPermission(item.requiredPermission)
+            );
 
             if (visibleItems.length === 0) return null;
 

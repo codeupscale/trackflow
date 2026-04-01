@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Models\Position;
 use App\Models\User;
+use App\Services\PermissionService;
 
 class PositionPolicy
 {
@@ -19,7 +20,7 @@ class PositionPolicy
 
     public function create(User $user): bool
     {
-        return $user->hasRole('owner', 'admin', 'manager');
+        return app(PermissionService::class)->hasPermission($user, 'positions.create');
     }
 
     public function update(User $user, Position $position): bool
@@ -28,7 +29,7 @@ class PositionPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin', 'manager');
+        return app(PermissionService::class)->hasPermission($user, 'positions.edit');
     }
 
     public function delete(User $user, Position $position): bool
@@ -37,6 +38,6 @@ class PositionPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin');
+        return app(PermissionService::class)->hasPermission($user, 'positions.delete');
     }
 }

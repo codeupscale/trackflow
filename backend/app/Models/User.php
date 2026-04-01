@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\PermissionService;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -127,6 +128,45 @@ class User extends Authenticatable
             ->withPivot(['effective_from', 'effective_to']);
     }
 
+    /**
+     * Roles assigned to this user via the user_roles pivot table.
+     */
+    public function assignedRoles(): BelongsToMany
+    {
+        return $this->belongsToMany(Role::class, 'user_roles')
+            ->withPivot('assigned_at');
+    }
+
+    /**
+     * Derive the role string from user_roles if available, otherwise fall back
+     * to the raw database column for backward compatibility.
+     */
+    public function getRoleAttribute($value): string
+    {
+        if ($this->relationLoaded('assignedRoles') && $this->assignedRoles->isNotEmpty()) {
+            return $this->assignedRoles->sortByDesc('priority')->first()->name;
+        }
+
+        return $value ?? 'employee';
+    }
+
+    /**
+     * Get the user's primary (highest-priority) role model.
+     */
+    public function primaryRole(): ?Role
+    {
+        return $this->assignedRoles()->orderByDesc('roles.priority')->first();
+    }
+
+    /**
+     * Get the full permission map for this user.
+     * Returns ['permission.key' => 'scope', ...].
+     */
+    public function getPermissionMap(): array
+    {
+        return app(PermissionService::class)->getPermissionMap($this);
+    }
+
     public function isOwner(): bool
     {
         return $this->role === 'owner';
@@ -173,13 +213,16 @@ class User extends Authenticatable
         return config('app.timezone', 'UTC');
     }
 
-    public function hasPermission(string $permission): bool
+    /**
+     * Check if the user has a specific permission, optionally at a required scope level.
+     */
+    public function hasPermission(string $permission, ?string $scope = null): bool
     {
         if ($this->isOwner()) {
             return true;
         }
 
-        return \App\Services\PermissionService::userCan($this, $permission);
+        return app(PermissionService::class)->hasPermission($this, $permission, $scope);
     }
 
     public function auditLogs(): HasMany

@@ -4,27 +4,36 @@ namespace App\Policies;
 
 use App\Models\EmployeeDocument;
 use App\Models\User;
+use App\Services\PermissionService;
 
 class EmployeeDocumentPolicy
 {
     /**
-     * Same org AND (self OR admin/owner/manager) can list documents.
+     * Same org AND (self OR has employees.manage_documents permission).
      */
     public function viewAny(User $user, string $employeeId): bool
     {
-        return $user->id === $employeeId || $user->hasRole('owner', 'admin', 'manager');
+        if ($user->id === $employeeId) {
+            return true;
+        }
+
+        return app(PermissionService::class)->hasPermission($user, 'employees.manage_documents');
     }
 
     /**
-     * Same org AND (self OR admin/owner) can upload documents.
+     * Same org AND (self OR has employees.manage_documents at org scope).
      */
     public function create(User $user, string $employeeId): bool
     {
-        return $user->id === $employeeId || $user->hasRole('owner', 'admin');
+        if ($user->id === $employeeId) {
+            return true;
+        }
+
+        return app(PermissionService::class)->hasPermission($user, 'employees.manage_documents', 'organization');
     }
 
     /**
-     * Admin/owner only can delete.
+     * Must have employees.manage_documents at org scope to delete.
      */
     public function delete(User $user, EmployeeDocument $document): bool
     {
@@ -32,11 +41,11 @@ class EmployeeDocumentPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin');
+        return app(PermissionService::class)->hasPermission($user, 'employees.manage_documents', 'organization');
     }
 
     /**
-     * Admin/owner only can verify.
+     * Must have employees.manage_documents at org scope to verify.
      */
     public function verify(User $user, EmployeeDocument $document): bool
     {
@@ -44,6 +53,6 @@ class EmployeeDocumentPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin');
+        return app(PermissionService::class)->hasPermission($user, 'employees.manage_documents', 'organization');
     }
 }

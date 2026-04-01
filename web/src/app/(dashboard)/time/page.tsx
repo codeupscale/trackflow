@@ -59,6 +59,7 @@ import {
 import api from '@/lib/api';
 import { formatDuration, getActivityColor } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 
 interface TimeEntry {
   id: string;
@@ -117,9 +118,10 @@ export default function TimePage() {
   const { user } = useAuthStore();
   const queryClient = useQueryClient();
   const searchParams = useSearchParams();
-  const canApprove = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
+  const { hasPermission, hasPermissionWithScope } = usePermissionStore();
+  const canApprove = hasPermission('time_entries.approve');
 
-  const isManagerOrAbove = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
+  const isManagerOrAbove = hasPermissionWithScope('time_entries.view', 'team');
 
   const [dateFrom, setDateFrom] = useState(() => searchParams.get('from') || format(new Date(), 'yyyy-MM-dd'));
   const [dateTo, setDateTo] = useState(() => searchParams.get('to') || format(new Date(), 'yyyy-MM-dd'));

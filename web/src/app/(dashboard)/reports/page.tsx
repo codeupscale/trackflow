@@ -54,6 +54,7 @@ import {
 import api from '@/lib/api';
 import { cn, formatDuration } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 
 // ─── Types ────────────────────────────────────────────────────────
 
@@ -295,7 +296,8 @@ const reportTypes: { value: ReportType; label: string; description: string }[] =
 export default function ReportsPage() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const isEmployee = user?.role === 'employee';
+  const { hasPermission } = usePermissionStore();
+  const isEmployee = !hasPermission('reports.view');
 
   // Redirect employees
   useEffect(() => {

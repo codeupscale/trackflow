@@ -42,6 +42,7 @@ import {
 } from '@/components/ui/select';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 import { User as UserIcon } from 'lucide-react';
 
 interface OrgSettings {
@@ -104,7 +105,8 @@ const timezones = [
 export default function SettingsPage() {
   const { user } = useAuthStore();
   const queryClient = useQueryClient();
-  const isAdmin = user?.role === 'owner' || user?.role === 'admin';
+  const { hasPermission } = usePermissionStore();
+  const isAdmin = hasPermission('settings.edit_org');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newPasswordConfirm, setNewPasswordConfirm] = useState('');

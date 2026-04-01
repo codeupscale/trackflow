@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Models\Timesheet;
 use App\Models\User;
+use App\Services\PermissionService;
 
 class TimesheetPolicy
 {
@@ -18,7 +19,23 @@ class TimesheetPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin', 'manager') || $user->id === $timesheet->user_id;
+        // Own timesheet
+        if ($user->id === $timesheet->user_id) {
+            return true;
+        }
+
+        $service = app(PermissionService::class);
+        $scope = $service->getScope($user, 'time_entries.view');
+
+        if ($scope === 'organization') {
+            return true;
+        }
+
+        if ($scope === 'team') {
+            return in_array($timesheet->user_id, $service->getTeamUserIds($user));
+        }
+
+        return false;
     }
 
     public function submit(User $user, Timesheet $timesheet): bool
@@ -33,6 +50,21 @@ class TimesheetPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin', 'manager');
+        $service = app(PermissionService::class);
+        $scope = $service->getScope($user, 'time_entries.approve');
+
+        if ($scope === null) {
+            return false;
+        }
+
+        if ($scope === 'organization') {
+            return true;
+        }
+
+        if ($scope === 'team') {
+            return in_array($timesheet->user_id, $service->getTeamUserIds($user));
+        }
+
+        return false;
     }
 }
