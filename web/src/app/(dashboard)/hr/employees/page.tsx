@@ -154,7 +154,7 @@ export default function EmployeesPage() {
           <Select
             value={employmentStatus}
             onValueChange={(v) => {
-              setEmploymentStatus(v);
+              setEmploymentStatus(v ?? 'all');
               handleFilterChange();
             }}
           >
@@ -176,7 +176,7 @@ export default function EmployeesPage() {
           <Select
             value={employmentType}
             onValueChange={(v) => {
-              setEmploymentType(v);
+              setEmploymentType(v ?? 'all');
               handleFilterChange();
             }}
           >
