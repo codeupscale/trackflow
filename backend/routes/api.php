@@ -209,7 +209,7 @@ Route::prefix('v1')->group(function () {
             Route::apiResource('leave-requests', LeaveRequestController::class)->except(['update']);
             Route::put('leave-requests/{leaveRequest}/approve', [LeaveRequestController::class, 'approve']);
             Route::put('leave-requests/{leaveRequest}/reject', [LeaveRequestController::class, 'reject']);
-            Route::apiResource('public-holidays', PublicHolidayController::class)->only(['index', 'store']);
+            Route::apiResource('public-holidays', PublicHolidayController::class)->only(['index', 'store', 'destroy']);
 
             // Attendance
             Route::get('attendance', [AttendanceController::class, 'index']);
