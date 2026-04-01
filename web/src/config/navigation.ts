@@ -16,6 +16,10 @@ import {
   UsersRound,
   FileEdit,
   Shield,
+  Clock4,
+  CalendarClock,
+  UserCog,
+  ArrowLeftRight,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -63,6 +67,10 @@ export const navigationConfig: NavGroup[] = [
       { name: 'Attendance', href: '/hr/attendance', icon: CalendarCheck, requiredPermission: 'attendance.view' },
       { name: 'Team Attendance', href: '/hr/attendance/team', icon: UsersRound, requiredPermission: 'attendance.view', requiredScope: 'team' },
       { name: 'Regularizations', href: '/hr/attendance/regularizations', icon: FileEdit, requiredPermission: 'attendance.approve_regularizations' },
+      { name: 'Shifts', href: '/hr/shifts', icon: Clock4, requiredPermission: 'shifts.view' },
+      { name: 'Shift Roster', href: '/hr/shifts/roster', icon: CalendarClock, requiredPermission: 'shifts.view' },
+      { name: 'Shift Assignments', href: '/hr/shifts/assignments', icon: UserCog, requiredPermission: 'shifts.manage_assignments' },
+      { name: 'Shift Swaps', href: '/hr/shifts/swaps', icon: ArrowLeftRight, requiredPermission: 'shifts.view' },
     ],
   },
   {

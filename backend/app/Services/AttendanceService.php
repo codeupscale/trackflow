@@ -97,12 +97,13 @@ class AttendanceService
                         $shiftEnd->addDay();
                     }
 
-                    $shiftHours = $shiftStart->diffInMinutes($shiftEnd) / 60;
+                    $shiftHours = ($shiftStart->diffInMinutes($shiftEnd) - ($shift->break_minutes ?? 0)) / 60;
 
                     // Late arrival
                     $firstSeenCarbon = Carbon::parse($firstSeen);
                     if ($firstSeenCarbon->gt($shiftStart)) {
-                        $lateMinutes = (int) $shiftStart->diffInMinutes($firstSeenCarbon);
+                        $rawLate = (int) $shiftStart->diffInMinutes($firstSeenCarbon);
+                        $lateMinutes = max(0, $rawLate - ($shift->grace_period_minutes ?? 0));
                     }
 
                     // Early departure

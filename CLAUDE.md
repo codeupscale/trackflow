@@ -157,6 +157,16 @@ Adds department/position org structure and leave management under `/api/v1/hr/`.
 - **Valid attendance statuses**: `present`, `absent`, `half_day`, `on_leave`, `weekend`, `holiday` — `late` is NOT a status (tracked via `late_minutes` column)
 - Routes: `GET /hr/attendance`, `GET /hr/attendance/team`, `GET /hr/attendance/summary`, `POST /hr/attendance/generate`, `GET/POST /hr/attendance/regularizations`, `POST /hr/attendance/{record}/regularize`, `PUT /hr/attendance/regularizations/{id}/approve`, `PUT /hr/attendance/regularizations/{id}/reject`, `GET/PUT /hr/overtime-rules`
 
+### Shift Management (Module 5)
+- Tables: `shifts` (softDeletes, new columns: `is_active`, `break_minutes`, `color`, `timezone`, `grace_period_minutes`, `description`), `shift_swap_requests` (softDeletes), `user_shifts` pivot (softDeletes added)
+- `ShiftService`: CRUD, `assignUser()` with overlap prevention, `unassignUser()`, `bulkAssign()` (transactional), `getShiftRoster()` (7-day weekly view), swap request lifecycle (create/approve/reject/cancel)
+- **Overlap prevention**: `assignUser()` checks for existing active pivot rows before inserting. A user can only have one active shift at a time.
+- **Swap approval**: Creates single-day pivot overrides (`effective_from = effective_to = swap_date`). Self-approval prevented at both policy and service layers.
+- **Grace period**: Per-shift `grace_period_minutes` deducted from late calculation in `AttendanceService`
+- **Break deduction**: Per-shift `break_minutes` subtracted from shift duration in overtime calculation
+- **Soft-deleted pivots**: `users()` and `activeUsers()` relationships filter `whereNull('user_shifts.deleted_at')`
+- Routes: `GET/POST /hr/shifts`, `GET /hr/shifts/roster`, `GET/PUT/DELETE /hr/shifts/{id}`, `GET /hr/shifts/{id}/assignments`, `POST /hr/shifts/{id}/assign`, `POST /hr/shifts/{id}/unassign`, `POST /hr/shifts/{id}/bulk-assign`, `GET/POST /hr/shift-swaps`, `PUT /hr/shift-swaps/{id}/approve`, `PUT /hr/shift-swaps/{id}/reject`, `DELETE /hr/shift-swaps/{id}`
+
 ## Quick Reference — Key Files
 
 | What | Where |
@@ -169,9 +179,9 @@ Adds department/position org structure and leave management under `/api/v1/hr/`.
 | Frontend pages | `web/src/app/(dashboard)/*/page.tsx` |
 | API client | `web/src/lib/api.ts` (axios + token refresh mutex) |
 | Zustand stores | `web/src/stores/` (auth-store, timer-store) |
-| HR controllers | `backend/app/Http/Controllers/Api/V1/Hr/` (Department, Position, LeaveType, LeaveBalance, LeaveRequest, PublicHoliday, Employee, EmployeeDocument, EmployeeNote, Attendance, AttendanceRegularization, OvertimeRule) |
-| HR services | `backend/app/Services/OrganizationStructureService.php`, `backend/app/Services/LeaveService.php`, `backend/app/Services/EmployeeService.php`, `backend/app/Services/AttendanceService.php` |
-| HR pages | `web/src/app/(dashboard)/hr/` (departments, positions, leave, leave/apply, leave/approvals, leave/calendar, leave/types, employees, employees/[id], attendance, attendance/team, attendance/regularizations) |
+| HR controllers | `backend/app/Http/Controllers/Api/V1/Hr/` (Department, Position, LeaveType, LeaveBalance, LeaveRequest, PublicHoliday, Employee, EmployeeDocument, EmployeeNote, Attendance, AttendanceRegularization, OvertimeRule, Shift, ShiftAssignment, ShiftSwap) |
+| HR services | `backend/app/Services/OrganizationStructureService.php`, `backend/app/Services/LeaveService.php`, `backend/app/Services/EmployeeService.php`, `backend/app/Services/AttendanceService.php`, `backend/app/Services/ShiftService.php` |
+| HR pages | `web/src/app/(dashboard)/hr/` (departments, positions, leave, leave/apply, leave/approvals, leave/calendar, leave/types, employees, employees/[id], attendance, attendance/team, attendance/regularizations, shifts, shifts/roster, shifts/assignments, shifts/swaps) |
 | HR components | `web/src/components/hr/` (DepartmentSelect, PositionSelect, LeaveBalanceCard, LeaveCalendar, LeaveApprovalCard, EmployeeCard, EmployeeStatusBadge, AttendanceStatusBadge, AttendanceSummaryCard, RegularizationCard, etc.) |
 | HR hooks | `web/src/hooks/hr/` (use-departments, use-positions, use-leave-requests, use-leave-balance, use-apply-leave, use-employees, use-employee-documents, use-attendance, use-regularizations, use-overtime-rules, etc.) |
 | Org selector | `web/src/components/org-selector.tsx` |
