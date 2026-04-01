@@ -3,6 +3,8 @@
 use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\DataPrivacyController;
+use App\Http\Controllers\Api\V1\Hr\AttendanceController;
+use App\Http\Controllers\Api\V1\Hr\AttendanceRegularizationController;
 use App\Http\Controllers\Api\V1\Hr\DepartmentController;
 use App\Http\Controllers\Api\V1\Hr\EmployeeController;
 use App\Http\Controllers\Api\V1\Hr\EmployeeDocumentController;
@@ -11,6 +13,7 @@ use App\Http\Controllers\Api\V1\Hr\LeaveBalanceController;
 use App\Http\Controllers\Api\V1\Hr\LeaveCalendarController;
 use App\Http\Controllers\Api\V1\Hr\LeaveRequestController;
 use App\Http\Controllers\Api\V1\Hr\LeaveTypeController;
+use App\Http\Controllers\Api\V1\Hr\OvertimeRuleController;
 use App\Http\Controllers\Api\V1\Hr\PositionController;
 use App\Http\Controllers\Api\V1\Hr\PublicHolidayController;
 use App\Http\Controllers\Api\V1\InvitationController;
@@ -207,6 +210,22 @@ Route::prefix('v1')->group(function () {
             Route::put('leave-requests/{leaveRequest}/approve', [LeaveRequestController::class, 'approve']);
             Route::put('leave-requests/{leaveRequest}/reject', [LeaveRequestController::class, 'reject']);
             Route::apiResource('public-holidays', PublicHolidayController::class)->only(['index', 'store']);
+
+            // Attendance
+            Route::get('attendance', [AttendanceController::class, 'index']);
+            Route::get('attendance/team', [AttendanceController::class, 'teamIndex']);
+            Route::get('attendance/summary', [AttendanceController::class, 'summary']);
+            Route::post('attendance/generate', [AttendanceController::class, 'store']);
+
+            // Attendance Regularizations
+            Route::get('attendance/regularizations', [AttendanceRegularizationController::class, 'index']);
+            Route::post('attendance/{record}/regularize', [AttendanceRegularizationController::class, 'store']);
+            Route::put('attendance/regularizations/{id}/approve', [AttendanceRegularizationController::class, 'approve']);
+            Route::put('attendance/regularizations/{id}/reject', [AttendanceRegularizationController::class, 'reject']);
+
+            // Overtime Rules
+            Route::get('overtime-rules', [OvertimeRuleController::class, 'show']);
+            Route::put('overtime-rules', [OvertimeRuleController::class, 'update']);
 
             // Employee Directory & Profiles
             Route::get('employees', [EmployeeController::class, 'index']);
