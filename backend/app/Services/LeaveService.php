@@ -221,15 +221,20 @@ class LeaveService
         foreach ($requests as $request) {
             $current = Carbon::parse($request->start_date)->max($startOfMonth);
             $end = Carbon::parse($request->end_date)->min($endOfMonth);
+            $isHalfDay = $request->days_count == 0.5;
 
             while ($current->lte($end)) {
                 $dateStr = $current->toDateString();
                 $calendar[$dateStr][] = [
                     'id' => $request->id,
                     'user' => $request->user,
+                    'user_name' => $request->user?->name,
                     'leave_type' => $request->leaveType,
+                    'leave_type_name' => $request->leaveType?->name,
+                    'leave_type_code' => $request->leaveType?->code,
                     'status' => $request->status,
                     'days_count' => $request->days_count,
+                    'half_day' => $isHalfDay,
                     'start_date' => $request->start_date->toDateString(),
                     'end_date' => $request->end_date->toDateString(),
                 ];

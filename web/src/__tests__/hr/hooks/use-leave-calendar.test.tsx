@@ -24,21 +24,25 @@ function createWrapper() {
 }
 
 const mockCalendarResponse = {
-  days: [
-    {
-      date: '2026-04-01',
-      leaves: [
-        {
-          user: { id: 'u-1', name: 'Jane Doe' },
-          leave_type: { code: 'AL', name: 'Annual Leave' },
-          half_day: false,
-          status: 'approved',
-        },
-      ],
-    },
-  ],
+  calendar: {
+    '2026-04-01': [
+      {
+        id: 'lr-1',
+        user: { id: 'u-1', name: 'Jane Doe', email: 'jane@example.com', avatar_url: null },
+        user_name: 'Jane Doe',
+        leave_type: { id: 'lt-1', code: 'AL', name: 'Annual Leave' },
+        leave_type_name: 'Annual Leave',
+        leave_type_code: 'AL',
+        half_day: false,
+        status: 'approved',
+        days_count: 1,
+        start_date: '2026-04-01',
+        end_date: '2026-04-01',
+      },
+    ],
+  },
   holidays: [
-    { id: 'h-1', name: 'Good Friday', date: '2026-04-03', is_recurring: false, created_at: '2024-01-01', updated_at: '2024-01-01' },
+    { id: 'h-1', name: 'Good Friday', date: '2026-04-03', is_recurring: false },
   ],
 };
 
@@ -63,7 +67,7 @@ describe('useLeaveCalendar', () => {
     const { result } = renderHook(() => useLeaveCalendar(4, 2026), { wrapper: createWrapper() });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.days).toHaveLength(1);
+    expect(Object.keys(result.current.data?.calendar ?? {})).toHaveLength(1);
     expect(result.current.data?.holidays).toHaveLength(1);
   });
 

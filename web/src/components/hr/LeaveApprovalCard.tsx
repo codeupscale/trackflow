@@ -96,7 +96,7 @@ export function LeaveApprovalCard({
                 <div>
                   <span className="text-muted-foreground">Days:</span>{' '}
                   <span className="font-medium text-foreground">
-                    {request.days}{request.half_day ? ' (half day)' : ''}
+                    {request.days_count}{Number(request.days_count) === 0.5 ? ' (half day)' : ''}
                   </span>
                 </div>
                 <div>
