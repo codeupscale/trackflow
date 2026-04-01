@@ -44,7 +44,7 @@ export function LeaveApprovalCard({
     reset,
     formState: { errors },
   } = useForm<RejectLeaveFormData>({
-    resolver: zodResolver(rejectLeaveSchema),
+    resolver: zodResolver(rejectLeaveSchema) as any,
   });
 
   const userInitials = request.user.name

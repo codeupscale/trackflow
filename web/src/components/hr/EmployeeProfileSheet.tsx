@@ -80,7 +80,8 @@ export function EmployeeProfileSheet({
   const updateMutation = useUpdateEmployeeProfile();
 
   const form = useForm<EmployeeProfileInput>({
-    resolver: zodResolver(employeeProfileSchema),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    resolver: zodResolver(employeeProfileSchema) as any,
     defaultValues: getDefaults(null),
   });
 
@@ -751,10 +752,10 @@ function getDefaults(
     probation_end_date: employee?.probation_end_date ?? null,
     notice_period_days: employee?.notice_period_days ?? null,
     work_location: employee?.work_location ?? null,
-    gender: employee?.gender ?? null,
-    marital_status: employee?.marital_status ?? null,
+    gender: (employee?.gender ?? null) as EmployeeProfileInput['gender'],
+    marital_status: (employee?.marital_status ?? null) as EmployeeProfileInput['marital_status'],
     nationality: employee?.nationality ?? null,
-    blood_group: employee?.blood_group ?? null,
+    blood_group: (employee?.blood_group ?? null) as EmployeeProfileInput['blood_group'],
     emergency_contact_name: employee?.emergency_contact_name ?? null,
     emergency_contact_phone: employee?.emergency_contact_phone ?? null,
     emergency_contact_relation: employee?.emergency_contact_relation ?? null,
