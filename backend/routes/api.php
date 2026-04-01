@@ -261,6 +261,14 @@ Route::prefix('v1')->group(function () {
             ->middleware('permission:roles.view');
         Route::get('roles/{role}', [RoleController::class, 'show'])
             ->middleware('permission:roles.view');
+        Route::post('roles', [RoleController::class, 'store'])
+            ->middleware('permission:roles.create');
+        Route::put('roles/{role}', [RoleController::class, 'update'])
+            ->middleware('permission:roles.edit');
+        Route::delete('roles/{role}', [RoleController::class, 'destroy'])
+            ->middleware('permission:roles.delete');
+        Route::put('users/{user}/role', [RoleController::class, 'assignRole'])
+            ->middleware('permission:team.change_role');
         Route::get('permissions', [PermissionController::class, 'index'])
             ->middleware('permission:roles.view');
     });
