@@ -31,6 +31,6 @@ class PublicHolidayController extends Controller
             ...$request->validated(),
         ]);
 
-        return response()->json(['public_holiday' => $holiday], 201);
+        return response()->json(['data' => $holiday], 201);
     }
 }

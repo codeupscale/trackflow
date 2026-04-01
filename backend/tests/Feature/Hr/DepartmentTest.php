@@ -63,8 +63,8 @@ class DepartmentTest extends TestCase
         ]);
 
         $response->assertStatus(201)
-            ->assertJsonPath('department.name', 'Engineering')
-            ->assertJsonPath('department.code', 'ENG');
+            ->assertJsonPath('data.name', 'Engineering')
+            ->assertJsonPath('data.code', 'ENG');
 
         $this->assertDatabaseHas('departments', [
             'organization_id' => $user->organization_id,
@@ -132,8 +132,8 @@ class DepartmentTest extends TestCase
         $response = $this->getJson("/api/v1/hr/departments/{$dept->id}");
 
         $response->assertOk()
-            ->assertJsonPath('department.id', $dept->id)
-            ->assertJsonCount(2, 'department.positions');
+            ->assertJsonPath('data.id', $dept->id)
+            ->assertJsonCount(2, 'data.positions');
     }
 
     // ── Update ───────────────────────────────────────────
@@ -152,7 +152,7 @@ class DepartmentTest extends TestCase
         ]);
 
         $response->assertOk()
-            ->assertJsonPath('department.name', 'New Name');
+            ->assertJsonPath('data.name', 'New Name');
     }
 
     // ── Destroy (archive) ────────────────────────────────

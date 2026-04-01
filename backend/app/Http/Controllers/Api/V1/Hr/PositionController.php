@@ -42,7 +42,7 @@ class PositionController extends Controller
             $request->validated(),
         );
 
-        return response()->json(['position' => $position], 201);
+        return response()->json(['data' => $position], 201);
     }
 
     public function show(Request $request, string $id): JsonResponse
@@ -53,7 +53,7 @@ class PositionController extends Controller
 
         $this->authorize('view', $position);
 
-        return response()->json(['position' => $position]);
+        return response()->json(['data' => $position]);
     }
 
     public function update(UpdatePositionRequest $request, string $id): JsonResponse
@@ -65,7 +65,7 @@ class PositionController extends Controller
 
         $position = $this->service->updatePosition($position, $request->validated());
 
-        return response()->json(['position' => $position]);
+        return response()->json(['data' => $position]);
     }
 
     public function destroy(Request $request, string $id): JsonResponse

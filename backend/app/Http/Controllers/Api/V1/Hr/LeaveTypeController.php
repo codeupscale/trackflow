@@ -27,6 +27,6 @@ class LeaveTypeController extends Controller
             ...$request->validated(),
         ]);
 
-        return response()->json(['leave_type' => $leaveType], 201);
+        return response()->json(['data' => $leaveType], 201);
     }
 }
