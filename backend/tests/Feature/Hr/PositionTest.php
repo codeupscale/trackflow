@@ -79,8 +79,8 @@ class PositionTest extends TestCase
         ]);
 
         $response->assertStatus(201)
-            ->assertJsonPath('position.title', 'Senior Engineer')
-            ->assertJsonPath('position.code', 'SE-001');
+            ->assertJsonPath('data.title', 'Senior Engineer')
+            ->assertJsonPath('data.code', 'SE-001');
 
         $this->assertDatabaseHas('positions', [
             'organization_id' => $user->organization_id,
@@ -129,7 +129,7 @@ class PositionTest extends TestCase
         ]);
 
         $response->assertOk()
-            ->assertJsonPath('position.title', 'New Title');
+            ->assertJsonPath('data.title', 'New Title');
     }
 
     // ── Destroy (archive) ────────────────────────────────

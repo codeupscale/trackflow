@@ -65,6 +65,18 @@ You are a staff-level security engineer (L6+ at FAANG) responsible for the secur
 | Renderer CSP | `src/renderer/*.html` | `default-src 'none'; script-src 'self' 'unsafe-inline'` |
 | Token encryption | `src/main/keychain.js` | AES-256-GCM with PBKDF2-derived key |
 
+## HR-Specific Threat Model
+
+| Threat | Vector | Mitigation |
+|---|---|---|
+| Salary data exposure | Employee accessing /payroll endpoints | HR Manager role check on all payroll routes |
+| Cross-employee payslip access | Guessing UUIDs in /payslips/:id | Verify `user_id = auth()->id()` OR `hasRole('hr_manager')` |
+| Bank account data leak | API response including encrypted fields | Never include bank_account, tax_id in list responses |
+| Leave manipulation | Employee approving own leave | Policy: approver !== requestor |
+| Pay run tampering | Employee modifying pay run amounts | Pay run endpoints require `hr_manager` or `admin` role only |
+| Document path traversal | File download endpoint with user-controlled path | Use UUIDs for document references, never file system paths |
+| PII in logs | Salary/bank data logged during errors | Code review: audit all `Log::` calls near HR services |
+
 ## OWASP Top 10 Mapping (2021)
 | # | Risk | TrackFlow Status |
 |---|---|---|

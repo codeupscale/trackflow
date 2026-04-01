@@ -82,6 +82,20 @@ npm test -- --coverage                        # With coverage
 | T1-5 | Reports | Admin generates summary → correct aggregation → CSV export works |
 | T1-6 | Idle detection | No input for 5 min → idle alert → user chooses keep/discard |
 
+### Tier 1 — HR Module Tests (blocks HR feature release)
+| # | Flow | Expected |
+|---|---|---|
+| T1-HR-1 | Leave application | Employee applies → balance checked → manager notified → approved → balance deducted |
+| T1-HR-2 | Leave overlap | Employee applies for dates already covered by approved leave → 422 error |
+| T1-HR-3 | Insufficient balance | Employee applies for 5 days with 2 remaining → 422 with clear message |
+| T1-HR-4 | Manager approval | Manager approves leave → employee notified → balance deducted in same transaction |
+| T1-HR-5 | Leave calendar | Team calendar shows all approved leaves for the month |
+| T1-HR-6 | Pay run | HR creates pay run → dispatches job → payslips generated per employee |
+| T1-HR-7 | Employee payslip | Employee views own payslip → correct net pay → cannot see other employees |
+| T1-HR-8 | Org structure | Create department → assign manager → assign employee → org chart updates |
+| T1-HR-9 | Cross-org HR data | Employee from Org A cannot see leave requests / payslips of Org B |
+| T1-HR-10 | HR role gate | Employee cannot access payroll endpoints → 403 |
+
 ### Tier 2 — Edge Cases (regression prevention)
 | # | Scenario | Expected |
 |---|---|---|

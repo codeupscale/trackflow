@@ -1,6 +1,6 @@
 ---
 name: frontend
-description: "Delegate Next.js web dashboard tasks to the frontend-engineer agent. Use for React components, pages, Zustand stores, TanStack Query hooks, styling, or any work in the /web directory."
+description: "Delegate Next.js web dashboard tasks to the frontend-engineer agent. Use for React components, pages, custom hooks, Zustand stores, TanStack Query, Tailwind CSS, shadcn/ui, HR module UI (leave, payroll, employees, onboarding, performance, org chart), reusable component architecture, or any work in the /web directory."
 ---
 
 # Frontend Engineer
@@ -9,12 +9,16 @@ Delegate this task to the `frontend-engineer` agent using the Agent tool with `s
 
 ## Scope
 
-- Next.js pages (`web/src/app/(dashboard)/*/page.tsx`)
-- React components (`web/src/components/`)
-- Zustand stores (`web/src/stores/`)
+- Next.js App Router pages (`web/src/app/(dashboard)/*/page.tsx`)
+- React components — reusable first (`web/src/components/`)
+- Custom hooks (`web/src/hooks/`) — business logic out of components
+- Zustand stores (`web/src/stores/`) — UI state only
 - API client (`web/src/lib/api.ts`)
-- TanStack Query hooks and mutations
-- Tailwind CSS styling, shadcn/ui components
+- TanStack Query `useQuery` / `useMutation` — never raw useEffect+fetch
+- Forms: react-hook-form + Zod (`web/src/lib/validations/`)
+- Tailwind CSS 4 + shadcn/ui — semantic tokens, `gap-*`, `size-*`, `cn()`
+- HR module pages: leave, payroll, employees, onboarding, performance, recruitment, org chart
+- Data tables: TanStack Table + DataTable wrapper component
 - Real-time subscriptions (Laravel Echo)
 
 ## Rules the agent follows

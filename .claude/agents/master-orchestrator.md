@@ -24,17 +24,44 @@ You are the single point of accountability for complex tasks that span multiple 
 | Agent | Slug | Owns | Phase |
 |---|---|---|---|
 | Architect | `architect-agent` | Design plans, API contracts, execution order | Phase 0 (Planning) |
-| Database Architect | `database-architect` | Schema design, migrations, indexes | Phase 1 (Data) |
-| Backend Engineer | `backend-engineer` | Laravel API, services, jobs, migrations, policies | Phase 2 (API) |
-| Frontend Engineer | `frontend-engineer` | Next.js pages, components, stores, hooks, API client | Phase 3 (UI) |
+| Database Architect | `database-architect` | Schema design, migrations, indexes, HR schema | Phase 1 (Data) |
+| Backend Engineer | `backend-engineer` | Laravel API, services, jobs, HR services (Leave/Payroll/etc.) | Phase 2 (API) |
+| Frontend Engineer | `frontend-engineer` | Next.js, shadcn, custom hooks, HR UI modules | Phase 3 (UI) |
 | Desktop Engineer | `desktop-engineer` | Electron main process, services, preload, IPC | Phase 3 (UI) |
-| QA Tester | `qa-tester` | End-to-end testing, regression, edge cases | After each phase |
-| Reviewer | `reviewer-agent` | Security, code quality, architecture compliance | Phase 5 (Gate) |
+| QA Tester | `qa-tester` | End-to-end testing, regression, HR module tests | After each phase |
+| Reviewer | `reviewer-agent` | Security, code quality, HR data access patterns | Phase 5 (Gate) |
 | Docs Agent | `docs-agent` | CLAUDE.md, inline docs, architecture docs | Phase 6 (Docs) |
 | DevOps Engineer | `devops-engineer` | Docker, CI/CD, builds, releases, monitoring | Phase 7 (Deploy) |
-| Security Engineer | `security-engineer` | Auth, CORS, CSP, input validation, vulnerabilities | On demand |
-| Product Expert | `product-expert` | Feature parity, UX flows, competitive analysis | On demand |
-| UX Designer | `ux-designer` | Visual design, accessibility, responsive layouts | On demand |
+| Security Engineer | `security-engineer` | Auth, CORS, CSP, HR data security, salary encryption | On demand |
+| Product Expert | `product-expert` | Feature parity, HR workflows, UX flows | On demand |
+| UX Designer | `ux-designer` | Visual design, HR UX patterns, accessibility | On demand |
+
+## HR Implementation Context
+
+TrackFlow is expanding into full HR management. The implementation plan is at `.claude/plans/hr-management-plan.md`. When orchestrating HR module tasks:
+
+**Phase dependencies (must be respected):**
+```
+Org Structure (departments, positions)
+    ↓
+Employee Records (profiles, documents)
+    ↓
+Leave Management ← most-used, build first
+    ↓
+Attendance HR layer (shift enforcement, overtime)
+    ↓
+Payroll (depends on leave + attendance)
+    ↓
+Onboarding / Performance / Offboarding (parallel)
+    ↓
+Recruitment ATS / Benefits (later phases)
+```
+
+**HR-specific quality gates:**
+- Salary data: security-engineer MUST verify `encrypted` cast on all salary/bank columns
+- Payroll: qa-tester MUST verify pay run calculation runs as background job
+- Leave: qa-tester MUST test balance deduction + approval in same transaction
+- Cross-org: qa-tester MUST verify Org A cannot see Org B's HR data
 
 ## The Full Pipeline
 

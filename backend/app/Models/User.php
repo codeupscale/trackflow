@@ -186,4 +186,19 @@ class User extends Authenticatable
     {
         return $this->hasMany(AuditLog::class);
     }
+
+    public function employeeProfile(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(EmployeeProfile::class);
+    }
+
+    public function employeeDocuments(): HasMany
+    {
+        return $this->hasMany(EmployeeDocument::class);
+    }
+
+    public function employeeNotes(): HasMany
+    {
+        return $this->hasMany(EmployeeNote::class);
+    }
 }
