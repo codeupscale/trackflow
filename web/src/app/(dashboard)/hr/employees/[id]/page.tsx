@@ -530,7 +530,7 @@ export default function EmployeeDetailPage() {
                         {formatDate(req.end_date)}
                       </div>
                       <div className="text-xs text-foreground tabular-nums md:text-center md:text-sm">
-                        {req.days}
+                        {req.days_count}
                       </div>
                       <div>
                         <LeaveStatusBadge status={req.status} />

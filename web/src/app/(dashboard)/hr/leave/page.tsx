@@ -167,8 +167,8 @@ export default function MyLeavePage() {
                       {formatDate(req.start_date)} &mdash; {formatDate(req.end_date)}
                     </div>
                     <div className="text-xs text-foreground tabular-nums md:text-center md:text-sm">
-                      {req.days}
-                      {req.half_day && (
+                      {req.days_count}
+                      {Number(req.days_count) === 0.5 && (
                         <Badge variant="secondary" className="ml-1 text-[10px]">
                           Half
                         </Badge>
