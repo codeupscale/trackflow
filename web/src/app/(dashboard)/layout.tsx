@@ -20,6 +20,9 @@ import {
   ClipboardCheck,
   CalendarRange,
   ListChecks,
+  CalendarCheck,
+  UsersRound,
+  FileEdit,
 } from 'lucide-react';
 import { TrackFlowLogo } from '@/components/ui/trackflow-logo';
 
@@ -85,10 +88,14 @@ const navGroups: { label: string; items: NavItem[] }[] = [
     items: [
       { name: 'Departments', href: '/hr/departments', icon: Building2, roles: ['owner', 'admin', 'manager'] },
       { name: 'Positions', href: '/hr/positions', icon: Briefcase, roles: ['owner', 'admin', 'manager'] },
+      { name: 'Employees', href: '/hr/employees', icon: Users, roles: ['owner', 'admin', 'manager', 'employee'] },
       { name: 'My Leave', href: '/hr/leave', icon: CalendarDays, roles: ['owner', 'admin', 'manager', 'employee'] },
       { name: 'Leave Approvals', href: '/hr/leave/approvals', icon: ClipboardCheck, roles: ['owner', 'admin', 'manager'] },
       { name: 'Leave Calendar', href: '/hr/leave/calendar', icon: CalendarRange, roles: ['owner', 'admin', 'manager', 'employee'] },
       { name: 'Leave Types', href: '/hr/leave/types', icon: ListChecks, roles: ['owner', 'admin'] },
+      { name: 'Attendance', href: '/hr/attendance', icon: CalendarCheck, roles: ['owner', 'admin', 'manager', 'employee'] },
+      { name: 'Team Attendance', href: '/hr/attendance/team', icon: UsersRound, roles: ['owner', 'admin', 'manager'] },
+      { name: 'Regularizations', href: '/hr/attendance/regularizations', icon: FileEdit, roles: ['owner', 'admin', 'manager'] },
     ],
   },
   {

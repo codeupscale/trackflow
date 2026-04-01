@@ -42,7 +42,7 @@ class DepartmentController extends Controller
             $request->validated(),
         );
 
-        return response()->json(['department' => $department], 201);
+        return response()->json(['data' => $department], 201);
     }
 
     public function show(Request $request, string $id): JsonResponse
@@ -53,7 +53,7 @@ class DepartmentController extends Controller
 
         $this->authorize('view', $department);
 
-        return response()->json(['department' => $department]);
+        return response()->json(['data' => $department]);
     }
 
     public function update(UpdateDepartmentRequest $request, string $id): JsonResponse
@@ -65,7 +65,7 @@ class DepartmentController extends Controller
 
         $department = $this->service->updateDepartment($department, $request->validated());
 
-        return response()->json(['department' => $department]);
+        return response()->json(['data' => $department]);
     }
 
     public function destroy(Request $request, string $id): JsonResponse

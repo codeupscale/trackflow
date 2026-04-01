@@ -81,7 +81,7 @@ class LeaveRequestController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
-        return response()->json(['leave_request' => $leaveRequest], 201);
+        return response()->json(['data' => $leaveRequest], 201);
     }
 
     public function show(Request $request, string $id): JsonResponse
@@ -92,7 +92,7 @@ class LeaveRequestController extends Controller
 
         $this->authorize('view', $leaveRequest);
 
-        return response()->json(['leave_request' => $leaveRequest]);
+        return response()->json(['data' => $leaveRequest]);
     }
 
     public function approve(Request $request, string $leaveRequest): JsonResponse
@@ -108,7 +108,7 @@ class LeaveRequestController extends Controller
 
         $result = $this->leaveService->approveLeave($lr, $request->user());
 
-        return response()->json(['message' => 'Leave request approved.', 'leave_request' => $result]);
+        return response()->json(['message' => 'Leave request approved.', 'data' => $result]);
     }
 
     public function reject(ApproveLeaveRequest $request, string $leaveRequest): JsonResponse
@@ -124,7 +124,7 @@ class LeaveRequestController extends Controller
 
         $result = $this->leaveService->rejectLeave($lr, $request->user(), $request->validated('rejection_reason'));
 
-        return response()->json(['message' => 'Leave request rejected.', 'leave_request' => $result]);
+        return response()->json(['message' => 'Leave request rejected.', 'data' => $result]);
     }
 
     public function destroy(Request $request, string $id): JsonResponse
