@@ -47,15 +47,17 @@ export function LeaveCalendar({ month, year, onMonthChange }: LeaveCalendarProps
     const map = new Map<string, PublicHoliday>();
     if (data?.holidays) {
       for (const h of data.holidays) {
-        // For recurring holidays, normalize the date to the current calendar year/month
+        // Normalize date: use the date string directly (backend already filters by month)
+        // For recurring holidays, replace the year with the current calendar year
+        const rawDate = typeof h.date === 'string' ? h.date.slice(0, 10) : h.date;
         const holidayDate = h.is_recurring
-          ? `${year}-${String(month).padStart(2, '0')}-${h.date.slice(8, 10)}`
-          : h.date;
+          ? `${year}-${rawDate.slice(5, 10)}`
+          : rawDate;
         map.set(holidayDate, { ...h, date: holidayDate });
       }
     }
     return map;
-  }, [data?.holidays, year, month]);
+  }, [data?.holidays, year]);
 
   const calendarDays = useMemo(() => {
     const firstDay = new Date(year, month - 1, 1);
@@ -242,11 +244,11 @@ export function LeaveCalendar({ month, year, onMonthChange }: LeaveCalendarProps
                       'relative min-h-16 rounded-md border border-transparent p-1 text-xs transition-colors',
                       // Base text color
                       cell.isCurrentMonth ? 'text-foreground' : 'text-muted-foreground/40',
-                      // Weekend styling
-                      cell.isWeekend && cell.isCurrentMonth && 'bg-muted/30 text-muted-foreground',
-                      cell.isWeekend && !cell.isCurrentMonth && 'bg-muted/15',
-                      // Holiday styling (overrides weekend)
-                      cell.holiday && cell.isCurrentMonth && 'bg-red-50 dark:bg-red-950/20',
+                      // Weekend styling — visible in both light and dark themes
+                      cell.isWeekend && cell.isCurrentMonth && 'bg-muted/60 dark:bg-muted/40 text-muted-foreground',
+                      cell.isWeekend && !cell.isCurrentMonth && 'bg-muted/30 dark:bg-muted/20',
+                      // Holiday styling (overrides weekend) — stronger contrast
+                      cell.holiday && cell.isCurrentMonth && 'bg-red-100/80 dark:bg-red-950/40 border-red-200 dark:border-red-900/50',
                       // Today highlight
                       cell.isToday && 'border-primary ring-1 ring-primary/30 bg-primary/5',
                     )}
