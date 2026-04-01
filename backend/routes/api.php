@@ -205,7 +205,7 @@ Route::prefix('v1')->group(function () {
             // Leave Management
             Route::get('leave-calendar', [LeaveCalendarController::class, 'index']);
             Route::get('leave-balances', [LeaveBalanceController::class, 'index']);
-            Route::apiResource('leave-types', LeaveTypeController::class)->only(['index', 'store']);
+            Route::apiResource('leave-types', LeaveTypeController::class)->only(['index', 'store', 'update']);
             Route::apiResource('leave-requests', LeaveRequestController::class)->except(['update']);
             Route::put('leave-requests/{leaveRequest}/approve', [LeaveRequestController::class, 'approve']);
             Route::put('leave-requests/{leaveRequest}/reject', [LeaveRequestController::class, 'reject']);
