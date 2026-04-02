@@ -16,6 +16,11 @@ use App\Http\Controllers\Api\V1\Hr\LeaveTypeController;
 use App\Http\Controllers\Api\V1\Hr\OvertimeRuleController;
 use App\Http\Controllers\Api\V1\Hr\PositionController;
 use App\Http\Controllers\Api\V1\Hr\PublicHolidayController;
+use App\Http\Controllers\Api\V1\Hr\PayComponentController;
+use App\Http\Controllers\Api\V1\Hr\PayrollPeriodController;
+use App\Http\Controllers\Api\V1\Hr\PayslipController;
+use App\Http\Controllers\Api\V1\Hr\SalaryStructureController;
+use App\Http\Controllers\Api\V1\Hr\EmployeeSalaryController;
 use App\Http\Controllers\Api\V1\Hr\ShiftAssignmentController;
 use App\Http\Controllers\Api\V1\Hr\ShiftController;
 use App\Http\Controllers\Api\V1\Hr\ShiftSwapController;
@@ -285,6 +290,55 @@ Route::prefix('v1')->group(function () {
             Route::put('shift-swaps/{shiftSwapRequest}/approve', [ShiftSwapController::class, 'approve']);
             Route::put('shift-swaps/{shiftSwapRequest}/reject', [ShiftSwapController::class, 'reject']);
             Route::delete('shift-swaps/{shiftSwapRequest}', [ShiftSwapController::class, 'destroy']);
+
+            // Payroll — Salary Structures
+            Route::get('salary-structures', [SalaryStructureController::class, 'index'])
+                ->middleware('permission:payroll.manage_structures');
+            Route::post('salary-structures', [SalaryStructureController::class, 'store'])
+                ->middleware('permission:payroll.manage_structures');
+            Route::get('salary-structures/{id}', [SalaryStructureController::class, 'show'])
+                ->middleware('permission:payroll.manage_structures');
+            Route::put('salary-structures/{id}', [SalaryStructureController::class, 'update'])
+                ->middleware('permission:payroll.manage_structures');
+            Route::delete('salary-structures/{id}', [SalaryStructureController::class, 'destroy'])
+                ->middleware('permission:payroll.manage_structures');
+
+            // Payroll — Pay Components
+            Route::get('pay-components', [PayComponentController::class, 'index'])
+                ->middleware('permission:payroll.manage_components');
+            Route::post('pay-components', [PayComponentController::class, 'store'])
+                ->middleware('permission:payroll.manage_components');
+            Route::get('pay-components/{id}', [PayComponentController::class, 'show'])
+                ->middleware('permission:payroll.manage_components');
+            Route::put('pay-components/{id}', [PayComponentController::class, 'update'])
+                ->middleware('permission:payroll.manage_components');
+            Route::delete('pay-components/{id}', [PayComponentController::class, 'destroy'])
+                ->middleware('permission:payroll.manage_components');
+
+            // Payroll — Periods
+            Route::get('payroll-periods', [PayrollPeriodController::class, 'index'])
+                ->middleware('permission:payroll.view_all');
+            Route::post('payroll-periods', [PayrollPeriodController::class, 'store'])
+                ->middleware('permission:payroll.run');
+            Route::get('payroll-periods/{id}', [PayrollPeriodController::class, 'show'])
+                ->middleware('permission:payroll.view_all');
+            Route::put('payroll-periods/{id}', [PayrollPeriodController::class, 'update'])
+                ->middleware('permission:payroll.run');
+            Route::delete('payroll-periods/{id}', [PayrollPeriodController::class, 'destroy'])
+                ->middleware('permission:payroll.run');
+            Route::post('payroll-periods/{id}/run', [PayrollPeriodController::class, 'run'])
+                ->middleware('permission:payroll.run');
+            Route::post('payroll-periods/{id}/approve', [PayrollPeriodController::class, 'approve'])
+                ->middleware('permission:payroll.approve');
+
+            // Payroll — Payslips
+            Route::get('payslips', [PayslipController::class, 'index']);
+            Route::get('payslips/{id}', [PayslipController::class, 'show']);
+
+            // Payroll — Employee Salary
+            Route::get('employees/{employee}/salary', [EmployeeSalaryController::class, 'show']);
+            Route::post('employees/{employee}/salary', [EmployeeSalaryController::class, 'store'])
+                ->middleware('permission:payroll.manage_structures');
         });
 
         // Roles & Permissions
