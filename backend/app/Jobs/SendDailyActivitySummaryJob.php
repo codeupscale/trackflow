@@ -11,6 +11,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 
@@ -49,6 +50,9 @@ class SendDailyActivitySummaryJob implements ShouldQueue, ShouldBeUnique
 
         $users = $service->getEligibleUsers($this->organizationId);
 
+        $emailsSent = 0;
+        $emailsSkipped = 0;
+
         foreach ($users as $user) {
             try {
                 $summary = $service->getUserDailySummary(
@@ -59,6 +63,7 @@ class SendDailyActivitySummaryJob implements ShouldQueue, ShouldBeUnique
 
                 // Skip users with zero tracked time — no point emailing "0 hours"
                 if ($summary['total_seconds'] === 0) {
+                    $emailsSkipped++;
                     continue;
                 }
 
@@ -75,6 +80,8 @@ class SendDailyActivitySummaryJob implements ShouldQueue, ShouldBeUnique
                         dashboardUrl: $dashboardUrl,
                     )
                 );
+
+                $emailsSent++;
             } catch (\Throwable $e) {
                 Log::error("SendDailyActivitySummaryJob: failed to send email to {$user->email}", [
                     'organization_id' => $this->organizationId,
@@ -84,6 +91,17 @@ class SendDailyActivitySummaryJob implements ShouldQueue, ShouldBeUnique
                 // Continue with next user — don't let one failure block the entire org
             }
         }
+
+        // Store completion marker so the self-check scheduler and /jobs/health can verify this ran
+        Cache::put(
+            "job:daily_activity_summary:{$this->date}:{$this->organizationId}",
+            [
+                'completed_at' => now()->toIso8601String(),
+                'emails_sent' => $emailsSent,
+                'emails_skipped' => $emailsSkipped,
+            ],
+            now()->addDays(7)
+        );
     }
 
     public function backoff(): array
