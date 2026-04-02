@@ -1,167 +1,330 @@
-// Idle Detection Service
-// Monitors user activity and triggers idle alerts like Hubstaff
+// Idle Detection Service — State Machine Implementation
 //
-// Architecture:
-//   ActivityMonitor tracks raw input events (keyboard/mouse counts).
-//   IdleDetector runs a separate check loop that queries the OS-level
-//   idle time (seconds since last input). When idle exceeds the configured
-//   threshold it emits 'idle' / 'idle-resolved' events via a callback
-//   interface so the main process can show/dismiss the idle alert window.
+// States:
+//   STOPPED    — detector is off (timer not running or explicitly stopped)
+//   WATCHING   — timer running, monitoring system idle time
+//   DETECTED   — idle threshold exceeded, waiting for alert to show
+//   ALERTING   — popup is visible, counting idle time, checking auto-stop
+//   SUSPENDED  — laptop is asleep / screen locked, intervals paused
+//   RESOLVED   — action was taken, transitioning back to WATCHING
 //
-// Hubstaff behavior replicated:
-//   1. Idle threshold (default 5 min) — configurable per org
-//   2. Alert popup with 3 choices: keep time, discard idle, stop timer
-//   3. Auto-stop after extended idle (alert timeout, default 10 min)
-//   4. Tracks exact idle start time for accurate time deduction
+// Transitions:
+//   STOPPED    → WATCHING   : start()
+//   WATCHING   → DETECTED   : _check() finds idle >= threshold
+//   DETECTED   → ALERTING   : after onIdleDetected callback fires
+//   ALERTING   → RESOLVED   : user clicks action OR auto-stop fires
+//   RESOLVED   → WATCHING   : after cooldown reset, resume monitoring
+//   ANY        → SUSPENDED  : suspend()
+//   SUSPENDED  → WATCHING   : resume() (caller decides whether to show alert)
+//   ANY        → STOPPED    : stop()
+//
+// Invalid transitions are logged and ignored, preventing double-actions.
 
 const { powerMonitor } = require('electron');
 
 const DEFAULT_IDLE_TIMEOUT_MIN = 5;
 const DEFAULT_IDLE_CHECK_INTERVAL_SEC = 10;
 
+const IDLE_STATE = Object.freeze({
+  STOPPED: 'STOPPED',
+  WATCHING: 'WATCHING',
+  DETECTED: 'DETECTED',
+  ALERTING: 'ALERTING',
+  SUSPENDED: 'SUSPENDED',
+  RESOLVED: 'RESOLVED',
+});
+
 class IdleDetector {
   constructor(config = {}) {
-    const timeout = config.idle_timeout != null ? config.idle_timeout : DEFAULT_IDLE_TIMEOUT_MIN;
-    this.idleTimeoutSec = timeout > 0 ? timeout * 60 : 0;
-    const autoStopMin = config.idle_alert_auto_stop_min != null ? config.idle_alert_auto_stop_min : 10;
-    this.alertAutoStopSec = autoStopMin > 0 ? autoStopMin * 60 : 0;
-    const checkSec = config.idle_check_interval_sec != null ? config.idle_check_interval_sec : DEFAULT_IDLE_CHECK_INTERVAL_SEC;
-    this.checkIntervalMs = Math.min(60, Math.max(1, checkSec)) * 1000;
+    this._state = IDLE_STATE.STOPPED;
+    this._applyConfig(config);
     this.checkInterval = null;
-    this.isIdle = false;
     this.idleStartedAt = null;
     this.alertShownAt = null;
-    this.enabled = config.idle_detection !== false && this.idleTimeoutSec > 0;
 
-    // BUG-001: Cooldown timestamp — after idle is resolved, suppress re-detection
-    // until the user has actually provided new input. This prevents the detector
-    // from immediately re-firing when the system idle time is still high
-    // (e.g., auto-discard policy where no user interaction occurs).
+    // Cooldown: after idle is resolved, suppress re-detection until the user
+    // has provided new input (system idle time drops below threshold).
     this._lastResolvedAt = null;
+
+    // Monotonic action ID — incremented on each idle detection cycle.
+    // Passed to callbacks so the caller can detect stale/duplicate actions.
+    this._actionId = 0;
 
     // Callbacks — set by main process
-    this._onIdleDetected = null;   // (idleSeconds, idleStartedAt) => void
-    this._onAutoStop = null;       // (totalIdleSeconds) => void
+    this._onIdleDetected = null;   // (idleSeconds, idleStartedAt, actionId) => void
+    this._onAutoStop = null;       // (totalIdleSeconds, actionId) => void
   }
 
-  // Register callbacks
-  onIdleDetected(callback) {
-    this._onIdleDetected = callback;
-  }
+  // ── Public API ──────────────────────────────────────────────────────────────
 
-  onAutoStop(callback) {
-    this._onAutoStop = callback;
-  }
+  get state() { return this._state; }
 
-  // Update config (e.g., after fetching from server)
+  onIdleDetected(callback) { this._onIdleDetected = callback; }
+  onAutoStop(callback) { this._onAutoStop = callback; }
+
   updateConfig(config) {
-    const timeout = config.idle_timeout != null ? config.idle_timeout : DEFAULT_IDLE_TIMEOUT_MIN;
-    this.idleTimeoutSec = timeout > 0 ? timeout * 60 : 0;
-    const autoStopMin = config.idle_alert_auto_stop_min != null ? config.idle_alert_auto_stop_min : 10;
-    this.alertAutoStopSec = autoStopMin > 0 ? autoStopMin * 60 : 0;
-    const checkSec = config.idle_check_interval_sec != null ? config.idle_check_interval_sec : DEFAULT_IDLE_CHECK_INTERVAL_SEC;
-    this.checkIntervalMs = Math.min(60, Math.max(1, checkSec)) * 1000;
-    this.enabled = config.idle_detection !== false && this.idleTimeoutSec > 0;
+    this._applyConfig(config);
   }
 
+  /**
+   * Start monitoring. Only valid from STOPPED state.
+   * Resets all internal state for a fresh monitoring session.
+   */
   start() {
     if (!this.enabled) return;
-    this.stop(); // Clear any existing interval
+    const previousState = this._state;
+    // Allow start from STOPPED or RESOLVED (re-arm after action)
+    if (previousState !== IDLE_STATE.STOPPED && previousState !== IDLE_STATE.RESOLVED) {
+      console.warn(`[IdleDetector] start() called in state ${previousState} — stopping first`);
+      this._clearInterval();
+    }
 
-    this.isIdle = false;
+    this._state = IDLE_STATE.WATCHING;
     this.idleStartedAt = null;
     this.alertShownAt = null;
-    // BUG-002: Reset cooldown on start() so a fresh timer session begins with
-    // clean state. Without this, _lastResolvedAt from a previous idle cycle
-    // (e.g., auto-stop) can persist across timer restarts and suppress idle
-    // detection until the user provides new input — which may never happen if
-    // the user starts a timer and immediately walks away.
-    this._lastResolvedAt = null;
 
+    // Only reset cooldown when starting from a fully stopped state (e.g., new
+    // timer session). When re-arming after resolveIdle (RESOLVED state), preserve
+    // the cooldown so _check() waits for fresh user input before re-detecting.
+    // Without this, starting from RESOLVED with the system still idle causes
+    // immediate re-detection (the user hasn't actually returned yet).
+    if (previousState === IDLE_STATE.STOPPED) {
+      this._lastResolvedAt = null;
+    }
+
+    this._clearInterval();
     this.checkInterval = setInterval(() => this._check(), this.checkIntervalMs);
   }
 
+  /**
+   * Fully stop the detector. Clears all state and intervals.
+   * Valid from any state.
+   */
   stop() {
-    if (this.checkInterval) {
-      clearInterval(this.checkInterval);
-      this.checkInterval = null;
+    this._clearInterval();
+    this._state = IDLE_STATE.STOPPED;
+    this.idleStartedAt = null;
+    this.alertShownAt = null;
+  }
+
+  /**
+   * Notify the detector that the system is suspending (sleep/lock).
+   * Pauses the check interval but preserves idle state so handleResume
+   * can inspect it.
+   *
+   * Returns a snapshot of the current idle state for the caller.
+   */
+  suspend() {
+    const snapshot = {
+      previousState: this._state,
+      isIdle: this._state === IDLE_STATE.ALERTING || this._state === IDLE_STATE.DETECTED,
+      idleStartedAt: this.idleStartedAt,
+    };
+
+    // Clear interval to prevent _check() from firing on resume before
+    // the main process has had a chance to run handleResume.
+    this._clearInterval();
+    this._state = IDLE_STATE.SUSPENDED;
+
+    return snapshot;
+  }
+
+  /**
+   * Notify the detector that the system has resumed.
+   * Does NOT restart the check interval — the caller must call start()
+   * or setAlertState() depending on whether they want to show an alert.
+   */
+  resume() {
+    if (this._state !== IDLE_STATE.SUSPENDED) {
+      console.warn(`[IdleDetector] resume() called in state ${this._state} — ignoring`);
+      return;
     }
-    this.isIdle = false;
-    this.idleStartedAt = null;
-    this.alertShownAt = null;
+    // Transition to STOPPED; caller will call start() or setAlertState()
+    this._state = IDLE_STATE.STOPPED;
   }
 
-  // Called when user responds to idle alert
-  resolveIdle() {
-    this.isIdle = false;
-    this.idleStartedAt = null;
-    this.alertShownAt = null;
-    // BUG-001: Record when idle was resolved so _check() can require
-    // fresh user input before re-detecting idle.
+  /**
+   * Externally set the detector into ALERTING state with a specific
+   * idleStartedAt time. Used by handleResume when sleep duration exceeds
+   * threshold and the caller wants to show an alert.
+   *
+   * Also starts the check interval so auto-stop can fire.
+   */
+  setAlertState(idleStartedAt) {
+    this._clearInterval();
+    this._actionId++;
+    this._state = IDLE_STATE.ALERTING;
+    this.idleStartedAt = idleStartedAt;
+    this.alertShownAt = Date.now();
+
+    // Start check interval so auto-stop can fire while alert is showing
+    if (this.alertAutoStopSec > 0) {
+      this.checkInterval = setInterval(() => this._checkAutoStop(), this.checkIntervalMs);
+    }
+
+    return this._actionId;
+  }
+
+  /**
+   * Called when the user responds to the idle alert or auto-stop fires.
+   * Transitions from ALERTING → RESOLVED.
+   *
+   * @param {number} actionId — must match the current _actionId to prevent
+   *   stale actions from a previous idle cycle.
+   * @returns {object|null} — idle info if action was valid, null if stale/invalid.
+   */
+  resolveIdle(actionId = null) {
+    // Guard: only resolve from ALERTING state
+    if (this._state !== IDLE_STATE.ALERTING && this._state !== IDLE_STATE.DETECTED) {
+      console.warn(`[IdleDetector] resolveIdle() called in state ${this._state} — ignoring`);
+      return null;
+    }
+
+    // Guard: stale action ID (e.g., user clicked after auto-stop already fired)
+    if (actionId !== null && actionId !== this._actionId) {
+      console.warn(`[IdleDetector] resolveIdle() stale actionId ${actionId} (current: ${this._actionId}) — ignoring`);
+      return null;
+    }
+
+    const info = {
+      idleStartedAt: this.idleStartedAt,
+      idleDuration: this.getIdleDuration(),
+    };
+
+    this._clearInterval();
+    this._state = IDLE_STATE.RESOLVED;
     this._lastResolvedAt = Date.now();
+    this.idleStartedAt = null;
+    this.alertShownAt = null;
+
+    return info;
   }
 
-  // Get current idle duration in seconds (for display in alert)
+  /**
+   * Get current idle duration in seconds.
+   */
   getIdleDuration() {
     if (!this.idleStartedAt) return 0;
     return Math.floor((Date.now() - this.idleStartedAt) / 1000);
   }
 
+  /**
+   * Whether the detector is currently in a state where an idle alert
+   * is being shown or should be shown.
+   */
+  isShowingAlert() {
+    return this._state === IDLE_STATE.ALERTING;
+  }
+
+  /**
+   * Whether idle has been detected but not yet fully resolved.
+   */
+  isIdleActive() {
+    return this._state === IDLE_STATE.ALERTING || this._state === IDLE_STATE.DETECTED;
+  }
+
+  /**
+   * Get the current action ID. Used by the caller to pass to resolveIdle()
+   * for stale-action detection.
+   */
+  getActionId() {
+    return this._actionId;
+  }
+
+  // ── Private ─────────────────────────────────────────────────────────────────
+
+  _applyConfig(config) {
+    const timeout = config.idle_timeout != null ? config.idle_timeout : DEFAULT_IDLE_TIMEOUT_MIN;
+    this.idleTimeoutSec = timeout > 0 ? timeout * 60 : 0;
+    const autoStopMin = config.idle_alert_auto_stop_min != null ? config.idle_alert_auto_stop_min : 10;
+    this.alertAutoStopSec = autoStopMin > 0 ? autoStopMin * 60 : 0;
+    const checkSec = config.idle_check_interval_sec != null ? config.idle_check_interval_sec : DEFAULT_IDLE_CHECK_INTERVAL_SEC;
+    this.checkIntervalMs = Math.min(60, Math.max(1, checkSec)) * 1000;
+    this.enabled = config.idle_detection !== false && this.idleTimeoutSec > 0;
+  }
+
+  _clearInterval() {
+    if (this.checkInterval) {
+      clearInterval(this.checkInterval);
+      this.checkInterval = null;
+    }
+  }
+
+  /**
+   * Main check loop — only runs in WATCHING state.
+   * Detects when the user crosses the idle threshold.
+   */
   _check() {
-    // powerMonitor.getSystemIdleTime() returns seconds since last user input
-    // This is the OS-level idle time — works even without uiohook
+    // Only detect idle while in WATCHING state
+    if (this._state !== IDLE_STATE.WATCHING) return;
+
     const systemIdleSec = powerMonitor.getSystemIdleTime();
 
-    // BUG-001: After idle was resolved (e.g., auto-discard), the system idle time
-    // may still be high because no new user input has occurred. We must wait for
-    // the user to actually provide input (systemIdleSec drops below the threshold)
-    // before we can detect a new idle period. Without this guard, the detector
-    // fires repeatedly creating zero-duration tracked entries between idle entries.
+    // Cooldown: after resolution, wait for fresh user input before re-detecting
     if (this._lastResolvedAt) {
       if (systemIdleSec < this.idleTimeoutSec) {
-        // User provided fresh input — clear the cooldown, resume normal detection
-        this._lastResolvedAt = null;
+        this._lastResolvedAt = null; // Fresh input — resume detection
       } else {
-        // Still idle since before resolution — skip this check
-        return;
+        return; // Still idle from before resolution
       }
     }
 
-    if (!this.isIdle && systemIdleSec >= this.idleTimeoutSec) {
-      // Just became idle
-      this.isIdle = true;
-      // Idle actually started (idleTimeoutSec) ago based on system idle time
+    if (systemIdleSec >= this.idleTimeoutSec) {
+      // Idle threshold crossed — transition to DETECTED
+      this._state = IDLE_STATE.DETECTED;
+      this._actionId++;
       this.idleStartedAt = Date.now() - (systemIdleSec * 1000);
       this.alertShownAt = Date.now();
 
+      // Stop the WATCHING interval — we will start a different interval
+      // (auto-stop check) once the alert is confirmed shown
+      this._clearInterval();
+
       if (this._onIdleDetected) {
-        this._onIdleDetected(systemIdleSec, this.idleStartedAt);
-      }
-    } else if (this.isIdle) {
-      // Already idle — check if we should auto-stop
-      if (systemIdleSec < 5) {
-        // User came back (input detected) — but don't auto-resolve
-        // The alert window handles resolution via user choice
-        return;
+        this._onIdleDetected(systemIdleSec, this.idleStartedAt, this._actionId);
       }
 
-      // Check auto-stop timeout measured from when user actually went idle,
-      // not from when the alert was shown. This ensures auto-stop fires at
-      // the configured total idle time (idle_threshold + auto_stop_threshold
-      // from the user's perspective), not idle_threshold + auto_stop_threshold
-      // stacked on top of each other.
-      if (this.idleStartedAt) {
-        const totalIdleDuration = (Date.now() - this.idleStartedAt) / 1000;
-        if (totalIdleDuration >= this.idleTimeoutSec + this.alertAutoStopSec) {
-          // Auto-stop timer — user has been idle way too long
-          if (this._onAutoStop) {
-            this._onAutoStop(this.getIdleDuration());
-          }
-          this.resolveIdle();
-        }
+      // Transition to ALERTING after callback (caller should show alert)
+      // Start auto-stop check interval
+      this._state = IDLE_STATE.ALERTING;
+      if (this.alertAutoStopSec > 0) {
+        this.checkInterval = setInterval(() => this._checkAutoStop(), this.checkIntervalMs);
+      }
+    }
+  }
+
+  /**
+   * Auto-stop check — only runs in ALERTING state.
+   * Fires the auto-stop callback when the user has been idle past the
+   * idle_timeout + alert_auto_stop threshold.
+   */
+  _checkAutoStop() {
+    if (this._state !== IDLE_STATE.ALERTING) {
+      this._clearInterval();
+      return;
+    }
+
+    if (!this.idleStartedAt) {
+      this._clearInterval();
+      return;
+    }
+
+    const totalIdleDuration = (Date.now() - this.idleStartedAt) / 1000;
+    if (totalIdleDuration >= this.idleTimeoutSec + this.alertAutoStopSec) {
+      const actionId = this._actionId;
+      // Fire auto-stop BEFORE resolving, so the callback can read idleStartedAt
+      if (this._onAutoStop) {
+        this._onAutoStop(Math.floor(totalIdleDuration), actionId);
+      }
+      // Auto-resolve (the callback should also call resolveIdle, but
+      // we do it here defensively in case the callback doesn't)
+      if (this._state === IDLE_STATE.ALERTING) {
+        this.resolveIdle(actionId);
       }
     }
   }
 }
 
+// Export both the class and the state enum
 module.exports = IdleDetector;
+module.exports.IDLE_STATE = IDLE_STATE;

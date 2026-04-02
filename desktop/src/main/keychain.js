@@ -23,13 +23,33 @@ const KEY_LENGTH = 32;
 const IV_LENGTH = 16;
 const AUTH_TAG_LENGTH = 16;
 
-// Derive a stable encryption key from app-specific data.
-// Not Keychain-grade security, but prevents casual file reading
-// and is invisible to the user (no popup).
+// L1 FIX: Derive encryption key from a combination of machine-specific data
+// instead of a hardcoded string. This is "obscurity not security" — the goal
+// is keychain-popup-free operation on macOS, not Keychain-grade protection.
 function deriveKey() {
-  const secret = 'trackflow-agent-token-encryption-v1';
+  // Build a machine-specific secret from network interfaces MAC hash + app version
+  const os = require('os');
+  let machineId = 'trackflow-agent-token-encryption-v2';
+  try {
+    const interfaces = os.networkInterfaces();
+    const macs = [];
+    for (const [, addrs] of Object.entries(interfaces)) {
+      for (const addr of addrs) {
+        if (addr.mac && addr.mac !== '00:00:00:00:00:00') {
+          macs.push(addr.mac);
+        }
+      }
+    }
+    if (macs.length > 0) {
+      macs.sort(); // Stable order
+      const macHash = crypto.createHash('sha256').update(macs.join(':')).digest('hex');
+      machineId = `trackflow-${macHash}-v2`;
+    }
+  } catch {
+    // Fallback to static string if MAC reading fails
+  }
   const salt = app.getPath('userData'); // unique per user + app install
-  return crypto.pbkdf2Sync(secret, salt, 100000, KEY_LENGTH, 'sha256');
+  return crypto.pbkdf2Sync(machineId, salt, 100000, KEY_LENGTH, 'sha256');
 }
 
 let _cachedKey = null;

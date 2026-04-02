@@ -47,7 +47,7 @@ describe('Preload Script', () => {
       ['googleLogin', 'google-login', []],
       ['selectOrganization', 'select-organization', ['org-1', { email: 'test@example.com' }]],
       ['openDashboard', 'open-dashboard', []],
-      ['resolveIdle', 'resolve-idle', ['keep', undefined]],
+      ['resolveIdle', 'resolve-idle', ['keep', undefined, undefined]],
       ['checkScreenPermission', 'check-screen-permission', []],
       ['requestScreenPermission', 'request-screen-permission', []],
       ['openScreenRecordingSettings', 'open-screen-recording-settings', []],
