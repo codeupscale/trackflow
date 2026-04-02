@@ -39,10 +39,10 @@ class AttendanceService
             ->where('is_active', true)
             ->with(['shifts' => function ($q) use ($carbonDate) {
                 $q->where(function ($sq) use ($carbonDate) {
-                    $sq->whereNull('pivot_effective_to')
+                    $sq->whereNull('user_shifts.effective_to')
                         ->orWhere('user_shifts.effective_to', '>=', $carbonDate->toDateString());
                 })->where(function ($sq) use ($carbonDate) {
-                    $sq->whereNull('pivot_effective_from')
+                    $sq->whereNull('user_shifts.effective_from')
                         ->orWhere('user_shifts.effective_from', '<=', $carbonDate->toDateString());
                 });
             }])
