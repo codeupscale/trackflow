@@ -20,6 +20,10 @@ import {
   CalendarClock,
   UserCog,
   ArrowLeftRight,
+  DollarSign,
+  Receipt,
+  Layers,
+  Puzzle,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -71,6 +75,10 @@ export const navigationConfig: NavGroup[] = [
       { name: 'Shift Roster', href: '/hr/shifts/roster', icon: CalendarClock, requiredPermission: 'shifts.view' },
       { name: 'Shift Assignments', href: '/hr/shifts/assignments', icon: UserCog, requiredPermission: 'shifts.manage_assignments' },
       { name: 'Shift Swaps', href: '/hr/shifts/swaps', icon: ArrowLeftRight, requiredPermission: 'shifts.view' },
+      { name: 'Payroll', href: '/hr/payroll', icon: DollarSign, requiredPermission: 'payroll.view_all' },
+      { name: 'My Payslips', href: '/hr/payroll/my-payslips', icon: Receipt, requiredPermission: 'payroll.view_own' },
+      { name: 'Salary Structures', href: '/hr/payroll/structures', icon: Layers, requiredPermission: 'payroll.manage_structures' },
+      { name: 'Pay Components', href: '/hr/payroll/components', icon: Puzzle, requiredPermission: 'payroll.manage_components' },
     ],
   },
   {

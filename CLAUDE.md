@@ -167,23 +167,32 @@ Adds department/position org structure and leave management under `/api/v1/hr/`.
 - **Soft-deleted pivots**: `users()` and `activeUsers()` relationships filter `whereNull('user_shifts.deleted_at')`
 - Routes: `GET/POST /hr/shifts`, `GET /hr/shifts/roster`, `GET/PUT/DELETE /hr/shifts/{id}`, `GET /hr/shifts/{id}/assignments`, `POST /hr/shifts/{id}/assign`, `POST /hr/shifts/{id}/unassign`, `POST /hr/shifts/{id}/bulk-assign`, `GET/POST /hr/shift-swaps`, `PUT /hr/shift-swaps/{id}/approve`, `PUT /hr/shift-swaps/{id}/reject`, `DELETE /hr/shift-swaps/{id}`
 
+### Payroll & Salary Management (Module 4)
+- Tables: `salary_structures` (type: monthly/hourly/daily, base_salary, effective dates), `pay_components` (allowance/deduction/bonus/tax, fixed/percentage), `employee_salary_assignments` (user+structure link, encrypted `custom_base_salary`), `payroll_periods` (status: draft/processing/approved/paid), `payslips` (gross/deductions/allowances/net, unique per user+period), `payslip_line_items` (earning/deduction breakdown)
+- `PayrollService`: salary structure CRUD, pay component CRUD, payroll period management, `runPayroll()` (DB transaction, chunked processing, creates payslips + line items), `approvePayroll()` (lockForUpdate, marks all payslips approved), role-scoped `getPayslips()` (employee=own, manager=team, admin=all), `getPayslipDetail()` with authorization
+- `RunPayrollJob`: `$tries=3`, `$timeout=300`, `backoff=[60,120,300]`, `failed()` handler -- dispatched from `PayrollPeriodController::run()`
+- **Encrypted fields**: `custom_base_salary` on `EmployeeSalaryAssignment` uses Laravel `encrypted` cast + `$hidden`. Never exposed raw in API responses.
+- **Role-based permissions** (7 new): `payroll.view_own` (employee), `payroll.view_team` (manager), `payroll.view_all` (admin/accountant), `payroll.run` (admin/accountant), `payroll.manage_structures` (admin), `payroll.manage_components` (admin), `payroll.approve` (admin/accountant)
+- **Policies**: `PayslipPolicy::view()` -- employee can only view own; manager can view team; admin can view all. `SalaryStructurePolicy` / `PayComponentPolicy` -- admin only. `PayrollPeriodPolicy` -- run/approve require specific permissions.
+- Routes: `GET/POST /hr/salary-structures`, `GET/PUT/DELETE /hr/salary-structures/{id}`, `GET/POST /hr/pay-components`, `GET/PUT/DELETE /hr/pay-components/{id}`, `GET/POST /hr/payroll-periods`, `GET/PUT/DELETE /hr/payroll-periods/{id}`, `POST /hr/payroll-periods/{id}/run`, `POST /hr/payroll-periods/{id}/approve`, `GET /hr/payslips`, `GET /hr/payslips/{id}`, `GET/POST /hr/employees/{id}/salary`
+
 ## Quick Reference — Key Files
 
 | What | Where |
 |---|---|
 | API routes | `backend/routes/api.php` |
 | Controllers | `backend/app/Http/Controllers/Api/V1/` |
-| Services | `backend/app/Services/` (Timer, Report, Billing, Audit, Permission, OrganizationStructure, Leave) |
+| Services | `backend/app/Services/` (Timer, Report, Billing, Audit, Permission, OrganizationStructure, Leave, Payroll) |
 | Models | `backend/app/Models/` |
 | Migrations | `backend/database/migrations/` |
 | Frontend pages | `web/src/app/(dashboard)/*/page.tsx` |
 | API client | `web/src/lib/api.ts` (axios + token refresh mutex) |
 | Zustand stores | `web/src/stores/` (auth-store, timer-store) |
-| HR controllers | `backend/app/Http/Controllers/Api/V1/Hr/` (Department, Position, LeaveType, LeaveBalance, LeaveRequest, PublicHoliday, Employee, EmployeeDocument, EmployeeNote, Attendance, AttendanceRegularization, OvertimeRule, Shift, ShiftAssignment, ShiftSwap) |
-| HR services | `backend/app/Services/OrganizationStructureService.php`, `backend/app/Services/LeaveService.php`, `backend/app/Services/EmployeeService.php`, `backend/app/Services/AttendanceService.php`, `backend/app/Services/ShiftService.php` |
-| HR pages | `web/src/app/(dashboard)/hr/` (departments, positions, leave, leave/apply, leave/approvals, leave/calendar, leave/types, employees, employees/[id], attendance, attendance/team, attendance/regularizations, shifts, shifts/roster, shifts/assignments, shifts/swaps) |
+| HR controllers | `backend/app/Http/Controllers/Api/V1/Hr/` (Department, Position, LeaveType, LeaveBalance, LeaveRequest, PublicHoliday, Employee, EmployeeDocument, EmployeeNote, Attendance, AttendanceRegularization, OvertimeRule, Shift, ShiftAssignment, ShiftSwap, SalaryStructure, PayComponent, PayrollPeriod, Payslip, EmployeeSalary) |
+| HR services | `backend/app/Services/OrganizationStructureService.php`, `backend/app/Services/LeaveService.php`, `backend/app/Services/EmployeeService.php`, `backend/app/Services/AttendanceService.php`, `backend/app/Services/ShiftService.php`, `backend/app/Services/PayrollService.php` |
+| HR pages | `web/src/app/(dashboard)/hr/` (departments, positions, leave, leave/apply, leave/approvals, leave/calendar, leave/types, employees, employees/[id], attendance, attendance/team, attendance/regularizations, shifts, shifts/roster, shifts/assignments, shifts/swaps, payroll, payroll/periods, payroll/periods/[id], payroll/my-payslips, payroll/structures, payroll/components) |
 | HR components | `web/src/components/hr/` (DepartmentSelect, PositionSelect, LeaveBalanceCard, LeaveCalendar, LeaveApprovalCard, EmployeeCard, EmployeeStatusBadge, AttendanceStatusBadge, AttendanceSummaryCard, RegularizationCard, etc.) |
-| HR hooks | `web/src/hooks/hr/` (use-departments, use-positions, use-leave-requests, use-leave-balance, use-apply-leave, use-employees, use-employee-documents, use-attendance, use-regularizations, use-overtime-rules, etc.) |
+| HR hooks | `web/src/hooks/hr/` (use-departments, use-positions, use-leave-requests, use-leave-balance, use-apply-leave, use-employees, use-employee-documents, use-attendance, use-regularizations, use-overtime-rules, use-payroll, use-payslips, use-salary-structures, use-pay-components, etc.) |
 | Org selector | `web/src/components/org-selector.tsx` |
 | Org switcher | `web/src/components/org-switcher.tsx` |
 | Sidebar primitive | `web/src/components/ui/sidebar.tsx` (shadcn Sidebar with collapsible icon mode) |
