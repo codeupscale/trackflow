@@ -17,6 +17,7 @@ use App\Http\Controllers\Api\V1\Hr\OvertimeRuleController;
 use App\Http\Controllers\Api\V1\Hr\PositionController;
 use App\Http\Controllers\Api\V1\Hr\PublicHolidayController;
 use App\Http\Controllers\Api\V1\InvitationController;
+use App\Http\Controllers\Api\V1\JobMonitorController;
 use App\Http\Controllers\Api\V1\PermissionController;
 use App\Http\Controllers\Api\V1\ProfileController;
 use App\Http\Controllers\Api\V1\RoleController;
@@ -165,6 +166,12 @@ Route::prefix('v1')->group(function () {
         // Settings
         Route::get('settings', [\App\Http\Controllers\Api\V1\SettingsController::class, 'show']);
         Route::put('settings', [\App\Http\Controllers\Api\V1\SettingsController::class, 'update'])->middleware('permission:settings.edit_org');
+
+        // Job Monitoring
+        Route::get('jobs/health', [JobMonitorController::class, 'health'])
+            ->middleware('permission:settings.view_org');
+        Route::post('jobs/retry/{id}', [JobMonitorController::class, 'retry'])
+            ->middleware('permission:settings.edit_org');
 
         // Billing
         Route::prefix('billing')->middleware('permission:settings.manage_billing')->group(function () {
