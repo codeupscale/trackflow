@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 
 interface PermissionState {
   permissions: Record<string, string>; // e.g. { 'time_entries.view': 'team' }
@@ -19,27 +20,36 @@ const SCOPE_HIERARCHY: Record<string, number> = {
   none: 3, // non-scoped permissions (e.g. boolean toggles)
 };
 
-export const usePermissionStore = create<PermissionState>((set, get) => ({
-  permissions: {},
+export const usePermissionStore = create<PermissionState>()(
+  persist(
+    (set, get) => ({
+      permissions: {},
 
-  setPermissions: (perms) => set({ permissions: perms }),
-  clearPermissions: () => set({ permissions: {} }),
+      setPermissions: (perms) => set({ permissions: perms }),
+      clearPermissions: () => set({ permissions: {} }),
 
-  hasPermission: (key) => {
-    return key in get().permissions;
-  },
+      hasPermission: (key) => {
+        return key in get().permissions;
+      },
 
-  hasPermissionWithScope: (key, requiredScope) => {
-    const granted = get().permissions[key];
-    if (!granted) return false;
-    return (SCOPE_HIERARCHY[granted] ?? 0) >= (SCOPE_HIERARCHY[requiredScope] ?? 0);
-  },
+      hasPermissionWithScope: (key, requiredScope) => {
+        const granted = get().permissions[key];
+        if (!granted) return false;
+        return (SCOPE_HIERARCHY[granted] ?? 0) >= (SCOPE_HIERARCHY[requiredScope] ?? 0);
+      },
 
-  getScope: (key) => {
-    return get().permissions[key] ?? null;
-  },
+      getScope: (key) => {
+        return get().permissions[key] ?? null;
+      },
 
-  canAccessModule: (module) => {
-    return Object.keys(get().permissions).some((key) => key.startsWith(module + '.'));
-  },
-}));
+      canAccessModule: (module) => {
+        return Object.keys(get().permissions).some((key) => key.startsWith(module + '.'));
+      },
+    }),
+    {
+      name: 'trackflow-permissions',
+      // Only persist the permissions data, not the methods
+      partialize: (state) => ({ permissions: state.permissions }),
+    }
+  )
+);
