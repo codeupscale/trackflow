@@ -321,15 +321,23 @@ class RoleController extends Controller
         $permissionKeys = array_keys($permissions);
         $permModels = Permission::whereIn('key', $permissionKeys)->get()->keyBy('key');
 
-        $syncData = [];
+        $rows = [];
         foreach ($permissions as $key => $scope) {
             $perm = $permModels->get($key);
             if ($perm) {
-                $syncData[$perm->id] = ['scope' => $scope];
+                $rows[] = [
+                    'id' => (string) \Illuminate\Support\Str::uuid(),
+                    'role_id' => $role->id,
+                    'permission_id' => $perm->id,
+                    'scope' => $scope,
+                    'created_at' => now(),
+                ];
             }
         }
 
-        $role->permissions()->attach($syncData);
+        if (! empty($rows)) {
+            DB::table('role_permissions')->insert($rows);
+        }
     }
 
     /**
