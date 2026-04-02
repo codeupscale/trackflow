@@ -29,12 +29,13 @@ function createWrapper() {
 
 const mockOvertimeRules = {
   id: 'ot-1',
-  daily_overtime_threshold: 8,
-  weekly_overtime_threshold: 40,
+  organization_id: 'org-1',
+  daily_threshold_hours: 8,
+  weekly_threshold_hours: 40,
   overtime_multiplier: 1.5,
   weekend_multiplier: 2.0,
-  holiday_multiplier: 2.5,
-  is_enabled: true,
+  created_at: '2024-01-01T00:00:00Z',
+  updated_at: '2024-01-01T00:00:00Z',
 };
 
 beforeEach(() => {
@@ -53,7 +54,7 @@ describe('useOvertimeRules', () => {
     const { result } = renderHook(() => useOvertimeRules(), { wrapper: createWrapper() });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.daily_overtime_threshold).toBe(8);
+    expect(result.current.data?.daily_threshold_hours).toBe(8);
   });
 
   it('calls correct API endpoint', async () => {
@@ -80,17 +81,15 @@ describe('useUpdateOvertimeRules', () => {
 
     await act(async () => {
       result.current.mutate({
-        daily_overtime_threshold: 9,
-        weekly_overtime_threshold: 45,
+        daily_threshold_hours: 9,
+        weekly_threshold_hours: 45,
         overtime_multiplier: 1.5,
         weekend_multiplier: 2.0,
-        holiday_multiplier: 2.5,
-        is_enabled: true,
-      } as never);
+      });
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(api.put).toHaveBeenCalledWith('/hr/overtime-rules', expect.objectContaining({ daily_overtime_threshold: 9 }));
+    expect(api.put).toHaveBeenCalledWith('/hr/overtime-rules', expect.objectContaining({ daily_threshold_hours: 9 }));
     expect(toast.success).toHaveBeenCalledWith('Overtime rules updated');
   });
 

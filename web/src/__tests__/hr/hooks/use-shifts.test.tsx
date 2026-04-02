@@ -142,6 +142,11 @@ describe('useCreateShift', () => {
         start_time: '16:00',
         end_time: '00:00',
         days_of_week: ['monday', 'friday'],
+        break_minutes: 30,
+        grace_period_minutes: 10,
+        color: '#3B82F6',
+        timezone: 'UTC',
+        is_active: true,
       });
     });
 
@@ -165,6 +170,11 @@ describe('useCreateShift', () => {
         start_time: '09:00',
         end_time: '17:00',
         days_of_week: ['monday'],
+        break_minutes: 0,
+        grace_period_minutes: 0,
+        color: '#3B82F6',
+        timezone: 'UTC',
+        is_active: true,
       });
     });
 
@@ -187,6 +197,11 @@ describe('useUpdateShift', () => {
         start_time: '08:00',
         end_time: '16:00',
         days_of_week: ['monday', 'tuesday'],
+        break_minutes: 60,
+        grace_period_minutes: 15,
+        color: '#3B82F6',
+        timezone: 'UTC',
+        is_active: true,
       });
     });
 
