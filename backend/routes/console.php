@@ -55,8 +55,9 @@ Schedule::call(function () {
 // Auto-closes running entries with no heartbeat for 30+ minutes (orphaned timers)
 Schedule::command('timer:cleanup-stale')->everyFiveMinutes()->name('cleanup-stale-entries');
 
-// JOB-08: Daily activity summary emails — weekdays (Mon-Fri) at 23:59
+// JOB-08: Daily activity summary emails — weekdays (Mon-Fri) at 23:00 UTC
 // Dispatches one job per organization; each job queries that org's employees and queues individual emails.
+// Note: runs at 23:00 (not 23:59) to avoid scheduler timing edge cases.
 Schedule::call(function () {
     $today = now()->toDateString();
     Organization::query()
@@ -66,7 +67,7 @@ Schedule::call(function () {
                 SendDailyActivitySummaryJob::dispatch($org->id, $today);
             }
         });
-})->weekdays()->dailyAt('23:59')->name('daily-activity-summary');
+})->weekdays()->dailyAt('23:00')->name('daily-activity-summary');
 
 // Data retention enforcement — Daily 4am UTC
 Schedule::job(new \App\Jobs\EnforceDataRetentionJob)->dailyAt('04:00')->name('enforce-data-retention');
