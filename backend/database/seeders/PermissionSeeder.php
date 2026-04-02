@@ -9,7 +9,7 @@ use Illuminate\Support\Str;
 class PermissionSeeder extends Seeder
 {
     /**
-     * All 53 permissions in the system.
+     * All 59 permissions in the system.
      * Format: [key, module, action, description, has_scope]
      */
     private function getPermissions(): array
@@ -80,6 +80,14 @@ class PermissionSeeder extends Seeder
             ['attendance.regularize',               'attendance', 'regularize',               'Submit regularization requests',       false],
             ['attendance.approve_regularizations',  'attendance', 'approve_regularizations',  'Approve or reject regularizations',   true],
             ['attendance.manage_overtime_rules',    'attendance', 'manage_overtime_rules',    'Configure overtime rules',            false],
+
+            // --- shifts (6) ---
+            ['shifts.view',                'shifts', 'view',                'View shifts and roster',                  false],
+            ['shifts.create',              'shifts', 'create',              'Create new shifts',                       false],
+            ['shifts.edit',                'shifts', 'edit',                'Edit shift details',                      false],
+            ['shifts.delete',              'shifts', 'delete',              'Delete shifts',                           false],
+            ['shifts.manage_assignments',  'shifts', 'manage_assignments',  'Assign and unassign users to shifts',    false],
+            ['shifts.manage_swaps',        'shifts', 'manage_swaps',        'Approve or reject shift swap requests',  false],
 
             // --- team (4) ---
             ['team.view_members', 'team', 'view_members', 'View org member list',          false],
@@ -179,6 +187,14 @@ class PermissionSeeder extends Seeder
             'attendance.approve_regularizations' => 'organization',
             'attendance.manage_overtime_rules'   => 'none',
 
+            // shifts
+            'shifts.view'               => 'none',
+            'shifts.create'             => 'none',
+            'shifts.edit'               => 'none',
+            'shifts.delete'             => 'none',
+            'shifts.manage_assignments' => 'none',
+            'shifts.manage_swaps'       => 'none',
+
             // team
             'team.view_members' => 'none',
             'team.invite'       => 'none',
@@ -248,6 +264,11 @@ class PermissionSeeder extends Seeder
             'attendance.regularize'              => 'none',
             'attendance.approve_regularizations' => 'team',
 
+            // shifts — view, manage assignments, manage swaps
+            'shifts.view'               => 'none',
+            'shifts.manage_assignments' => 'none',
+            'shifts.manage_swaps'       => 'none',
+
             // team — view + invite
             'team.view_members' => 'none',
             'team.invite'       => 'none',
@@ -296,6 +317,9 @@ class PermissionSeeder extends Seeder
             // attendance — own view, can regularize
             'attendance.view'       => 'own',
             'attendance.regularize' => 'none',
+
+            // shifts — view only
+            'shifts.view' => 'none',
         ];
     }
 
