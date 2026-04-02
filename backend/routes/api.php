@@ -16,6 +16,9 @@ use App\Http\Controllers\Api\V1\Hr\LeaveTypeController;
 use App\Http\Controllers\Api\V1\Hr\OvertimeRuleController;
 use App\Http\Controllers\Api\V1\Hr\PositionController;
 use App\Http\Controllers\Api\V1\Hr\PublicHolidayController;
+use App\Http\Controllers\Api\V1\Hr\ShiftAssignmentController;
+use App\Http\Controllers\Api\V1\Hr\ShiftController;
+use App\Http\Controllers\Api\V1\Hr\ShiftSwapController;
 use App\Http\Controllers\Api\V1\InvitationController;
 use App\Http\Controllers\Api\V1\JobMonitorController;
 use App\Http\Controllers\Api\V1\PermissionController;
@@ -261,6 +264,27 @@ Route::prefix('v1')->group(function () {
             Route::get('employees/{employee}/notes', [EmployeeNoteController::class, 'index']);
             Route::post('employees/{employee}/notes', [EmployeeNoteController::class, 'store']);
             Route::delete('employees/{employee}/notes/{note}', [EmployeeNoteController::class, 'destroy']);
+
+            // Shifts
+            Route::get('shifts', [ShiftController::class, 'index']);
+            Route::post('shifts', [ShiftController::class, 'store']);
+            Route::get('shifts/roster', [ShiftController::class, 'roster']);
+            Route::get('shifts/{shift}', [ShiftController::class, 'show']);
+            Route::put('shifts/{shift}', [ShiftController::class, 'update']);
+            Route::delete('shifts/{shift}', [ShiftController::class, 'destroy']);
+
+            // Shift Assignments
+            Route::get('shifts/{shift}/assignments', [ShiftAssignmentController::class, 'index']);
+            Route::post('shifts/{shift}/assign', [ShiftAssignmentController::class, 'assign']);
+            Route::post('shifts/{shift}/unassign', [ShiftAssignmentController::class, 'unassign']);
+            Route::post('shifts/{shift}/bulk-assign', [ShiftAssignmentController::class, 'bulkAssign']);
+
+            // Shift Swaps
+            Route::get('shift-swaps', [ShiftSwapController::class, 'index']);
+            Route::post('shift-swaps', [ShiftSwapController::class, 'store']);
+            Route::put('shift-swaps/{shiftSwapRequest}/approve', [ShiftSwapController::class, 'approve']);
+            Route::put('shift-swaps/{shiftSwapRequest}/reject', [ShiftSwapController::class, 'reject']);
+            Route::delete('shift-swaps/{shiftSwapRequest}', [ShiftSwapController::class, 'destroy']);
         });
 
         // Roles & Permissions

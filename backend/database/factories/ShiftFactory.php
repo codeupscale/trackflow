@@ -34,6 +34,12 @@ class ShiftFactory extends Factory
             'start_time' => $shift['start'],
             'end_time' => $shift['end'],
             'days_of_week' => fake()->boolean(70) ? $weekdays : fake()->randomElements($allDays, fake()->numberBetween(3, 7)),
+            'is_active' => true,
+            'break_minutes' => fake()->randomElement([0, 15, 30, 60]),
+            'color' => fake()->hexColor(),
+            'timezone' => 'UTC',
+            'grace_period_minutes' => fake()->randomElement([0, 5, 10, 15]),
+            'description' => fake()->optional()->sentence(),
         ];
     }
 
@@ -48,6 +54,13 @@ class ShiftFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'days_of_week' => ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+        ]);
+    }
+
+    public function inactive(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'is_active' => false,
         ]);
     }
 }
