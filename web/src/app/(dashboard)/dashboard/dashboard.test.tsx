@@ -167,7 +167,7 @@ describe('DashboardPage', () => {
       expect(screen.getByText('Dashboard')).toBeInTheDocument();
     });
 
-    it('renders admin stat cards (Total Online, Hours, Active Projects, Team Members)', async () => {
+    it('renders admin stat cards (Team Online, Hours, Active Projects, Team Members)', async () => {
       mockApiGet.mockImplementation((url: string) => {
         if (url === '/dashboard') return Promise.resolve({ data: adminDashboardResponse });
         if (url === '/time-entries') return Promise.resolve({ data: timeEntriesResponse });
@@ -177,7 +177,7 @@ describe('DashboardPage', () => {
       renderDashboard();
 
       await waitFor(() => {
-        expect(screen.getByText('Total Online')).toBeInTheDocument();
+        expect(screen.getByText('Team Online')).toBeInTheDocument();
       });
 
       expect(screen.getByText('Active Projects')).toBeInTheDocument();
@@ -330,7 +330,7 @@ describe('DashboardPage', () => {
       expect(screen.getByText(/40h required/)).toBeInTheDocument();
     });
 
-    it('renders daily hours chart', async () => {
+    it('renders employee hours chart', async () => {
       mockApiGet.mockImplementation((url: string) => {
         if (url === '/dashboard') return Promise.resolve({ data: employeeDashboardResponse });
         if (url === '/time-entries') return Promise.resolve({ data: { data: [] } });
@@ -340,7 +340,7 @@ describe('DashboardPage', () => {
       renderDashboard();
 
       await waitFor(() => {
-        expect(screen.getByText('Daily Hours')).toBeInTheDocument();
+        expect(screen.getByText('Your Hours This Week')).toBeInTheDocument();
       });
     });
   });
