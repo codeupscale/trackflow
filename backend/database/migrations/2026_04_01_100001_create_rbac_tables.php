@@ -34,7 +34,7 @@ return new class extends Migration
             });
 
             // Make description NOT NULL with default (PostgreSQL only — SQLite handles this via column definition)
-            if (DB::getDriverName() === 'pgsql') {
+            if (Schema::getConnection()->getDriverName() === 'pgsql') {
                 DB::statement("ALTER TABLE permissions ALTER COLUMN description SET NOT NULL");
                 DB::statement("ALTER TABLE permissions ALTER COLUMN description SET DEFAULT ''");
             }
@@ -73,7 +73,7 @@ return new class extends Migration
             });
 
             // Add check constraint for scope values (PostgreSQL only)
-            if (DB::getDriverName() === 'pgsql') {
+            if (Schema::getConnection()->getDriverName() === 'pgsql') {
                 DB::statement("ALTER TABLE role_permissions ADD CONSTRAINT chk_scope CHECK (scope IN ('own', 'team', 'organization', 'none'))");
             }
 
@@ -166,7 +166,7 @@ return new class extends Migration
                 $table->dropColumn(['action', 'has_scope']);
             });
 
-            if (DB::getDriverName() === 'pgsql') {
+            if (Schema::getConnection()->getDriverName() === 'pgsql') {
                 DB::statement("ALTER TABLE permissions ALTER COLUMN description DROP NOT NULL");
                 DB::statement("ALTER TABLE permissions ALTER COLUMN description DROP DEFAULT");
             }
