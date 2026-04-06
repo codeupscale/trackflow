@@ -30,6 +30,7 @@ const fs = require('fs');
     // Non-fatal — env vars may already be set by the OS or launcher
   }
 })();
+const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
 const ApiClient = require('./api-client');
 const ActivityMonitor = require('./activity-monitor');
@@ -37,6 +38,7 @@ const ScreenshotService = require('./screenshot-service');
 const IdleDetector = require('./idle-detector');
 const { IDLE_STATE } = require('./idle-detector');
 const OfflineQueue = require('./offline-queue');
+const NetworkMonitor = require('./network-monitor');
 const { getToken, setToken, getRefreshToken, setRefreshToken, deleteToken } = require('./keychain');
 const posthog = require('./posthog');
 const { getTrayIcon, warmIconCache } = require('./tray-icons');
@@ -438,6 +440,7 @@ let activityMonitor = null;
 let screenshotService = null;
 let idleDetector = null;
 let offlineQueue = null;
+let networkMonitor = null;
 let isTimerRunning = false;
 let currentEntry = null;
 // Two totals for multi-project clarity
@@ -456,6 +459,133 @@ let _idleActionInProgress = false;
 let _cachedStartedAtMs = null;
 // M8 FIX: Clock skew compensation — server time minus local time
 let _clockOffsetMs = 0;
+// Local-first timer: suspend timestamp for sleep/wake gap calculation
+let _suspendedAt = null;
+
+// ── Local Timer State (SQLite) ──────────────────────────────────────────────
+// Persists timer state locally so no time is lost during network outages.
+// Uses the same offline-queue.db via a lazy-initialized reference.
+let _localTimerDb = null;
+
+function _getLocalTimerDb() {
+  if (_localTimerDb) return _localTimerDb;
+  try {
+    const Database = require('better-sqlite3');
+    const dbPath = path.join(app.getPath('userData'), 'offline-queue.db');
+    _localTimerDb = new Database(dbPath);
+    _localTimerDb.pragma('journal_mode = WAL');
+    _localTimerDb.pragma('busy_timeout = 5000');
+
+    // Create timer_sessions table for local-first timer state
+    _localTimerDb.exec(`
+      CREATE TABLE IF NOT EXISTS timer_sessions (
+        id TEXT PRIMARY KEY,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        project_id TEXT,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        duration_seconds INTEGER,
+        synced_start INTEGER NOT NULL DEFAULT 0,
+        synced_stop INTEGER NOT NULL DEFAULT 0,
+        server_entry_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    return _localTimerDb;
+  } catch (e) {
+    console.error('[LocalTimerDb] Init failed:', e.message);
+    return null;
+  }
+}
+
+function generateIdempotencyKey() {
+  return crypto.randomUUID();
+}
+
+function saveLocalTimerStart(id, idempotencyKey, projectId, startedAt) {
+  const db = _getLocalTimerDb();
+  if (!db) return;
+  try {
+    db.prepare(
+      'INSERT OR REPLACE INTO timer_sessions (id, idempotency_key, project_id, started_at) VALUES (?, ?, ?, ?)'
+    ).run(id, idempotencyKey, projectId, startedAt);
+  } catch (e) {
+    console.error('[LocalTimerDb] saveStart failed:', e.message);
+  }
+}
+
+function markLocalTimerStartSynced(localId, serverEntryId) {
+  const db = _getLocalTimerDb();
+  if (!db) return;
+  try {
+    db.prepare(
+      'UPDATE timer_sessions SET synced_start = 1, server_entry_id = ? WHERE id = ?'
+    ).run(serverEntryId, localId);
+  } catch (e) {
+    console.error('[LocalTimerDb] markStartSynced failed:', e.message);
+  }
+}
+
+function saveLocalTimerStop(localId, endedAt, durationSeconds) {
+  const db = _getLocalTimerDb();
+  if (!db) return;
+  try {
+    db.prepare(
+      'UPDATE timer_sessions SET ended_at = ?, duration_seconds = ? WHERE id = ?'
+    ).run(endedAt, durationSeconds, localId);
+  } catch (e) {
+    console.error('[LocalTimerDb] saveStop failed:', e.message);
+  }
+}
+
+function markLocalTimerStopSynced(localId) {
+  const db = _getLocalTimerDb();
+  if (!db) return;
+  try {
+    db.prepare('UPDATE timer_sessions SET synced_stop = 1 WHERE id = ?').run(localId);
+  } catch (e) {
+    console.error('[LocalTimerDb] markStopSynced failed:', e.message);
+  }
+}
+
+function getUnsyncedTimerSessions() {
+  const db = _getLocalTimerDb();
+  if (!db) return [];
+  try {
+    return db.prepare(
+      'SELECT * FROM timer_sessions WHERE synced_start = 0 OR (ended_at IS NOT NULL AND synced_stop = 0) ORDER BY created_at ASC'
+    ).all();
+  } catch (e) {
+    console.error('[LocalTimerDb] getUnsynced failed:', e.message);
+    return [];
+  }
+}
+
+function getActiveLocalTimer() {
+  const db = _getLocalTimerDb();
+  if (!db) return null;
+  try {
+    return db.prepare(
+      'SELECT * FROM timer_sessions WHERE ended_at IS NULL ORDER BY created_at DESC LIMIT 1'
+    ).get() || null;
+  } catch (e) {
+    console.error('[LocalTimerDb] getActive failed:', e.message);
+    return null;
+  }
+}
+
+function cleanOldLocalTimerSessions() {
+  const db = _getLocalTimerDb();
+  if (!db) return;
+  try {
+    // Remove fully synced sessions older than 7 days
+    db.prepare(
+      "DELETE FROM timer_sessions WHERE synced_start = 1 AND synced_stop = 1 AND created_at < datetime('now', '-7 days')"
+    ).run();
+  } catch (e) {
+    console.error('[LocalTimerDb] cleanup failed:', e.message);
+  }
+}
 
 // ── Global Error Handlers ────────────────────────────────────────────────────
 
@@ -504,11 +634,20 @@ app.on('before-quit', async (e) => {
   if (isTimerRunning && apiClient) {
     e.preventDefault();
     isQuitting = true;
+    // LOCAL-FIRST: Record stop locally before attempting server stop
+    const localId = currentEntry?._localId;
+    if (localId) {
+      saveLocalTimerStop(localId, new Date().toISOString(), 0);
+    }
     try {
+      const stopPayload = currentEntry?._localId
+        ? { started_at: currentEntry?.started_at, ended_at: new Date().toISOString() }
+        : {};
       await Promise.race([
-        apiClient.stopTimer(),
+        apiClient.stopTimer(stopPayload),
         new Promise((resolve) => setTimeout(resolve, 3000)),
       ]);
+      if (localId) markLocalTimerStopSynced(localId);
     } catch {}
     isTimerRunning = false;
     currentEntry = null;
@@ -534,6 +673,16 @@ function cleanupOnExit() {
   offlineQueue?.close();
 }
 
+// CLEANUP-FIX: Remove powerMonitor and app listeners that reference stale apiClient/services.
+// Called from both forceLogout and performLogout to prevent stale callback crashes.
+function removeSessionListeners() {
+  powerMonitor.removeAllListeners('suspend');
+  powerMonitor.removeAllListeners('resume');
+  powerMonitor.removeAllListeners('lock-screen');
+  powerMonitor.removeAllListeners('unlock-screen');
+  app.removeAllListeners('browser-window-focus');
+}
+
 // Force logout — called when token refresh fails (password changed, tokens revoked).
 // Stops timer locally (does NOT call server since token is invalid), clears state, shows login.
 let _forceLogoutInProgress = false;
@@ -552,6 +701,8 @@ async function forceLogout() {
   activityMonitor?.stop();
   screenshotService?.stop();
   idleDetector?.stop();
+  networkMonitor?.stop();
+  removeSessionListeners();
   dismissIdleAlert();
 
   if (timerSyncInterval) {
@@ -570,6 +721,7 @@ async function forceLogout() {
   activityMonitor = null;
   screenshotService = null;
   idleDetector = null;
+  networkMonitor = null;
   cachedProjects = [];
   todayTotalGlobal = 0;
   todayTotalCurrentProject = 0;
@@ -683,6 +835,22 @@ async function initializeApp() {
     });
   });
   idleDetector = new IdleDetector(config);
+
+  // Initialize network monitor for online/offline detection
+  networkMonitor = new NetworkMonitor();
+  networkMonitor.on('online', async () => {
+    console.log('[Network] Back online — reconciling and flushing');
+    // Reconcile local timer state with server before flushing queue
+    await reconcileTimerState();
+    offlineQueue?.flush(apiClient);
+    // Notify renderer of status change
+    notifyPopup('network-status', { online: true });
+  });
+  networkMonitor.on('offline', () => {
+    console.log('[Network] Gone offline');
+    notifyPopup('network-status', { online: false });
+  });
+  networkMonitor.start();
 
   // Wire idle detection events
   idleDetector.onIdleDetected((idleSeconds, idleStartedAt, actionId) => {
@@ -827,14 +995,9 @@ async function initializeApp() {
       isTimerRunning = true;
       currentEntry = status.entry;
       _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
-      try {
-        todayTotalCurrentProject = await apiClient.getTodayTotal(currentEntry?.project_id ?? null);
-        if (currentEntry?.project_id) {
-          todayTotalCurrentProject = Math.max(0, todayTotalCurrentProject - elapsed);
-        }
-      } catch {
-        todayTotalCurrentProject = Math.max(0, globalTotal - elapsed);
-      }
+      // BUG-1 FIX: Use project_today_total from the same atomic response to avoid race conditions
+      const projectTotal = status.project_today_total ?? globalTotal;
+      todayTotalCurrentProject = Math.max(0, projectTotal - elapsed);
       activityMonitor.start();
       screenshotService.start(currentEntry.id);
       idleDetector.start();
@@ -941,6 +1104,13 @@ async function initializeApp() {
       // Restart idle detector (it was running before suspend)
       idleDetector?.start();
     }
+
+    // After any resume: flush offline queue if online (sync any pending data)
+    if (networkMonitor?.isOnline && offlineQueue && apiClient) {
+      setImmediate(() => {
+        reconcileTimerState().then(() => offlineQueue.flush(apiClient)).catch(() => {});
+      });
+    }
   };
 
   // M4 FIX: Remove existing listeners defensively before adding to prevent stacking on re-login
@@ -967,12 +1137,9 @@ async function initializeApp() {
         const elapsed = status.elapsed_seconds ?? 0;
         if (status.running) {
           todayTotalGlobal = Math.max(0, globalTotal - elapsed);
-          try {
-            const withElapsed = await apiClient.getTodayTotal(status.entry?.project_id ?? null);
-            todayTotalCurrentProject = Math.max(0, withElapsed - elapsed);
-          } catch {
-            todayTotalCurrentProject = todayTotalGlobal;
-          }
+          // BUG-1 FIX: Use project_today_total from the same atomic response
+          const projectTotal = status.project_today_total ?? globalTotal;
+          todayTotalCurrentProject = Math.max(0, projectTotal - elapsed);
         } else {
           todayTotalGlobal = globalTotal;
           todayTotalCurrentProject = 0;
@@ -989,6 +1156,11 @@ async function initializeApp() {
           updateTrayIcon(true);
           notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
         } else if (!status.running && isTimerRunning) {
+          // BUG-2 FIX: Don't override local state while idle alert is showing
+          if (idleDetector?.isIdleActive()) {
+            console.log('[ImmediateSync] Server says stopped but idle alert is active — keeping local state');
+            return;
+          }
           isTimerRunning = false;
           currentEntry = null;
           _cachedStartedAtMs = null;
@@ -1378,6 +1550,8 @@ async function performLogout() {
   activityMonitor?.stop();
   screenshotService?.stop();
   idleDetector?.stop();
+  networkMonitor?.stop();
+  removeSessionListeners();
   dismissIdleAlert();
 
   if (timerSyncInterval) {
@@ -1398,6 +1572,7 @@ async function performLogout() {
   activityMonitor = null;
   screenshotService = null;
   idleDetector = null;
+  networkMonitor = null;
   cachedProjects = [];
   todayTotalGlobal = 0;
   todayTotalCurrentProject = 0;
@@ -1512,6 +1687,12 @@ function setupIPC() {
     return getOSTheme();
   });
 
+  // CONNECTIVITY FIX: Network status IPC handler
+  ipcMain.removeHandler('get-network-status');
+  ipcMain.handle('get-network-status', () => ({
+    online: networkMonitor?.isOnline ?? true,
+  }));
+
   ipcMain.handle('install-update', () => {
     console.log('[updater] User clicked Restart Now — installing update');
     const { autoUpdater } = require('electron-updater');
@@ -1520,6 +1701,7 @@ function setupIPC() {
 
   ipcMain.handle('get-timer-state', async (_, projectId) => {
     const validProjectId = validateProjectId(projectId);
+    let todayTotalForDisplay = 0;
     if (apiClient) {
       try {
         const status = await apiClient.getTimerStatus();
@@ -1530,12 +1712,9 @@ function setupIPC() {
           isTimerRunning = true;
           currentEntry = status.entry;
           _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
-          try {
-            const withElapsed = await apiClient.getTodayTotal(currentEntry?.project_id ?? null);
-            todayTotalCurrentProject = Math.max(0, withElapsed - elapsed);
-          } catch {
-            todayTotalCurrentProject = todayTotalGlobal;
-          }
+          // BUG-1 FIX: Use project_today_total from the same atomic response
+          const projectTotal = status.project_today_total ?? globalTotal;
+          todayTotalCurrentProject = Math.max(0, projectTotal - elapsed);
         } else {
           todayTotalGlobal = globalTotal;
           todayTotalCurrentProject = 0;
@@ -1543,15 +1722,12 @@ function setupIPC() {
           currentEntry = null;
           _cachedStartedAtMs = null;
         }
-      } catch {}
-    }
-    const projectIdForTotal = isTimerRunning && currentEntry?.project_id
-      ? currentEntry.project_id
-      : validProjectId || null;
-    let todayTotalForDisplay = 0;
-    if (apiClient) {
-      try {
-        todayTotalForDisplay = await apiClient.getTodayTotal(projectIdForTotal);
+        // BUG-1 FIX: Use the project_today_total already in the response instead of a separate call
+        if (isTimerRunning && currentEntry?.project_id) {
+          todayTotalForDisplay = status.project_today_total ?? globalTotal;
+        } else {
+          todayTotalForDisplay = globalTotal;
+        }
       } catch {}
     }
     return {
@@ -1618,11 +1794,9 @@ function afterStartTimer(projectIdForTotal, todayTotalForPopup) {
   }
   console.log(`[afterStartTimer] Running for entry=${currentEntry.id}, project=${projectIdForTotal}`);
   (async () => {
-    try {
-      todayTotalGlobal = await apiClient.getTodayTotal(null);
-    } catch {
-      todayTotalGlobal = todayTotalForPopup;
-    }
+    // BUG-1 FIX: Use todayTotalForPopup already passed in instead of a separate API call
+    // that could race with the elapsed timer and produce inconsistent totals
+    todayTotalGlobal = todayTotalForPopup;
     try {
       activityMonitor.start();
       console.log('[afterStartTimer] activityMonitor started');
@@ -1694,6 +1868,7 @@ async function switchProject(projectId) {
   }
 }
 
+let _startTimerInProgress = false; // Mutex to prevent concurrent startTimer calls
 async function startTimer(projectId = null) {
   // If timer is already running on a different project, use atomic switch
   if (isTimerRunning && projectId && currentEntry?.project_id !== projectId) {
@@ -1701,71 +1876,116 @@ async function startTimer(projectId = null) {
   }
   if (isTimerRunning) return { error: 'Timer already running' };
 
-  // ── Pre-start permission gate (macOS only) ──────────────────────────────
-  // Check screen recording permission BEFORE starting the timer so the user
-  // is not surprised by a permission prompt mid-tracking.
-  if (process.platform === 'darwin' && _screenPermissionGranted !== true) {
-    checkScreenRecordingPermission();
-    if (!_screenPermissionGranted) {
-      // Probe desktopCapturer so TrackFlow registers in the Screen Recording
-      // list before we direct the user to System Settings.
-      const probeGranted = await probeScreenRecordingPermission();
-      if (probeGranted) {
-        console.log('[Timer] Probe confirmed permission — proceeding with timer start');
-      } else {
-        console.log('[Timer] Screen recording permission not granted — showing onboarding');
-        const permResult = await showScreenPermissionOnboarding({
-          isPreStart: true,
-          wasTracking: false,
-        });
-        if (permResult === 'opened-settings') {
-          // User went to settings — don't start timer yet. They need to restart.
-          return { error: 'Please grant Screen Recording permission and restart the app. Your project selection will be remembered.' };
-        }
-        // User clicked "Skip for Now" — let them track without screenshots
-        console.log('[Timer] User skipped permission — starting timer without screenshot capability');
-        // Notify renderer that permission is not granted so it can show a warning
-        notifyPopup('permission-status', { granted: false });
-      }
-    }
-  }
+  // RACE-FIX: Prevent concurrent start calls from creating duplicate entries
+  if (_startTimerInProgress) return { error: 'Timer start already in progress' };
+  _startTimerInProgress = true;
 
   try {
-    const result = await apiClient.startTimer(projectId);
-    currentEntry = result.entry;
-    _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
-    isTimerRunning = true;
-    todayTotalCurrentProject = result.today_total ?? 0;
-    posthog.capture(currentEntry?.user_id || 'unknown', 'timer_started', { project_id: projectId });
-
-    const todayTotalForPopup = todayTotalCurrentProject;
-    notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup });
-    setImmediate(() => afterStartTimer(projectId, todayTotalForPopup));
-    return { success: true, entry: currentEntry, todayTotal: todayTotalForPopup };
-  } catch (e) {
-    const status = e.response?.status;
-
-    // 409 = timer already running on server — sync local state
-    if (status === 409) {
-      try {
-        await apiClient.stopTimer();
-      } catch {}
-
-      try {
-        const retryResult = await apiClient.startTimer(projectId);
-        currentEntry = retryResult.entry;
-        _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
-        isTimerRunning = true;
-        todayTotalCurrentProject = retryResult.today_total ?? 0;
-        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
-        setImmediate(() => afterStartTimer(projectId, todayTotalCurrentProject));
-        return { success: true, entry: currentEntry, todayTotal: todayTotalCurrentProject };
-      } catch (retryErr) {
-        return { error: retryErr.response?.data?.message || retryErr.message };
+    // ── Pre-start permission gate (macOS only) ──────────────────────────────
+    // Check screen recording permission BEFORE starting the timer so the user
+    // is not surprised by a permission prompt mid-tracking.
+    if (process.platform === 'darwin' && _screenPermissionGranted !== true) {
+      checkScreenRecordingPermission();
+      if (!_screenPermissionGranted) {
+        // Probe desktopCapturer so TrackFlow registers in the Screen Recording
+        // list before we direct the user to System Settings.
+        const probeGranted = await probeScreenRecordingPermission();
+        if (probeGranted) {
+          console.log('[Timer] Probe confirmed permission — proceeding with timer start');
+        } else {
+          console.log('[Timer] Screen recording permission not granted — showing onboarding');
+          const permResult = await showScreenPermissionOnboarding({
+            isPreStart: true,
+            wasTracking: false,
+          });
+          if (permResult === 'opened-settings') {
+            // User went to settings — don't start timer yet. They need to restart.
+            return { error: 'Please grant Screen Recording permission and restart the app. Your project selection will be remembered.' };
+          }
+          // User clicked "Skip for Now" — let them track without screenshots
+          console.log('[Timer] User skipped permission — starting timer without screenshot capability');
+          // Notify renderer that permission is not granted so it can show a warning
+          notifyPopup('permission-status', { granted: false });
+        }
       }
     }
 
-    return { error: e.response?.data?.message || e.message };
+    // LOCAL-FIRST: Record timer start in SQLite immediately.
+    // The local timestamp is the source of truth — never overwritten.
+    const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const idempotencyKey = generateIdempotencyKey();
+    const localStartedAt = new Date().toISOString();
+    _cachedStartedAtMs = Date.now();
+
+    saveLocalTimerStart(localId, idempotencyKey, projectId, localStartedAt);
+    console.log(`[Timer] Local start recorded: ${localId}, key=${idempotencyKey}`);
+
+    // Set local state immediately — timer is running regardless of network
+    const localEntry = {
+      id: localId,
+      started_at: localStartedAt,
+      project_id: projectId,
+      idempotency_key: idempotencyKey,
+      _offline: true,
+      _localId: localId,
+    };
+    currentEntry = localEntry;
+    isTimerRunning = true;
+    todayTotalCurrentProject = 0;
+
+    // Try to sync with server (non-blocking for the user)
+    try {
+      const result = await apiClient.startTimer(projectId, idempotencyKey);
+      // Server confirmed — update local state with server entry
+      currentEntry = { ...result.entry, _localId: localId, idempotency_key: idempotencyKey };
+      _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+      todayTotalCurrentProject = result.today_total ?? 0;
+      markLocalTimerStartSynced(localId, result.entry.id);
+      posthog.capture(currentEntry?.user_id || 'unknown', 'timer_started', { project_id: projectId });
+
+      const todayTotalForPopup = todayTotalCurrentProject;
+      notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup });
+      setImmediate(() => afterStartTimer(projectId, todayTotalForPopup));
+      return { success: true, entry: currentEntry, todayTotal: todayTotalForPopup };
+    } catch (e) {
+      const status = e.response?.status;
+
+      // 409 = timer already running on server — sync local state
+      if (status === 409) {
+        try {
+          await apiClient.stopTimer();
+        } catch {}
+
+        try {
+          const retryResult = await apiClient.startTimer(projectId, idempotencyKey);
+          currentEntry = { ...retryResult.entry, _localId: localId, idempotency_key: idempotencyKey };
+          _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+          isTimerRunning = true;
+          todayTotalCurrentProject = retryResult.today_total ?? 0;
+          markLocalTimerStartSynced(localId, retryResult.entry.id);
+          notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
+          setImmediate(() => afterStartTimer(projectId, todayTotalCurrentProject));
+          return { success: true, entry: currentEntry, todayTotal: todayTotalCurrentProject };
+        } catch (retryErr) {
+          // Still offline or server error — timer is running locally
+          console.warn('[Timer] 409 retry failed, continuing locally:', retryErr.message);
+        }
+      }
+
+      // Network failure or any other error — timer is already running locally
+      console.log('[Timer] API start failed, continuing in local-first mode:', e.message);
+      // Queue the start for later sync
+      offlineQueue?.add('timer_start', {
+        project_id: projectId,
+        idempotency_key: idempotencyKey,
+        started_at: localStartedAt,
+      });
+      notifyPopup('timer-started', { ...localEntry, todayTotal: 0, offline: true });
+      setImmediate(() => afterStartTimer(projectId, 0));
+      return { success: true, entry: localEntry, todayTotal: 0, offline: true };
+    }
+  } finally {
+    _startTimerInProgress = false;
   }
 }
 
@@ -1788,27 +2008,53 @@ async function stopTimer() {
     await activityMonitor.sendFinalHeartbeat().catch(() => {});
   }
 
-  // Server-first stop: call API before updating local state.
-  // If API fails, keep local state as running and show error notification.
-  // If API call times out (5s), stop locally anyway and queue for offline sync.
+  // LOCAL-FIRST: Record stop in SQLite immediately with precise timestamps.
+  const localEndedAt = new Date().toISOString();
+  const localDuration = sessionElapsed;
+  const localStartedAtIso = currentEntry?.started_at || localEndedAt;
+  const localId = currentEntry?._localId || null;
+
+  if (localId) {
+    saveLocalTimerStop(localId, localEndedAt, localDuration);
+    console.log(`[Timer] Local stop recorded: ${localId}, duration=${localDuration}s`);
+  }
+
+  // Try to sync stop with server (non-blocking for local state)
   let serverResult = null;
   let serverStopFailed = false;
   try {
-    const stopPromise = apiClient.stopTimer();
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('API stop timeout')), 5000)
-    );
-    serverResult = await Promise.race([stopPromise, timeoutPromise]);
+    const stopPayload = {};
+    // Send local timestamps for offline sync accuracy
+    if (currentEntry?._offline || currentEntry?._localId) {
+      stopPayload.started_at = localStartedAtIso;
+      stopPayload.ended_at = localEndedAt;
+    }
+    serverResult = await apiClient.stopTimer(stopPayload);
+    // Mark synced in local DB
+    if (localId) markLocalTimerStopSynced(localId);
   } catch (e) {
     serverStopFailed = true;
-    if (e.message === 'API stop timeout') {
-      // Timeout: stop locally and let offline sync handle it
-      console.warn('[Timer] API stop timed out — stopping locally');
+    if (!e.response || e.code === 'ECONNABORTED') {
+      // Network error or timeout — stop locally, queue for sync
+      console.warn('[Timer] Server stop failed (offline/timeout) — queueing');
+      offlineQueue?.add('timer_stop', {
+        entry_id: currentEntry?.id,
+        started_at: localStartedAtIso,
+        ended_at: localEndedAt,
+        idempotency_key: currentEntry?.idempotency_key || null,
+        project_id: currentEntry?.project_id,
+      });
     } else {
-      // Non-timeout API error: keep timer running and notify user
-      console.error('[Timer] Server stop failed:', e.message);
-      notifyPopup('error', { message: 'Failed to stop timer on server. Please try again.' });
-      return { error: e.response?.data?.message || e.message };
+      // Server returned an error but we already stopped locally
+      console.error('[Timer] Server stop returned error:', e.message);
+      // Queue it anyway — time must not be lost
+      offlineQueue?.add('timer_stop', {
+        entry_id: currentEntry?.id,
+        started_at: localStartedAtIso,
+        ended_at: localEndedAt,
+        idempotency_key: currentEntry?.idempotency_key || null,
+        project_id: currentEntry?.project_id,
+      });
     }
   }
 
@@ -1855,6 +2101,110 @@ async function stopTimer() {
   return { success: true, entry: null, todayTotal: localStoppedProjectTotal };
 }
 
+// ── Reconciliation on Reconnect ─────────────────────────────────────────────
+// When network comes back, compare local SQLite timer state vs server state.
+// Preference: never lose time.
+async function reconcileTimerState() {
+  if (!apiClient) return;
+  try {
+    const serverStatus = await apiClient.getTimerStatus();
+    const localActive = getActiveLocalTimer();
+
+    if (localActive && !localActive.synced_start) {
+      // Local has an unsynced start — push it to server
+      console.log('[Reconcile] Pushing unsynced local start to server');
+      try {
+        const result = await apiClient.startTimer(
+          localActive.project_id || null,
+          localActive.idempotency_key
+        );
+        markLocalTimerStartSynced(localActive.id, result.entry.id);
+
+        // If local also has an unsynced stop, push that too
+        if (localActive.ended_at && !localActive.synced_stop) {
+          try {
+            await apiClient.stopTimer({
+              started_at: localActive.started_at,
+              ended_at: localActive.ended_at,
+            });
+            markLocalTimerStopSynced(localActive.id);
+          } catch (stopErr) {
+            console.warn('[Reconcile] Stop sync failed, will retry:', stopErr.message);
+          }
+        }
+      } catch (startErr) {
+        if (startErr.response?.status === 409) {
+          // Server already has a running timer — check if it's ours (idempotency)
+          console.log('[Reconcile] Server has running timer (409)');
+        } else {
+          console.warn('[Reconcile] Start sync failed, will retry:', startErr.message);
+        }
+      }
+    } else if (!serverStatus.running && isTimerRunning && currentEntry?._localId) {
+      // Server has no open entry but local does — push start with original timestamp
+      console.log('[Reconcile] Server has no timer but local is running — pushing start');
+      const key = currentEntry?.idempotency_key || generateIdempotencyKey();
+      try {
+        const result = await apiClient.startTimer(currentEntry?.project_id || null, key);
+        if (currentEntry?._localId) {
+          markLocalTimerStartSynced(currentEntry._localId, result.entry.id);
+        }
+        // Update local entry with server data
+        currentEntry = { ...result.entry, _localId: currentEntry?._localId, idempotency_key: key };
+      } catch (e) {
+        console.warn('[Reconcile] Push start failed:', e.message);
+      }
+    } else if (serverStatus.running && isTimerRunning) {
+      // Both have open entries — use the one with earlier started_at (never lose time)
+      const serverStartMs = new Date(serverStatus.entry.started_at).getTime();
+      const localStartMs = _cachedStartedAtMs || Date.now();
+      if (serverStartMs <= localStartMs) {
+        // Server entry is older or same — adopt server state
+        currentEntry = { ...serverStatus.entry, _localId: currentEntry?._localId };
+        _cachedStartedAtMs = serverStartMs;
+        console.log('[Reconcile] Adopted server entry (earlier started_at)');
+      } else {
+        console.log('[Reconcile] Kept local entry (earlier started_at)');
+      }
+    }
+
+    // Also sync any fully unsynced sessions from the DB
+    const unsynced = getUnsyncedTimerSessions();
+    for (const session of unsynced) {
+      if (session.id === currentEntry?._localId) continue; // Skip active session
+      if (!session.synced_start) {
+        try {
+          const result = await apiClient.startTimer(session.project_id || null, session.idempotency_key);
+          markLocalTimerStartSynced(session.id, result.entry.id);
+          if (session.ended_at) {
+            await apiClient.stopTimer({
+              started_at: session.started_at,
+              ended_at: session.ended_at,
+            });
+            markLocalTimerStopSynced(session.id);
+          }
+        } catch (e) {
+          console.warn(`[Reconcile] Session ${session.id} sync failed:`, e.message);
+        }
+      } else if (session.ended_at && !session.synced_stop) {
+        try {
+          await apiClient.stopTimer({
+            started_at: session.started_at,
+            ended_at: session.ended_at,
+          });
+          markLocalTimerStopSynced(session.id);
+        } catch (e) {
+          console.warn(`[Reconcile] Session ${session.id} stop sync failed:`, e.message);
+        }
+      }
+    }
+
+    cleanOldLocalTimerSessions();
+  } catch (e) {
+    console.error('[Reconcile] Failed:', e.message);
+  }
+}
+
 // Periodically sync timer state with server to stay in sync with web dashboard
 let _configRefetchCycle = 0;
 let _isSyncing = false; // M6 FIX: guard against concurrent sync cycles
@@ -1882,18 +2232,21 @@ function startTimerSync() {
       }
     }
 
+    // CONNECTIVITY FIX: Skip sync when offline to avoid unnecessary errors
+    if (networkMonitor && !networkMonitor.isOnline) {
+      _isSyncing = false;
+      return;
+    }
+
     try {
       const status = await apiClient.getTimerStatus();
       const globalTotal = status.today_total ?? 0;
       const elapsed = status.elapsed_seconds ?? 0;
       if (status.running) {
         todayTotalGlobal = Math.max(0, globalTotal - elapsed);
-        try {
-          const withElapsed = await apiClient.getTodayTotal(status.entry?.project_id ?? null);
-          todayTotalCurrentProject = Math.max(0, withElapsed - elapsed);
-        } catch {
-          todayTotalCurrentProject = todayTotalGlobal;
-        }
+        // BUG-1 FIX: Use project_today_total from the same atomic response to avoid race conditions
+        const projectTotal = status.project_today_total ?? globalTotal;
+        todayTotalCurrentProject = Math.max(0, projectTotal - elapsed);
       } else {
         todayTotalGlobal = globalTotal;
         todayTotalCurrentProject = 0;
@@ -1903,11 +2256,7 @@ function startTimerSync() {
         isTimerRunning = true;
         currentEntry = status.entry;
         _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
-        try {
-          todayTotalCurrentProject = Math.max(0, (await apiClient.getTodayTotal(status.entry?.project_id ?? null)) - (status.elapsed_seconds ?? 0));
-        } catch {
-          todayTotalCurrentProject = 0;
-        }
+        // BUG-1 FIX: project_today_total already set above from atomic response
         activityMonitor?.start();
         screenshotService?.start(currentEntry.id);
         idleDetector?.start();
@@ -1915,6 +2264,14 @@ function startTimerSync() {
         updateTrayIcon(true);
         notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
       } else if (!status.running && isTimerRunning) {
+        // BUG-2 FIX: Don't override local state while idle alert is showing — the server may show
+        // timer as stopped because idle-discard split the entry, but locally we're still
+        // in the idle flow and the user hasn't responded yet.
+        if (idleDetector?.isIdleActive()) {
+          console.log('[TimerSync] Server says stopped but idle alert is active — keeping local state');
+          _isSyncing = false;
+          return;
+        }
         isTimerRunning = false;
         currentEntry = null;
         _cachedStartedAtMs = null;
@@ -2040,7 +2397,10 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     });
     return;
   }
-  if (!isTimerRunning) return;
+  // BUG-2 FIX: Check idle detector state instead of isTimerRunning to avoid race condition
+  // where a concurrent sync cycle temporarily sets isTimerRunning=false, preventing the
+  // modal from appearing. The idle detector is the authoritative source of idle state.
+  if (!idleDetector?.isIdleActive()) return;
 
   screenshotService?.stop();
 

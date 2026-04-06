@@ -11,37 +11,60 @@ class TimerController extends Controller
 {
     public function __construct(private TimerService $timerService) {}
 
-    // TIME-01: Start timer
+    // TIME-01: Start timer (with idempotency key support for offline sync)
     public function start(Request $request): JsonResponse
     {
         $request->validate([
             'project_id' => 'nullable|uuid',
             'task_id' => 'nullable|uuid',
             'notes' => 'nullable|string|max:1000',
+            'idempotency_key' => 'nullable|string|max:255',
         ]);
 
         try {
-            $entry = $this->timerService->start($request->only('project_id', 'task_id', 'notes'));
+            $result = $this->timerService->start(
+                $request->only('project_id', 'task_id', 'notes', 'idempotency_key')
+            );
 
-            // Return today's total for this project so header shows correct total (resumes from where it stopped)
+            $entry = $result['entry'];
+            $isExisting = $result['is_existing'];
             $todayTotal = $this->timerService->todayTotal($entry->project_id);
 
-            return response()->json(['entry' => $entry, 'today_total' => $todayTotal], 201);
+            return response()->json(
+                ['entry' => $entry, 'today_total' => $todayTotal],
+                $isExisting ? 200 : 201
+            );
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 409);
         }
     }
 
-    // TIME-02: Stop timer
-    public function stop(): JsonResponse
+    // TIME-02: Stop timer (with offline timestamp support)
+    public function stop(Request $request): JsonResponse
     {
-        try {
-            $entry = $this->timerService->stop();
+        $request->validate([
+            'started_at' => 'nullable|date|before_or_equal:now',
+            'ended_at' => 'nullable|date|before_or_equal:now',
+        ]);
 
-            // Return today's total for this project so header shows correct total
+        // Additional cross-field validation: ended_at must be after started_at
+        if ($request->filled('started_at') && $request->filled('ended_at')) {
+            $request->validate([
+                'ended_at' => 'after:started_at',
+            ]);
+        }
+
+        try {
+            $result = $this->timerService->stop(
+                $request->only('started_at', 'ended_at')
+            );
+
+            $entry = $result['entry'];
             $todayTotal = $this->timerService->todayTotal($entry->project_id);
 
             return response()->json(['entry' => $entry, 'today_total' => $todayTotal]);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 404);
         }

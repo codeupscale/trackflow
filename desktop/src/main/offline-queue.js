@@ -15,11 +15,14 @@ const MAX_SCREENSHOT_SIZE = 2 * 1024 * 1024;
 // Max total queue size before pruning old entries
 const MAX_QUEUE_ENTRIES = 1000;
 
+// Exponential backoff schedule: 5s, 15s, 30s, 60s, 120s (cap)
+const BACKOFF_SCHEDULE = [5000, 15000, 30000, 60000, 120000];
+
 class OfflineQueue {
   constructor() {
     this.db = null;
-    this.retryDelay = 5000; // Start with 5s
-    this.maxRetryDelay = 300000; // Max 5 min
+    this.retryDelay = BACKOFF_SCHEDULE[0];
+    this._backoffStep = 0;
     this.flushing = false;
     this._flushTimer = null;
     this._screenshotDir = null;
@@ -108,7 +111,23 @@ class OfflineQueue {
       }
     }
 
-    // Future migrations go here as: if (currentVersion < 2) { ... }
+    // Migration 2: Add idempotency_key column for timer start dedup
+    if (currentVersion < 2) {
+      try {
+        const cols = this.db.pragma('table_info(queue)');
+        const hasIdempotencyKey = cols.some(c => c.name === 'idempotency_key');
+        if (!hasIdempotencyKey) {
+          this.db.exec('ALTER TABLE queue ADD COLUMN idempotency_key TEXT');
+        }
+        this.db.prepare('UPDATE schema_version SET version = 2').run();
+        currentVersion = 2;
+        console.log('[OfflineQueue] Migration 2 applied: added idempotency_key column');
+      } catch (e) {
+        console.error('[OfflineQueue] Migration 2 failed:', e.message);
+      }
+    }
+
+    // Future migrations go here as: if (currentVersion < 3) { ... }
   }
 
   _pruneOldEntries() {
@@ -215,7 +234,8 @@ class OfflineQueue {
 
       if (items.length === 0) {
         this.flushing = false;
-        this.retryDelay = 5000;
+        this._backoffStep = 0;
+        this.retryDelay = BACKOFF_SCHEDULE[0];
         return;
       }
 
@@ -277,6 +297,36 @@ class OfflineQueue {
           } else if (item.type === 'idle_discard') {
             await apiClient.reportIdleTime(data);
             deleteIds.push(item.id);
+          } else if (item.type === 'timer_start') {
+            // Offline timer start — push to server with idempotency key
+            try {
+              await apiClient.startTimer(data.project_id || null, data.idempotency_key || null);
+              deleteIds.push(item.id);
+            } catch (startErr) {
+              // 200/201 = success (idempotency hit or new entry)
+              // 409 = timer already running — also success for our purpose
+              if (startErr.response?.status === 409) {
+                deleteIds.push(item.id);
+              } else {
+                throw startErr;
+              }
+            }
+          } else if (item.type === 'timer_stop') {
+            // CONNECTIVITY FIX: Retry stopping timer with offline timestamps
+            try {
+              const stopPayload = {};
+              if (data.started_at) stopPayload.started_at = data.started_at;
+              if (data.ended_at) stopPayload.ended_at = data.ended_at;
+              await apiClient.stopTimer(stopPayload);
+              deleteIds.push(item.id);
+            } catch (stopErr) {
+              // If 404 (no timer running), the timer was already stopped — success
+              if (stopErr.response?.status === 404) {
+                deleteIds.push(item.id);
+              } else {
+                throw stopErr; // Let outer catch handle retry logic
+              }
+            }
           }
         } catch (e) {
           // Update attempt count
@@ -323,13 +373,17 @@ class OfflineQueue {
         }
       }
 
-      this.retryDelay = 5000; // Reset on success
+      // Reset backoff on success
+      this._backoffStep = 0;
+      this.retryDelay = BACKOFF_SCHEDULE[0];
 
       // L7: Clean up orphaned screenshot files after successful flush
       this.cleanupOrphanedFiles();
     } catch (e) {
       console.error('Queue flush failed:', e.message);
-      this.retryDelay = Math.min(this.retryDelay * 2, this.maxRetryDelay);
+      // Exponential backoff: step through schedule 5s → 15s → 30s → 60s → 120s (cap)
+      this._backoffStep = Math.min(this._backoffStep + 1, BACKOFF_SCHEDULE.length - 1);
+      this.retryDelay = BACKOFF_SCHEDULE[this._backoffStep];
     }
 
     this.flushing = false;

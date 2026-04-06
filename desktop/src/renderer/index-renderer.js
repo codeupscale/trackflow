@@ -40,6 +40,15 @@ const permissionBanner = document.getElementById('permissionBanner');
 const fixPermissionBtn = document.getElementById('fixPermissionBtn');
 const wallpaperBanner = document.getElementById('wallpaperBanner');
 const fixWallpaperBtn = document.getElementById('fixWallpaperBtn');
+const offlineBanner = document.getElementById('offlineBanner');
+
+// CONNECTIVITY FIX: Network status indicator
+window.trackflow.getNetworkStatus().then((status) => {
+  if (offlineBanner) offlineBanner.style.display = status.online ? 'none' : 'flex';
+}).catch(() => {});
+window.trackflow.onNetworkStatus((data) => {
+  if (offlineBanner) offlineBanner.style.display = data.online ? 'none' : 'flex';
+});
 
 function formatTime(seconds) {
   const h = Math.floor(seconds / 3600).toString().padStart(2, '0');

@@ -82,8 +82,14 @@ const Notification = jest.fn().mockImplementation(() => ({
 }));
 Notification.isSupported = jest.fn(() => true);
 
+const net = {
+  isOnline: jest.fn(() => true),
+};
+
 const powerMonitor = {
   getSystemIdleTime: jest.fn(() => 0),
+  on: jest.fn(),
+  removeAllListeners: jest.fn(),
 };
 
 const desktopCapturer = {
@@ -136,6 +142,7 @@ module.exports = {
   shell,
   dialog,
   Notification,
+  net,
   powerMonitor,
   desktopCapturer,
   screen,
