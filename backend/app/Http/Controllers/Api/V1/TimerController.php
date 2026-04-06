@@ -22,7 +22,7 @@ class TimerController extends Controller
         ]);
 
         try {
-            $result = $this->timerService->start(
+            $result = $this->timerService->startWithMeta(
                 $request->only('project_id', 'task_id', 'notes', 'idempotency_key')
             );
 
@@ -55,7 +55,7 @@ class TimerController extends Controller
         }
 
         try {
-            $result = $this->timerService->stop(
+            $result = $this->timerService->stopWithMeta(
                 $request->only('started_at', 'ended_at')
             );
 
