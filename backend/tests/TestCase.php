@@ -20,7 +20,7 @@ abstract class TestCase extends BaseTestCase
     private bool $permissionsSeeded = false;
 
     /**
-     * Permission key → id map, populated by seedPermissions().
+     * Permission key -> id map, populated by seedPermissions().
      */
     private array $permissionMap = [];
 
@@ -52,7 +52,7 @@ abstract class TestCase extends BaseTestCase
         return $user;
     }
 
-    // ── Private RBAC helpers ──────────────────────────────────────────────
+    // -- Private RBAC helpers --
 
     /**
      * Seed all permission rows exactly once per test.
@@ -134,7 +134,7 @@ abstract class TestCase extends BaseTestCase
             ->first();
 
         if (! $role) {
-            return; // Role not found — fallback to column-based check
+            return; // Role not found -- fallback to column-based check
         }
 
         DB::table('user_roles')->insert([

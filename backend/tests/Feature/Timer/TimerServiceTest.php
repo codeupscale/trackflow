@@ -493,7 +493,7 @@ class TimerServiceTest extends TestCase
 
     // ─── pause() ─────────────────────────────────────────────────────
 
-    public function test_pause_stops_timer_and_creates_idle_entry(): void
+    public function test_pause_stops_timer_without_creating_idle_entry(): void
     {
         $project = Project::factory()->create(['organization_id' => $this->org->id]);
         $project->members()->attach($this->user->id);
@@ -504,15 +504,15 @@ class TimerServiceTest extends TestCase
 
         $this->assertNotNull($stoppedEntry->ended_at);
 
-        // Check that an idle entry was created
+        // Verify no idle entry was created (zero-duration idle entries were removed
+        // because they corrupted duration totals and reports)
         $idleEntry = TimeEntry::withoutGlobalScopes()
             ->where('user_id', $this->user->id)
             ->where('type', 'idle')
             ->latest('id')
             ->first();
 
-        $this->assertNotNull($idleEntry);
-        $this->assertEquals($project->id, $idleEntry->project_id);
+        $this->assertNull($idleEntry);
     }
 
     // ─── reportIdle() ────────────────────────────────────────────────

@@ -431,6 +431,84 @@ class PermissionSeeder extends Seeder
         });
     }
 
+    // ── Test helper methods ───────────────────────────────────────────────
+
+    /**
+     * Seed only the permissions table (no roles/role_permissions).
+     * Used by Tests\TestCase::afterRefreshingDatabase() so tests have
+     * a populated permissions table without needing any orgs to exist yet.
+     */
+    public function seedPermissionsOnly(): void
+    {
+        // Idempotent: skip if permissions are already seeded
+        if (DB::table('permissions')->count() > 0) {
+            return;
+        }
+
+        $now = now();
+
+        foreach ($this->getPermissions() as [$key, $module, $action, $description, $hasScope]) {
+            DB::table('permissions')->insert([
+                'id'          => Str::uuid()->toString(),
+                'key'         => $key,
+                'module'      => $module,
+                'action'      => $action,
+                'description' => $description,
+                'has_scope'   => $hasScope,
+            ]);
+        }
+    }
+
+    /**
+     * Seed the 4 system roles + role_permissions for a single organization.
+     * Used by Tests\TestCase::seedSystemRoles() when createOrganization() is called.
+     */
+    public function seedRolesForOrg(string $orgId): void
+    {
+        $now = now();
+
+        // Build permission map from the already-seeded permissions table
+        $permissionMap = DB::table('permissions')
+            ->pluck('id', 'key')
+            ->toArray();
+
+        $roleDefinitions = [
+            ['name' => 'owner',    'display_name' => 'Owner',    'priority' => 100, 'is_default' => false],
+            ['name' => 'admin',    'display_name' => 'Admin',    'priority' => 75,  'is_default' => false],
+            ['name' => 'manager',  'display_name' => 'Manager',  'priority' => 50,  'is_default' => false],
+            ['name' => 'employee', 'display_name' => 'Employee', 'priority' => 10,  'is_default' => true],
+        ];
+
+        $orgRoleIds = [];
+
+        foreach ($roleDefinitions as $def) {
+            $roleId = Str::uuid()->toString();
+            DB::table('roles')->insert([
+                'id'              => $roleId,
+                'organization_id' => $orgId,
+                'name'            => $def['name'],
+                'display_name'    => $def['display_name'],
+                'is_system'       => true,
+                'is_default'      => $def['is_default'],
+                'priority'        => $def['priority'],
+                'created_at'      => $now,
+                'updated_at'      => $now,
+            ]);
+            $orgRoleIds[$def['name']] = $roleId;
+        }
+
+        // Owner: NO role_permissions rows (bypass in code)
+
+        // Admin permissions
+        $this->insertRolePermissions($orgRoleIds['admin'], $this->getAdminPermissions(), $permissionMap);
+
+        // Manager permissions
+        $this->insertRolePermissions($orgRoleIds['manager'], $this->getManagerPermissions(), $permissionMap);
+
+        // Employee permissions
+        $this->insertRolePermissions($orgRoleIds['employee'], $this->getEmployeePermissions(), $permissionMap);
+    }
+
     /**
      * Bulk-insert role_permissions rows for a single role.
      */
