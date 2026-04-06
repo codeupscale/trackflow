@@ -310,6 +310,14 @@
         <button class="permission-banner-btn" id="fixWallpaperBtn">Fix</button>
       </div>
 
+      <!-- Offline status banner — shown when network is unavailable -->
+      <div class="permission-banner" id="offlineBanner" style="display:none" role="status">
+        <div class="permission-banner-text">
+          <span class="permission-banner-icon" aria-hidden="true" style="background:rgba(239,68,68,0.3);color:#ef4444">!</span>
+          <span>Offline — data will sync when connected</span>
+        </div>
+      </div>
+
       <div class="timer-display">
         <div class="time stopped" id="timerDisplay" role="timer" aria-live="polite">00:00:00</div>
         <div class="status">

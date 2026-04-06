@@ -25,6 +25,7 @@ class TimeEntry extends Model
         'type',
         'activity_score',
         'notes',
+        'idempotency_key',
         'is_approved',
         'approved_by',
         'approved_at',

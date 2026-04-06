@@ -61,6 +61,15 @@ Every database query MUST be scoped by `organization_id`. The `GlobalOrganizatio
 - ALL renderer ↔ main communication through `contextBridge` in preload script
 - Token storage: AES-256-GCM via Node.js `crypto`. NOT keytar, NOT safeStorage (both trigger macOS keychain popups on ad-hoc signed apps)
 - Screenshots on macOS: window capture first (avoids wallpaper-only bug), screen capture fallback
+- **Logout conditions** (enforced in `api-client.js` interceptor): `forceLogout()` is ONLY triggered when token refresh returns HTTP 401 or 403 (genuine auth rejection: invalid/expired refresh token, password changed, token revoked). Network errors, timeouts, DNS failures, and 5xx server errors during token refresh do NOT trigger logout — the request simply fails and the user stays authenticated. This prevents the "unconditional logout" bug where transient network issues would log the user out.
+- **Logout cleanup**: Both `forceLogout()` and `performLogout()` clean up: timer state, all services (activityMonitor, screenshotService, idleDetector, networkMonitor), powerMonitor/app listeners (`removeSessionListeners()`), timerSync interval, tray timer, offline queue, and encrypted token file.
+- **Timer start mutex**: `startTimer()` uses a `_startTimerInProgress` flag with `try/finally` to prevent concurrent API calls from creating duplicate time entries on rapid double-clicks.
+- **Local-first timer architecture**: Timer starts/stops write to SQLite (`timer_sessions` table) BEFORE calling the API. The local `started_at` timestamp is the source of truth and is never overwritten. If the API call fails (timeout, offline, server error), the timer continues running locally. On reconnect, `reconcileTimerState()` compares local vs server state and syncs using idempotency keys. The server `POST /timer/start` accepts an `idempotency_key`; if the key matches an existing entry, it returns that entry (200) instead of creating a duplicate. `POST /timer/stop` accepts optional `started_at`/`ended_at` timestamps for offline sync — both are validated server-side to be in the past.
+- **Offline sync protocol**: Timer start/stop events are queued in SQLite with full timestamps. On reconnect, the queue flushes with exponential backoff: 5s, 15s, 30s, 60s, 120s (cap). Backoff resets on success. `timer_start` entries include `idempotency_key` to prevent duplicates. `timer_stop` entries include `started_at`/`ended_at` so the server uses the local timestamps. 409 on start and 404 on stop are treated as success (already synced). A single retry scheduler handles all failed calls — no per-call retry storms.
+- **Platform-specific network detection**: macOS/Linux use Electron's `net.isOnline()` directly. Windows adds a ping fallback (`ping 1.1.1.1` with 3s timeout) since `net.isOnline()` can report false positives on Windows.
+- **Sleep/wake behavior**: On suspend, `_suspendedAt` is recorded and capture services are paused. On resume, the sleep gap is calculated and compared against the idle threshold. Long sleeps trigger the idle alert (discard/keep/reassign). Short sleeps resume tracking normally. After any resume, `reconcileTimerState()` runs followed by an offline queue flush.
+- **Offline queue**: Stores heartbeat data, screenshot file paths, and timer start/stop events only — no tokens or sensitive credentials in SQLite. Queue is closed and nullified on both logout paths to prevent cross-user data leakage.
+- **API timeouts**: Timer start/stop calls use 10s timeout. Screenshot uploads use 30s timeout. Default API timeout is 15s.
 
 ### 6. Performance Budgets
 | Metric | Target | Measured By |
@@ -197,8 +206,9 @@ Adds department/position org structure and leave management under `/api/v1/hr/`.
 | Org switcher | `web/src/components/org-switcher.tsx` |
 | Sidebar primitive | `web/src/components/ui/sidebar.tsx` (shadcn Sidebar with collapsible icon mode) |
 | Chart primitive | `web/src/components/ui/chart.tsx` (shadcn ChartContainer, ChartTooltip, ChartLegend) |
-| Desktop main | `desktop/src/main/index.js` |
-| Desktop services | `desktop/src/main/` (screenshot, activity, idle, offline, keychain) |
+| Desktop main | `desktop/src/main/index.js` (includes local-first timer with SQLite, reconciliation, sleep/wake) |
+| Desktop services | `desktop/src/main/` (screenshot, activity, idle, offline, keychain, network-monitor, api-client, timer-manager) |
+| Desktop timer tests | `desktop/test/timer-start.test.js`, `timer-stop.test.js`, `offline-sync.test.js`, `network-resilience.test.js`, `platform-compat.test.js` |
 | Build config | `desktop/package.json` (build field) |
 | Docker dev | `compose.yaml` |
 | Docker prod | `compose.production.yaml` |
