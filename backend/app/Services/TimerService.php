@@ -62,14 +62,16 @@ class TimerService
 
                     if ($existingEntry) {
                         $now = now();
+                        // Clock skew guard: ended_at must never be before started_at
+                        $endedAt = $now->lt($existingEntry->started_at) ? $existingEntry->started_at->copy() : $now;
                         $duration = min(
-                            (int) abs($now->diffInSeconds($existingEntry->started_at)),
+                            (int) $endedAt->diffInSeconds($existingEntry->started_at),
                             self::MAX_ENTRY_DURATION
                         );
                         $finalScore = $this->computeFinalActivityScore($existingEntry->id);
 
                         $existingEntry->update([
-                            'ended_at' => $now,
+                            'ended_at' => $endedAt,
                             'duration_seconds' => $duration,
                             'activity_score' => $finalScore ?? $existingEntry->activity_score ?? 0,
                         ]);
@@ -140,8 +142,10 @@ class TimerService
                     ->firstOrFail();
 
                 $now = now();
+                // Clock skew guard: ended_at must never be before started_at
+                $endedAt = $now->lt($entry->started_at) ? $entry->started_at->copy() : $now;
                 $duration = min(
-                    (int) abs($now->diffInSeconds($entry->started_at)),
+                    (int) $endedAt->diffInSeconds($entry->started_at),
                     self::MAX_ENTRY_DURATION
                 );
 
@@ -150,7 +154,7 @@ class TimerService
                 $finalScore = $this->computeFinalActivityScore($entry->id);
 
                 $entry->update([
-                    'ended_at' => $now,
+                    'ended_at' => $endedAt,
                     'duration_seconds' => $duration,
                     'activity_score' => $finalScore ?? $entry->activity_score ?? 0,
                 ]);
@@ -212,14 +216,16 @@ class TimerService
                     ->firstOrFail();
 
                 $now = now();
+                // Clock skew guard: ended_at must never be before started_at
+                $endedAt = $now->lt($currentEntry->started_at) ? $currentEntry->started_at->copy() : $now;
                 $duration = min(
-                    (int) abs($now->diffInSeconds($currentEntry->started_at)),
+                    (int) $endedAt->diffInSeconds($currentEntry->started_at),
                     self::MAX_ENTRY_DURATION
                 );
                 $finalScore = $this->computeFinalActivityScore($currentEntry->id);
 
                 $currentEntry->update([
-                    'ended_at' => $now,
+                    'ended_at' => $endedAt,
                     'duration_seconds' => $duration,
                     'activity_score' => $finalScore ?? $currentEntry->activity_score ?? 0,
                 ]);
@@ -256,23 +262,9 @@ class TimerService
 
     public function pause(): TimeEntry
     {
-        $stoppedEntry = $this->stop();
-
-        // Create idle entry (point-in-time record, zero duration)
-        $user = Auth::user();
-        $idleNow = now();
-        TimeEntry::create([
-            'organization_id' => $user->organization_id,
-            'user_id' => $user->id,
-            'project_id' => $stoppedEntry->project_id,
-            'task_id' => $stoppedEntry->task_id,
-            'started_at' => $idleNow,
-            'ended_at' => $idleNow,
-            'duration_seconds' => 0,
-            'type' => 'idle',
-        ]);
-
-        return $stoppedEntry;
+        // Stop the running timer and return the completed entry.
+        // No idle marker is created — zero-duration entries corrupt duration totals and reports.
+        return $this->stop();
     }
 
     /**

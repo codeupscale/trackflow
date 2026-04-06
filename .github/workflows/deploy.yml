@@ -1,22 +1,38 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# TrackFlow — Build & Deploy Pipeline
+# TrackFlow — Build, Test & Deploy Pipeline
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# Builds Docker images on GitHub Actions runners and deploys to production
-# via SSH. Images are pushed to GitHub Container Registry (ghcr.io).
+# Builds Docker images on GitHub Actions runners (NOT on the server — avoids
+# OOM on the resource-constrained production host), pushes to GHCR, then
+# deploys to production via SSH with zero-downtime rolling restarts.
+#
+# Pipeline gates (all must pass before deploy):
+#   1. PHPUnit tests (with PostgreSQL + Redis service containers)
+#   2. TypeScript type check (npx tsc --noEmit)
+#   3. Docker image build (must succeed)
+#   4. Post-deploy health check (rollback on failure)
 #
 # Triggers:
 #   - Push to main (auto-deploy, only changed services)
 #   - Manual dispatch (choose which services to build/deploy)
 #
 # Required secrets:
-#   DEPLOY_SSH_KEY       — SSH private key for production server
-#   DEPLOY_HOST          — Production server IP/hostname
-#   DEPLOY_USER          — SSH user (e.g. ubuntu)
+#   DEPLOY_SSH_KEY       — SSH private key for production server access
+#   DEPLOY_HOST          — Production server IP or hostname
+#   DEPLOY_USER          — SSH user on production server (e.g. ubuntu)
+#   GITHUB_TOKEN         — Auto-provided by GitHub Actions for GHCR auth
 #
 # Optional secrets:
-#   NEXT_PUBLIC_POSTHOG_KEY      — PostHog analytics key
-#   NEXT_PUBLIC_GOOGLE_CLIENT_ID — Google OAuth client ID
+#   NEXT_PUBLIC_POSTHOG_KEY      — PostHog analytics key (baked into web image)
+#   NEXT_PUBLIC_GOOGLE_CLIENT_ID — Google OAuth client ID (baked into web image)
+#
+# Zero-downtime strategy:
+#   1. Build new Docker image in GitHub Actions runner (not on server)
+#   2. Push image to ghcr.io
+#   3. SSH to server: docker compose pull (download only, no restart)
+#   4. Rolling restart: recreate containers one at a time
+#   5. Health check gate: wait for all containers to report (healthy)
+#   6. Automatic rollback if health check fails within 90 seconds
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -75,16 +91,150 @@ jobs:
             web:
               - 'web/**'
 
-  # ─── BUILD BACKEND IMAGE ──────────────────────────────────────────────────
+  # ─── GATE: BACKEND TESTS ─────────────────────────────────────────────────
+  # PHPUnit must pass before any deploy. Uses PostgreSQL + Redis service
+  # containers to match production environment.
 
-  build-api:
-    name: Build API image
+  test-backend:
+    name: Backend tests (PHPUnit)
     runs-on: ubuntu-latest
     needs: [changes]
     if: |
       always() &&
       (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'backend')) ||
       (needs.changes.result == 'success' && needs.changes.outputs.backend == 'true')
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: trackflow
+          POSTGRES_PASSWORD: trackflow_test
+          POSTGRES_DB: trackflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trackflow"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, pdo_pgsql, pgsql, redis, gd, bcmath
+          coverage: none
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/composer
+          key: ${{ runner.os }}-composer-${{ hashFiles('backend/composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Run migrations
+        run: php artisan migrate --force
+        env:
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: trackflow_test
+          DB_USERNAME: trackflow
+          DB_PASSWORD: trackflow_test
+
+      - name: Run PHPUnit tests
+        run: php artisan test --exclude-group=external
+        env:
+          APP_ENV: testing
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: trackflow_test
+          DB_USERNAME: trackflow
+          DB_PASSWORD: trackflow_test
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: 6379
+
+      - name: Audit PHP dependencies (non-blocking)
+        if: always()
+        continue-on-error: true
+        run: composer audit
+
+  # ─── GATE: FRONTEND TYPE CHECK ───────────────────────────────────────────
+  # TypeScript must compile cleanly. Also runs npm audit as a warning.
+
+  test-frontend:
+    name: Frontend type check
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: |
+      always() &&
+      (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'web')) ||
+      (needs.changes.result == 'success' && needs.changes.outputs.web == 'true')
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+
+      - name: Audit frontend dependencies (non-blocking)
+        if: always()
+        continue-on-error: true
+        run: npm audit --audit-level=critical
+
+  # ─── BUILD BACKEND IMAGE ──────────────────────────────────────────────────
+  # Built on GitHub Actions runner (NOT on the server) to avoid OOM.
+
+  build-api:
+    name: Build API image
+    runs-on: ubuntu-latest
+    needs: [changes, test-backend]
+    if: |
+      always() &&
+      (needs.test-backend.result == 'success' || needs.test-backend.result == 'skipped') &&
+      (
+        (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'backend')) ||
+        (needs.changes.result == 'success' && needs.changes.outputs.backend == 'true')
+      )
     permissions:
       contents: read
       packages: write
@@ -119,11 +269,14 @@ jobs:
   build-web:
     name: Build Web image
     runs-on: ubuntu-latest
-    needs: [changes]
+    needs: [changes, test-frontend]
     if: |
       always() &&
-      (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'web')) ||
-      (needs.changes.result == 'success' && needs.changes.outputs.web == 'true')
+      (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped') &&
+      (
+        (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'web')) ||
+        (needs.changes.result == 'success' && needs.changes.outputs.web == 'true')
+      )
     permissions:
       contents: read
       packages: write
@@ -162,8 +315,14 @@ jobs:
           cache-to: type=gha,mode=max,scope=web
 
   # ─── DEPLOY TO PRODUCTION ────────────────────────────────────────────────
-  # SSHs to the server, pulls new images, and recreates only affected
-  # containers. Infrastructure (postgres, redis) is never touched.
+  # Zero-downtime deployment:
+  #   1. Pull new images (old containers keep running)
+  #   2. Recreate containers one at a time (rolling restart)
+  #   3. Health check gate — wait for (healthy) status
+  #   4. Automatic rollback if health check fails within 90 seconds
+  #
+  # IMPORTANT: Never runs `docker compose build` on the server.
+  # Images are pre-built in GitHub Actions and pulled via GHCR.
 
   deploy:
     name: Deploy to production
@@ -191,70 +350,157 @@ jobs:
             echo "web=${{ needs.changes.outputs.web }}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Deploy via SSH
+      - name: Deploy via SSH (zero-downtime rolling restart)
         uses: appleboy/ssh-action@v1
+        env:
+          DEPLOY_API: ${{ steps.services.outputs.api }}
+          DEPLOY_WEB: ${{ steps.services.outputs.web }}
+          GH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: DEPLOY_API,DEPLOY_WEB,GH_ACTOR,GH_TOKEN,COMMIT_SHA
           script_stop: true
+          command_timeout: 5m
           script: |
             set -euo pipefail
             cd /home/ubuntu/infra
 
             echo "==> Logging in to GitHub Container Registry"
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            echo "${GH_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin
 
-            DEPLOY_API="${{ steps.services.outputs.api }}"
-            DEPLOY_WEB="${{ steps.services.outputs.web }}"
+            # ── 1. SNAPSHOT: Record current image digests for rollback ──
 
-            # ── Pull new images first (zero-downtime: old containers keep running) ──
-
-            if [ "$DEPLOY_API" = "true" ]; then
-              echo "==> Pulling API image"
-              docker pull ghcr.io/codeupscale/trackflow-api:latest
+            API_OLD_DIGEST=""
+            WEB_OLD_DIGEST=""
+            if [ "${DEPLOY_API}" = "true" ]; then
+              API_OLD_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/codeupscale/trackflow-api:latest 2>/dev/null || echo "")
+              echo "==> Current API digest: ${API_OLD_DIGEST:-none}"
+            fi
+            if [ "${DEPLOY_WEB}" = "true" ]; then
+              WEB_OLD_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/codeupscale/trackflow-web:latest 2>/dev/null || echo "")
+              echo "==> Current Web digest: ${WEB_OLD_DIGEST:-none}"
             fi
 
-            if [ "$DEPLOY_WEB" = "true" ]; then
-              echo "==> Pulling Web image"
+            # ── 2. PULL: Download new images (old containers keep serving traffic) ──
+
+            if [ "${DEPLOY_API}" = "true" ]; then
+              echo "==> Pulling API image (sha: ${COMMIT_SHA:0:8})"
+              docker pull ghcr.io/codeupscale/trackflow-api:latest
+            fi
+            if [ "${DEPLOY_WEB}" = "true" ]; then
+              echo "==> Pulling Web image (sha: ${COMMIT_SHA:0:8})"
               docker pull ghcr.io/codeupscale/trackflow-web:latest
             fi
 
-            # ── Recreate containers with new images ──
+            # ── 3. ROLLING RESTART: Recreate containers one at a time ──
+            # Each container's stop_grace_period (configured in compose) ensures
+            # in-flight requests complete before the old container is killed.
 
-            if [ "$DEPLOY_API" = "true" ]; then
-              echo "==> Recreating API containers"
+            if [ "${DEPLOY_API}" = "true" ]; then
+              echo "==> Rolling restart: tf-app"
               docker compose up -d --no-deps --force-recreate tf-app
-              docker compose up -d --no-deps --force-recreate tf-horizon
-              docker compose up -d --no-deps --force-recreate tf-reverb
-              docker compose up -d --no-deps --force-recreate tf-scheduler
-
-              echo "==> Gracefully terminating old Horizon workers"
-              docker compose exec tf-horizon php artisan horizon:terminate || true
 
               echo "==> Running migrations"
               docker compose exec tf-app php artisan migrate --force || true
+
+              echo "==> Rolling restart: tf-horizon"
+              docker compose up -d --no-deps --force-recreate tf-horizon
+              docker compose exec tf-horizon php artisan horizon:terminate 2>/dev/null || true
+
+              echo "==> Rolling restart: tf-scheduler"
+              docker compose up -d --no-deps --force-recreate tf-scheduler
+
+              echo "==> Rolling restart: tf-reverb"
+              docker compose up -d --no-deps --force-recreate tf-reverb
             fi
 
-            if [ "$DEPLOY_WEB" = "true" ]; then
-              echo "==> Recreating Web container"
+            if [ "${DEPLOY_WEB}" = "true" ]; then
+              echo "==> Rolling restart: tf-web"
               docker compose up -d --no-deps --force-recreate tf-web
             fi
 
-            # ── Health check ──
+            # ── 4. HEALTH CHECK GATE ──
+            # Wait up to 90 seconds for all TrackFlow containers to report healthy.
+            # If any container fails health check, trigger rollback.
 
-            echo "==> Waiting for containers to stabilize..."
-            sleep 15
+            echo "==> Waiting for containers to become healthy (timeout: 90s)..."
+            HEALTH_OK=true
+            SERVICES_TO_CHECK=""
 
-            echo "==> Container status"
+            if [ "${DEPLOY_API}" = "true" ]; then
+              SERVICES_TO_CHECK="tf-app tf-horizon tf-scheduler tf-reverb"
+            fi
+            if [ "${DEPLOY_WEB}" = "true" ]; then
+              SERVICES_TO_CHECK="${SERVICES_TO_CHECK} tf-web"
+            fi
+
+            for svc in ${SERVICES_TO_CHECK}; do
+              echo "  Checking health: ${svc}..."
+              ATTEMPTS=0
+              MAX_ATTEMPTS=18  # 18 * 5s = 90s
+              while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
+                STATUS=$(docker inspect --format='{{.State.Health.Status}}' "infra-${svc}-1" 2>/dev/null || echo "missing")
+                if [ "${STATUS}" = "healthy" ]; then
+                  echo "  [OK] ${svc} is healthy"
+                  break
+                fi
+                ATTEMPTS=$((ATTEMPTS + 1))
+                if [ $ATTEMPTS -ge $MAX_ATTEMPTS ]; then
+                  echo "  [FAIL] ${svc} did not become healthy within 90s (status: ${STATUS})"
+                  HEALTH_OK=false
+                fi
+                sleep 5
+              done
+            done
+
+            # ── 5. ROLLBACK on health check failure ──
+
+            if [ "${HEALTH_OK}" != "true" ]; then
+              echo ""
+              echo "!!! HEALTH CHECK FAILED — INITIATING ROLLBACK !!!"
+              echo ""
+
+              if [ "${DEPLOY_API}" = "true" ] && [ -n "${API_OLD_DIGEST}" ]; then
+                echo "==> Rolling back API to: ${API_OLD_DIGEST}"
+                docker pull "${API_OLD_DIGEST}" 2>/dev/null || true
+                docker tag "${API_OLD_DIGEST}" ghcr.io/codeupscale/trackflow-api:latest 2>/dev/null || true
+                docker compose up -d --no-deps --force-recreate tf-app tf-horizon tf-scheduler tf-reverb
+              fi
+
+              if [ "${DEPLOY_WEB}" = "true" ] && [ -n "${WEB_OLD_DIGEST}" ]; then
+                echo "==> Rolling back Web to: ${WEB_OLD_DIGEST}"
+                docker pull "${WEB_OLD_DIGEST}" 2>/dev/null || true
+                docker tag "${WEB_OLD_DIGEST}" ghcr.io/codeupscale/trackflow-web:latest 2>/dev/null || true
+                docker compose up -d --no-deps --force-recreate tf-web
+              fi
+
+              echo "==> Rollback complete. Waiting for rollback containers..."
+              sleep 15
+              docker compose ps --format "table {{.Name}}\t{{.Status}}" | grep "tf-"
+              echo ""
+              echo "!!! DEPLOY FAILED — ROLLED BACK TO PREVIOUS VERSION !!!"
+              exit 1
+            fi
+
+            # ── 6. SUCCESS: Report status ──
+
+            echo ""
+            echo "==> Deploy successful! Container status:"
             docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}" | grep "tf-"
 
-            echo "==> Resource usage"
+            echo ""
+            echo "==> Resource usage:"
             docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" | grep "tf-"
 
-            # ── Prune old images to reclaim disk ──
+            # ── 7. CLEANUP: Remove old images to reclaim disk ──
 
+            echo ""
             echo "==> Pruning dangling images"
             docker image prune -f
 
-            echo "==> Deploy complete"
+            echo ""
+            echo "==> Deploy complete (commit: ${COMMIT_SHA:0:8})"
