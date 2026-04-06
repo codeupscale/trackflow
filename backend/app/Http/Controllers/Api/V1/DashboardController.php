@@ -56,20 +56,52 @@ class DashboardController extends Controller
         $userById = $users->keyBy('id');
         $now = now();
 
-        $onlineUsers = [];
+        // Collect entry IDs from Redis to batch-verify they are still open in the DB
+        $pendingOnline = [];
         foreach ($userIds as $i => $userId) {
             $timerData = $redisValues[$i] ?? null;
             if ($timerData) {
                 $data = json_decode($timerData, true);
                 $u = $userById->get($userId);
-                if ($u) {
-                    $onlineUsers[] = [
-                        'user' => $u,
-                        'timer' => $data,
-                        'elapsed_seconds' => (int) abs($now->diffInSeconds(Carbon::parse($data['started_at']))),
-                    ];
+                if ($u && !empty($data['entry_id'])) {
+                    $pendingOnline[$userId] = ['user' => $u, 'data' => $data];
                 }
             }
+        }
+
+        // Batch verify: only count as online if the DB entry is still open
+        $openEntryIds = [];
+        if (!empty($pendingOnline)) {
+            $entryIds = array_map(fn ($p) => $p['data']['entry_id'], $pendingOnline);
+            $openEntryIds = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                ->whereIn('id', $entryIds)
+                ->whereNull('ended_at')
+                ->pluck('id')
+                ->flip()
+                ->all();
+
+            // Clean up stale Redis keys for entries that are already closed
+            $staleUserIds = [];
+            foreach ($pendingOnline as $userId => $p) {
+                if (!isset($openEntryIds[$p['data']['entry_id']])) {
+                    $staleUserIds[] = "timer:{$userId}";
+                }
+            }
+            if (!empty($staleUserIds)) {
+                Redis::del(...$staleUserIds);
+            }
+        }
+
+        $onlineUsers = [];
+        foreach ($pendingOnline as $userId => $p) {
+            if (!isset($openEntryIds[$p['data']['entry_id']])) {
+                continue; // stale key — skip
+            }
+            $onlineUsers[] = [
+                'user' => $p['user'],
+                'timer' => $p['data'],
+                'elapsed_seconds' => (int) abs($now->diffInSeconds(Carbon::parse($p['data']['started_at']))),
+            ];
         }
 
         // Hours per user in range
