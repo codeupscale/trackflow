@@ -228,12 +228,25 @@ describe('ActivityMonitor', () => {
 
     test('30s of full activity generates ~300 total events (matches backend maxExpected)', () => {
       const mon = new ActivityMonitor(mockApiClient, mockOfflineQueue);
+      // Spy on sendHeartbeat to capture the event counts BEFORE reset
+      const hbSpy = jest.spyOn(mon, 'sendHeartbeat').mockImplementation(async function() {
+        // Snapshot counters the same way the real implementation does
+        this._lastCapturedKeyboard = this.keyboardCount;
+        this._lastCapturedMouse = this.mouseCount;
+        this.keyboardCount = 0;
+        this.mouseCount = 0;
+        this._activeSeconds = new Set();
+        this._intervalStartTime = Date.now();
+      });
       mon.start();
 
+      // Advance 30s — 10 fallback polls fire (3s each), then heartbeat fires at 30s
+      // The heartbeat resets counters to 0, so we check the captured snapshot
       jest.advanceTimersByTime(30000);
-      const total = mon.keyboardCount + mon.mouseCount;
+      const total = mon._lastCapturedKeyboard + mon._lastCapturedMouse;
       expect(total).toBe(300);
 
+      hbSpy.mockRestore();
       mon.stop();
     });
 
