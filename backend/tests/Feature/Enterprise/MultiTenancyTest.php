@@ -23,17 +23,11 @@ class MultiTenancyTest extends TestCase
     {
         parent::setUp();
 
-        $this->orgA = Organization::factory()->create(['name' => 'Org A']);
-        $this->orgB = Organization::factory()->create(['name' => 'Org B']);
+        $this->orgA = $this->createOrganization(['name' => 'Org A']);
+        $this->orgB = $this->createOrganization(['name' => 'Org B']);
 
-        $this->orgAUser = User::factory()->create([
-            'organization_id' => $this->orgA->id,
-            'role' => 'admin',
-        ]);
-        $this->orgBUser = User::factory()->create([
-            'organization_id' => $this->orgB->id,
-            'role' => 'admin',
-        ]);
+        $this->orgAUser = $this->createUser($this->orgA, 'admin');
+        $this->orgBUser = $this->createUser($this->orgB, 'admin');
     }
 
     public function test_cannot_view_other_org_team(): void

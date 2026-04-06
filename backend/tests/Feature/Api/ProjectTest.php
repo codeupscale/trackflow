@@ -16,9 +16,9 @@ class ProjectTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->org = Organization::factory()->create();
-        $this->owner = User::factory()->create(['organization_id' => $this->org->id, 'role' => 'owner']);
-        $this->employee = User::factory()->create(['organization_id' => $this->org->id, 'role' => 'employee']);
+        $this->org = $this->createOrganization();
+        $this->owner = $this->createUser($this->org, 'owner');
+        $this->employee = $this->createUser($this->org, 'employee');
     }
 
     public function test_owner_can_create_project(): void
@@ -111,12 +111,12 @@ class ProjectTest extends TestCase
 
     public function test_manager_can_list_and_sync_project_members(): void
     {
-        $manager = User::factory()->create(['organization_id' => $this->org->id, 'role' => 'manager']);
+        $manager = $this->createUser($this->org, 'manager');
         $project = Project::factory()->create([
             'organization_id' => $this->org->id,
             'created_by' => $this->owner->id,
         ]);
-        $member = User::factory()->create(['organization_id' => $this->org->id, 'role' => 'employee']);
+        $member = $this->createUser($this->org, 'employee');
 
         $this->actingAs($manager, 'sanctum');
 
@@ -155,8 +155,8 @@ class ProjectTest extends TestCase
 
     public function test_cross_tenant_project_isolation(): void
     {
-        $otherOrg = Organization::factory()->create();
-        $otherUser = User::factory()->create(['organization_id' => $otherOrg->id, 'role' => 'owner']);
+        $otherOrg = $this->createOrganization();
+        $otherUser = $this->createUser($otherOrg, 'owner');
 
         Project::factory()->create([
             'organization_id' => $this->org->id,

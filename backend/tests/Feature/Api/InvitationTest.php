@@ -18,19 +18,12 @@ class InvitationTest extends TestCase
     {
         parent::setUp();
 
-        $this->org = Organization::factory()->create([
+        $this->org = $this->createOrganization([
             'plan' => 'trial',
         ]);
 
-        $this->owner = User::factory()->create([
-            'organization_id' => $this->org->id,
-            'role' => 'owner',
-        ]);
-
-        $this->manager = User::factory()->create([
-            'organization_id' => $this->org->id,
-            'role' => 'manager',
-        ]);
+        $this->owner = $this->createUser($this->org, 'owner');
+        $this->manager = $this->createUser($this->org, 'manager');
     }
 
     public function test_owner_can_create_invitation(): void
