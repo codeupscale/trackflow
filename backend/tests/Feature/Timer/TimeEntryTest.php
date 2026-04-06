@@ -2,10 +2,7 @@
 
 namespace Tests\Feature\Timer;
 
-use App\Models\Organization;
-use App\Models\Project;
 use App\Models\TimeEntry;
-use App\Models\User;
 use Tests\TestCase;
 
 class TimeEntryTest extends TestCase
@@ -17,9 +14,9 @@ class TimeEntryTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->org = Organization::factory()->create();
-        $this->owner = User::factory()->create(['organization_id' => $this->org->id, 'role' => 'owner']);
-        $this->employee = User::factory()->create(['organization_id' => $this->org->id, 'role' => 'employee']);
+        $this->org = $this->createOrganization();
+        $this->owner = $this->createUser($this->org, 'owner');
+        $this->employee = $this->createUser($this->org, 'employee');
     }
 
     public function test_can_create_manual_time_entry(): void
@@ -53,10 +50,7 @@ class TimeEntryTest extends TestCase
 
     public function test_employee_only_sees_own_entries(): void
     {
-        $otherEmployee = User::factory()->create([
-            'organization_id' => $this->org->id,
-            'role' => 'employee',
-        ]);
+        $otherEmployee = $this->createUser($this->org, 'employee');
 
         TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
@@ -138,8 +132,8 @@ class TimeEntryTest extends TestCase
 
     public function test_cross_tenant_cannot_access(): void
     {
-        $otherOrg = Organization::factory()->create();
-        $otherUser = User::factory()->create(['organization_id' => $otherOrg->id, 'role' => 'owner']);
+        $otherOrg = $this->createOrganization();
+        $otherUser = $this->createUser($otherOrg, 'owner');
 
         $entry = TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
