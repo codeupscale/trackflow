@@ -43,8 +43,8 @@ class InvitationTest extends TestCase
         $response->assertStatus(201);
     }
 
-    /** AUTH-09: Manager cannot create invitation */
-    public function test_manager_cannot_create_invitation(): void
+    /** AUTH-09: Manager CAN create invitation (team.invite granted in RBAC) */
+    public function test_manager_can_create_invitation(): void
     {
         $this->actingAsUser('manager');
 
@@ -53,7 +53,7 @@ class InvitationTest extends TestCase
             'role' => 'employee',
         ]);
 
-        $response->assertStatus(403);
+        $response->assertStatus(201);
     }
 
     /** AUTH-09: Employee cannot create invitation */

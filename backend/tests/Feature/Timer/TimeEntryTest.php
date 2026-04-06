@@ -2,7 +2,9 @@
 
 namespace Tests\Feature\Timer;
 
+use App\Models\Organization;
 use App\Models\TimeEntry;
+use App\Models\User;
 use Tests\TestCase;
 
 class TimeEntryTest extends TestCase

@@ -241,7 +241,7 @@ class PermissionSeeder extends Seeder
             'time_entries.create' => 'team',
             'time_entries.edit'   => 'team',
             'time_entries.delete' => 'team',
-            'time_entries.approve'=> 'team',
+            'time_entries.approve'=> 'organization',
             'time_entries.export' => 'team',
 
             // screenshots — team view only
