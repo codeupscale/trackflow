@@ -101,8 +101,8 @@ class TimerServiceTest extends TestCase
         ]);
         // Admin is NOT explicitly assigned, but hasRole('admin') returns true in isAssignedTo
 
-        $entry = (new TimerService())->start(['project_id' => $project->id]);
-        $this->assertEquals($project->id, $entry->project_id);
+        $result = (new TimerService())->start(['project_id' => $project->id]);
+        $this->assertEquals($project->id, $result['entry']->project_id);
     }
 
     public function test_start_throws_when_project_belongs_to_different_org(): void
