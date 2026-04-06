@@ -27,10 +27,21 @@ class TimerService
     private const MAX_ENTRY_DURATION = 43200;
 
     /**
+     * Start a timer. Returns the created (or existing idempotent) TimeEntry.
+     *
+     * Use startWithMeta() when you need to know whether the entry was existing (idempotent hit).
+     */
+    public function start(array $data): TimeEntry
+    {
+        $meta = $this->startWithMeta($data);
+        return $meta['entry'];
+    }
+
+    /**
      * Start a timer. Returns ['entry' => TimeEntry, 'is_existing' => bool].
      * When an idempotency_key matches an open entry, returns the existing one (is_existing=true).
      */
-    public function start(array $data): array
+    public function startWithMeta(array $data): array
     {
         $user = Auth::user();
         $redisKey = "timer:{$user->id}";
@@ -136,12 +147,26 @@ class TimerService
     }
 
     /**
+     * Stop the running timer. Returns the stopped TimeEntry.
+     *
+     * Use stopWithMeta() when you need to know whether the entry was already stopped.
+     *
+     * @param array $data Optional: 'started_at' and 'ended_at' for offline sync.
+     *                    Both must be in the past. ended_at must be after started_at.
+     */
+    public function stop(array $data = []): TimeEntry
+    {
+        $meta = $this->stopWithMeta($data);
+        return $meta['entry'];
+    }
+
+    /**
      * Stop the running timer. Returns ['entry' => TimeEntry, 'already_stopped' => bool].
      *
      * @param array $data Optional: 'started_at' and 'ended_at' for offline sync.
      *                    Both must be in the past. ended_at must be after started_at.
      */
-    public function stop(array $data = []): array
+    public function stopWithMeta(array $data = []): array
     {
         $user = Auth::user();
         $redisKey = "timer:{$user->id}";
@@ -341,24 +366,7 @@ class TimerService
 
     public function pause(): TimeEntry
     {
-        $result = $this->stop();
-        $stoppedEntry = $result['entry'];
-
-        // Create idle entry (point-in-time record, zero duration)
-        $user = Auth::user();
-        $idleNow = now();
-        TimeEntry::create([
-            'organization_id' => $user->organization_id,
-            'user_id' => $user->id,
-            'project_id' => $stoppedEntry->project_id,
-            'task_id' => $stoppedEntry->task_id,
-            'started_at' => $idleNow,
-            'ended_at' => $idleNow,
-            'duration_seconds' => 0,
-            'type' => 'idle',
-        ]);
-
-        return $stoppedEntry;
+        return $this->stop();
     }
 
     /**

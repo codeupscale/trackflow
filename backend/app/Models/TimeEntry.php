@@ -77,4 +77,14 @@ class TimeEntry extends Model
     {
         return is_null($this->ended_at);
     }
+
+    /**
+     * Backward-compatible accessor: allows $entry['entry'] to return $this.
+     * This supports code that previously consumed the array format
+     * ['entry' => TimeEntry, 'is_existing' => bool] returned by TimerService::start().
+     */
+    public function getEntryAttribute(): self
+    {
+        return $this;
+    }
 }
