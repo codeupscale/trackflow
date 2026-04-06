@@ -20,23 +20,11 @@ class TimesheetTest extends TestCase
     {
         parent::setUp();
 
-        $this->org = Organization::factory()->create();
-        $this->owner = User::factory()->create([
-            'organization_id' => $this->org->id,
-            'role' => 'owner',
-        ]);
-        $this->manager = User::factory()->create([
-            'organization_id' => $this->org->id,
-            'role' => 'manager',
-        ]);
-        $this->employee = User::factory()->create([
-            'organization_id' => $this->org->id,
-            'role' => 'employee',
-        ]);
-        $this->otherEmployee = User::factory()->create([
-            'organization_id' => $this->org->id,
-            'role' => 'employee',
-        ]);
+        $this->org = $this->createOrganization();
+        $this->owner = $this->createUser($this->org, 'owner');
+        $this->manager = $this->createUser($this->org, 'manager');
+        $this->employee = $this->createUser($this->org, 'employee');
+        $this->otherEmployee = $this->createUser($this->org, 'employee');
     }
 
     public function test_employee_can_submit_timesheet(): void
@@ -176,11 +164,8 @@ class TimesheetTest extends TestCase
 
     public function test_manager_cannot_review_other_org_timesheet(): void
     {
-        $otherOrg = Organization::factory()->create();
-        $otherManager = User::factory()->create([
-            'organization_id' => $otherOrg->id,
-            'role' => 'manager',
-        ]);
+        $otherOrg = $this->createOrganization();
+        $otherManager = $this->createUser($otherOrg, 'manager');
 
         $timesheet = Timesheet::factory()->create([
             'organization_id' => $this->org->id,

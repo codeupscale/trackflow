@@ -300,10 +300,11 @@ class PermissionSeeder extends Seeder
     public function getEmployeePermissions(): array
     {
         return [
-            // time_entries — own scope, no delete, no approve
+            // time_entries — own scope, no approve
             'time_entries.view'   => 'own',
             'time_entries.create' => 'own',
             'time_entries.edit'   => 'own',
+            'time_entries.delete' => 'own',
             'time_entries.export' => 'own',
 
             // screenshots — own view only
