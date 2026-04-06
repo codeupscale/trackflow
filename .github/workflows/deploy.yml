@@ -363,7 +363,6 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           envs: DEPLOY_API,DEPLOY_WEB,GH_ACTOR,GH_TOKEN,COMMIT_SHA
-          script_stop: true
           command_timeout: 5m
           script: |
             set -euo pipefail
