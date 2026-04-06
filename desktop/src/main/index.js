@@ -35,10 +35,11 @@ const ApiClient = require('./api-client');
 const ActivityMonitor = require('./activity-monitor');
 const ScreenshotService = require('./screenshot-service');
 const IdleDetector = require('./idle-detector');
+const { IDLE_STATE } = require('./idle-detector');
 const OfflineQueue = require('./offline-queue');
 const { getToken, setToken, getRefreshToken, setRefreshToken, deleteToken } = require('./keychain');
 const posthog = require('./posthog');
-const { getTrayIcon } = require('./tray-icons');
+const { getTrayIcon, warmIconCache } = require('./tray-icons');
 
 const WEB_DASHBOARD_URL = process.env.TRACKFLOW_WEB_URL || 'https://trackflow.codeupscale.com';
 
@@ -449,8 +450,12 @@ let isAuthenticated = false;
 let timerSyncInterval = null;
 let trayTimerInterval = null;
 let isQuitting = false;
+// Idle action mutex — prevents double-action from auto-stop + user click race
+let _idleActionInProgress = false;
 // Cache parsed started_at timestamp to avoid re-parsing every second
 let _cachedStartedAtMs = null;
+// M8 FIX: Clock skew compensation — server time minus local time
+let _clockOffsetMs = 0;
 
 // ── Global Error Handlers ────────────────────────────────────────────────────
 
@@ -680,7 +685,7 @@ async function initializeApp() {
   idleDetector = new IdleDetector(config);
 
   // Wire idle detection events
-  idleDetector.onIdleDetected((idleSeconds, idleStartedAt) => {
+  idleDetector.onIdleDetected((idleSeconds, idleStartedAt, actionId) => {
     // Pause both screenshot and activity capture during idle.
     // This prevents zero-event heartbeats from dragging down the activity score.
     screenshotService?.stop();
@@ -688,7 +693,8 @@ async function initializeApp() {
     stopTrayTimer();
     const policy = config.keep_idle_time || 'prompt';
     if (policy === 'always') {
-      idleDetector.resolveIdle();
+      idleDetector.resolveIdle(actionId);
+      idleDetector.start();
       // Restore tray from idle state
       updateTrayIcon(isTimerRunning);
       if (isTimerRunning) updateTrayTitle();
@@ -702,17 +708,17 @@ async function initializeApp() {
       return;
     }
     if (policy === 'never') {
-      handleIdleAction('discard', idleSeconds, null);
+      handleIdleAction('discard', actionId, idleSeconds, null);
       dismissIdleAlert();
       return;
     }
     // Update tray to reflect idle state
     setTrayText(`Idle (${Math.floor(idleSeconds / 60)}m)`);
-    showIdleAlert(idleSeconds, idleStartedAt);
+    showIdleAlert(idleSeconds, idleStartedAt, actionId);
   });
 
-  idleDetector.onAutoStop((totalIdleSeconds) => {
-    handleIdleAction('stop', totalIdleSeconds);
+  idleDetector.onAutoStop((totalIdleSeconds, actionId) => {
+    handleIdleAction('stop', actionId, totalIdleSeconds);
     dismissIdleAlert();
 
     try {
@@ -740,7 +746,10 @@ async function initializeApp() {
     }
   });
 
-  // Flush offline queue
+  // L7: Clean up orphaned screenshot files on startup
+  offlineQueue.cleanupOrphanedFiles();
+
+  // Flush offline queue (L7: orphan cleanup also runs after each successful flush)
   offlineQueue.flush(apiClient);
 
   // ── Early Screen Recording Permission Check (macOS) ──────────────────────
@@ -845,6 +854,9 @@ async function initializeApp() {
   // with the sleep time. Short sleeps resume tracking normally.
 
   let _suspendedAt = null;
+  // Snapshot returned by idleDetector.suspend() — tells handleResume whether
+  // the user was already idle when the lid closed.
+  let _idleStateAtSuspend = null;
 
   const handleSuspend = () => {
     if (!isTimerRunning) return;
@@ -856,35 +868,43 @@ async function initializeApp() {
       activityMonitor.stop();
     }
     screenshotService?.stop();
+    // Suspend idle detector — clears intervals but preserves state snapshot.
+    // This prevents _check() from firing on resume before handleResume runs.
+    _idleStateAtSuspend = idleDetector?.suspend() || null;
   };
 
   const handleResume = () => {
     if (!isTimerRunning || !_suspendedAt) {
       _suspendedAt = null;
+      _idleStateAtSuspend = null;
       return;
     }
     const sleepDurationSec = Math.floor((Date.now() - _suspendedAt) / 1000);
     const sleepStartedAt = _suspendedAt;
     _suspendedAt = null;
+    const idleSnap = _idleStateAtSuspend;
+    _idleStateAtSuspend = null;
     console.log(`[power] Resumed/unlocked after ${sleepDurationSec}s`);
 
-    // Issue 6: If idleDetector is already in idle state (e.g. idle alert was showing
-    // before sleep), preserve the original idleStartedAt. Just update the idle alert
-    // display with the extended duration and return early.
-    if (idleDetector?.isIdle && idleDetector.idleStartedAt) {
-      const originalIdleStart = idleDetector.idleStartedAt;
+    // Tell the detector we are resuming (transitions from SUSPENDED to STOPPED)
+    idleDetector?.resume();
+
+    // Issue 6: If idleDetector was already showing an alert when suspend fired,
+    // preserve the original idleStartedAt and extend the popup display.
+    if (idleSnap?.isIdle && idleSnap.idleStartedAt) {
+      const originalIdleStart = idleSnap.idleStartedAt;
       const totalIdleSec = Math.floor((Date.now() - originalIdleStart) / 1000);
       console.log(`[power] Already idle since ${new Date(originalIdleStart).toISOString()} — preserving original idle start, total idle: ${totalIdleSec}s`);
-      showIdleAlert(totalIdleSec, originalIdleStart);
+      // Use setAlertState to properly transition to ALERTING with auto-stop checking
+      const actionId = idleDetector?.setAlertState(originalIdleStart) || 0;
+      showIdleAlert(totalIdleSec, originalIdleStart, actionId);
       return;
     }
 
     const idleThresholdSec = idleDetector?.idleTimeoutSec || (config.idle_timeout || 5) * 60;
 
     if (sleepDurationSec >= idleThresholdSec) {
-      // Long sleep — treat as idle. Stop activity monitor (already stopped in suspend),
-      // pause idle detector polling, and show the idle alert.
-      idleDetector?.stop();
+      // Long sleep — treat as idle.
       const policy = config.keep_idle_time || 'prompt';
       if (policy === 'always') {
         // Auto-keep: just resume everything
@@ -898,27 +918,18 @@ async function initializeApp() {
         return;
       }
       if (policy === 'never') {
-        // Set idleDetector state so handleIdleAction can read idleStartedAt
-        if (idleDetector) {
-          idleDetector.isIdle = true;
-          idleDetector.idleStartedAt = sleepStartedAt;
-        }
+        // Use setAlertState so handleIdleAction can read idleStartedAt properly
+        const actionId = idleDetector?.setAlertState(sleepStartedAt) || 0;
         // Auto-discard sleep time. handleIdleAction restarts activityMonitor
-        // and screenshotService internally (P2-2 fix).
-        handleIdleAction('discard', sleepDurationSec, null).catch((e) => {
+        // and screenshotService internally.
+        handleIdleAction('discard', actionId, sleepDurationSec, null).catch((e) => {
           console.error('[power] Failed to discard sleep idle time:', e.message);
         });
-        idleDetector?.start();
         return;
       }
       // Prompt user — show idle alert with sleep duration
-      // Temporarily set idleDetector state so handleIdleAction can read idleStartedAt
-      if (idleDetector) {
-        idleDetector.isIdle = true;
-        idleDetector.idleStartedAt = sleepStartedAt;
-        idleDetector.alertShownAt = Date.now();
-      }
-      showIdleAlert(sleepDurationSec, sleepStartedAt);
+      const actionId = idleDetector?.setAlertState(sleepStartedAt) || 0;
+      showIdleAlert(sleepDurationSec, sleepStartedAt, actionId);
     } else {
       // Short sleep — resume tracking normally
       activityMonitor?.start();
@@ -932,6 +943,11 @@ async function initializeApp() {
     }
   };
 
+  // M4 FIX: Remove existing listeners defensively before adding to prevent stacking on re-login
+  powerMonitor.removeAllListeners('suspend');
+  powerMonitor.removeAllListeners('resume');
+  powerMonitor.removeAllListeners('lock-screen');
+  powerMonitor.removeAllListeners('unlock-screen');
   powerMonitor.on('suspend', handleSuspend);
   powerMonitor.on('resume', handleResume);
   powerMonitor.on('lock-screen', handleSuspend);
@@ -1001,6 +1017,8 @@ function createTray() {
     return;
   }
 
+  // L5: Pre-generate both tracking/idle icons into the cache
+  warmIconCache();
   const icon = getTrayIcon(false);
 
   tray = new Tray(icon);
@@ -1268,7 +1286,7 @@ function showPopup() {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: process.env.NODE_ENV !== 'development',
+      sandbox: true,
       devTools: true,
     },
   });
@@ -1582,11 +1600,11 @@ function setupIPC() {
 
   // Idle alert actions
   ipcMain.removeHandler('resolve-idle');
-  ipcMain.handle('resolve-idle', async (_, action, projectId = null) => {
+  ipcMain.handle('resolve-idle', async (_, action, projectId = null, actionId = null) => {
     const validAction = validateIdleAction(action);
     if (!validAction) return { error: 'Invalid action' };
     const validProjectId = validateProjectId(projectId);
-    await handleIdleAction(validAction, null, validProjectId);
+    await handleIdleAction(validAction, actionId, null, validProjectId);
     dismissIdleAlert();
     return { success: true };
   });
@@ -1839,11 +1857,16 @@ async function stopTimer() {
 
 // Periodically sync timer state with server to stay in sync with web dashboard
 let _configRefetchCycle = 0;
+let _isSyncing = false; // M6 FIX: guard against concurrent sync cycles
 function startTimerSync() {
   if (timerSyncInterval) clearInterval(timerSyncInterval);
   _configRefetchCycle = 0;
+  _isSyncing = false;
   timerSyncInterval = setInterval(async () => {
     if (!apiClient) return;
+    // M6 FIX: Skip if a sync is already in progress
+    if (_isSyncing) return;
+    _isSyncing = true;
 
     // Re-fetch org config every 30th cycle (~5 minutes at 10s interval)
     _configRefetchCycle++;
@@ -1905,7 +1928,13 @@ function startTimerSync() {
         updateTrayIcon(false);
         notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal });
       }
-    } catch {}
+    } catch (err) {
+      // H4 FIX: Log sync errors instead of swallowing them
+      console.error('[TimerSync] sync failed:', err.message);
+      // Do not re-throw — keep interval alive
+    } finally {
+      _isSyncing = false; // M6 FIX: Always release sync guard
+    }
   }, 10000);
 }
 
@@ -1962,12 +1991,14 @@ function startTrayTimer() {
   updateTrayTitle();
   trayTimerInterval = setInterval(() => {
     if (!isTimerRunning || !_cachedStartedAtMs) return;
-    const currentElapsed = Math.floor((Date.now() - _cachedStartedAtMs) / 1000);
+    // M8 FIX: Use clock offset for accurate elapsed time display
+    const clientNowMs = Date.now() + _clockOffsetMs;
+    const currentElapsed = Math.floor((clientNowMs - _cachedStartedAtMs) / 1000);
     const totalSeconds = todayTotalCurrentProject + currentElapsed;
     const formatted = formatTimeShort(totalSeconds);
     setTrayText(formatted);
-    // Broadcast the same computed time to the renderer so both displays are in perfect sync
-    if (popupWindow && !popupWindow.isDestroyed()) {
+    // L12: Only send IPC to renderer when window is visible — avoids wasted work
+    if (popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible()) {
       popupWindow.webContents.send('timer-tick', { totalSeconds, formatted });
     }
   }, 1000);
@@ -1988,16 +2019,22 @@ function notifyPopup(event, data) {
 
 // ── Idle Alert System ────────────────────────────────────────────────────────
 
-async function showIdleAlert(idleSeconds, idleStartedAt) {
+async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
+  // Capture the actionId at call time; if not provided, read from detector
+  const alertActionId = actionId ?? idleDetector?.getActionId() ?? 0;
+
   if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
     // Alert already showing — bring it to front and update idle data
     idleAlertWindow.focus();
     if (typeof idleAlertWindow.moveTop === 'function') {
       idleAlertWindow.moveTop();
     }
+    // Update the action ID on the window so the close handler uses the latest
+    idleAlertWindow._actionId = alertActionId;
     idleAlertWindow.webContents.send('idle-data', {
       idleStartedAt,
       idleSeconds,
+      actionId: alertActionId,
       autoStopTotalSec: idleDetector ? (idleDetector.idleTimeoutSec + idleDetector.alertAutoStopSec) : 0,
       projects: cachedProjects || [],
     });
@@ -2041,7 +2078,7 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: process.env.NODE_ENV !== 'development',
+      sandbox: true,
       devTools: true,
     },
   });
@@ -2050,6 +2087,8 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
   // always operate on the window they were registered on, even if the outer
   // idleAlertWindow variable is reassigned or nulled by dismissIdleAlert().
   const win = idleAlertWindow;
+  // Store the action ID on the window for the close handler
+  win._actionId = alertActionId;
   let shown = false;
 
   function showAndSendData() {
@@ -2061,6 +2100,7 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
     win.webContents.send('idle-data', {
       idleStartedAt,
       idleSeconds,
+      actionId: alertActionId,
       autoStopTotalSec: idleDetector ? (idleDetector.idleTimeoutSec + idleDetector.alertAutoStopSec) : 0,
       projects: cachedProjects || [],
     });
@@ -2074,30 +2114,29 @@ async function showIdleAlert(idleSeconds, idleStartedAt) {
   // Use did-finish-load as a safety net.
   win.webContents.once('did-finish-load', showAndSendData);
 
-  // BUG-002: If the idle alert window is closed without the user clicking an
-  // action button (e.g., Cmd+W on macOS, dock close, OS memory pressure), the
-  // idle detector stays in isIdle=true state forever, preventing all future
-  // idle detection. We must treat unexpected closure as "keep" (safest default
-  // — does not discard tracked time) and re-arm the detector.
-  // Track whether the window was dismissed programmatically via dismissIdleAlert().
+  // If the idle alert window is closed without the user clicking an action
+  // button (e.g., Cmd+W, dock close, OS memory pressure), treat as "keep"
+  // (safest default — does not discard tracked time) and re-arm the detector.
   win._dismissedProgrammatically = false;
 
   win.on('closed', () => {
     idleAlertWindow = null;
     if (!win._dismissedProgrammatically) {
       console.log('[IdleAlert] Window closed without user action — treating as "keep" and re-arming idle detector');
-      // Resolve idle state so isIdle resets to false
-      idleDetector?.resolveIdle();
-      // Restart activity monitor and screenshots that were paused when idle was detected
-      activityMonitor?.start();
-      if (isTimerRunning && currentEntry) {
-        screenshotService?.start(currentEntry.id, {
-          immediateCapture: config.screenshot_capture_immediate_after_idle === true,
-        });
+      // Use the action ID stored on the window to resolve the correct idle cycle
+      const windowActionId = win._actionId;
+      const resolved = idleDetector?.resolveIdle(windowActionId);
+      if (resolved) {
+        // Only restart services if resolve succeeded (not stale)
+        activityMonitor?.start();
+        if (isTimerRunning && currentEntry) {
+          screenshotService?.start(currentEntry.id, {
+            immediateCapture: config.screenshot_capture_immediate_after_idle === true,
+          });
+        }
+        idleDetector?.start();
       }
-      // Re-arm idle detector so future idle periods are detected
-      idleDetector?.start();
-      // Restore tray
+      // Restore tray regardless
       updateTrayIcon(isTimerRunning);
       if (isTimerRunning) {
         updateTrayTitle();
@@ -2122,109 +2161,134 @@ function dismissIdleAlert() {
   idleAlertWindow = null;
 }
 
-async function handleIdleAction(action, idleDurationOverride = null, reassignProjectId = null) {
-  const idleDuration = idleDurationOverride || idleDetector?.getIdleDuration() || 0;
-  const idleStartedAt = idleDetector?.idleStartedAt || null;
+/**
+ * Handle the user's idle action choice. Uses a mutex (_idleActionInProgress)
+ * to prevent double-action from auto-stop + user click racing.
+ *
+ * @param {string} action — 'keep', 'discard', 'reassign', or 'stop'
+ * @param {number|null} actionId — the idle detector action ID for this cycle
+ * @param {number|null} idleDurationOverride — override idle duration (seconds)
+ * @param {string|null} reassignProjectId — project ID for reassign action
+ */
+async function handleIdleAction(action, actionId = null, idleDurationOverride = null, reassignProjectId = null) {
+  // Mutex: prevent double-action (auto-stop + user click, or double-click)
+  if (_idleActionInProgress) {
+    console.warn(`[handleIdleAction] Action "${action}" blocked — another action is in progress`);
+    return;
+  }
+  _idleActionInProgress = true;
 
-  posthog.capture(null, 'idle_action', { action, idle_seconds: idleDuration });
+  try {
+    // Read idle info BEFORE resolving (resolveIdle clears it)
+    const idleDuration = idleDurationOverride || idleDetector?.getIdleDuration() || 0;
+    const idleStartedAt = idleDetector?.idleStartedAt || null;
 
-  idleDetector?.resolveIdle();
+    posthog.capture(currentEntry?.user_id || 'unknown', 'idle_action', { action, idle_seconds: idleDuration });
 
-  // Restore tray tooltip from idle state back to normal
-  updateTrayIcon(isTimerRunning);
-  if (isTimerRunning) updateTrayTitle();
+    // Resolve the idle state — returns null if already resolved (stale action)
+    const resolved = idleDetector?.resolveIdle(actionId);
+    if (!resolved && idleDetector?.state !== IDLE_STATE.STOPPED) {
+      // Already resolved by a competing action — abort
+      console.warn(`[handleIdleAction] Action "${action}" aborted — idle already resolved`);
+      return;
+    }
 
-  switch (action) {
-    case 'keep':
-      // Resume activity monitor and screenshots — idle is over
-      activityMonitor?.start();
-      if (isTimerRunning && currentEntry) {
-        screenshotService?.start(currentEntry.id, {
-          immediateCapture: config.screenshot_capture_immediate_after_idle === true,
-        });
-      }
-      idleDetector?.start();
-      startTrayTimer();
-      break;
+    // Use idleStartedAt from the resolve result if available (more reliable
+    // than reading it before resolve, since resolve is atomic)
+    const effectiveIdleStartedAt = resolved?.idleStartedAt || idleStartedAt;
 
-    case 'discard':
-    case 'reassign':
-      if (apiClient && currentEntry && idleStartedAt) {
-        try {
-          const payload = {
-            time_entry_id: currentEntry.id,
-            idle_started_at: new Date(idleStartedAt).toISOString(),
-            idle_ended_at: new Date().toISOString(),
-            idle_seconds: idleDuration,
-            action: action === 'reassign' && reassignProjectId ? 'reassign' : 'discard',
-          };
-          if (payload.action === 'reassign') payload.project_id = reassignProjectId;
+    // Restore tray tooltip from idle state back to normal
+    updateTrayIcon(isTimerRunning);
+    if (isTimerRunning) updateTrayTitle();
 
-          const result = await apiClient.reportIdleTime(payload);
-          if (result?.new_entry) {
-            currentEntry = result.new_entry;
-            _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
-          }
-        } catch (e) {
-          console.error('Failed to report idle time:', e.message);
-          // Queue for offline retry so idle time is eventually deducted
-          offlineQueue?.add('idle_discard', {
-            time_entry_id: currentEntry?.id,
-            idle_started_at: new Date(idleStartedAt).toISOString(),
-            idle_ended_at: new Date().toISOString(),
-            idle_seconds: idleDuration,
-            action: action,
-            project_id: reassignProjectId || null,
+    switch (action) {
+      case 'keep':
+        // Resume activity monitor and screenshots — idle is over
+        activityMonitor?.start();
+        if (isTimerRunning && currentEntry) {
+          screenshotService?.start(currentEntry.id, {
+            immediateCapture: config.screenshot_capture_immediate_after_idle === true,
           });
         }
-      }
-      // Resume activity monitor and screenshots — idle is over
-      activityMonitor?.start();
-      if (isTimerRunning && currentEntry) {
-        screenshotService?.start(currentEntry.id, {
-          immediateCapture: config.screenshot_capture_immediate_after_idle === true,
-        });
-      }
-      idleDetector?.start();
-      startTrayTimer();
-      break;
+        idleDetector?.start();
+        startTrayTimer();
+        break;
 
-    case 'stop':
-      // P1-2: Deduct idle time BEFORE stopping the timer.
-      // reportIdleTime creates a new running entry on the server (started_at = now).
-      // Since we are stopping immediately, that new entry will have zero duration.
-      // We must: (1) report idle to deduct the idle period from the tracked entry,
-      // (2) stop the newly-created entry, (3) delete the zero-duration entry
-      // to avoid polluting the time sheet.
-      if (apiClient && currentEntry && idleStartedAt) {
-        try {
-          const idleResult = await apiClient.reportIdleTime({
-            time_entry_id: currentEntry.id,
-            idle_started_at: new Date(idleStartedAt).toISOString(),
-            idle_ended_at: new Date().toISOString(),
-            idle_seconds: idleDuration,
-            action: 'discard',
-          });
-          // Update local state to the new entry so stopTimer() closes it
-          if (idleResult?.new_entry) {
-            currentEntry = idleResult.new_entry;
-            _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+      case 'discard':
+      case 'reassign':
+        if (apiClient && currentEntry && effectiveIdleStartedAt) {
+          try {
+            const payload = {
+              time_entry_id: currentEntry.id,
+              idle_started_at: new Date(effectiveIdleStartedAt).toISOString(),
+              idle_ended_at: new Date().toISOString(),
+              idle_seconds: idleDuration,
+              action: action === 'reassign' && reassignProjectId ? 'reassign' : 'discard',
+            };
+            if (payload.action === 'reassign') payload.project_id = reassignProjectId;
+
+            const result = await apiClient.reportIdleTime(payload);
+            if (result?.new_entry) {
+              currentEntry = result.new_entry;
+              _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+            }
+          } catch (e) {
+            console.error('Failed to report idle time:', e.message);
+            // Queue for offline retry so idle time is eventually deducted
+            offlineQueue?.add('idle_discard', {
+              time_entry_id: currentEntry?.id,
+              idle_started_at: new Date(effectiveIdleStartedAt).toISOString(),
+              idle_ended_at: new Date().toISOString(),
+              idle_seconds: idleDuration,
+              action: action,
+              project_id: reassignProjectId || null,
+            });
           }
-        } catch (e) {
-          console.error('Failed to discard idle time before stop:', e.message);
-          offlineQueue?.add('idle_discard', {
-            time_entry_id: currentEntry?.id,
-            idle_started_at: new Date(idleStartedAt).toISOString(),
-            idle_ended_at: new Date().toISOString(),
-            idle_seconds: idleDuration,
-            action: 'discard',
+        }
+        // Resume activity monitor and screenshots — idle is over
+        activityMonitor?.start();
+        if (isTimerRunning && currentEntry) {
+          screenshotService?.start(currentEntry.id, {
+            immediateCapture: config.screenshot_capture_immediate_after_idle === true,
           });
         }
-      }
-      // stopTimer() now detects entries shorter than MIN_ENTRY_DURATION_SEC
-      // and auto-deletes them from the server (BUG-001 fix).
-      stopTimer();
-      break;
+        idleDetector?.start();
+        startTrayTimer();
+        break;
+
+      case 'stop':
+        // P1-2: Deduct idle time BEFORE stopping the timer.
+        if (apiClient && currentEntry && effectiveIdleStartedAt) {
+          try {
+            const idleResult = await apiClient.reportIdleTime({
+              time_entry_id: currentEntry.id,
+              idle_started_at: new Date(effectiveIdleStartedAt).toISOString(),
+              idle_ended_at: new Date().toISOString(),
+              idle_seconds: idleDuration,
+              action: 'discard',
+            });
+            // Update local state to the new entry so stopTimer() closes it
+            if (idleResult?.new_entry) {
+              currentEntry = idleResult.new_entry;
+              _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+            }
+          } catch (e) {
+            console.error('Failed to discard idle time before stop:', e.message);
+            offlineQueue?.add('idle_discard', {
+              time_entry_id: currentEntry?.id,
+              idle_started_at: new Date(effectiveIdleStartedAt).toISOString(),
+              idle_ended_at: new Date().toISOString(),
+              idle_seconds: idleDuration,
+              action: 'discard',
+            });
+          }
+        }
+        // B1 FIX: await stopTimer() — it's async and must complete before returning
+        await stopTimer();
+        break;
+    }
+  } finally {
+    _idleActionInProgress = false;
   }
 }
 
@@ -2249,7 +2313,7 @@ function createLoginWindow() {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: process.env.NODE_ENV !== 'development',
+      sandbox: true,
       devTools: true,
     },
   });
@@ -2291,6 +2355,10 @@ function createLoginWindow() {
         await setToken(result.access_token);
         await setRefreshToken(result.refresh_token);
 
+        // B3 FIX: Clear sync interval before re-initializing to prevent overlap
+        if (timerSyncInterval) { clearInterval(timerSyncInterval); timerSyncInterval = null; }
+        stopTrayTimer();
+
         BrowserWindow.getAllWindows().forEach((w) => w.close());
         await initializeApp();
         // Show the popup immediately after login so the user sees the timer
@@ -2320,8 +2388,21 @@ function createLoginWindow() {
         const state = crypto.randomBytes(16).toString('hex');
         let callbackServer = null;
 
-        const result = await new Promise((resolve, reject) => {
+        // B2 FIX: Use a settled guard so late-arriving callbacks after timeout are ignored,
+        // and ensure the server is always closed on both success and timeout.
+        const result = await new Promise((resolve) => {
+          let settled = false;
+          const done = (value) => {
+            if (settled) return;
+            settled = true;
+            if (callbackServer) {
+              try { callbackServer.close(); } catch {}
+            }
+            resolve(value);
+          };
+
           callbackServer = http.createServer(async (req, res) => {
+            if (settled) { res.writeHead(200); res.end(); return; }
             try {
               const parsed = url.parse(req.url, true);
               if (parsed.pathname !== '/callback') {
@@ -2334,14 +2415,14 @@ function createLoginWindow() {
               if (parsed.query.state !== state) {
                 res.writeHead(400);
                 res.end('Invalid state parameter.');
-                resolve({ error: 'OAuth state mismatch. Please try again.' });
+                done({ error: 'OAuth state mismatch. Please try again.' });
                 return;
               }
 
               if (parsed.query.error) {
                 res.writeHead(200, { 'Content-Type': 'text/html' });
                 res.end('<html><body><h2>Sign-in cancelled.</h2><p>You can close this tab.</p></body></html>');
-                resolve({ error: parsed.query.error_description || 'Google sign-in was cancelled.' });
+                done({ error: parsed.query.error_description || 'Google sign-in was cancelled.' });
                 return;
               }
 
@@ -2349,7 +2430,7 @@ function createLoginWindow() {
               if (!code) {
                 res.writeHead(400);
                 res.end('Missing authorization code.');
-                resolve({ error: 'No authorization code received from Google.' });
+                done({ error: 'No authorization code received from Google.' });
                 return;
               }
 
@@ -2366,19 +2447,18 @@ function createLoginWindow() {
               if (!idToken) {
                 res.writeHead(200, { 'Content-Type': 'text/html' });
                 res.end('<html><body><h2>Error</h2><p>Could not get ID token from Google.</p></body></html>');
-                resolve({ error: 'Failed to obtain ID token from Google.' });
+                done({ error: 'Failed to obtain ID token from Google.' });
                 return;
               }
 
               res.writeHead(200, { 'Content-Type': 'text/html' });
               res.end('<html><body style="font-family:system-ui;text-align:center;padding:40px"><h2>Sign-in successful!</h2><p>You can close this tab and return to TrackFlow.</p></body></html>');
 
-              resolve({ id_token: idToken });
+              done({ id_token: idToken });
             } catch (err) {
               console.error('[GoogleAuth] Callback error:', err.message);
-              res.writeHead(500);
-              res.end('Internal error');
-              resolve({ error: err.message || 'Google authentication failed.' });
+              try { res.writeHead(500); res.end('Internal error'); } catch {}
+              done({ error: err.message || 'Google authentication failed.' });
             }
           });
 
@@ -2399,16 +2479,11 @@ function createLoginWindow() {
             shell.openExternal(authUrl);
           });
 
-          // Timeout after 5 minutes
+          // Timeout after 5 minutes — B2 FIX: server is closed via done()
           setTimeout(() => {
-            resolve({ error: 'Google sign-in timed out. Please try again.' });
+            done({ error: 'Google sign-in timed out. Please try again.' });
           }, 5 * 60 * 1000);
         });
-
-        // Clean up the callback server
-        if (callbackServer) {
-          callbackServer.close();
-        }
 
         if (result.error) {
           return { error: result.error };
@@ -2429,6 +2504,10 @@ function createLoginWindow() {
 
         await setToken(authResult.access_token);
         await setRefreshToken(authResult.refresh_token);
+
+        // B3 FIX: Clear sync interval before re-initializing to prevent overlap
+        if (timerSyncInterval) { clearInterval(timerSyncInterval); timerSyncInterval = null; }
+        stopTrayTimer();
 
         BrowserWindow.getAllWindows().forEach((w) => w.close());
         await initializeApp();
@@ -2453,6 +2532,10 @@ function createLoginWindow() {
 
         await setToken(result.access_token);
         await setRefreshToken(result.refresh_token);
+
+        // B3 FIX: Clear sync interval before re-initializing to prevent overlap
+        if (timerSyncInterval) { clearInterval(timerSyncInterval); timerSyncInterval = null; }
+        stopTrayTimer();
 
         BrowserWindow.getAllWindows().forEach((w) => w.close());
         await initializeApp();
@@ -2498,12 +2581,12 @@ function checkForUpdates() {
 
     autoUpdater.on('update-available', (info) => {
       console.log(`[updater] Update available: v${info.version}`);
-      posthog.capture(null, 'auto_update_available', { new_version: info.version });
+      posthog.capture(currentEntry?.user_id || 'unknown', 'auto_update_available', { new_version: info.version });
     });
     autoUpdater.on('update-downloaded', (info) => {
       console.log(`[updater] Update downloaded: v${info.version} — will install on quit`);
       _pendingUpdate = true;
-      posthog.capture(null, 'auto_update_downloaded', { new_version: info.version });
+      posthog.capture(currentEntry?.user_id || 'unknown', 'auto_update_downloaded', { new_version: info.version });
 
       // Send in-app update dialog to the renderer (prominent, can't be missed)
       try {
@@ -2529,9 +2612,24 @@ function checkForUpdates() {
     autoUpdater.on('update-not-available', (info) => {
       console.log(`[updater] Already on latest version (v${info.version})`);
     });
+    // L11: Retry with exponential backoff on update check failure
+    let _updateRetryCount = 0;
+    const _updateMaxRetries = 3;
+    const _updateRetryDelays = [2 * 60 * 1000, 4 * 60 * 1000, 8 * 60 * 1000]; // 2m, 4m, 8m
+
     autoUpdater.on('error', (err) => {
       console.warn(`[updater] Error: ${err?.message || err}`);
       posthog.captureError(null, err || new Error('auto_update_error'), { type: 'auto_update' });
+
+      // L11: Retry with backoff
+      if (_updateRetryCount < _updateMaxRetries) {
+        const delay = _updateRetryDelays[_updateRetryCount];
+        _updateRetryCount++;
+        console.log(`[updater] Retrying in ${delay / 1000}s (attempt ${_updateRetryCount}/${_updateMaxRetries})`);
+        setTimeout(() => {
+          autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+        }, delay);
+      }
     });
 
     // When app is about to quit, force-install the update if one is pending
@@ -2555,7 +2653,18 @@ function checkForUpdates() {
   }
 }
 
-// Auto-start on login — only set if packaged (don't interfere with dev)
+// M5 FIX: Gate auto-start behind user preference stored in config
+// Only set login item if packaged AND user hasn't explicitly disabled it
 if (app.isPackaged) {
-  app.setLoginItemSettings({ openAtLogin: true });
+  try {
+    const prefsPath = path.join(app.getPath('userData'), 'user-prefs.json');
+    let launchAtLogin = true; // default: enabled
+    if (fs.existsSync(prefsPath)) {
+      try {
+        const prefs = JSON.parse(fs.readFileSync(prefsPath, 'utf8'));
+        if (prefs.launchAtLogin === false) launchAtLogin = false;
+      } catch {}
+    }
+    app.setLoginItemSettings({ openAtLogin: launchAtLogin });
+  } catch {}
 }

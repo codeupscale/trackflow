@@ -48,9 +48,13 @@ class OfflineQueue {
         )
       `);
 
+      // L10: Schema versioning — run migrations incrementally
+      this._runMigrations();
+
       // Prepare commonly used statements for performance
-      this._stmtInsert = this.db.prepare('INSERT INTO queue (type, data) VALUES (?, ?)');
-      this._stmtSelect = this.db.prepare('SELECT * FROM queue ORDER BY id LIMIT 500');
+      // L9: Insert now includes priority; select orders by priority DESC then id ASC
+      this._stmtInsert = this.db.prepare('INSERT INTO queue (type, data, priority) VALUES (?, ?, ?)');
+      this._stmtSelect = this.db.prepare('SELECT * FROM queue ORDER BY priority DESC, id ASC LIMIT 500');
       this._stmtCount = this.db.prepare('SELECT COUNT(*) as count FROM queue');
       this._stmtIncAttempt = this.db.prepare('UPDATE queue SET attempts = attempts + 1 WHERE id = ?');
 
@@ -65,6 +69,46 @@ class OfflineQueue {
     } catch (e) {
       console.error('Failed to initialize offline queue:', e.message);
     }
+  }
+
+  // L10: Schema version table + incremental migrations
+  _runMigrations() {
+    if (!this.db) return;
+
+    // Create schema_version table if it doesn't exist
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_version (
+        version INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+
+    // Ensure exactly one row exists
+    const row = this.db.prepare('SELECT version FROM schema_version').get();
+    if (!row) {
+      this.db.prepare('INSERT INTO schema_version (version) VALUES (0)').run();
+    }
+    let currentVersion = row ? row.version : 0;
+
+    // Migration 1: Add priority column (L9)
+    if (currentVersion < 1) {
+      try {
+        // Check if column already exists (safe for existing installs)
+        const cols = this.db.pragma('table_info(queue)');
+        const hasPriority = cols.some(c => c.name === 'priority');
+        if (!hasPriority) {
+          this.db.exec('ALTER TABLE queue ADD COLUMN priority INTEGER NOT NULL DEFAULT 0');
+          // Backfill: heartbeats get priority 1, screenshots stay 0
+          this.db.exec("UPDATE queue SET priority = 1 WHERE type = 'heartbeat'");
+        }
+        this.db.prepare('UPDATE schema_version SET version = 1').run();
+        currentVersion = 1;
+        console.log('[OfflineQueue] Migration 1 applied: added priority column');
+      } catch (e) {
+        console.error('[OfflineQueue] Migration 1 failed:', e.message);
+      }
+    }
+
+    // Future migrations go here as: if (currentVersion < 2) { ... }
   }
 
   _pruneOldEntries() {
@@ -119,8 +163,11 @@ class OfflineQueue {
     }
   }
 
-  add(type, data) {
+  // M2 FIX: async add — uses fs.promises for screenshot file writes
+  // L9: priority derived from type — heartbeats=1 (flush first), screenshots=0
+  async add(type, data) {
     if (!this.db) return;
+    const priority = type === 'heartbeat' ? 1 : 0;
 
     try {
       if (type === 'screenshot' && data.buffer) {
@@ -133,7 +180,7 @@ class OfflineQueue {
 
         const filename = `ss_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
         const filePath = path.join(this._screenshotDir, filename);
-        fs.writeFileSync(filePath, buffer);
+        await fs.promises.writeFile(filePath, buffer);
 
         // Store file path (not the blob) in SQLite
         const queueData = {
@@ -143,10 +190,10 @@ class OfflineQueue {
         };
         if (data.app_name) queueData.app_name = data.app_name;
         if (data.window_title) queueData.window_title = data.window_title;
-        this._stmtInsert.run(type, JSON.stringify(queueData));
+        this._stmtInsert.run(type, JSON.stringify(queueData), priority);
         console.log(`[OfflineQueue] Screenshot saved to file: ${filename} (${Math.round(buffer.length / 1024)}KB)`);
       } else {
-        this._stmtInsert.run(type, JSON.stringify(data));
+        this._stmtInsert.run(type, JSON.stringify(data), priority);
       }
     } catch (e) {
       console.error('Failed to queue item:', e.message);
@@ -194,13 +241,14 @@ class OfflineQueue {
             // SS-4: Read screenshot from file, not from base64 in SQLite
             let buffer;
             if (data.file_path) {
-              // New file-based format
-              if (!fs.existsSync(data.file_path)) {
-                console.warn(`[OfflineQueue] Screenshot file missing: ${data.file_path}`);
+              // M2 FIX: Use async file read
+              try {
+                buffer = await fs.promises.readFile(data.file_path);
+              } catch (readErr) {
+                console.warn(`[OfflineQueue] Screenshot file missing or unreadable: ${data.file_path}`);
                 deleteIds.push(item.id);
                 continue;
               }
-              buffer = fs.readFileSync(data.file_path);
             } else if (data.buffer) {
               // Legacy base64 format (migration path)
               buffer = Buffer.from(data.buffer, 'base64');
@@ -276,6 +324,9 @@ class OfflineQueue {
       }
 
       this.retryDelay = 5000; // Reset on success
+
+      // L7: Clean up orphaned screenshot files after successful flush
+      this.cleanupOrphanedFiles();
     } catch (e) {
       console.error('Queue flush failed:', e.message);
       this.retryDelay = Math.min(this.retryDelay * 2, this.maxRetryDelay);

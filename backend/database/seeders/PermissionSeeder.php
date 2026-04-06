@@ -12,7 +12,7 @@ class PermissionSeeder extends Seeder
      * All 59 permissions in the system.
      * Format: [key, module, action, description, has_scope]
      */
-    private function getPermissions(): array
+    public function getPermissions(): array
     {
         return [
             // --- time_entries (6) ---
@@ -81,6 +81,15 @@ class PermissionSeeder extends Seeder
             ['attendance.approve_regularizations',  'attendance', 'approve_regularizations',  'Approve or reject regularizations',   true],
             ['attendance.manage_overtime_rules',    'attendance', 'manage_overtime_rules',    'Configure overtime rules',            false],
 
+            // --- payroll (7) ---
+            ['payroll.view_own',           'payroll', 'view_own',           'View own payslips',                               false],
+            ['payroll.view_team',          'payroll', 'view_team',          'View direct reports payslips',                     false],
+            ['payroll.view_all',           'payroll', 'view_all',           'View all payroll data',                            false],
+            ['payroll.run',                'payroll', 'run',                'Run payroll for a period',                         false],
+            ['payroll.manage_structures',  'payroll', 'manage_structures',  'Create and edit salary structures',                false],
+            ['payroll.manage_components',  'payroll', 'manage_components',  'Manage pay components (allowances, deductions)',   false],
+            ['payroll.approve',            'payroll', 'approve',            'Approve and finalize payslips',                    false],
+
             // --- shifts (6) ---
             ['shifts.view',                'shifts', 'view',                'View shifts and roster',                  false],
             ['shifts.create',              'shifts', 'create',              'Create new shifts',                       false],
@@ -118,7 +127,7 @@ class PermissionSeeder extends Seeder
      * Format: 'permission.key' => scope
      * For has_scope=false permissions, scope is 'none'.
      */
-    private function getAdminPermissions(): array
+    public function getAdminPermissions(): array
     {
         return [
             // time_entries — all at organization scope
@@ -187,6 +196,15 @@ class PermissionSeeder extends Seeder
             'attendance.approve_regularizations' => 'organization',
             'attendance.manage_overtime_rules'   => 'none',
 
+            // payroll — admin gets full access
+            'payroll.view_own'          => 'none',
+            'payroll.view_team'         => 'none',
+            'payroll.view_all'          => 'none',
+            'payroll.run'               => 'none',
+            'payroll.manage_structures' => 'none',
+            'payroll.manage_components' => 'none',
+            'payroll.approve'           => 'none',
+
             // shifts
             'shifts.view'               => 'none',
             'shifts.create'             => 'none',
@@ -215,7 +233,7 @@ class PermissionSeeder extends Seeder
         ];
     }
 
-    private function getManagerPermissions(): array
+    public function getManagerPermissions(): array
     {
         return [
             // time_entries — team scope
@@ -223,7 +241,7 @@ class PermissionSeeder extends Seeder
             'time_entries.create' => 'team',
             'time_entries.edit'   => 'team',
             'time_entries.delete' => 'team',
-            'time_entries.approve'=> 'team',
+            'time_entries.approve'=> 'organization',
             'time_entries.export' => 'team',
 
             // screenshots — team view only
@@ -250,19 +268,23 @@ class PermissionSeeder extends Seeder
             'employees.view_directory'   => 'none',
             'employees.view_profile'     => 'team',
             'employees.manage_documents' => 'team',
-            'employees.manage_notes'     => 'team',
+            // employees.manage_notes: admin/owner only — not granted to manager
 
             // leave
             'leave.apply'         => 'none',
-            'leave.view_requests' => 'team',
-            'leave.approve'       => 'team',
-            'leave.cancel'        => 'team',
-            'leave.view_calendar' => 'team',
+            'leave.view_requests' => 'organization',
+            'leave.approve'       => 'organization',
+            'leave.cancel'        => 'organization',
+            'leave.view_calendar' => 'organization',
 
             // attendance
-            'attendance.view'                    => 'team',
+            'attendance.view'                    => 'organization',
             'attendance.regularize'              => 'none',
-            'attendance.approve_regularizations' => 'team',
+            'attendance.approve_regularizations' => 'organization',
+
+            // payroll — manager: view own + view team
+            'payroll.view_own'  => 'none',
+            'payroll.view_team' => 'none',
 
             // shifts — view, manage assignments, manage swaps
             'shifts.view'               => 'none',
@@ -275,13 +297,14 @@ class PermissionSeeder extends Seeder
         ];
     }
 
-    private function getEmployeePermissions(): array
+    public function getEmployeePermissions(): array
     {
         return [
-            // time_entries — own scope, no delete, no approve
+            // time_entries — own scope, no approve
             'time_entries.view'   => 'own',
             'time_entries.create' => 'own',
             'time_entries.edit'   => 'own',
+            'time_entries.delete' => 'own',
             'time_entries.export' => 'own',
 
             // screenshots — own view only
@@ -317,6 +340,9 @@ class PermissionSeeder extends Seeder
             // attendance — own view, can regularize
             'attendance.view'       => 'own',
             'attendance.regularize' => 'none',
+
+            // payroll — employee: view own payslips only
+            'payroll.view_own' => 'none',
 
             // shifts — view only
             'shifts.view' => 'none',

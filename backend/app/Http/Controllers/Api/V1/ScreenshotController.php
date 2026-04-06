@@ -9,6 +9,7 @@ use App\Jobs\ProcessScreenshotJob;
 use App\Support\TimezoneAwareDateRange;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -150,7 +151,12 @@ class ScreenshotController extends Controller
                         $ss->captured_at->copy()->subMinutes(10),
                         $ss->captured_at->copy()->addMinutes(10),
                     ])
-                    ->orderByRaw('ABS(EXTRACT(EPOCH FROM (logged_at - ?)))', [$ss->captured_at])
+                    ->orderByRaw(
+                        DB::connection()->getDriverName() === 'sqlite'
+                            ? 'ABS(CAST((julianday(logged_at) - julianday(?)) * 86400 AS INTEGER))'
+                            : 'ABS(EXTRACT(EPOCH FROM (logged_at - ?)))',
+                        [$ss->captured_at]
+                    )
                     ->first();
                 if ($log) {
                     $activityData[$ss->id] = $log;

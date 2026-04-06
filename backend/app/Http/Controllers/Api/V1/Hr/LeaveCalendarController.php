@@ -40,7 +40,7 @@ class LeaveCalendarController extends Controller
                     ->orWhere(function ($q2) use ($month) {
                         // Recurring holidays: match by month/day regardless of year
                         $q2->where('is_recurring', true)
-                            ->whereRaw('EXTRACT(MONTH FROM date) = ?', [$month]);
+                            ->whereMonth('date', $month);
                     });
             })
             ->orderBy('date')

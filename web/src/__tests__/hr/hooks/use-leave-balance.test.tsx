@@ -25,24 +25,18 @@ function createWrapper() {
 
 const mockBalances = [
   {
-    id: 'lb-1',
-    user_id: 'u-1',
     leave_type_id: 'lt-1',
-    entitled: 20,
-    used: 5,
-    remaining: 15,
-    carried_over: 2,
-    leave_type: { id: 'lt-1', name: 'Annual Leave', code: 'AL', type: 'paid', days_per_year: 20, accrual_method: 'annual', max_carry_over: 5, is_active: true, created_at: '2024-01-01', updated_at: '2024-01-01' },
+    total_days: 20,
+    used_days: 5,
+    pending_days: 2,
+    leave_type: { id: 'lt-1', name: 'Annual Leave', code: 'AL', type: 'paid' as const },
   },
   {
-    id: 'lb-2',
-    user_id: 'u-1',
     leave_type_id: 'lt-2',
-    entitled: 10,
-    used: 2,
-    remaining: 8,
-    carried_over: 0,
-    leave_type: { id: 'lt-2', name: 'Sick Leave', code: 'SL', type: 'paid', days_per_year: 10, accrual_method: 'annual', max_carry_over: 0, is_active: true, created_at: '2024-01-01', updated_at: '2024-01-01' },
+    total_days: 10,
+    used_days: 2,
+    pending_days: 0,
+    leave_type: { id: 'lt-2', name: 'Sick Leave', code: 'SL', type: 'paid' as const },
   },
 ];
 
@@ -81,10 +75,12 @@ describe('useLeaveBalance', () => {
 
     await waitFor(() => expect(result.current.balances).toBeDefined());
     const annualBalance = result.current.getBalance('AL');
-    expect(annualBalance?.remaining).toBe(15);
+    expect(annualBalance?.total_days).toBe(20);
+    expect(annualBalance?.used_days).toBe(5);
 
     const sickBalance = result.current.getBalance('SL');
-    expect(sickBalance?.remaining).toBe(8);
+    expect(sickBalance?.total_days).toBe(10);
+    expect(sickBalance?.used_days).toBe(2);
   });
 
   it('getBalance returns undefined for unknown type code', async () => {

@@ -9,6 +9,8 @@ function makeRegularization(
 ): AttendanceRegularization {
   return {
     id: 'reg-1',
+    attendance_record_id: 'att-1',
+    user_id: 'u-1',
     user: {
       id: 'u-1',
       name: 'Jane Doe',
@@ -18,12 +20,14 @@ function makeRegularization(
     attendance_record: {
       id: 'att-1',
       date: '2026-03-28',
+      status: 'absent' as const,
     },
     current_status: 'absent',
     requested_status: 'present',
     reason: 'Was working from home',
     status: 'pending',
     review_note: null,
+    reviewed_by: null,
     reviewer: null,
     reviewed_at: null,
     created_at: '2026-03-29T10:00:00Z',
@@ -135,7 +139,7 @@ describe('RegularizationCard', () => {
         regularization={makeRegularization({
           status: 'rejected',
           review_note: 'No supporting evidence',
-          reviewer: { id: 'u-admin', name: 'Admin User', email: 'admin@test.com', avatar_url: null },
+          reviewer: { id: 'u-admin', name: 'Admin User' },
           reviewed_at: '2026-03-30T10:00:00Z',
         })}
         onApprove={vi.fn()}
@@ -151,7 +155,7 @@ describe('RegularizationCard', () => {
       <RegularizationCard
         regularization={makeRegularization({
           status: 'approved',
-          reviewer: { id: 'u-admin', name: 'Admin User', email: 'admin@test.com', avatar_url: null },
+          reviewer: { id: 'u-admin', name: 'Admin User' },
           reviewed_at: '2026-03-30T10:00:00Z',
         })}
         onApprove={vi.fn()}

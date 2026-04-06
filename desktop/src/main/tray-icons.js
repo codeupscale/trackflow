@@ -153,16 +153,36 @@ function createStandardIcon(tracking) {
   });
 }
 
+// ── Icon cache ──────────────────────────────────────────────────────────────
+// Icons are generated once at first access and reused. This avoids
+// re-allocating RGBA buffers + nativeImage on every tray update.
+const _cache = new Map();
+
+/**
+ * Warm the icon cache eagerly. Call once after app.whenReady().
+ * This ensures both tracking and idle icons are pre-generated
+ * so getTrayIcon() is allocation-free during normal operation.
+ */
+function warmIconCache() {
+  getTrayIcon(true);
+  getTrayIcon(false);
+}
+
 /**
  * Get the appropriate tray icon for the current platform and tracking state.
+ * Returns a cached nativeImage — zero allocation after first call per state.
  * @param {boolean} tracking - Whether the timer is currently running
  * @returns {Electron.NativeImage}
  */
 function getTrayIcon(tracking) {
-  if (process.platform === 'darwin') {
-    return createMacIcon(tracking);
-  }
-  return createStandardIcon(tracking);
+  const key = `${process.platform}-${tracking}`;
+  if (_cache.has(key)) return _cache.get(key);
+
+  const icon = process.platform === 'darwin'
+    ? createMacIcon(tracking)
+    : createStandardIcon(tracking);
+  _cache.set(key, icon);
+  return icon;
 }
 
-module.exports = { getTrayIcon };
+module.exports = { getTrayIcon, warmIconCache };

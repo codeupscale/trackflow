@@ -26,6 +26,12 @@ class ReportService
         $cap = self::MAX_ENTRY_DURATION;
         $startCol = $prefix ? "{$prefix}.started_at" : 'started_at';
         $endCol = $prefix ? "{$prefix}.ended_at" : 'ended_at';
+
+        if (DB::connection()->getDriverName() === 'sqlite') {
+            // SQLite: julianday diff * 86400 = seconds; MIN/MAX are scalar in SQLite
+            return "MIN(MAX(CAST((julianday({$endCol}) - julianday({$startCol})) * 86400 AS INTEGER), 0), {$cap})";
+        }
+
         return "LEAST(GREATEST(EXTRACT(EPOCH FROM ({$endCol} - {$startCol}))::int, 0), {$cap})";
     }
 

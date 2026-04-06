@@ -235,28 +235,49 @@ class ActivityMonitor {
     // Store as the last completed interval score (for screenshot-service)
     this._lastCompletedIntervalScore = intervalScore;
 
+    // M1 FIX: Snapshot counters, reset immediately (avoid double-counting on retry),
+    // then attempt API/queue. If BOTH fail, restore snapshot values.
+    const snapshot = {
+      keyboard: this.keyboardCount,
+      mouse: this.mouseCount,
+      activeSeconds: [...this._activeSeconds],
+    };
+
+    // Reset counters for next interval immediately
+    this.keyboardCount = 0;
+    this.mouseCount = 0;
+    this._activeSeconds = new Set();
+    this._intervalStartTime = Date.now();
+
     const data = {
-      keyboard_events: this.keyboardCount,
-      mouse_events: this.mouseCount,
+      keyboard_events: snapshot.keyboard,
+      mouse_events: snapshot.mouse,
       active_seconds: activeSecondsCount,
       active_app: await this.getActiveApp(),
       active_window_title: await this.getActiveWindowTitle(),
       active_url: null,
     };
 
-    // Reset counters for next interval
-    this.keyboardCount = 0;
-    this.mouseCount = 0;
-    this._activeSeconds = new Set();
-    this._intervalStartTime = Date.now();
-
     try {
       await this.apiClient.sendHeartbeat(data);
-    } catch (e) {
-      this.offlineQueue.add('heartbeat', {
-        ...data,
-        logged_at: new Date().toISOString(),
-      });
+    } catch (apiErr) {
+      try {
+        // M7 FIX: Guard offlineQueue access — it may be null after logout
+        if (this.offlineQueue) {
+          await this.offlineQueue.add('heartbeat', {
+            ...data,
+            logged_at: new Date().toISOString(),
+          });
+        } else {
+          throw new Error('offlineQueue is null');
+        }
+      } catch (queueErr) {
+        // M1 FIX: Last resort — restore counters so next tick can retry
+        this.keyboardCount += snapshot.keyboard;
+        this.mouseCount += snapshot.mouse;
+        snapshot.activeSeconds.forEach(s => this._activeSeconds.add(s));
+        console.error('[Heartbeat] both API and queue failed -- data restored for retry');
+      }
     }
   }
 
@@ -286,11 +307,66 @@ class ActivityMonitor {
       ]);
     }
     if (os.platform() === 'win32') {
-      return this._execWithTimeout('powershell.exe', [
-        '-NoProfile', '-NonInteractive', '-Command',
-        '(Get-Process | Where-Object {$_.MainWindowHandle -ne 0 -and $_.MainWindowTitle} | Select-Object -First 1).ProcessName',
+      // M3 FIX: Use GetForegroundWindow P/Invoke instead of Get-Process
+      const result = await this._getActiveWindowWindows();
+      return result ? result.processName : null;
+    }
+    // L6 FIX: Detect Wayland via WAYLAND_DISPLAY env var
+    if (os.platform() === 'linux') {
+      return this._getActiveAppLinux();
+    }
+    return null;
+  }
+
+  async getActiveWindowTitle() {
+    if (os.platform() === 'darwin') {
+      return this._execWithTimeout('osascript', [
+        '-e', 'tell application "System Events" to get title of front window of (first application process whose frontmost is true)',
       ]);
     }
+    if (os.platform() === 'win32') {
+      // M3 FIX: Use GetForegroundWindow P/Invoke
+      const result = await this._getActiveWindowWindows();
+      return result ? result.windowTitle : null;
+    }
+    // L6 FIX: Wayland-aware
+    if (os.platform() === 'linux') {
+      return this._getActiveWindowTitleLinux();
+    }
+    return null;
+  }
+
+  // M3 FIX: Windows — use Win32 GetForegroundWindow + GetWindowText via P/Invoke
+  async _getActiveWindowWindows() {
+    const ps = `Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;using System.Text;public class Win32{[DllImport("user32.dll")]public static extern IntPtr GetForegroundWindow();[DllImport("user32.dll")]public static extern int GetWindowText(IntPtr h,StringBuilder s,int n);[DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);}';$hwnd=[Win32]::GetForegroundWindow();$pid=0;[Win32]::GetWindowThreadProcessId($hwnd,[ref]$pid)|Out-Null;$p=Get-Process -Id $pid -EA SilentlyContinue;$t=New-Object System.Text.StringBuilder 256;[Win32]::GetWindowText($hwnd,$t,256)|Out-Null;"$($p.Name)|$($t.ToString())"`;
+    const result = await this._execWithTimeout('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-Command', ps,
+    ]);
+    if (!result) return null;
+    const parts = result.split('|');
+    return {
+      processName: parts[0] || null,
+      windowTitle: parts.slice(1).join('|') || null,
+    };
+  }
+
+  // L6 FIX: Linux — detect Wayland via WAYLAND_DISPLAY env var
+  async _getActiveAppLinux() {
+    if (process.env.WAYLAND_DISPLAY) {
+      return this._getActiveAppWayland();
+    }
+    return this._getActiveAppX11();
+  }
+
+  async _getActiveWindowTitleLinux() {
+    if (process.env.WAYLAND_DISPLAY) {
+      // Wayland: window title is harder to get; return null gracefully
+      return null;
+    }
+    return this._execWithTimeout('xdotool', ['getactivewindow', 'getwindowname']);
+  }
+
+  async _getActiveAppX11() {
     return new Promise((resolve) => {
       let resolved = false;
       let outerTimer = null;
@@ -313,19 +389,22 @@ class ActivityMonitor {
     });
   }
 
-  async getActiveWindowTitle() {
-    if (os.platform() === 'darwin') {
-      return this._execWithTimeout('osascript', [
-        '-e', 'tell application "System Events" to get title of front window of (first application process whose frontmost is true)',
-      ]);
+  // L6 FIX: Wayland fallback — try ydotool or wlrctl, log warning once if unavailable
+  _waylandWarningLogged = false;
+  async _getActiveAppWayland() {
+    // Try ydotool first (if available)
+    const result = await this._execWithTimeout('ydotool', ['getactivewindow']);
+    if (result) return result;
+
+    // Try wlrctl as fallback
+    const result2 = await this._execWithTimeout('wlrctl', ['toplevel', 'find', 'focused']);
+    if (result2) return result2;
+
+    if (!this._waylandWarningLogged) {
+      this._waylandWarningLogged = true;
+      console.warn('[ActivityMonitor] Wayland detected but ydotool/wlrctl not available -- active window detection disabled');
     }
-    if (os.platform() === 'win32') {
-      return this._execWithTimeout('powershell.exe', [
-        '-NoProfile', '-NonInteractive', '-Command',
-        '(Get-Process | Where-Object {$_.MainWindowHandle -ne 0 -and $_.MainWindowTitle} | Select-Object -First 1).MainWindowTitle',
-      ]);
-    }
-    return this._execWithTimeout('xdotool', ['getactivewindow', 'getwindowname']);
+    return null;
   }
 }
 

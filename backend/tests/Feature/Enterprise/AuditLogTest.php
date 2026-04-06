@@ -64,11 +64,8 @@ class AuditLogTest extends TestCase
 
     public function test_admin_can_view_audit_logs(): void
     {
-        $org = Organization::factory()->create();
-        $admin = User::factory()->create([
-            'organization_id' => $org->id,
-            'role' => 'admin',
-        ]);
+        $org = $this->createOrganization();
+        $admin = $this->createUser($org, 'admin');
 
         AuditService::log('test.action', $admin, ['key' => 'value'], $admin);
 
@@ -78,10 +75,10 @@ class AuditLogTest extends TestCase
 
     public function test_audit_logs_scoped_to_organization(): void
     {
-        $orgA = Organization::factory()->create();
-        $orgB = Organization::factory()->create();
-        $adminA = User::factory()->create(['organization_id' => $orgA->id, 'role' => 'admin']);
-        $adminB = User::factory()->create(['organization_id' => $orgB->id, 'role' => 'admin']);
+        $orgA = $this->createOrganization();
+        $orgB = $this->createOrganization();
+        $adminA = $this->createUser($orgA, 'admin');
+        $adminB = $this->createUser($orgB, 'admin');
 
         AuditService::log('action.a', $adminA, [], $adminA);
         AuditService::log('action.b', $adminB, [], $adminB);

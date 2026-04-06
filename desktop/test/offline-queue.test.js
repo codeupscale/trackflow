@@ -13,6 +13,10 @@ jest.mock('fs', () => {
     readFileSync: jest.fn(() => Buffer.alloc(1000, 0x42)),
     unlinkSync: jest.fn(),
     readdirSync: jest.fn(() => []),
+    promises: {
+      writeFile: jest.fn().mockResolvedValue(undefined),
+      readFile: jest.fn().mockResolvedValue(Buffer.alloc(1000, 0x42)),
+    },
   };
 });
 
@@ -44,37 +48,37 @@ describe('OfflineQueue', () => {
     expect(() => queue.add('heartbeat', { test: 1 })).not.toThrow();
   });
 
-  test('add screenshot saves buffer to file and stores path in SQLite', () => {
+  test('add screenshot saves buffer to file and stores path in SQLite', async () => {
     const buffer = Buffer.alloc(5000, 0x42);
-    queue.add('screenshot', {
+    await queue.add('screenshot', {
       buffer: buffer,
       time_entry_id: 'entry-1',
       captured_at: '2026-01-01T00:00:00.000Z',
     });
 
-    // Should write the file to disk
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
+    // Should write the file to disk via fs.promises.writeFile
+    expect(fs.promises.writeFile).toHaveBeenCalledWith(
       expect.stringContaining('offline-screenshots'),
       buffer
     );
   });
 
-  test('add screenshot rejects oversized buffers', () => {
+  test('add screenshot rejects oversized buffers', async () => {
     const hugeBuffer = Buffer.alloc(3 * 1024 * 1024); // 3MB > 2MB limit
-    queue.add('screenshot', {
+    await queue.add('screenshot', {
       buffer: hugeBuffer,
       time_entry_id: 'entry-1',
       captured_at: '2026-01-01T00:00:00.000Z',
     });
 
     // Should NOT write file for oversized buffer
-    expect(fs.writeFileSync).not.toHaveBeenCalled();
+    expect(fs.promises.writeFile).not.toHaveBeenCalled();
   });
 
-  test('add heartbeat stores data normally (no file)', () => {
-    queue.add('heartbeat', { test: 1 });
+  test('add heartbeat stores data normally (no file)', async () => {
+    await queue.add('heartbeat', { test: 1 });
     // No file write for heartbeats
-    expect(fs.writeFileSync).not.toHaveBeenCalled();
+    expect(fs.promises.writeFile).not.toHaveBeenCalled();
   });
 
   test('getQueueSize should return 0 when db is null', () => {

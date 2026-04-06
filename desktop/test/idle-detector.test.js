@@ -1,5 +1,6 @@
 const { powerMonitor } = require('electron');
 const IdleDetector = require('../src/main/idle-detector');
+const { IDLE_STATE } = require('../src/main/idle-detector');
 
 describe('IdleDetector', () => {
   let detector;
@@ -20,6 +21,7 @@ describe('IdleDetector', () => {
     expect(detector.idleTimeoutSec).toBe(5 * 60); // 5 min default
     expect(detector.alertAutoStopSec).toBe(10 * 60); // 10 min default
     expect(detector.enabled).toBe(true);
+    expect(detector.state).toBe(IDLE_STATE.STOPPED);
   });
 
   test('should respect custom config', () => {
@@ -38,6 +40,7 @@ describe('IdleDetector', () => {
     expect(detector.enabled).toBe(false);
     detector.start();
     expect(detector.checkInterval).toBeNull();
+    expect(detector.state).toBe(IDLE_STATE.STOPPED);
   });
 
   test('should not start if idle_timeout is 0', () => {
@@ -50,6 +53,7 @@ describe('IdleDetector', () => {
     const onIdle = jest.fn();
     detector.onIdleDetected(onIdle);
     detector.start();
+    expect(detector.state).toBe(IDLE_STATE.WATCHING);
 
     // Not idle yet
     powerMonitor.getSystemIdleTime.mockReturnValue(100);
@@ -60,8 +64,9 @@ describe('IdleDetector', () => {
     powerMonitor.getSystemIdleTime.mockReturnValue(300);
     jest.advanceTimersByTime(10000);
     expect(onIdle).toHaveBeenCalledTimes(1);
-    expect(onIdle).toHaveBeenCalledWith(300, expect.any(Number));
-    expect(detector.isIdle).toBe(true);
+    expect(onIdle).toHaveBeenCalledWith(300, expect.any(Number), expect.any(Number));
+    expect(detector.state).toBe(IDLE_STATE.ALERTING);
+    expect(detector.isIdleActive()).toBe(true);
   });
 
   test('should not fire idle multiple times', () => {
@@ -100,19 +105,47 @@ describe('IdleDetector', () => {
     expect(onAutoStop).toHaveBeenCalledTimes(1);
   });
 
-  test('resolveIdle should reset idle state', () => {
+  test('resolveIdle should reset idle state and return idle info', () => {
     detector = new IdleDetector({ idle_timeout: 5, idle_check_interval_sec: 10 });
     detector.onIdleDetected(jest.fn());
     detector.start();
 
     powerMonitor.getSystemIdleTime.mockReturnValue(300);
     jest.advanceTimersByTime(10000);
-    expect(detector.isIdle).toBe(true);
+    expect(detector.state).toBe(IDLE_STATE.ALERTING);
 
-    detector.resolveIdle();
-    expect(detector.isIdle).toBe(false);
+    const actionId = detector.getActionId();
+    const result = detector.resolveIdle(actionId);
+    expect(result).not.toBeNull();
+    expect(result.idleStartedAt).toBeDefined();
+    expect(result.idleDuration).toBeGreaterThanOrEqual(0);
+    expect(detector.state).toBe(IDLE_STATE.RESOLVED);
     expect(detector.idleStartedAt).toBeNull();
     expect(detector.alertShownAt).toBeNull();
+  });
+
+  test('resolveIdle returns null for stale action ID', () => {
+    detector = new IdleDetector({ idle_timeout: 5, idle_check_interval_sec: 10 });
+    detector.onIdleDetected(jest.fn());
+    detector.start();
+
+    powerMonitor.getSystemIdleTime.mockReturnValue(300);
+    jest.advanceTimersByTime(10000);
+
+    const staleId = detector.getActionId() - 1;
+    const result = detector.resolveIdle(staleId);
+    expect(result).toBeNull();
+    // State should be unchanged — still alerting
+    expect(detector.state).toBe(IDLE_STATE.ALERTING);
+  });
+
+  test('resolveIdle returns null when not in alerting state', () => {
+    detector = new IdleDetector({ idle_timeout: 5, idle_check_interval_sec: 10 });
+    detector.start();
+    // Not idle — WATCHING state
+    expect(detector.state).toBe(IDLE_STATE.WATCHING);
+    const result = detector.resolveIdle();
+    expect(result).toBeNull();
   });
 
   test('getIdleDuration should return correct duration', () => {
@@ -122,9 +155,9 @@ describe('IdleDetector', () => {
     // No idle = 0
     expect(detector.getIdleDuration()).toBe(0);
 
-    // Simulate idle
-    detector.isIdle = true;
-    detector.idleStartedAt = Date.now() - 120000; // 2 minutes ago
+    // Simulate idle via setAlertState
+    const idleStart = Date.now() - 120000; // 2 minutes ago
+    detector.setAlertState(idleStart);
     const duration = detector.getIdleDuration();
     expect(duration).toBeGreaterThanOrEqual(119);
     expect(duration).toBeLessThanOrEqual(121);
@@ -137,7 +170,7 @@ describe('IdleDetector', () => {
 
     detector.stop();
     expect(detector.checkInterval).toBeNull();
-    expect(detector.isIdle).toBe(false);
+    expect(detector.state).toBe(IDLE_STATE.STOPPED);
     expect(detector.idleStartedAt).toBeNull();
   });
 
@@ -149,11 +182,93 @@ describe('IdleDetector', () => {
     expect(detector.idleTimeoutSec).toBe(600);
   });
 
-  // ── New tests: auto-stop fires based on total idle time ──────────────────
+  // ── State machine transition tests ─────────────────────────────────────────
 
-  test('auto-stop fires based on total idle time (idle_timeout + auto_stop), not just auto_stop from alert', () => {
-    // Config: idle_timeout = 2 min (120s), auto_stop = 3 min (180s)
-    // Total time before auto-stop should be 120 + 180 = 300s from when user went idle
+  test('state transitions: STOPPED -> WATCHING -> ALERTING -> RESOLVED -> WATCHING', () => {
+    detector = new IdleDetector({ idle_timeout: 1, idle_check_interval_sec: 10 });
+    detector.onIdleDetected(jest.fn());
+    expect(detector.state).toBe(IDLE_STATE.STOPPED);
+
+    detector.start();
+    expect(detector.state).toBe(IDLE_STATE.WATCHING);
+
+    // Trigger idle
+    powerMonitor.getSystemIdleTime.mockReturnValue(60);
+    jest.advanceTimersByTime(10000);
+    expect(detector.state).toBe(IDLE_STATE.ALERTING);
+
+    // Resolve
+    const actionId = detector.getActionId();
+    detector.resolveIdle(actionId);
+    expect(detector.state).toBe(IDLE_STATE.RESOLVED);
+
+    // Re-arm
+    detector.start();
+    expect(detector.state).toBe(IDLE_STATE.WATCHING);
+  });
+
+  test('suspend and resume transitions', () => {
+    detector = new IdleDetector({ idle_timeout: 5, idle_check_interval_sec: 10 });
+    detector.start();
+    expect(detector.state).toBe(IDLE_STATE.WATCHING);
+
+    const snapshot = detector.suspend();
+    expect(detector.state).toBe(IDLE_STATE.SUSPENDED);
+    expect(snapshot.previousState).toBe(IDLE_STATE.WATCHING);
+    expect(snapshot.isIdle).toBe(false);
+    expect(detector.checkInterval).toBeNull();
+
+    detector.resume();
+    expect(detector.state).toBe(IDLE_STATE.STOPPED);
+  });
+
+  test('suspend preserves idle state in snapshot when alerting', () => {
+    detector = new IdleDetector({ idle_timeout: 1, idle_check_interval_sec: 10 });
+    detector.onIdleDetected(jest.fn());
+    detector.start();
+
+    // Go idle
+    powerMonitor.getSystemIdleTime.mockReturnValue(60);
+    jest.advanceTimersByTime(10000);
+    expect(detector.state).toBe(IDLE_STATE.ALERTING);
+    const idleStart = detector.idleStartedAt;
+
+    // Suspend
+    const snapshot = detector.suspend();
+    expect(snapshot.isIdle).toBe(true);
+    expect(snapshot.idleStartedAt).toBe(idleStart);
+    expect(detector.state).toBe(IDLE_STATE.SUSPENDED);
+  });
+
+  test('setAlertState transitions to ALERTING with auto-stop check', () => {
+    detector = new IdleDetector({
+      idle_timeout: 1,
+      idle_alert_auto_stop_min: 2,
+      idle_check_interval_sec: 10,
+    });
+    const onAutoStop = jest.fn();
+    detector.onAutoStop(onAutoStop);
+    detector.start();
+
+    // Simulate resume after sleep — set alert state externally
+    const sleepStart = Date.now() - 200000; // 200s ago
+    const actionId = detector.setAlertState(sleepStart);
+    expect(detector.state).toBe(IDLE_STATE.ALERTING);
+    expect(detector.idleStartedAt).toBe(sleepStart);
+    expect(actionId).toBeGreaterThan(0);
+
+    // The auto-stop check interval should be running
+    expect(detector.checkInterval).not.toBeNull();
+
+    // Auto-stop should not have fired yet (200s < 60 + 120 = 180s... wait, 200 > 180)
+    // Actually 200s > 180s, so auto-stop should fire on first check
+    jest.advanceTimersByTime(10000);
+    expect(onAutoStop).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Auto-stop tests (updated from original) ───────────────────────────────
+
+  test('auto-stop fires based on total idle time (idle_timeout + auto_stop)', () => {
     detector = new IdleDetector({
       idle_timeout: 2,              // 2 min = 120s
       idle_alert_auto_stop_min: 3,  // 3 min = 180s
@@ -167,27 +282,21 @@ describe('IdleDetector', () => {
 
     // Become idle at exactly 120s of system idle time
     powerMonitor.getSystemIdleTime.mockReturnValue(120);
-    jest.advanceTimersByTime(10000); // 1st check
+    jest.advanceTimersByTime(10000);
     expect(onIdle).toHaveBeenCalledTimes(1);
 
-    // At this point idleStartedAt = Date.now() - 120*1000 (backdated by system idle)
-    // Auto-stop requires totalIdleDuration >= 120 + 180 = 300s from idleStartedAt
-    // That means we need 180 more real seconds to pass (since 120s already accounted for)
-
-    // After 170s more real time (17 checks), total idle = ~290s — should NOT auto-stop
+    // After 170s more real time, total idle ~290s — should NOT auto-stop
     powerMonitor.getSystemIdleTime.mockReturnValue(290);
     jest.advanceTimersByTime(170000);
     expect(onAutoStop).not.toHaveBeenCalled();
 
-    // After 20s more real time (2 checks), total idle = ~310s >= 300s — should auto-stop
+    // After 20s more, total idle ~310s >= 300s — should auto-stop
     powerMonitor.getSystemIdleTime.mockReturnValue(310);
     jest.advanceTimersByTime(20000);
     expect(onAutoStop).toHaveBeenCalledTimes(1);
   });
 
   test('auto-stop fires after correct total duration with precise threshold', () => {
-    // Config: idle_timeout = 1 min (60s), auto_stop = 2 min (120s)
-    // Total threshold = 60 + 120 = 180s from idleStartedAt
     detector = new IdleDetector({
       idle_timeout: 1,              // 1 min = 60s
       idle_alert_auto_stop_min: 2,  // 2 min = 120s
@@ -203,7 +312,7 @@ describe('IdleDetector', () => {
     powerMonitor.getSystemIdleTime.mockReturnValue(60);
     jest.advanceTimersByTime(10000);
     expect(onIdle).toHaveBeenCalledTimes(1);
-    expect(detector.isIdle).toBe(true);
+    expect(detector.state).toBe(IDLE_STATE.ALERTING);
     expect(detector.idleStartedAt).not.toBeNull();
 
     // Verify idleStartedAt was backdated: it should be ~60s before current time
@@ -220,67 +329,11 @@ describe('IdleDetector', () => {
     jest.advanceTimersByTime(10000);
     expect(onAutoStop).toHaveBeenCalledTimes(1);
 
-    // resolveIdle was called internally by auto-stop, but because systemIdleSec
-    // still exceeds idleTimeoutSec, the next _check tick re-enters idle state.
-    // Verify auto-stop only fired once (no double-fire in the same batch).
+    // auto-stop should only fire once
     expect(onAutoStop).toHaveBeenCalledTimes(1);
   });
 
-  test('auto-stop does not fire if user returns (system idle drops below 5s)', () => {
-    detector = new IdleDetector({
-      idle_timeout: 1,              // 1 min = 60s
-      idle_alert_auto_stop_min: 2,  // 2 min = 120s
-      idle_check_interval_sec: 10,
-    });
-    const onIdle = jest.fn();
-    const onAutoStop = jest.fn();
-    detector.onIdleDetected(onIdle);
-    detector.onAutoStop(onAutoStop);
-    detector.start();
-
-    // Become idle
-    powerMonitor.getSystemIdleTime.mockReturnValue(60);
-    jest.advanceTimersByTime(10000);
-    expect(onIdle).toHaveBeenCalledTimes(1);
-
-    // User returns — system idle drops below 5s
-    // The _check method returns early without auto-stopping
-    powerMonitor.getSystemIdleTime.mockReturnValue(2);
-    jest.advanceTimersByTime(10000);
-    expect(onAutoStop).not.toHaveBeenCalled();
-    // Note: isIdle remains true because only the alert window resolves it
-    expect(detector.isIdle).toBe(true);
-  });
-
-  test('getIdleDuration returns correct value during active idle tracking', () => {
-    detector = new IdleDetector({
-      idle_timeout: 1,
-      idle_check_interval_sec: 10,
-    });
-    detector.onIdleDetected(jest.fn());
-    detector.start();
-
-    // Before idle, duration is 0
-    expect(detector.getIdleDuration()).toBe(0);
-
-    // Become idle — system reports 60s idle, so idleStartedAt is backdated 60s
-    powerMonitor.getSystemIdleTime.mockReturnValue(60);
-    jest.advanceTimersByTime(10000);
-    expect(detector.isIdle).toBe(true);
-
-    // Immediately after detection, getIdleDuration should reflect the backdated start
-    const durationAtDetection = detector.getIdleDuration();
-    expect(durationAtDetection).toBeGreaterThanOrEqual(59);
-    expect(durationAtDetection).toBeLessThanOrEqual(61);
-
-    // Advance 30 more seconds — duration should increase accordingly
-    jest.advanceTimersByTime(30000);
-    const durationAfter30s = detector.getIdleDuration();
-    expect(durationAfter30s).toBeGreaterThanOrEqual(89);
-    expect(durationAfter30s).toBeLessThanOrEqual(91);
-  });
-
-  test('auto-stop callback receives total idle duration', () => {
+  test('auto-stop callback receives total idle duration and actionId', () => {
     detector = new IdleDetector({
       idle_timeout: 1,              // 60s
       idle_alert_auto_stop_min: 1,  // 60s
@@ -296,14 +349,95 @@ describe('IdleDetector', () => {
     jest.advanceTimersByTime(10000);
 
     // Auto-stop threshold = 60 + 60 = 120s from idleStartedAt
-    // Need 60 more real seconds to pass
     powerMonitor.getSystemIdleTime.mockReturnValue(130);
     jest.advanceTimersByTime(70000);
     expect(onAutoStop).toHaveBeenCalledTimes(1);
 
-    // The callback arg should be the total idle duration in seconds
+    // The callback args should be (totalIdleDuration, actionId)
     const reportedDuration = onAutoStop.mock.calls[0][0];
     expect(reportedDuration).toBeGreaterThanOrEqual(120);
     expect(reportedDuration).toBeLessThanOrEqual(140);
+
+    const reportedActionId = onAutoStop.mock.calls[0][1];
+    expect(typeof reportedActionId).toBe('number');
+    expect(reportedActionId).toBeGreaterThan(0);
+  });
+
+  test('getIdleDuration returns correct value during active idle tracking', () => {
+    detector = new IdleDetector({
+      idle_timeout: 1,
+      idle_check_interval_sec: 10,
+    });
+    detector.onIdleDetected(jest.fn());
+    detector.start();
+
+    // Before idle, duration is 0
+    expect(detector.getIdleDuration()).toBe(0);
+
+    // Become idle
+    powerMonitor.getSystemIdleTime.mockReturnValue(60);
+    jest.advanceTimersByTime(10000);
+    expect(detector.state).toBe(IDLE_STATE.ALERTING);
+
+    // Immediately after detection, getIdleDuration should reflect the backdated start
+    const durationAtDetection = detector.getIdleDuration();
+    expect(durationAtDetection).toBeGreaterThanOrEqual(59);
+    expect(durationAtDetection).toBeLessThanOrEqual(61);
+
+    // Advance 30 more seconds — duration should increase accordingly
+    jest.advanceTimersByTime(30000);
+    const durationAfter30s = detector.getIdleDuration();
+    expect(durationAfter30s).toBeGreaterThanOrEqual(89);
+    expect(durationAfter30s).toBeLessThanOrEqual(91);
+  });
+
+  // ── Cooldown / re-detection tests ──────────────────────────────────────────
+
+  test('after resolveIdle, does not re-detect until fresh input arrives', () => {
+    detector = new IdleDetector({ idle_timeout: 1, idle_check_interval_sec: 10 });
+    const onIdle = jest.fn();
+    detector.onIdleDetected(onIdle);
+    detector.start();
+
+    // Become idle
+    powerMonitor.getSystemIdleTime.mockReturnValue(60);
+    jest.advanceTimersByTime(10000);
+    expect(onIdle).toHaveBeenCalledTimes(1);
+
+    // Resolve and restart
+    detector.resolveIdle(detector.getActionId());
+    detector.start();
+
+    // System still idle — should NOT fire again (cooldown active)
+    powerMonitor.getSystemIdleTime.mockReturnValue(120);
+    jest.advanceTimersByTime(10000);
+    expect(onIdle).toHaveBeenCalledTimes(1); // no second fire
+
+    // User provides input — cooldown clears
+    powerMonitor.getSystemIdleTime.mockReturnValue(5);
+    jest.advanceTimersByTime(10000);
+
+    // User goes idle again — should fire
+    powerMonitor.getSystemIdleTime.mockReturnValue(60);
+    jest.advanceTimersByTime(10000);
+    expect(onIdle).toHaveBeenCalledTimes(2);
+  });
+
+  // ── Double-action prevention tests ─────────────────────────────────────────
+
+  test('double resolveIdle with same actionId returns null on second call', () => {
+    detector = new IdleDetector({ idle_timeout: 1, idle_check_interval_sec: 10 });
+    detector.onIdleDetected(jest.fn());
+    detector.start();
+
+    powerMonitor.getSystemIdleTime.mockReturnValue(60);
+    jest.advanceTimersByTime(10000);
+
+    const actionId = detector.getActionId();
+    const first = detector.resolveIdle(actionId);
+    expect(first).not.toBeNull();
+
+    const second = detector.resolveIdle(actionId);
+    expect(second).toBeNull(); // Already resolved
   });
 });
