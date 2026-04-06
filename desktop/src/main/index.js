@@ -868,6 +868,7 @@ async function initializeApp() {
 
   // Wire idle detection events
   idleDetector.onIdleDetected((idleSeconds, idleStartedAt, actionId) => {
+    console.log(`[IdleDetector] Idle detected! idleSeconds=${idleSeconds}, actionId=${actionId}, policy=${config.keep_idle_time || 'prompt'}`);
     // Pause both screenshot and activity capture during idle.
     // This prevents zero-event heartbeats from dragging down the activity score.
     screenshotService?.stop();
@@ -2473,6 +2474,7 @@ function notifyPopup(event, data) {
 // ── Idle Alert System ────────────────────────────────────────────────────────
 
 async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
+  console.log(`[IdleAlert] showIdleAlert called: idleSeconds=${idleSeconds}, actionId=${actionId}, detectorState=${idleDetector?.state}, isIdleActive=${idleDetector?.isIdleActive()}`);
   // Capture the actionId at call time; if not provided, read from detector
   const alertActionId = actionId ?? idleDetector?.getActionId() ?? 0;
 
@@ -2496,7 +2498,10 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
   // BUG-2 FIX: Check idle detector state instead of isTimerRunning to avoid race condition
   // where a concurrent sync cycle temporarily sets isTimerRunning=false, preventing the
   // modal from appearing. The idle detector is the authoritative source of idle state.
-  if (!idleDetector?.isIdleActive()) return;
+  if (!idleDetector?.isIdleActive()) {
+    console.warn('[IdleAlert] showIdleAlert aborted — idleDetector not in idle-active state');
+    return;
+  }
 
   screenshotService?.stop();
 
@@ -2515,6 +2520,10 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
 
   // Refresh project list so idle reassign dropdown is up-to-date
   await loadProjects();
+
+  const htmlPath = path.join(__dirname, '..', 'renderer', 'idle-alert.html');
+  const preloadPath = path.join(__dirname, '..', 'preload', 'index.js');
+  console.log(`[IdleAlert] Creating window — htmlPath=${htmlPath}, preloadPath=${preloadPath}, __dirname=${__dirname}`);
 
   idleAlertWindow = new BrowserWindow({
     width: 380,
@@ -2549,8 +2558,9 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
 
   function showAndSendData() {
     if (shown) return;
-    if (win.isDestroyed()) return;
+    if (win.isDestroyed()) { console.warn('[IdleAlert] Window destroyed before show'); return; }
     shown = true;
+    console.log('[IdleAlert] Showing idle alert window');
     win.show();
     win.focus();
     win.webContents.send('idle-data', {
@@ -2601,7 +2611,9 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     }
   });
 
-  win.loadFile(path.join(__dirname, '..', 'renderer', 'idle-alert.html')).catch((err) => {
+  win.loadFile(htmlPath).then(() => {
+    console.log('[IdleAlert] idle-alert.html loaded successfully');
+  }).catch((err) => {
     console.error('[IdleAlert] Failed to load idle-alert.html:', err.message);
   });
 
