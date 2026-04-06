@@ -41,7 +41,7 @@ class InvitationTest extends TestCase
             ->assertJsonPath('message', 'Invitation sent successfully.');
     }
 
-    public function test_manager_cannot_create_invitation(): void
+    public function test_manager_can_create_invitation(): void
     {
         $this->actingAs($this->manager, 'sanctum');
 
@@ -50,7 +50,9 @@ class InvitationTest extends TestCase
             'role' => 'employee',
         ]);
 
-        $response->assertStatus(403);
+        $response->assertStatus(201)
+            ->assertJsonPath('invitation.email', 'someone@example.com')
+            ->assertJsonPath('message', 'Invitation sent successfully.');
     }
 
     public function test_invite_is_blocked_when_seat_limit_reached(): void

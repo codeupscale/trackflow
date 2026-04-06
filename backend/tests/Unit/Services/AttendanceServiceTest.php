@@ -177,13 +177,14 @@ class AttendanceServiceTest extends TestCase
         $date = '2026-03-18'; // Wednesday
         $carbonDate = Carbon::parse($date);
 
-        // Create shift starting at 9:00
+        // Create shift starting at 9:00 with no grace period
         $shift = Shift::factory()->create([
             'organization_id' => $org->id,
             'name' => 'Day Shift',
             'start_time' => '09:00:00',
             'end_time' => '17:00:00',
             'days_of_week' => ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+            'grace_period_minutes' => 0,
         ]);
 
         // Assign shift to user via pivot

@@ -115,6 +115,7 @@ class ProjectTest extends TestCase
         $project = Project::factory()->create([
             'organization_id' => $this->org->id,
             'created_by' => $this->owner->id,
+            'manager_id' => $manager->id,
         ]);
         $member = $this->createUser($this->org, 'employee');
 
