@@ -349,11 +349,21 @@ describe('ActivityMonitor — Active-Seconds Scoring', () => {
 
     test('30s of full activity in fallback produces ~30 active seconds', () => {
       const mon = new ActivityMonitor(mockApiClient, mockOfflineQueue);
+      // Spy on sendHeartbeat to capture _activeSeconds before reset
+      let capturedActiveCount = 0;
+      jest.spyOn(mon, 'sendHeartbeat').mockImplementation(async function() {
+        capturedActiveCount = this._activeSeconds.size;
+        this.keyboardCount = 0;
+        this.mouseCount = 0;
+        this._activeSeconds = new Set();
+        this._intervalStartTime = Date.now();
+      });
       mon.start();
 
-      // 30s = 10 polls, each adding 3 active seconds
+      // 30s = 10 polls, each adding 3 active seconds. At 30s the heartbeat
+      // fires and resets _activeSeconds, so check the captured snapshot.
       jest.advanceTimersByTime(30000);
-      expect(mon._activeSeconds.size).toBe(30);
+      expect(capturedActiveCount).toBe(30);
 
       mon.stop();
     });

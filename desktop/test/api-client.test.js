@@ -107,7 +107,10 @@ describe('ApiClient', () => {
       data: { running: true, entry: { id: 1 }, today_total: 300 },
     });
     await client.getTimerStatus(42);
-    expect(mockAxios.get).toHaveBeenCalledWith('/timer/status', { params: { project_id: 42 } });
+    expect(mockAxios.get).toHaveBeenCalledWith('/timer/status', {
+      params: { project_id: 42 },
+      timeout: 10000,
+    });
   });
 
   test('getTimerStatus without project_id should pass empty params', async () => {
@@ -115,7 +118,10 @@ describe('ApiClient', () => {
       data: { running: false, today_total: 0 },
     });
     await client.getTimerStatus();
-    expect(mockAxios.get).toHaveBeenCalledWith('/timer/status', { params: {} });
+    expect(mockAxios.get).toHaveBeenCalledWith('/timer/status', {
+      params: {},
+      timeout: 10000,
+    });
   });
 
   test('getTodayTotal should return numeric value', async () => {
