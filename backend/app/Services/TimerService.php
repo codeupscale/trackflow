@@ -26,11 +26,29 @@ class TimerService
      */
     private const MAX_ENTRY_DURATION = 43200;
 
-    public function start(array $data): TimeEntry
+    /**
+     * Start a timer. Returns ['entry' => TimeEntry, 'is_existing' => bool].
+     * When an idempotency_key matches an open entry, returns the existing one (is_existing=true).
+     */
+    public function start(array $data): array
     {
         $user = Auth::user();
         $redisKey = "timer:{$user->id}";
         $lockKey = "timer:lock:{$user->id}";
+
+        // Idempotency check — BEFORE lock acquisition (read-only, safe without lock).
+        // If the desktop/client sends the same idempotency_key for a start that already
+        // succeeded, return the existing open entry instead of creating a duplicate.
+        if (! empty($data['idempotency_key'])) {
+            $idempotent = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                ->where('organization_id', $user->organization_id)
+                ->where('idempotency_key', $data['idempotency_key'])
+                ->first();
+
+            if ($idempotent) {
+                return ['entry' => $idempotent, 'is_existing' => true];
+            }
+        }
 
         // Employees may only start a timer on projects they are assigned to
         if (! empty($data['project_id'] ?? null)) {
@@ -93,6 +111,7 @@ class TimerService
                     'notes' => $data['notes'] ?? null,
                     'started_at' => now(),
                     'type' => 'tracked',
+                    'idempotency_key' => $data['idempotency_key'] ?? null,
                 ]);
 
                 // Set Redis before committing to maintain consistency
@@ -108,24 +127,74 @@ class TimerService
 
             TimerStarted::dispatch($entry);
 
-            return $entry;
+            return ['entry' => $entry, 'is_existing' => false];
         } finally {
             Redis::del($lockKey);
         }
     }
 
-    public function stop(): TimeEntry
+    /**
+     * Stop the running timer. Returns ['entry' => TimeEntry, 'already_stopped' => bool].
+     *
+     * @param array $data Optional: 'started_at' and 'ended_at' for offline sync.
+     *                    Both must be in the past. ended_at must be after started_at.
+     */
+    public function stop(array $data = []): array
     {
         $user = Auth::user();
         $redisKey = "timer:{$user->id}";
         $lockKey = "timer:lock:{$user->id}";
 
+        // Parse and validate optional offline timestamps (never trust future times)
+        $overrideEndedAt = null;
+        $overrideStartedAt = null;
+
+        if (! empty($data['ended_at'])) {
+            $overrideEndedAt = Carbon::parse($data['ended_at']);
+            if ($overrideEndedAt->isFuture()) {
+                throw new \InvalidArgumentException('ended_at cannot be in the future.');
+            }
+        }
+        if (! empty($data['started_at'])) {
+            $overrideStartedAt = Carbon::parse($data['started_at']);
+            if ($overrideStartedAt->isFuture()) {
+                throw new \InvalidArgumentException('started_at cannot be in the future.');
+            }
+        }
+        if ($overrideStartedAt && $overrideEndedAt && $overrideEndedAt->lte($overrideStartedAt)) {
+            throw new \InvalidArgumentException('ended_at must be after started_at.');
+        }
+
         $timerData = Redis::get($redisKey);
         if (!$timerData) {
+            // No Redis key — check if the most recent entry for this user is already stopped.
+            // This handles the case where desktop queued a stop that already completed.
+            $lastEntry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                ->where('user_id', $user->id)
+                ->whereNotNull('ended_at')
+                ->latest('ended_at')
+                ->first();
+
+            if ($lastEntry) {
+                return ['entry' => $lastEntry, 'already_stopped' => true];
+            }
+
             throw new \RuntimeException('No timer is currently running.');
         }
 
         $timerData = json_decode($timerData, true);
+
+        // Check if the entry is already stopped (race condition / duplicate stop)
+        $checkEntry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+            ->where('id', $timerData['entry_id'])
+            ->where('user_id', $user->id)
+            ->first();
+
+        if ($checkEntry && $checkEntry->ended_at !== null) {
+            // Already stopped — clean up stale Redis key and return gracefully
+            Redis::del($redisKey);
+            return ['entry' => $checkEntry, 'already_stopped' => true];
+        }
 
         // Atomically acquire lock to prevent race condition (same pattern as start())
         if (!Redis::set($lockKey, 1, 'EX', 5, 'NX')) {
@@ -133,15 +202,26 @@ class TimerService
         }
 
         try {
-            $entry = DB::transaction(function () use ($user, $timerData, $redisKey) {
+            $entry = DB::transaction(function () use ($user, $timerData, $redisKey, $overrideStartedAt, $overrideEndedAt) {
                 $entry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
                     ->where('id', $timerData['entry_id'])
                     ->where('user_id', $user->id)
                     ->firstOrFail();
 
-                $now = now();
+                // Double-check: if entry was stopped between our check and lock acquisition
+                if ($entry->ended_at !== null) {
+                    Redis::del($redisKey);
+                    return $entry;
+                }
+
+                // Apply offline overrides if provided
+                if ($overrideStartedAt) {
+                    $entry->started_at = $overrideStartedAt;
+                }
+
+                $stopTime = $overrideEndedAt ?? now();
                 $duration = min(
-                    (int) abs($now->diffInSeconds($entry->started_at)),
+                    (int) abs($stopTime->diffInSeconds($entry->started_at)),
                     self::MAX_ENTRY_DURATION
                 );
 
@@ -150,7 +230,8 @@ class TimerService
                 $finalScore = $this->computeFinalActivityScore($entry->id);
 
                 $entry->update([
-                    'ended_at' => $now,
+                    'started_at' => $entry->started_at, // Persist override if applied
+                    'ended_at' => $stopTime,
                     'duration_seconds' => $duration,
                     'activity_score' => $finalScore ?? $entry->activity_score ?? 0,
                 ]);
@@ -161,7 +242,7 @@ class TimerService
 
             TimerStopped::dispatch($entry);
 
-            return $entry;
+            return ['entry' => $entry, 'already_stopped' => false];
         } finally {
             Redis::del($lockKey);
         }
@@ -256,7 +337,8 @@ class TimerService
 
     public function pause(): TimeEntry
     {
-        $stoppedEntry = $this->stop();
+        $result = $this->stop();
+        $stoppedEntry = $result['entry'];
 
         // Create idle entry (point-in-time record, zero duration)
         $user = Auth::user();

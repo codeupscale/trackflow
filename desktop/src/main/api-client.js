@@ -30,7 +30,7 @@ class ApiClient {
         'Accept': 'application/json',
         'X-Agent-Version': agentVersion,
       },
-      timeout: 30000,
+      timeout: 15000, // Default timeout; overridden per-call where needed
     });
 
     if (token) {
@@ -57,8 +57,14 @@ class ApiClient {
             originalRequest.headers['Authorization'] = `Bearer ${tokens.access_token}`;
             return this.client(originalRequest);
           } catch (refreshErr) {
-            // Refresh failed — token is truly expired (e.g. password changed)
-            if (this._onAuthFailed) {
+            // LOGOUT-FIX: Only trigger auth failure callback for genuine auth
+            // rejections (401/403 from the refresh endpoint). Network errors,
+            // timeouts, and 5xx responses are transient — the user should NOT
+            // be logged out for those.
+            const refreshStatus = refreshErr.response?.status;
+            const isAuthRejection = refreshStatus === 401 || refreshStatus === 403;
+
+            if (isAuthRejection && this._onAuthFailed) {
               this._onAuthFailed(refreshErr);
             }
             return Promise.reject(refreshErr);
@@ -163,15 +169,19 @@ class ApiClient {
     return res.data;
   }
 
-  async startTimer(projectId = null) {
-    const res = await this.client.post('/timer/start', {
-      project_id: projectId,
+  async startTimer(projectId = null, idempotencyKey = null) {
+    const payload = { project_id: projectId };
+    if (idempotencyKey) payload.idempotency_key = idempotencyKey;
+    const res = await this.client.post('/timer/start', payload, {
+      timeout: 10000, // Timer operations: 10s timeout
     });
     return res.data;
   }
 
-  async stopTimer() {
-    const res = await this.client.post('/timer/stop');
+  async stopTimer(data = {}) {
+    const res = await this.client.post('/timer/stop', data, {
+      timeout: 10000, // Timer operations: 10s timeout
+    });
     return res.data;
   }
 
@@ -211,7 +221,7 @@ class ApiClient {
       headers: {
         ...formData.getHeaders(),
       },
-      timeout: 60000,
+      timeout: 30000, // Screenshot uploads: 30s timeout
       maxContentLength: Infinity,
       maxBodyLength: Infinity,
     });

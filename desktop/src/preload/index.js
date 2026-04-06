@@ -58,6 +58,10 @@ contextBridge.exposeInMainWorld('trackflow', {
   onProjectsReady: (callback) => safeOn('projects-ready', () => callback()),
   onIdleData: (callback) => safeOn('idle-data', (_, data) => callback(data)),
 
+  // Network status (connectivity monitoring)
+  getNetworkStatus: () => ipcRenderer.invoke('get-network-status'),
+  onNetworkStatus: (callback) => safeOn('network-status', (_, data) => callback(data)),
+
   // Auto-update
   onUpdateReady: (callback) => safeOn('update-ready', (_, data) => callback(data)),
   installUpdate: () => ipcRenderer.invoke('install-update'),

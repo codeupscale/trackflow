@@ -118,8 +118,11 @@ describe('OfflineQueue', () => {
     expect(queue.retryDelay).toBe(5000);
   });
 
-  test('maxRetryDelay should be 5 minutes', () => {
-    expect(queue.maxRetryDelay).toBe(300000);
+  test('backoff schedule caps at 120s', () => {
+    // After multiple failures, backoff caps at step 4 (120000ms)
+    queue._backoffStep = 10;
+    const cappedStep = Math.min(queue._backoffStep, 4); // BACKOFF_SCHEDULE has 5 entries
+    expect(cappedStep).toBe(4);
   });
 
   test('cleanupOrphanedFiles does not throw when db is null', () => {

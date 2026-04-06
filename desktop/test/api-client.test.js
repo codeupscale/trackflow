@@ -32,7 +32,7 @@ describe('ApiClient', () => {
   test('should create axios instance with correct config', () => {
     expect(axios.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        timeout: 30000,
+        timeout: 15000,
         headers: expect.objectContaining({
           'Content-Type': 'application/json',
           'Accept': 'application/json',
@@ -80,7 +80,7 @@ describe('ApiClient', () => {
       data: { entry: { id: 1 }, today_total: 100 },
     });
     const result = await client.startTimer(42);
-    expect(mockAxios.post).toHaveBeenCalledWith('/timer/start', { project_id: 42 });
+    expect(mockAxios.post).toHaveBeenCalledWith('/timer/start', { project_id: 42 }, { timeout: 10000 });
     expect(result.entry.id).toBe(1);
   });
 
@@ -89,7 +89,7 @@ describe('ApiClient', () => {
       data: { entry: { id: 2 }, today_total: 0 },
     });
     const result = await client.startTimer();
-    expect(mockAxios.post).toHaveBeenCalledWith('/timer/start', { project_id: null });
+    expect(mockAxios.post).toHaveBeenCalledWith('/timer/start', { project_id: null }, { timeout: 10000 });
     expect(result.entry.id).toBe(2);
   });
 
@@ -98,7 +98,7 @@ describe('ApiClient', () => {
       data: { entry: { id: 1 }, today_total: 500 },
     });
     const result = await client.stopTimer();
-    expect(mockAxios.post).toHaveBeenCalledWith('/timer/stop');
+    expect(mockAxios.post).toHaveBeenCalledWith('/timer/stop', {}, { timeout: 10000 });
     expect(result.today_total).toBe(500);
   });
 
