@@ -13,11 +13,14 @@ class ApiErrorHandlingTest extends TestCase
 
     public function test_404_returns_consistent_error_format(): void
     {
-        $org = Organization::factory()->create();
-        $user = User::factory()->create(['organization_id' => $org->id, 'role' => 'admin']);
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'admin');
+
+        // Use a valid UUID format that doesn't exist — PostgreSQL rejects non-UUID strings
+        $fakeUuid = '00000000-0000-0000-0000-000000000000';
 
         $response = $this->actingAs($user)
-            ->getJson('/api/v1/time-entries/nonexistent-uuid-here');
+            ->getJson("/api/v1/time-entries/{$fakeUuid}");
 
         $response->assertStatus(404)
             ->assertJsonStructure(['error' => ['code', 'message']]);
@@ -36,11 +39,8 @@ class ApiErrorHandlingTest extends TestCase
 
     public function test_403_returns_consistent_format(): void
     {
-        $org = Organization::factory()->create();
-        $employee = User::factory()->create([
-            'organization_id' => $org->id,
-            'role' => 'employee',
-        ]);
+        $org = $this->createOrganization();
+        $employee = $this->createUser($org, 'employee');
 
         $response = $this->actingAs($employee)->getJson('/api/v1/audit-logs');
 
