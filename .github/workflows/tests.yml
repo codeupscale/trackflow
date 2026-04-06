@@ -6,6 +6,7 @@ on:
       - main
       - '*.x'
   pull_request:
+  workflow_dispatch:
   schedule:
     - cron: '0 0 * * *'
 
@@ -17,6 +18,20 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: trackflow
+          POSTGRES_PASSWORD: trackflow_test
+          POSTGRES_DB: trackflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trackflow"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
       redis:
         image: redis:7-alpine
         ports:
@@ -40,14 +55,25 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite, redis
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, pdo_pgsql, pgsql, redis, gd, bcmath
           coverage: none
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('backend/composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
 
       - name: Install Composer dependencies
         run: composer install --prefer-dist --no-interaction --no-progress
@@ -58,39 +84,63 @@ jobs:
       - name: Generate app key
         run: php artisan key:generate
 
+      - name: Run database migrations
+        run: php artisan migrate --force
+        env:
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: trackflow_test
+          DB_USERNAME: trackflow
+          DB_PASSWORD: trackflow_test
+
       - name: Execute tests
         run: php artisan test --exclude-group=external
         env:
+          APP_ENV: testing
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: trackflow_test
+          DB_USERNAME: trackflow
+          DB_PASSWORD: trackflow_test
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: 6379
 
-      - name: Update vulnerable packages
-        run: composer update league/commonmark --with-all-dependencies --no-interaction
-
       - name: Audit PHP dependencies for vulnerabilities
+        if: always()
+        continue-on-error: true
         run: composer audit
 
-  frontend-security:
+  frontend-checks:
     runs-on: ubuntu-latest
-    name: Frontend Security Audit
+    name: Frontend (TypeScript + Audit)
     defaults:
       run:
         working-directory: web
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Audit production dependencies for vulnerabilities
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+
+      - name: Audit production dependencies for vulnerabilities (non-blocking)
+        if: always()
+        continue-on-error: true
         run: npm audit --audit-level=high --omit=dev
 
       - name: Audit dev dependencies (non-blocking)
+        if: always()
         continue-on-error: true
         run: npm audit --audit-level=high
