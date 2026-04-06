@@ -65,7 +65,7 @@ class TimerService
                         // Clock skew guard: ended_at must never be before started_at
                         $endedAt = $now->lt($existingEntry->started_at) ? $existingEntry->started_at->copy() : $now;
                         $duration = min(
-                            (int) $endedAt->diffInSeconds($existingEntry->started_at),
+                            (int) abs($existingEntry->started_at->diffInSeconds($endedAt)),
                             self::MAX_ENTRY_DURATION
                         );
                         $finalScore = $this->computeFinalActivityScore($existingEntry->id);
@@ -145,7 +145,7 @@ class TimerService
                 // Clock skew guard: ended_at must never be before started_at
                 $endedAt = $now->lt($entry->started_at) ? $entry->started_at->copy() : $now;
                 $duration = min(
-                    (int) $endedAt->diffInSeconds($entry->started_at),
+                    (int) abs($entry->started_at->diffInSeconds($endedAt)),
                     self::MAX_ENTRY_DURATION
                 );
 
@@ -219,7 +219,7 @@ class TimerService
                 // Clock skew guard: ended_at must never be before started_at
                 $endedAt = $now->lt($currentEntry->started_at) ? $currentEntry->started_at->copy() : $now;
                 $duration = min(
-                    (int) $endedAt->diffInSeconds($currentEntry->started_at),
+                    (int) abs($currentEntry->started_at->diffInSeconds($endedAt)),
                     self::MAX_ENTRY_DURATION
                 );
                 $finalScore = $this->computeFinalActivityScore($currentEntry->id);
