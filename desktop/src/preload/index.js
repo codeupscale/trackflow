@@ -36,7 +36,8 @@ contextBridge.exposeInMainWorld('trackflow', {
   onGoogleAuthError: (callback) => safeOn('google-auth-error', (_, data) => callback(data)),
 
   // Idle alert actions (action: 'keep'|'discard'|'stop'|'reassign'; projectId only for reassign)
-  resolveIdle: (action, projectId) => ipcRenderer.invoke('resolve-idle', action, projectId),
+  // actionId is passed through for stale-action detection in the idle state machine
+  resolveIdle: (action, projectId, actionId) => ipcRenderer.invoke('resolve-idle', action, projectId, actionId),
 
   // Screen recording permission (macOS)
   checkScreenPermission: () => ipcRenderer.invoke('check-screen-permission'),

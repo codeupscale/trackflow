@@ -17,9 +17,9 @@ class ReportTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->org = Organization::factory()->create();
-        $this->owner = User::factory()->create(['organization_id' => $this->org->id, 'role' => 'owner']);
-        $this->employee = User::factory()->create(['organization_id' => $this->org->id, 'role' => 'employee']);
+        $this->org = $this->createOrganization();
+        $this->owner = $this->createUser($this->org, 'owner');
+        $this->employee = $this->createUser($this->org, 'employee');
     }
 
     public function test_can_get_summary_report(): void

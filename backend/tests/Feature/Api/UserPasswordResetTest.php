@@ -11,7 +11,7 @@ class UserPasswordResetTest extends TestCase
 {
     public function test_owner_can_reset_team_member_password_with_provided_password(): void
     {
-        $org = Organization::factory()->create();
+        $org = $this->createOrganization();
         $actor = $this->actingAsUser('owner', $org);
         $target = User::factory()->create([
             'organization_id' => $org->id,
@@ -41,7 +41,7 @@ class UserPasswordResetTest extends TestCase
 
     public function test_admin_can_reset_team_member_password(): void
     {
-        $org = Organization::factory()->create();
+        $org = $this->createOrganization();
         $this->actingAsUser('admin', $org);
         $target = User::factory()->create([
             'organization_id' => $org->id,
@@ -56,9 +56,9 @@ class UserPasswordResetTest extends TestCase
         $response->assertOk();
     }
 
-    public function test_manager_can_reset_team_member_password(): void
+    public function test_manager_cannot_reset_team_member_password(): void
     {
-        $org = Organization::factory()->create();
+        $org = $this->createOrganization();
         $this->actingAsUser('manager', $org);
         $target = User::factory()->create([
             'organization_id' => $org->id,
@@ -70,12 +70,13 @@ class UserPasswordResetTest extends TestCase
             'password_confirmation' => 'new-password-123',
         ]);
 
-        $response->assertOk();
+        // Manager does not have team.change_role permission in the RBAC system
+        $response->assertForbidden();
     }
 
     public function test_employee_cannot_reset_other_users_password(): void
     {
-        $org = Organization::factory()->create();
+        $org = $this->createOrganization();
         $this->actingAsUser('employee', $org);
         $target = User::factory()->create([
             'organization_id' => $org->id,
@@ -92,8 +93,8 @@ class UserPasswordResetTest extends TestCase
 
     public function test_cannot_reset_cross_org_user_password(): void
     {
-        $orgA = Organization::factory()->create();
-        $orgB = Organization::factory()->create();
+        $orgA = $this->createOrganization();
+        $orgB = $this->createOrganization();
         $this->actingAsUser('admin', $orgA);
         $target = User::factory()->create([
             'organization_id' => $orgB->id,
@@ -110,7 +111,7 @@ class UserPasswordResetTest extends TestCase
 
     public function test_reset_is_blocked_when_org_enforces_sso(): void
     {
-        $org = Organization::factory()->create([
+        $org = $this->createOrganization([
             'enforce_sso' => true,
             'sso_config' => ['provider' => 'saml'],
         ]);
@@ -131,7 +132,7 @@ class UserPasswordResetTest extends TestCase
 
     public function test_reset_is_blocked_for_sso_managed_user(): void
     {
-        $org = Organization::factory()->create();
+        $org = $this->createOrganization();
         $this->actingAsUser('admin', $org);
         $target = User::factory()->create([
             'organization_id' => $org->id,
@@ -151,7 +152,7 @@ class UserPasswordResetTest extends TestCase
 
     public function test_generate_true_returns_generated_password_once_and_resets_password(): void
     {
-        $org = Organization::factory()->create();
+        $org = $this->createOrganization();
         $this->actingAsUser('admin', $org);
         $target = User::factory()->create([
             'organization_id' => $org->id,

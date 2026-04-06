@@ -33,9 +33,11 @@ return new class extends Migration
                 $table->boolean('has_scope')->default(false)->after('description');
             });
 
-            // Make description NOT NULL with default
-            DB::statement("ALTER TABLE permissions ALTER COLUMN description SET NOT NULL");
-            DB::statement("ALTER TABLE permissions ALTER COLUMN description SET DEFAULT ''");
+            // Make description NOT NULL with default (PostgreSQL only — SQLite handles this via column definition)
+            if (Schema::getConnection()->getDriverName() === 'pgsql') {
+                DB::statement("ALTER TABLE permissions ALTER COLUMN description SET NOT NULL");
+                DB::statement("ALTER TABLE permissions ALTER COLUMN description SET DEFAULT ''");
+            }
 
             // ---------------------------------------------------------------
             // Step 3: Create roles table
@@ -70,8 +72,10 @@ return new class extends Migration
                 $table->index(['permission_id'], 'idx_role_permissions_perm');
             });
 
-            // Add check constraint for scope values
-            DB::statement("ALTER TABLE role_permissions ADD CONSTRAINT chk_scope CHECK (scope IN ('own', 'team', 'organization', 'none'))");
+            // Add check constraint for scope values (PostgreSQL only)
+            if (Schema::getConnection()->getDriverName() === 'pgsql') {
+                DB::statement("ALTER TABLE role_permissions ADD CONSTRAINT chk_scope CHECK (scope IN ('own', 'team', 'organization', 'none'))");
+            }
 
             // ---------------------------------------------------------------
             // Step 5: Create user_roles table
@@ -108,7 +112,7 @@ return new class extends Migration
                 // Create 4 system roles for each organization
                 foreach ($systemRoles as $roleDef) {
                     DB::table('roles')->insert([
-                        'id' => DB::raw('gen_random_uuid()'),
+                        'id' => \Illuminate\Support\Str::uuid()->toString(),
                         'organization_id' => $org->id,
                         'name' => $roleDef['name'],
                         'display_name' => $roleDef['display_name'],
@@ -137,7 +141,7 @@ return new class extends Migration
 
                     if ($role) {
                         DB::table('user_roles')->insert([
-                            'id' => DB::raw('gen_random_uuid()'),
+                            'id' => \Illuminate\Support\Str::uuid()->toString(),
                             'user_id' => $user->id,
                             'role_id' => $role->id,
                             'assigned_by' => null,
@@ -162,8 +166,10 @@ return new class extends Migration
                 $table->dropColumn(['action', 'has_scope']);
             });
 
-            DB::statement("ALTER TABLE permissions ALTER COLUMN description DROP NOT NULL");
-            DB::statement("ALTER TABLE permissions ALTER COLUMN description DROP DEFAULT");
+            if (Schema::getConnection()->getDriverName() === 'pgsql') {
+                DB::statement("ALTER TABLE permissions ALTER COLUMN description DROP NOT NULL");
+                DB::statement("ALTER TABLE permissions ALTER COLUMN description DROP DEFAULT");
+            }
 
             Schema::table('permissions', function (Blueprint $table) {
                 $table->renameColumn('key', 'name');
