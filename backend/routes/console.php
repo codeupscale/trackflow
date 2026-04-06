@@ -1,5 +1,6 @@
 <?php
 
+use App\Jobs\GenerateDailyAttendanceJob;
 use App\Jobs\PruneOldActivityLogsJob;
 use App\Jobs\SendDailyActivitySummaryJob;
 use App\Jobs\SendTimerIdleAlertJob;
@@ -70,6 +71,18 @@ Schedule::call(function () {
             }
         });
 })->weekdays()->dailyAt('23:00')->name('daily-activity-summary');
+
+// JOB-09: Generate daily attendance records — Daily 00:30 UTC (processes previous calendar day)
+Schedule::call(function () {
+    $yesterday = now()->subDay()->toDateString();
+    Organization::query()
+        ->select('id')
+        ->chunkById(500, function ($orgs) use ($yesterday) {
+            foreach ($orgs as $org) {
+                GenerateDailyAttendanceJob::dispatch($org->id, $yesterday);
+            }
+        });
+})->dailyAt('00:30')->name('generate-daily-attendance');
 
 // Data retention enforcement — Daily 4am UTC
 Schedule::job(new \App\Jobs\EnforceDataRetentionJob)->dailyAt('04:00')->name('enforce-data-retention');
