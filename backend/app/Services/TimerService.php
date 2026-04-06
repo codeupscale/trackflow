@@ -412,8 +412,10 @@ class TimerService
         }
 
         $data = json_decode($timerData, true);
-        $entry = TimeEntry::find($data['entry_id'] ?? null);
+        $entry = TimeEntry::whereNull('ended_at')->find($data['entry_id'] ?? null);
         if (!$entry) {
+            // Stale Redis key — entry is already closed. Clean up and return not-running.
+            Redis::del($redisKey);
             return [
                 'running' => false,
                 'entry' => null,
@@ -495,7 +497,7 @@ class TimerService
         $timerData = Redis::get($redisKey);
         if ($timerData) {
             $data = json_decode($timerData, true);
-            $entry = TimeEntry::find($data['entry_id'] ?? null);
+            $entry = TimeEntry::whereNull('ended_at')->find($data['entry_id'] ?? null);
             if ($entry && ($projectId === null || $projectId === '' || (string) $entry->project_id === (string) $projectId)) {
                 $total += (int) abs(now()->diffInSeconds($entry->started_at));
             }
