@@ -38,13 +38,11 @@ class AttendanceService
         User::where('organization_id', $orgId)
             ->where('is_active', true)
             ->with(['shifts' => function ($q) use ($carbonDate) {
-                $q->where(function ($sq) use ($carbonDate) {
-                    $sq->whereNull('user_shifts.effective_to')
-                        ->orWhere('user_shifts.effective_to', '>=', $carbonDate->toDateString());
-                })->where(function ($sq) use ($carbonDate) {
-                    $sq->whereNull('user_shifts.effective_from')
-                        ->orWhere('user_shifts.effective_from', '<=', $carbonDate->toDateString());
-                });
+                $date = $carbonDate->toDateString();
+                // Use whereRaw to avoid Laravel prefixing pivot column names with "pivot_"
+                // which generates non-existent column references like "pivot_effective_to"
+                $q->whereRaw('("user_shifts"."effective_to" IS NULL OR "user_shifts"."effective_to" >= ?)', [$date])
+                  ->whereRaw('("user_shifts"."effective_from" IS NULL OR "user_shifts"."effective_from" <= ?)', [$date]);
             }])
             ->chunk(200, function ($users) use ($orgId, $carbonDate, $date, $dayOfWeek, $isHoliday, &$processedCount) {
         foreach ($users as $user) {
