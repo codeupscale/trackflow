@@ -258,7 +258,19 @@ class IdleDetector {
     // Only detect idle while in WATCHING state
     if (this._state !== IDLE_STATE.WATCHING) return;
 
-    const systemIdleSec = powerMonitor.getSystemIdleTime();
+    let systemIdleSec;
+    try {
+      systemIdleSec = powerMonitor.getSystemIdleTime();
+    } catch (err) {
+      console.error('[IdleDetector] getSystemIdleTime() threw:', err.message);
+      return;
+    }
+
+    // Log idle time periodically (every ~60s) to help diagnose detection issues
+    if (!this._lastLoggedAt || Date.now() - this._lastLoggedAt > 60000) {
+      console.log(`[IdleDetector] _check: systemIdleSec=${systemIdleSec}, threshold=${this.idleTimeoutSec}s, enabled=${this.enabled}`);
+      this._lastLoggedAt = Date.now();
+    }
 
     // Cooldown: after resolution, wait for fresh user input before re-detecting
     if (this._lastResolvedAt) {
