@@ -258,7 +258,19 @@ class IdleDetector {
     // Only detect idle while in WATCHING state
     if (this._state !== IDLE_STATE.WATCHING) return;
 
-    const systemIdleSec = powerMonitor.getSystemIdleTime();
+    let systemIdleSec;
+    try {
+      systemIdleSec = powerMonitor.getSystemIdleTime();
+    } catch (err) {
+      console.error('[IdleDetector] getSystemIdleTime() threw:', err.message);
+      return;
+    }
+
+    // Log idle time periodically (every ~60s) to help diagnose detection issues
+    if (!this._lastLoggedAt || Date.now() - this._lastLoggedAt > 60000) {
+      console.log(`[IdleDetector] _check: systemIdleSec=${systemIdleSec}, threshold=${this.idleTimeoutSec}s, enabled=${this.enabled}`);
+      this._lastLoggedAt = Date.now();
+    }
 
     // Cooldown: after resolution, wait for fresh user input before re-detecting
     if (this._lastResolvedAt) {
@@ -295,8 +307,16 @@ class IdleDetector {
 
   /**
    * Auto-stop check — only runs in ALERTING state.
-   * Fires the auto-stop callback when the user has been idle past the
-   * idle_timeout + alert_auto_stop threshold.
+   * Fires the auto-stop callback when the alert has been shown for longer
+   * than alertAutoStopSec. Uses alertShownAt (not idleStartedAt) so that
+   * long sleeps don't cause immediate auto-stop before the user sees the popup.
+   *
+   * Previously this compared total idle time (Date.now() - idleStartedAt)
+   * against idleTimeoutSec + alertAutoStopSec, which caused a bug: after a
+   * long sleep (> idle + autoStop threshold), the first _checkAutoStop tick
+   * would fire auto-stop immediately — before showIdleAlert() had finished
+   * creating the BrowserWindow. The user's timer was stopped without them
+   * ever seeing the idle alert.
    */
   _checkAutoStop() {
     if (this._state !== IDLE_STATE.ALERTING) {
@@ -304,17 +324,20 @@ class IdleDetector {
       return;
     }
 
-    if (!this.idleStartedAt) {
+    if (!this.alertShownAt) {
       this._clearInterval();
       return;
     }
 
-    const totalIdleDuration = (Date.now() - this.idleStartedAt) / 1000;
-    if (totalIdleDuration >= this.idleTimeoutSec + this.alertAutoStopSec) {
+    const alertDurationSec = (Date.now() - this.alertShownAt) / 1000;
+    if (alertDurationSec >= this.alertAutoStopSec) {
+      const totalIdleDuration = this.idleStartedAt
+        ? Math.floor((Date.now() - this.idleStartedAt) / 1000)
+        : Math.floor(alertDurationSec);
       const actionId = this._actionId;
       // Fire auto-stop BEFORE resolving, so the callback can read idleStartedAt
       if (this._onAutoStop) {
-        this._onAutoStop(Math.floor(totalIdleDuration), actionId);
+        this._onAutoStop(totalIdleDuration, actionId);
       }
       // Auto-resolve (the callback should also call resolveIdle, but
       // we do it here defensively in case the callback doesn't)

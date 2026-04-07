@@ -165,7 +165,9 @@ class ApiClient {
   }
 
   async getConfig() {
-    const res = await this.client.get('/agent/config');
+    const res = await this.client.get('/agent/config', {
+      timeout: 10000,
+    });
     return res.data;
   }
 
@@ -199,14 +201,20 @@ class ApiClient {
   /** Get timer status. Optional projectId scopes today_total to that project (for per-project display). */
   async getTimerStatus(projectId = null) {
     const params = projectId ? { project_id: projectId } : {};
-    const res = await this.client.get('/timer/status', { params });
+    const res = await this.client.get('/timer/status', {
+      params,
+      timeout: 10000, // Same budget as timer start/stop — avoids hanging on default 15s
+    });
     return res.data;
   }
 
   /** Get today's total tracked seconds, optionally for a specific project. */
   async getTodayTotal(projectId = null) {
     const params = projectId ? { project_id: projectId } : {};
-    const res = await this.client.get('/timer/today-total', { params });
+    const res = await this.client.get('/timer/today-total', {
+      params,
+      timeout: 10000,
+    });
     return res.data.today_total ?? 0;
   }
 

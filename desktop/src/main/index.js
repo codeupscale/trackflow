@@ -255,12 +255,16 @@ function checkScreenRecordingPermission() {
   // So we always return false here to force the probe to run.
   try {
     const status = systemPreferences.getMediaAccessStatus('screen');
-    console.log(`[Permission] Screen recording API status: ${status}`);
     if (status === 'granted') {
       _screenPermissionGranted = true;
+      console.log('[Permission] Screen recording API status: granted');
       return true;
     }
-    // For 'denied' or 'not-determined', don't trust it — force probe
+    // For 'denied' or 'not-determined', don't trust it — force probe (API often
+    // misreports for Electron dev/ad-hoc builds; desktopCapturer probe is authoritative)
+    console.log(
+      `[Permission] Screen recording API status: ${status} — verifying with desktopCapturer probe`
+    );
     _screenPermissionGranted = false;
     return false;
   } catch {
@@ -457,10 +461,16 @@ let isQuitting = false;
 let _idleActionInProgress = false;
 // Cache parsed started_at timestamp to avoid re-parsing every second
 let _cachedStartedAtMs = null;
+// RACE-FIX: Monotonic version counter for timer state changes.
+// Every start/stop increments this. Notifications carry the version so the
+// renderer can discard stale out-of-order messages from async follow-ups.
+let _timerStateVersion = 0;
+// RACE-FIX: Mutex to prevent concurrent stopTimer calls
+let _stopTimerInProgress = false;
 // M8 FIX: Clock skew compensation — server time minus local time
 let _clockOffsetMs = 0;
-// Local-first timer: suspend timestamp for sleep/wake gap calculation
-let _suspendedAt = null;
+// NOTE: _suspendedAt is declared inside initializeApp() as a closure variable
+// co-located with the powerMonitor handlers that use it. Do not re-declare here.
 
 // ── Local Timer State (SQLite) ──────────────────────────────────────────────
 // Persists timer state locally so no time is lost during network outages.
@@ -741,6 +751,10 @@ async function forceLogout() {
 }
 
 async function initializeApp() {
+  // Register theme handler early — needed by both login and main windows
+  ipcMain.removeHandler('get-theme');
+  ipcMain.handle('get-theme', () => getOSTheme());
+
   // Load saved tokens
   const token = await getToken();
   if (!token) {
@@ -854,6 +868,7 @@ async function initializeApp() {
 
   // Wire idle detection events
   idleDetector.onIdleDetected((idleSeconds, idleStartedAt, actionId) => {
+    console.log(`[IdleDetector] Idle detected! idleSeconds=${idleSeconds}, actionId=${actionId}, policy=${config.keep_idle_time || 'prompt'}`);
     // Pause both screenshot and activity capture during idle.
     // This prevents zero-event heartbeats from dragging down the activity score.
     screenshotService?.stop();
@@ -886,19 +901,42 @@ async function initializeApp() {
   });
 
   idleDetector.onAutoStop((totalIdleSeconds, actionId) => {
+    console.log(`[IdleAlert] Auto-stop fired: totalIdleSeconds=${totalIdleSeconds}, actionId=${actionId}`);
     handleIdleAction('stop', actionId, totalIdleSeconds);
-    dismissIdleAlert();
 
-    try {
-      if (Notification.isSupported()) {
-        const n = new Notification({
-          title: 'TrackFlow — Timer Stopped',
-          body: `Timer was automatically stopped after ${Math.floor(totalIdleSeconds / 60)} minutes of inactivity.`,
-          silent: false,
-        });
-        n.show();
-      }
-    } catch {}
+    // Keep the idle alert window visible — update it to show "Timer Stopped"
+    // so the user sees it when they return. Do NOT dismiss.
+    if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
+      idleAlertWindow._autoStopped = true;
+      idleAlertWindow.webContents.send('auto-stopped', {
+        idleDuration: totalIdleSeconds,
+        stoppedAt: Date.now(),
+      });
+      // Play notification sound to alert the user
+      try {
+        if (Notification.isSupported()) {
+          const n = new Notification({
+            title: 'TrackFlow — Timer Stopped',
+            body: `Timer was automatically stopped after ${Math.floor(totalIdleSeconds / 60)} minutes of inactivity.`,
+            silent: false,
+          });
+          n.show();
+          setTimeout(() => { try { n.close(); } catch {} }, 5000);
+        }
+      } catch {}
+    } else {
+      // Popup was already closed — just show a notification
+      try {
+        if (Notification.isSupported()) {
+          const n = new Notification({
+            title: 'TrackFlow — Timer Stopped',
+            body: `Timer was automatically stopped after ${Math.floor(totalIdleSeconds / 60)} minutes of inactivity.`,
+            silent: false,
+          });
+          n.show();
+        }
+      } catch {}
+    }
   });
 
   // Keep dock icon visible on macOS — the app has both tray and dock presence
@@ -1023,8 +1061,16 @@ async function initializeApp() {
 
   const handleSuspend = () => {
     if (!isTimerRunning) return;
-    _suspendedAt = Date.now();
-    console.log('[power] Suspended/locked — pausing capture');
+    // Only record the FIRST suspend timestamp — macOS fires both 'suspend'
+    // and 'lock-screen' on lid close. The second event must NOT overwrite
+    // _suspendedAt or the sleep duration calculation will be too short.
+    if (!_suspendedAt) {
+      _suspendedAt = Date.now();
+      console.log('[power] Suspended/locked — pausing capture');
+    } else {
+      console.log('[power] Duplicate suspend/lock event ignored — already suspended since', new Date(_suspendedAt).toISOString());
+      return;
+    }
     // Send final heartbeat to capture any pending activity data
     if (activityMonitor) {
       activityMonitor.sendFinalHeartbeat().catch(() => {});
@@ -1038,6 +1084,7 @@ async function initializeApp() {
 
   const handleResume = () => {
     if (!isTimerRunning || !_suspendedAt) {
+      console.log(`[power] Resume ignored — isTimerRunning=${isTimerRunning}, _suspendedAt=${_suspendedAt}`);
       _suspendedAt = null;
       _idleStateAtSuspend = null;
       return;
@@ -1065,6 +1112,7 @@ async function initializeApp() {
     }
 
     const idleThresholdSec = idleDetector?.idleTimeoutSec || (config.idle_timeout || 5) * 60;
+    console.log(`[power] Idle check: sleepDuration=${sleepDurationSec}s vs threshold=${idleThresholdSec}s (config.idle_timeout=${config.idle_timeout}min), policy=${config.keep_idle_time || 'prompt'}`);
 
     if (sleepDurationSec >= idleThresholdSec) {
       // Long sleep — treat as idle.
@@ -1093,6 +1141,10 @@ async function initializeApp() {
       // Prompt user — show idle alert with sleep duration
       const actionId = idleDetector?.setAlertState(sleepStartedAt) || 0;
       showIdleAlert(sleepDurationSec, sleepStartedAt, actionId);
+      // Do NOT reconcile or flush while idle alert is showing — the user
+      // hasn't decided what to do with the idle time yet. Reconciling now
+      // could modify currentEntry or isTimerRunning mid-decision.
+      return;
     } else {
       // Short sleep — resume tracking normally
       activityMonitor?.start();
@@ -1105,7 +1157,7 @@ async function initializeApp() {
       idleDetector?.start();
     }
 
-    // After any resume: flush offline queue if online (sync any pending data)
+    // After any resume (short sleep or policy=always): flush offline queue if online
     if (networkMonitor?.isOnline && offlineQueue && apiClient) {
       setImmediate(() => {
         reconcileTimerState().then(() => offlineQueue.flush(apiClient)).catch(() => {});
@@ -1154,7 +1206,8 @@ async function initializeApp() {
           idleDetector?.start();
           startTrayTimer();
           updateTrayIcon(true);
-          notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
+          _timerStateVersion++;
+          notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject, _stateVersion: _timerStateVersion });
         } else if (!status.running && isTimerRunning) {
           // BUG-2 FIX: Don't override local state while idle alert is showing
           if (idleDetector?.isIdleActive()) {
@@ -1172,7 +1225,8 @@ async function initializeApp() {
           stopTrayTimer();
           updateTrayTitle();
           updateTrayIcon(false);
-          notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal });
+          _timerStateVersion++;
+          notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal, _stateVersion: _timerStateVersion });
         }
       } catch {}
     })();
@@ -1529,7 +1583,7 @@ function validateProjectId(id) {
 }
 
 function validateIdleAction(action) {
-  const valid = ['keep', 'discard', 'stop', 'reassign'];
+  const valid = ['keep', 'discard', 'stop', 'reassign', 'dismiss'];
   return valid.includes(action) ? action : null;
 }
 
@@ -1614,7 +1668,6 @@ nativeTheme.on('updated', () => {
 
 function setupIPC() {
   // Remove previous handlers to avoid duplicate registration
-  ipcMain.removeHandler('get-theme');
   ipcMain.removeHandler('get-timer-state');
   ipcMain.removeHandler('start-timer');
   ipcMain.removeHandler('stop-timer');
@@ -1681,10 +1734,6 @@ function setupIPC() {
     console.log('[Permission] User clicked Fix — opening Screen Recording settings');
     shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
     return { opened: true };
-  });
-
-  ipcMain.handle('get-theme', () => {
-    return getOSTheme();
   });
 
   // CONNECTIVITY FIX: Network status IPC handler
@@ -1779,6 +1828,11 @@ function setupIPC() {
   ipcMain.handle('resolve-idle', async (_, action, projectId = null, actionId = null) => {
     const validAction = validateIdleAction(action);
     if (!validAction) return { error: 'Invalid action' };
+    // 'dismiss' — timer was already auto-stopped, just close the popup
+    if (validAction === 'dismiss') {
+      dismissIdleAlert();
+      return { success: true };
+    }
     const validProjectId = validateProjectId(projectId);
     await handleIdleAction(validAction, actionId, null, validProjectId);
     dismissIdleAlert();
@@ -1858,7 +1912,8 @@ async function switchProject(projectId) {
     idleDetector?.stop();
     idleDetector?.start();
 
-    notifyPopup('timer-started', { ...newEntry, todayTotal: todayTotalCurrentProject });
+    _timerStateVersion++;
+    notifyPopup('timer-started', { ...newEntry, todayTotal: todayTotalCurrentProject, _stateVersion: _timerStateVersion });
     updateTrayTitle();
 
     return { success: true, entry: newEntry, todayTotal: todayTotalCurrentProject };
@@ -1917,8 +1972,12 @@ async function startTimer(projectId = null) {
     const localStartedAt = new Date().toISOString();
     _cachedStartedAtMs = Date.now();
 
+    // RACE-FIX: Increment state version — all notifications from this start carry this version
+    _timerStateVersion++;
+    const startVersion = _timerStateVersion;
+
     saveLocalTimerStart(localId, idempotencyKey, projectId, localStartedAt);
-    console.log(`[Timer] Local start recorded: ${localId}, key=${idempotencyKey}`);
+    console.log(`[Timer] Local start recorded: ${localId}, key=${idempotencyKey}, stateVersion=${startVersion}`);
 
     // Set local state immediately — timer is running regardless of network
     const localEntry = {
@@ -1944,7 +2003,10 @@ async function startTimer(projectId = null) {
       posthog.capture(currentEntry?.user_id || 'unknown', 'timer_started', { project_id: projectId });
 
       const todayTotalForPopup = todayTotalCurrentProject;
-      notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup });
+      // RACE-FIX: Only notify if this start is still current (no stop raced us during await)
+      if (_timerStateVersion === startVersion) {
+        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup, _stateVersion: startVersion });
+      }
       setImmediate(() => afterStartTimer(projectId, todayTotalForPopup));
       return { success: true, entry: currentEntry, todayTotal: todayTotalForPopup };
     } catch (e) {
@@ -1963,7 +2025,9 @@ async function startTimer(projectId = null) {
           isTimerRunning = true;
           todayTotalCurrentProject = retryResult.today_total ?? 0;
           markLocalTimerStartSynced(localId, retryResult.entry.id);
-          notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
+          if (_timerStateVersion === startVersion) {
+            notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject, _stateVersion: startVersion });
+          }
           setImmediate(() => afterStartTimer(projectId, todayTotalCurrentProject));
           return { success: true, entry: currentEntry, todayTotal: todayTotalCurrentProject };
         } catch (retryErr) {
@@ -1980,7 +2044,9 @@ async function startTimer(projectId = null) {
         idempotency_key: idempotencyKey,
         started_at: localStartedAt,
       });
-      notifyPopup('timer-started', { ...localEntry, todayTotal: 0, offline: true });
+      if (_timerStateVersion === startVersion) {
+        notifyPopup('timer-started', { ...localEntry, todayTotal: 0, offline: true, _stateVersion: startVersion });
+      }
       setImmediate(() => afterStartTimer(projectId, 0));
       return { success: true, entry: localEntry, todayTotal: 0, offline: true };
     }
@@ -1990,6 +2056,17 @@ async function startTimer(projectId = null) {
 }
 
 async function stopTimer() {
+  // RACE-FIX: Prevent concurrent stop calls from racing with each other
+  if (_stopTimerInProgress) {
+    console.log('[Timer] Stop already in progress — ignoring duplicate call');
+    return { success: true, entry: null, todayTotal: 0 };
+  }
+  _stopTimerInProgress = true;
+
+  // RACE-FIX: Increment state version so any stale async notifications are discarded
+  _timerStateVersion++;
+  const stopVersion = _timerStateVersion;
+
   const sessionElapsed = currentEntry && _cachedStartedAtMs
     ? Math.max(0, Math.floor((Date.now() - _cachedStartedAtMs) / 1000))
     : 0;
@@ -2070,7 +2147,11 @@ async function stopTimer() {
   stopTrayTimer();
   updateTrayIcon(false);
 
-  notifyPopup('timer-stopped', { entry: null, todayTotal: localStoppedProjectTotal });
+  notifyPopup('timer-stopped', { entry: null, todayTotal: localStoppedProjectTotal, _stateVersion: stopVersion });
+
+  // RACE-FIX: Release stop mutex BEFORE async follow-up work.
+  // The synchronous state transition is complete — the timer is stopped.
+  _stopTimerInProgress = false;
 
   // Post-stop async work (non-blocking)
   (async () => {
@@ -2095,7 +2176,14 @@ async function stopTimer() {
     try {
       todayTotalForPopup = await apiClient.getTodayTotal(stoppedProjectId);
     } catch {}
-    notifyPopup('timer-stopped', { entry: result?.entry ?? null, todayTotal: todayTotalForPopup });
+    // RACE-FIX: Only send the follow-up notification if no new start/stop has happened
+    // since this stop began. Without this guard, the async follow-up overwrites a
+    // subsequent 'timer-started' notification, causing the "Start button while running" bug.
+    if (_timerStateVersion === stopVersion) {
+      notifyPopup('timer-stopped', { entry: result?.entry ?? null, todayTotal: todayTotalForPopup, _stateVersion: stopVersion });
+    } else {
+      console.log(`[Timer] Skipping stale post-stop notification (stopVersion=${stopVersion}, current=${_timerStateVersion})`);
+    }
   })().catch(() => {});
 
   return { success: true, entry: null, todayTotal: localStoppedProjectTotal };
@@ -2208,6 +2296,29 @@ async function reconcileTimerState() {
 // Periodically sync timer state with server to stay in sync with web dashboard
 let _configRefetchCycle = 0;
 let _isSyncing = false; // M6 FIX: guard against concurrent sync cycles
+let _timerSyncTransientLogAt = 0;
+const TIMER_SYNC_TRANSIENT_LOG_MS = 60000;
+
+/** Network/timeouts while OS still reports "online" — avoid error-spam in logs */
+function isTransientTimerSyncError(err) {
+  const code = err && err.code;
+  const msg = (err && err.message) || '';
+  if (
+    code === 'ECONNABORTED'
+    || code === 'ETIMEDOUT'
+    || code === 'ECONNREFUSED'
+    || code === 'ENOTFOUND'
+    || code === 'ENETUNREACH'
+    || code === 'EAI_AGAIN'
+    || code === 'ERR_NETWORK'
+  ) {
+    return true;
+  }
+  if (/timeout.*exceeded/i.test(msg)) return true;
+  if (!err.response && err.request) return true;
+  return false;
+}
+
 function startTimerSync() {
   if (timerSyncInterval) clearInterval(timerSyncInterval);
   _configRefetchCycle = 0;
@@ -2262,7 +2373,8 @@ function startTimerSync() {
         idleDetector?.start();
         startTrayTimer();
         updateTrayIcon(true);
-        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
+        _timerStateVersion++;
+        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject, _stateVersion: _timerStateVersion });
       } else if (!status.running && isTimerRunning) {
         // BUG-2 FIX: Don't override local state while idle alert is showing — the server may show
         // timer as stopped because idle-discard split the entry, but locally we're still
@@ -2283,11 +2395,24 @@ function startTimerSync() {
         stopTrayTimer();
         updateTrayTitle();
         updateTrayIcon(false);
-        notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal });
+        _timerStateVersion++;
+        notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal, _stateVersion: _timerStateVersion });
       }
     } catch (err) {
-      // H4 FIX: Log sync errors instead of swallowing them
-      console.error('[TimerSync] sync failed:', err.message);
+      if (isTransientTimerSyncError(err)) {
+        const now = Date.now();
+        if (now - _timerSyncTransientLogAt >= TIMER_SYNC_TRANSIENT_LOG_MS) {
+          _timerSyncTransientLogAt = now;
+          const hint = err.code ? err.code : err.message;
+          console.warn(
+            '[TimerSync] API unreachable (retrying while online):',
+            hint,
+            '— check TRACKFLOW_API_URL or server availability'
+          );
+        }
+      } else {
+        console.error('[TimerSync] sync failed:', err.message);
+      }
       // Do not re-throw — keep interval alive
     } finally {
       _isSyncing = false; // M6 FIX: Always release sync guard
@@ -2377,6 +2502,7 @@ function notifyPopup(event, data) {
 // ── Idle Alert System ────────────────────────────────────────────────────────
 
 async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
+  console.log(`[IdleAlert] showIdleAlert called: idleSeconds=${idleSeconds}, actionId=${actionId}, detectorState=${idleDetector?.state}, isIdleActive=${idleDetector?.isIdleActive()}`);
   // Capture the actionId at call time; if not provided, read from detector
   const alertActionId = actionId ?? idleDetector?.getActionId() ?? 0;
 
@@ -2400,7 +2526,10 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
   // BUG-2 FIX: Check idle detector state instead of isTimerRunning to avoid race condition
   // where a concurrent sync cycle temporarily sets isTimerRunning=false, preventing the
   // modal from appearing. The idle detector is the authoritative source of idle state.
-  if (!idleDetector?.isIdleActive()) return;
+  if (!idleDetector?.isIdleActive()) {
+    console.warn('[IdleAlert] showIdleAlert aborted — idleDetector not in idle-active state');
+    return;
+  }
 
   screenshotService?.stop();
 
@@ -2419,6 +2548,10 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
 
   // Refresh project list so idle reassign dropdown is up-to-date
   await loadProjects();
+
+  const htmlPath = path.join(__dirname, '..', 'renderer', 'idle-alert.html');
+  const preloadPath = path.join(__dirname, '..', 'preload', 'index.js');
+  console.log(`[IdleAlert] Creating window — htmlPath=${htmlPath}, preloadPath=${preloadPath}, __dirname=${__dirname}`);
 
   idleAlertWindow = new BrowserWindow({
     width: 380,
@@ -2453,8 +2586,9 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
 
   function showAndSendData() {
     if (shown) return;
-    if (win.isDestroyed()) return;
+    if (win.isDestroyed()) { console.warn('[IdleAlert] Window destroyed before show'); return; }
     shown = true;
+    console.log('[IdleAlert] Showing idle alert window');
     win.show();
     win.focus();
     win.webContents.send('idle-data', {
@@ -2477,11 +2611,20 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
   // If the idle alert window is closed without the user clicking an action
   // button (e.g., Cmd+W, dock close, OS memory pressure), treat as "keep"
   // (safest default — does not discard tracked time) and re-arm the detector.
+  // Exception: if auto-stop already fired (_autoStopped=true), timer is already
+  // stopped — just clean up, don't re-arm.
   win._dismissedProgrammatically = false;
+  win._autoStopped = false;
 
   win.on('closed', () => {
     idleAlertWindow = null;
     if (!win._dismissedProgrammatically) {
+      if (win._autoStopped) {
+        // Auto-stop already stopped the timer — just clean up
+        console.log('[IdleAlert] Window closed after auto-stop — timer already stopped, no action needed');
+        updateTrayIcon(isTimerRunning);
+        return;
+      }
       console.log('[IdleAlert] Window closed without user action — treating as "keep" and re-arming idle detector');
       // Use the action ID stored on the window to resolve the correct idle cycle
       const windowActionId = win._actionId;
@@ -2505,7 +2648,9 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     }
   });
 
-  win.loadFile(path.join(__dirname, '..', 'renderer', 'idle-alert.html')).catch((err) => {
+  win.loadFile(htmlPath).then(() => {
+    console.log('[IdleAlert] idle-alert.html loaded successfully');
+  }).catch((err) => {
     console.error('[IdleAlert] Failed to load idle-alert.html:', err.message);
   });
 
@@ -2646,6 +2791,14 @@ async function handleIdleAction(action, actionId = null, idleDurationOverride = 
         // B1 FIX: await stopTimer() — it's async and must complete before returning
         await stopTimer();
         break;
+    }
+    // After idle is resolved: flush any pending offline data (heartbeats,
+    // screenshots, timer events queued during sleep). This is especially
+    // important after a long sleep where reconcile was deferred.
+    if (networkMonitor?.isOnline && offlineQueue && apiClient) {
+      setImmediate(() => {
+        reconcileTimerState().then(() => offlineQueue.flush(apiClient)).catch(() => {});
+      });
     }
   } finally {
     _idleActionInProgress = false;
