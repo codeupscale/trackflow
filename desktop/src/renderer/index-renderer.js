@@ -16,6 +16,10 @@ let todayTotalBase = 0;
 let isRunning = false;
 let currentStartedAt = null;
 let _startedAtMs = null;
+// RACE-FIX: Track the latest state version from the main process.
+// Any timer-started/timer-stopped notification with a version older than this
+// is stale (from an async follow-up that raced with a newer action) and is discarded.
+let _lastStateVersion = 0;
 
 function showNotification(msg) {
   const el = document.createElement('div');
@@ -301,7 +305,10 @@ startBtn.addEventListener('click', async () => {
   updateStartBtnState();
 });
 
+let _stopInFlight = false; // RACE-FIX: Prevent rapid stop-start from overlapping
 stopBtn.addEventListener('click', () => {
+  if (_stopInFlight) return;
+  _stopInFlight = true;
   stopTicking();
   const stoppedTotal = elapsedSeconds;
   setStartedAt(null);
@@ -315,7 +322,9 @@ stopBtn.addEventListener('click', () => {
       elapsedSeconds = result.todayTotal;
       updateDisplay(false);
     }
-  }).catch(() => {});
+  }).catch(() => {}).finally(() => {
+    _stopInFlight = false;
+  });
 });
 
 async function handleLogout() {
@@ -379,6 +388,15 @@ document.addEventListener('keydown', (e) => {
 
 // Events from main process
 window.trackflow.onTimerStarted((data) => {
+  // RACE-FIX: Discard stale notifications that arrive out of order.
+  // This prevents an async follow-up from a previous stop overwriting
+  // the UI after a new start has already updated it.
+  if (data?._stateVersion != null && data._stateVersion < _lastStateVersion) {
+    console.log(`[renderer] Ignoring stale timer-started (v${data._stateVersion} < current v${_lastStateVersion})`);
+    return;
+  }
+  if (data?._stateVersion != null) _lastStateVersion = data._stateVersion;
+
   setStartedAt(data?.started_at || new Date().toISOString());
   if (data?.todayTotal > 0) todayTotalBase = data.todayTotal;
   elapsedSeconds = todayTotalBase + calcElapsedFromStartedAt();
@@ -387,6 +405,13 @@ window.trackflow.onTimerStarted((data) => {
 });
 
 window.trackflow.onTimerStopped((data) => {
+  // RACE-FIX: Discard stale notifications that arrive out of order.
+  if (data?._stateVersion != null && data._stateVersion < _lastStateVersion) {
+    console.log(`[renderer] Ignoring stale timer-stopped (v${data._stateVersion} < current v${_lastStateVersion})`);
+    return;
+  }
+  if (data?._stateVersion != null) _lastStateVersion = data._stateVersion;
+
   stopTicking();
   setStartedAt(null);
   if (data?.entry?.project_id) {

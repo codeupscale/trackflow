@@ -159,6 +159,44 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// ── Auto-Stopped State ──────────────────────────────────────────────────────
+// When the auto-stop timer fires, the main process stops the timer but keeps
+// this window visible. It sends 'auto-stopped' so we can switch the UI to
+// show "Timer Stopped" with a dismiss button — ensuring the user sees what
+// happened when they return.
+
+window.trackflow.onAutoStopped((data) => {
+  // Stop the idle time ticker
+  if (tickInterval) {
+    clearInterval(tickInterval);
+    tickInterval = null;
+  }
+
+  // Freeze the idle time display at the final value
+  if (data.idleDuration) {
+    idleTimeEl.textContent = formatIdleTime(data.idleDuration);
+  }
+
+  // Hide the action buttons and auto-stop countdown
+  document.querySelector('.actions').style.display = 'none';
+  const autoStopBar = document.getElementById('autoStopBar');
+  if (autoStopBar) autoStopBar.style.display = 'none';
+
+  // Update header text
+  document.querySelector('.title').textContent = 'Timer was stopped';
+  document.querySelector('.message').textContent = 'Automatically stopped due to inactivity';
+
+  // Change the timer label
+  document.querySelector('.timer-label').textContent = 'Total idle time';
+
+  // Show the auto-stopped section
+  document.getElementById('autoStoppedSection').classList.add('visible');
+});
+
+document.getElementById('dismissBtn').addEventListener('click', () => {
+  window.trackflow.resolveIdle('dismiss', null, currentActionId);
+});
+
 window.addEventListener('beforeunload', () => {
   if (tickInterval) {
     clearInterval(tickInterval);
