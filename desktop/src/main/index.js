@@ -901,19 +901,42 @@ async function initializeApp() {
   });
 
   idleDetector.onAutoStop((totalIdleSeconds, actionId) => {
+    console.log(`[IdleAlert] Auto-stop fired: totalIdleSeconds=${totalIdleSeconds}, actionId=${actionId}`);
     handleIdleAction('stop', actionId, totalIdleSeconds);
-    dismissIdleAlert();
 
-    try {
-      if (Notification.isSupported()) {
-        const n = new Notification({
-          title: 'TrackFlow — Timer Stopped',
-          body: `Timer was automatically stopped after ${Math.floor(totalIdleSeconds / 60)} minutes of inactivity.`,
-          silent: false,
-        });
-        n.show();
-      }
-    } catch {}
+    // Keep the idle alert window visible — update it to show "Timer Stopped"
+    // so the user sees it when they return. Do NOT dismiss.
+    if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
+      idleAlertWindow._autoStopped = true;
+      idleAlertWindow.webContents.send('auto-stopped', {
+        idleDuration: totalIdleSeconds,
+        stoppedAt: Date.now(),
+      });
+      // Play notification sound to alert the user
+      try {
+        if (Notification.isSupported()) {
+          const n = new Notification({
+            title: 'TrackFlow — Timer Stopped',
+            body: `Timer was automatically stopped after ${Math.floor(totalIdleSeconds / 60)} minutes of inactivity.`,
+            silent: false,
+          });
+          n.show();
+          setTimeout(() => { try { n.close(); } catch {} }, 5000);
+        }
+      } catch {}
+    } else {
+      // Popup was already closed — just show a notification
+      try {
+        if (Notification.isSupported()) {
+          const n = new Notification({
+            title: 'TrackFlow — Timer Stopped',
+            body: `Timer was automatically stopped after ${Math.floor(totalIdleSeconds / 60)} minutes of inactivity.`,
+            silent: false,
+          });
+          n.show();
+        }
+      } catch {}
+    }
   });
 
   // Keep dock icon visible on macOS — the app has both tray and dock presence
@@ -1560,7 +1583,7 @@ function validateProjectId(id) {
 }
 
 function validateIdleAction(action) {
-  const valid = ['keep', 'discard', 'stop', 'reassign'];
+  const valid = ['keep', 'discard', 'stop', 'reassign', 'dismiss'];
   return valid.includes(action) ? action : null;
 }
 
@@ -1805,6 +1828,11 @@ function setupIPC() {
   ipcMain.handle('resolve-idle', async (_, action, projectId = null, actionId = null) => {
     const validAction = validateIdleAction(action);
     if (!validAction) return { error: 'Invalid action' };
+    // 'dismiss' — timer was already auto-stopped, just close the popup
+    if (validAction === 'dismiss') {
+      dismissIdleAlert();
+      return { success: true };
+    }
     const validProjectId = validateProjectId(projectId);
     await handleIdleAction(validAction, actionId, null, validProjectId);
     dismissIdleAlert();
@@ -2583,11 +2611,20 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
   // If the idle alert window is closed without the user clicking an action
   // button (e.g., Cmd+W, dock close, OS memory pressure), treat as "keep"
   // (safest default — does not discard tracked time) and re-arm the detector.
+  // Exception: if auto-stop already fired (_autoStopped=true), timer is already
+  // stopped — just clean up, don't re-arm.
   win._dismissedProgrammatically = false;
+  win._autoStopped = false;
 
   win.on('closed', () => {
     idleAlertWindow = null;
     if (!win._dismissedProgrammatically) {
+      if (win._autoStopped) {
+        // Auto-stop already stopped the timer — just clean up
+        console.log('[IdleAlert] Window closed after auto-stop — timer already stopped, no action needed');
+        updateTrayIcon(isTimerRunning);
+        return;
+      }
       console.log('[IdleAlert] Window closed without user action — treating as "keep" and re-arming idle detector');
       // Use the action ID stored on the window to resolve the correct idle cycle
       const windowActionId = win._actionId;

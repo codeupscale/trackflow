@@ -300,6 +300,68 @@
     .auto-stop-text span {
       font-variant-numeric: tabular-nums;
     }
+
+    /* ── Auto-Stopped State ────────────────────────────────── */
+    .auto-stopped-section {
+      display: none;
+      text-align: center;
+      padding: 8px 0;
+    }
+
+    .auto-stopped-section.visible {
+      display: block;
+    }
+
+    .auto-stopped-icon {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 12px;
+      color: var(--accent-red);
+    }
+
+    .auto-stopped-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--accent-red);
+      margin-bottom: 6px;
+    }
+
+    .auto-stopped-message {
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.5;
+      margin-bottom: 16px;
+    }
+
+    .btn-dismiss {
+      background: var(--accent-blue);
+      border: 1px solid var(--accent-blue);
+      color: #fff;
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      outline: none;
+      -webkit-app-region: no-drag;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    .btn-dismiss:hover {
+      background: var(--accent-blue-hover);
+      border-color: var(--accent-blue-hover);
+    }
+    .btn-dismiss:active {
+      background: var(--accent-blue-active);
+      border-color: var(--accent-blue-active);
+      transform: scale(0.98);
+    }
+    .btn-dismiss:focus-visible {
+      box-shadow: 0 0 0 2px var(--focus-ring-outer), 0 0 0 4px var(--accent-blue);
+    }
   </style>
 </head>
 <body>
@@ -393,6 +455,20 @@
         </span>
         <kbd class="action-kbd">S</kbd>
       </button>
+    </div>
+
+    <!-- Auto-stopped state (shown after timer is auto-stopped) -->
+    <div class="auto-stopped-section" id="autoStoppedSection">
+      <svg class="auto-stopped-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="10"/>
+        <rect x="9" y="9" width="6" height="6" rx="0.5" fill="currentColor" stroke="none"/>
+      </svg>
+      <div class="auto-stopped-title">Timer Stopped</div>
+      <div class="auto-stopped-message" id="autoStoppedMessage">
+        Your timer was automatically stopped due to inactivity.<br>
+        Idle time has been deducted from your time entry.
+      </div>
+      <button class="btn-dismiss" id="dismissBtn">OK — Got it</button>
     </div>
 
     <!-- Auto-stop countdown -->
