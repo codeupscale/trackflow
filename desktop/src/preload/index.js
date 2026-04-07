@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('trackflow', {
   onSyncTimer: (callback) => safeOn('sync-timer', () => callback()),
   onProjectsReady: (callback) => safeOn('projects-ready', () => callback()),
   onIdleData: (callback) => safeOn('idle-data', (_, data) => callback(data)),
+  onAutoStopped: (callback) => safeOn('auto-stopped', (_, data) => callback(data)),
 
   // Network status (connectivity monitoring)
   getNetworkStatus: () => ipcRenderer.invoke('get-network-status'),
