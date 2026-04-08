@@ -13,11 +13,74 @@ const api = axios.create({
 // 401 handlers wait on the same promise instead of issuing duplicate refreshes.
 let refreshPromise: Promise<string> | null = null;
 
-api.interceptors.request.use((config) => {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+const TOKEN_LIFETIME_MS = 24 * 60 * 60 * 1000; // 24 hours (matches server)
+const PROACTIVE_REFRESH_MS = 5 * 60 * 1000; // Refresh 5 minutes before expiry
+
+// Refresh tokens with retry + backoff for transient errors (5xx, network).
+// Auth rejections (401/403) fail immediately.
+async function refreshWithRetry(token: string): Promise<string> {
+  const maxRetries = 2;
+  const backoffMs = [1000, 3000];
+
+  try {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const res = await axios.post(
+          `${api.defaults.baseURL}/auth/refresh`,
+          {},
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        localStorage.setItem('access_token', res.data.access_token);
+        localStorage.setItem('refresh_token', res.data.refresh_token);
+        localStorage.setItem('token_issued_at', Date.now().toString());
+        return res.data.access_token as string;
+      } catch (err: unknown) {
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        const isAuthRejection = status === 401 || status === 403;
+
+        // Auth rejections are permanent — don't retry
+        if (isAuthRejection) throw err;
+
+        // Last attempt — give up
+        if (attempt === maxRetries) throw err;
+
+        // Transient error — retry after backoff
+        await new Promise(r => setTimeout(r, backoffMs[attempt]));
+      }
+    }
+    throw new Error('Token refresh failed');
+  } finally {
+    refreshPromise = null;
+  }
+}
+
+api.interceptors.request.use(async (config) => {
+  if (typeof window === 'undefined') return config;
+
+  const token = localStorage.getItem('access_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+
+  // Proactive refresh — refresh before expiry to avoid 401 round-trips
+  const isAuthEndpoint = /\/auth\//.test(config.url || '');
+  if (!isAuthEndpoint && token) {
+    const issuedAt = parseInt(localStorage.getItem('token_issued_at') || '0', 10);
+    const elapsed = Date.now() - issuedAt;
+    const nearExpiry = issuedAt > 0 && elapsed > (TOKEN_LIFETIME_MS - PROACTIVE_REFRESH_MS);
+    const refreshToken = localStorage.getItem('refresh_token');
+
+    if (nearExpiry && refreshToken && !refreshPromise) {
+      try {
+        refreshPromise = refreshWithRetry(refreshToken);
+        const newToken = await refreshPromise;
+        config.headers.Authorization = `Bearer ${newToken}`;
+      } catch {
+        // Non-fatal — the 401 interceptor will catch it if token is truly expired
+      }
+    }
+  }
+
   return config;
 });
 
@@ -74,35 +137,35 @@ api.interceptors.response.use(
           // If a refresh is already in-flight, wait for it instead of
           // issuing a second refresh (which would race and likely fail).
           if (!refreshPromise) {
-            refreshPromise = axios
-              .post(
-                `${api.defaults.baseURL}/auth/refresh`,
-                {},
-                { headers: { Authorization: `Bearer ${refreshToken}` } }
-              )
-              .then((res) => {
-                localStorage.setItem('access_token', res.data.access_token);
-                localStorage.setItem('refresh_token', res.data.refresh_token);
-                return res.data.access_token as string;
-              })
-              .finally(() => {
-                refreshPromise = null;
-              });
+            refreshPromise = refreshWithRetry(refreshToken);
           }
 
           const newAccessToken = await refreshPromise;
           error.config.headers.Authorization = `Bearer ${newAccessToken}`;
           return api(error.config);
-        } catch {
-          localStorage.removeItem('access_token');
-          localStorage.removeItem('refresh_token');
-          if (typeof window !== 'undefined') {
-            window.location.href = '/login';
+        } catch (refreshErr: unknown) {
+          // Only clear tokens and redirect for genuine auth rejections (401/403).
+          // Transient errors (5xx, network) should NOT log the user out —
+          // the request simply fails and the user can retry.
+          const refreshStatus = (refreshErr as { status?: number })?.status
+            ?? (refreshErr as { response?: { status?: number } })?.response?.status;
+          const isAuthRejection = refreshStatus === 401 || refreshStatus === 403;
+
+          if (isAuthRejection) {
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
+            localStorage.removeItem('token_issued_at');
+            if (typeof window !== 'undefined') {
+              window.location.href = '/login';
+            }
           }
+          // For transient errors, don't clear tokens — let the original request fail
+          // so the caller can show an error message. User stays logged in.
         }
-      } else {
+      } else if (!refreshToken) {
+        // No refresh token at all — must re-login
         localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
+        localStorage.removeItem('token_issued_at');
         if (typeof window !== 'undefined') {
           window.location.href = '/login';
         }
