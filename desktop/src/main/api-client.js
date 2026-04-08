@@ -10,6 +10,9 @@ class ApiClient {
     this._refreshPromise = null;
     this._onTokenRefreshed = null; // Callback to persist new tokens
     this._onAuthFailed = null; // Callback when token refresh fails (force logout)
+    this._tokenIssuedAt = Date.now(); // Track when current access token was issued
+    this._tokenLifetimeMs = 24 * 60 * 60 * 1000; // 24 hours (matches server)
+    this._proactiveRefreshMs = 5 * 60 * 1000; // Refresh 5 minutes before expiry
 
     // Dynamically resolve agent version from Electron app or package.json
     let agentVersion = '1.0.0';
@@ -36,6 +39,27 @@ class ApiClient {
     if (token) {
       this.setToken(token);
     }
+
+    // Proactive token refresh — refresh before expiry to avoid 401 round-trips
+    this.client.interceptors.request.use(async (config) => {
+      // Skip refresh endpoint itself and auth endpoints
+      if (config.url?.includes('/auth/')) return config;
+
+      const elapsed = Date.now() - this._tokenIssuedAt;
+      const nearExpiry = elapsed > (this._tokenLifetimeMs - this._proactiveRefreshMs);
+
+      if (nearExpiry && this.refreshToken && !this._isRefreshing) {
+        try {
+          console.log('[Auth] Access token near expiry — proactively refreshing');
+          await this._doRefresh();
+        } catch (err) {
+          // Non-fatal — the 401 interceptor will catch it if token is truly expired
+          console.warn('[Auth] Proactive refresh failed:', err.message);
+        }
+      }
+
+      return config;
+    });
 
     // Auto-refresh on 401
     this.client.interceptors.response.use(
@@ -95,25 +119,51 @@ class ApiClient {
   }
 
   async _refreshTokens() {
-    const res = await axios.post(`${API_BASE}/auth/refresh`, {}, {
-      headers: {
-        'Authorization': `Bearer ${this.refreshToken}`,
-        'Accept': 'application/json',
-      },
-      timeout: 15000,
-    });
+    // Retry with exponential backoff for transient errors (5xx, network, timeout).
+    // Auth rejections (401/403) fail immediately — no point retrying.
+    const maxRetries = 3;
+    const backoffMs = [1000, 3000, 6000]; // 1s, 3s, 6s
 
-    const { access_token, refresh_token } = res.data;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const res = await axios.post(`${API_BASE}/auth/refresh`, {}, {
+          headers: {
+            'Authorization': `Bearer ${this.refreshToken}`,
+            'Accept': 'application/json',
+          },
+          timeout: 15000,
+        });
 
-    this.setToken(access_token);
-    this.refreshToken = refresh_token;
+        const { access_token, refresh_token } = res.data;
 
-    // Persist new tokens via callback
-    if (this._onTokenRefreshed) {
-      await this._onTokenRefreshed(access_token, refresh_token);
+        this.setToken(access_token);
+        this.refreshToken = refresh_token;
+        this._tokenIssuedAt = Date.now();
+
+        // Persist new tokens via callback
+        if (this._onTokenRefreshed) {
+          await this._onTokenRefreshed(access_token, refresh_token);
+        }
+
+        return res.data;
+      } catch (err) {
+        const status = err.response?.status;
+        const isAuthRejection = status === 401 || status === 403;
+
+        // Auth rejections are permanent — don't retry
+        if (isAuthRejection) throw err;
+
+        // Last attempt — give up
+        if (attempt === maxRetries) {
+          console.error(`[Auth] Token refresh failed after ${maxRetries + 1} attempts:`, err.message);
+          throw err;
+        }
+
+        // Transient error — retry after backoff
+        console.warn(`[Auth] Token refresh attempt ${attempt + 1} failed (${status || 'network'}), retrying in ${backoffMs[attempt]}ms...`);
+        await new Promise(r => setTimeout(r, backoffMs[attempt]));
+      }
     }
-
-    return res.data;
   }
 
   // Register callback to persist refreshed tokens to keychain
@@ -138,6 +188,7 @@ class ApiClient {
     }
     this.setToken(res.data.access_token);
     this.refreshToken = res.data.refresh_token;
+    this._tokenIssuedAt = Date.now();
     return res.data;
   }
 
@@ -149,6 +200,7 @@ class ApiClient {
     }
     this.setToken(res.data.access_token);
     this.refreshToken = res.data.refresh_token;
+    this._tokenIssuedAt = Date.now();
     return res.data;
   }
 
@@ -156,6 +208,7 @@ class ApiClient {
     const res = await this.client.post('/auth/select-organization', payload);
     this.setToken(res.data.access_token);
     this.refreshToken = res.data.refresh_token;
+    this._tokenIssuedAt = Date.now();
     return res.data;
   }
 

@@ -755,6 +755,37 @@ async function initializeApp() {
   ipcMain.removeHandler('get-theme');
   ipcMain.handle('get-theme', () => getOSTheme());
 
+  // ── Early Screen Recording Permission Check (macOS) ──────────────────────
+  // Run BEFORE auth check so the permission prompt appears on first launch,
+  // even before the user logs in. This ensures the app registers in macOS
+  // System Settings > Screen Recording list immediately.
+  if (process.platform === 'darwin') {
+    const apiStatus = checkScreenRecordingPermission();
+    if (apiStatus) {
+      console.log('[Permission] Screen recording granted (API) — skipping probe');
+      _screenPermissionGranted = true;
+    } else {
+      // Not granted — probe to register app in System Settings list,
+      // then show onboarding dialog. Await so the user can grant before proceeding.
+      try {
+        const probeGranted = await probeScreenRecordingPermission();
+        if (probeGranted) {
+          console.log('[Permission] Probe confirmed permission — no onboarding needed');
+          _screenPermissionGranted = true;
+        } else {
+          console.log('[Permission] Screen recording NOT granted at launch — showing onboarding');
+          _screenPermissionGranted = false;
+          saveScreenPermissionState(false);
+          await showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false });
+        }
+      } catch {
+        _screenPermissionGranted = false;
+        saveScreenPermissionState(false);
+        await showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
+      }
+    }
+  }
+
   // Load saved tokens
   const token = await getToken();
   if (!token) {
@@ -957,37 +988,6 @@ async function initializeApp() {
 
   // Flush offline queue (L7: orphan cleanup also runs after each successful flush)
   offlineQueue.flush(apiClient);
-
-  // ── Early Screen Recording Permission Check (macOS) ──────────────────────
-  // Check if permission is granted using systemPreferences API first.
-  // Only probe desktopCapturer when permission is NOT granted (to register
-  // the app in the macOS Screen Recording list). Probing when permission IS
-  // granted triggers an unnecessary native macOS popup dialog.
-  if (process.platform === 'darwin') {
-    const apiStatus = checkScreenRecordingPermission();
-    if (apiStatus) {
-      // systemPreferences says granted — trust it, no probe needed.
-      // This avoids the native macOS "TrackFlow would like to record" popup.
-      console.log('[Permission] Screen recording granted (API) — skipping probe');
-      _screenPermissionGranted = true;
-    } else {
-      // Not granted — probe to register app in System Settings list,
-      // then show onboarding dialog.
-      probeScreenRecordingPermission().then((probeGranted) => {
-        if (probeGranted) {
-          console.log('[Permission] Probe confirmed permission — no onboarding needed');
-          _screenPermissionGranted = true;
-          return;
-        }
-        console.log('[Permission] Screen recording NOT granted at launch — showing onboarding');
-        _screenPermissionGranted = false;
-        showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
-      }).catch(() => {
-        _screenPermissionGranted = false;
-        showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
-      });
-    }
-  }
 
   // ── Restart State Auto-Resume ────────────────────────────────────────────
   // If the app was restarted after granting Screen Recording permission,
