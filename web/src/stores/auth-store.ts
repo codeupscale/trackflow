@@ -113,6 +113,7 @@ export const useAuthStore = create<AuthState>()(
           if (typeof window !== 'undefined') {
             localStorage.setItem('access_token', res.data.access_token);
             localStorage.setItem('refresh_token', res.data.refresh_token);
+            localStorage.setItem('token_issued_at', Date.now().toString());
           }
           set({ user: res.data.user, isAuthenticated: true, isLoading: false, pendingOrgSelection: null });
           identifyUser(res.data.user);
@@ -131,6 +132,7 @@ export const useAuthStore = create<AuthState>()(
           if (typeof window !== 'undefined') {
             localStorage.setItem('access_token', res.data.access_token);
             localStorage.setItem('refresh_token', res.data.refresh_token);
+            localStorage.setItem('token_issued_at', Date.now().toString());
           }
           set({ user: res.data.user, isAuthenticated: true, isLoading: false });
           identifyUser(res.data.user);
@@ -151,6 +153,7 @@ export const useAuthStore = create<AuthState>()(
         if (typeof window !== 'undefined') {
           localStorage.removeItem('access_token');
           localStorage.removeItem('refresh_token');
+          localStorage.removeItem('token_issued_at');
         }
         set({ user: null, isAuthenticated: false, pendingOrgSelection: null });
         usePermissionStore.getState().clearPermissions();
@@ -177,6 +180,7 @@ export const useAuthStore = create<AuthState>()(
         if (typeof window !== 'undefined') {
           localStorage.setItem('access_token', accessToken);
           localStorage.setItem('refresh_token', refreshToken);
+          localStorage.setItem('token_issued_at', Date.now().toString());
         }
         // Fetch user profile after setting tokens
         api.get('/auth/me').then((res) => {
@@ -207,6 +211,7 @@ export const useAuthStore = create<AuthState>()(
           if (typeof window !== 'undefined') {
             localStorage.setItem('access_token', res.data.access_token);
             localStorage.setItem('refresh_token', res.data.refresh_token);
+            localStorage.setItem('token_issued_at', Date.now().toString());
           }
           set({
             user: res.data.user,
@@ -232,6 +237,7 @@ export const useAuthStore = create<AuthState>()(
           if (typeof window !== 'undefined') {
             localStorage.setItem('access_token', res.data.access_token);
             localStorage.setItem('refresh_token', res.data.refresh_token);
+            localStorage.setItem('token_issued_at', Date.now().toString());
           }
           set({
             user: res.data.user,
