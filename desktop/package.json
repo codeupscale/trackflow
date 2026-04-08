@@ -62,7 +62,12 @@
       "node_modules/sharp/**",
       "node_modules/uiohook-napi/**"
     ],
-    "extraResources": [],
+    "extraResources": [
+      {
+        "from": ".env",
+        "to": ".env"
+      }
+    ],
     "mac": {
       "category": "public.app-category.productivity",
       "target": [
