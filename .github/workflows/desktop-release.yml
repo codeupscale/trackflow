@@ -43,6 +43,23 @@ jobs:
         working-directory: desktop
         run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version --allow-same-version
 
+      - name: Create .env for desktop build
+        working-directory: desktop
+        env:
+          TRACKFLOW_API_URL: ${{ secrets.TRACKFLOW_API_URL }}
+          TRACKFLOW_WEB_URL: ${{ secrets.TRACKFLOW_WEB_URL }}
+          TRACKFLOW_GOOGLE_CLIENT_ID: ${{ secrets.TRACKFLOW_GOOGLE_CLIENT_ID }}
+          TRACKFLOW_GOOGLE_CLIENT_SECRET: ${{ secrets.TRACKFLOW_GOOGLE_CLIENT_SECRET }}
+          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
+          POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
+        run: |
+          echo "TRACKFLOW_API_URL=${TRACKFLOW_API_URL:-https://trackflow.codeupscale.com/api/v1}" > .env
+          echo "TRACKFLOW_WEB_URL=${TRACKFLOW_WEB_URL:-https://trackflow.codeupscale.com}" >> .env
+          echo "TRACKFLOW_GOOGLE_CLIENT_ID=${TRACKFLOW_GOOGLE_CLIENT_ID}" >> .env
+          echo "TRACKFLOW_GOOGLE_CLIENT_SECRET=${TRACKFLOW_GOOGLE_CLIENT_SECRET}" >> .env
+          echo "POSTHOG_KEY=${POSTHOG_KEY}" >> .env
+          echo "POSTHOG_HOST=${POSTHOG_HOST:-https://us.i.posthog.com}" >> .env
+
       - name: Build and publish macOS
         working-directory: desktop
         env:
@@ -86,6 +103,24 @@ jobs:
         working-directory: desktop
         run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
 
+      - name: Create .env for desktop build
+        working-directory: desktop
+        shell: bash
+        env:
+          TRACKFLOW_API_URL: ${{ secrets.TRACKFLOW_API_URL }}
+          TRACKFLOW_WEB_URL: ${{ secrets.TRACKFLOW_WEB_URL }}
+          TRACKFLOW_GOOGLE_CLIENT_ID: ${{ secrets.TRACKFLOW_GOOGLE_CLIENT_ID }}
+          TRACKFLOW_GOOGLE_CLIENT_SECRET: ${{ secrets.TRACKFLOW_GOOGLE_CLIENT_SECRET }}
+          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
+          POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
+        run: |
+          echo "TRACKFLOW_API_URL=${TRACKFLOW_API_URL:-https://trackflow.codeupscale.com/api/v1}" > .env
+          echo "TRACKFLOW_WEB_URL=${TRACKFLOW_WEB_URL:-https://trackflow.codeupscale.com}" >> .env
+          echo "TRACKFLOW_GOOGLE_CLIENT_ID=${TRACKFLOW_GOOGLE_CLIENT_ID}" >> .env
+          echo "TRACKFLOW_GOOGLE_CLIENT_SECRET=${TRACKFLOW_GOOGLE_CLIENT_SECRET}" >> .env
+          echo "POSTHOG_KEY=${POSTHOG_KEY}" >> .env
+          echo "POSTHOG_HOST=${POSTHOG_HOST:-https://us.i.posthog.com}" >> .env
+
       - name: Build and publish Windows
         working-directory: desktop
         env:
@@ -119,6 +154,23 @@ jobs:
       - name: Install dependencies
         working-directory: desktop
         run: npm ci
+
+      - name: Create .env for desktop build
+        working-directory: desktop
+        env:
+          TRACKFLOW_API_URL: ${{ secrets.TRACKFLOW_API_URL }}
+          TRACKFLOW_WEB_URL: ${{ secrets.TRACKFLOW_WEB_URL }}
+          TRACKFLOW_GOOGLE_CLIENT_ID: ${{ secrets.TRACKFLOW_GOOGLE_CLIENT_ID }}
+          TRACKFLOW_GOOGLE_CLIENT_SECRET: ${{ secrets.TRACKFLOW_GOOGLE_CLIENT_SECRET }}
+          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
+          POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
+        run: |
+          echo "TRACKFLOW_API_URL=${TRACKFLOW_API_URL:-https://trackflow.codeupscale.com/api/v1}" > .env
+          echo "TRACKFLOW_WEB_URL=${TRACKFLOW_WEB_URL:-https://trackflow.codeupscale.com}" >> .env
+          echo "TRACKFLOW_GOOGLE_CLIENT_ID=${TRACKFLOW_GOOGLE_CLIENT_ID}" >> .env
+          echo "TRACKFLOW_GOOGLE_CLIENT_SECRET=${TRACKFLOW_GOOGLE_CLIENT_SECRET}" >> .env
+          echo "POSTHOG_KEY=${POSTHOG_KEY}" >> .env
+          echo "POSTHOG_HOST=${POSTHOG_HOST:-https://us.i.posthog.com}" >> .env
 
       - name: Build and publish Linux
         working-directory: desktop
