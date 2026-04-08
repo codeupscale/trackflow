@@ -570,8 +570,10 @@ class AuthController extends Controller
     /** Verify a Google ID token and return the payload, or null on failure. */
     private function verifyGoogleToken(string $idToken): ?array
     {
-        $clientId = config('services.google.client_id');
-        if (empty($clientId)) {
+        $webClientId = config('services.google.client_id');
+        $desktopClientId = config('services.google.desktop_client_id');
+
+        if (empty($webClientId) && empty($desktopClientId)) {
             return null;
         }
 
@@ -585,8 +587,10 @@ class AuthController extends Controller
 
         $payload = $response->json();
 
-        // Verify audience matches our client ID
-        if (($payload['aud'] ?? '') !== $clientId) {
+        // Verify audience matches either the web or desktop client ID
+        $aud = $payload['aud'] ?? '';
+        $validClientIds = array_filter([$webClientId, $desktopClientId]);
+        if (!in_array($aud, $validClientIds, true)) {
             return null;
         }
 
