@@ -4,7 +4,6 @@ import { useState, useMemo } from 'react';
 import { format, subDays } from 'date-fns';
 import {
   Monitor,
-  Loader2,
   AlertCircle,
   AppWindow,
 } from 'lucide-react';
@@ -161,7 +160,9 @@ function AppUsageTable({ entries, totalSeconds }: { entries: AppUsageEntry[]; to
               <TableRow key={`${entry.app_name}-${idx}`}>
                 <TableCell className="font-medium">{entry.app_name}</TableCell>
                 <TableCell>{formatAppDuration(entry.duration_seconds)}</TableCell>
-                <TableCell>{getPercentOfTotal(entry.duration_seconds, totalSeconds)}</TableCell>
+                <TableCell>
+                  {totalSeconds > 0 ? getPercentOfTotal(entry.duration_seconds, totalSeconds) : '—'}
+                </TableCell>
                 <TableCell><ProductivityBadge isProductive={entry.is_productive} /></TableCell>
               </TableRow>
             ))}
@@ -177,7 +178,16 @@ function TeamUsageTable({ entries }: { entries: TeamAppUsageEntry[] }) {
     return <EmptyState title="No team usage data" description="No team application usage was recorded for this period." />;
   }
 
-  const totalSeconds = entries.reduce((sum, e) => sum + (Number(e.duration_seconds) || 0), 0);
+  // Compute per-user totals so % of Total is meaningful per person
+  const userTotals = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const e of entries) {
+      map[e.user_id] = (map[e.user_id] || 0) + (Number(e.duration_seconds) || 0);
+    }
+    return map;
+  }, [entries]);
+
+  const hasAnyDuration = Object.values(userTotals).some((t) => t > 0);
 
   return (
     <Card>
@@ -198,7 +208,11 @@ function TeamUsageTable({ entries }: { entries: TeamAppUsageEntry[] }) {
                 <TableCell className="font-medium">{entry.user_name}</TableCell>
                 <TableCell>{entry.app_name}</TableCell>
                 <TableCell>{formatAppDuration(entry.duration_seconds)}</TableCell>
-                <TableCell>{getPercentOfTotal(entry.duration_seconds, totalSeconds)}</TableCell>
+                <TableCell>
+                  {hasAnyDuration && userTotals[entry.user_id] > 0
+                    ? getPercentOfTotal(entry.duration_seconds, userTotals[entry.user_id])
+                    : '—'}
+                </TableCell>
                 <TableCell><ProductivityBadge isProductive={entry.is_productive} /></TableCell>
               </TableRow>
             ))}
@@ -214,14 +228,21 @@ function TopAppsChart({ entries }: { entries: TopAppEntry[] }) {
     return <EmptyState title="No top apps data" description="No application usage was recorded for this period." />;
   }
 
-  const chartData = entries.map((entry) => ({
-    app_name: entry.app_name,
-    duration_seconds: entry.duration_seconds,
-    is_productive: entry.is_productive,
-    fill: productivityColor(entry.is_productive),
-  }));
-
   const totalSeconds = entries.reduce((sum, e) => sum + (Number(e.duration_seconds) || 0), 0);
+
+  // Only show chart when there is actual duration data
+  const hasChartData = totalSeconds > 0;
+
+  const chartData = entries
+    .filter((e) => (Number(e.duration_seconds) || 0) > 0)
+    .map((entry) => ({
+      app_name: entry.app_name,
+      duration: Number(entry.duration_seconds),
+      fill: productivityColor(entry.is_productive),
+    }));
+
+  // Dynamic height: 44px per bar, min 300px
+  const chartHeight = Math.max(300, chartData.length * 44);
 
   return (
     <div className="flex flex-col gap-6">
@@ -231,54 +252,71 @@ function TopAppsChart({ entries }: { entries: TopAppEntry[] }) {
           <CardDescription>Most used applications by total duration</CardDescription>
         </CardHeader>
         <CardContent>
-          <ChartContainer config={chartConfig} className="min-h-[300px] w-full">
-            <BarChart
-              data={chartData}
-              layout="vertical"
-              margin={{ left: 120, right: 20, top: 10, bottom: 10 }}
-            >
-              <XAxis
-                type="number"
-                tickFormatter={(value: number) => formatTickDuration(value)}
-                axisLine={false}
-                tickLine={false}
-              />
-              <YAxis
-                type="category"
-                dataKey="app_name"
-                width={110}
-                tickLine={false}
-                axisLine={false}
-                className="text-xs"
-              />
-              <ChartTooltip
-                content={
-                  <ChartTooltipContent
-                    formatter={(value) => formatAppDuration(Number(value))}
+          {hasChartData ? (
+            <>
+              <ChartContainer
+                config={chartConfig}
+                style={{ height: chartHeight }}
+                className="w-full"
+              >
+                <BarChart
+                  data={chartData}
+                  layout="vertical"
+                  margin={{ left: 8, right: 24, top: 8, bottom: 8 }}
+                >
+                  <XAxis
+                    type="number"
+                    tickFormatter={(value: number) => formatTickDuration(value)}
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fontSize: 12 }}
                   />
-                }
-              />
-              <Bar dataKey="duration_seconds" radius={[0, 4, 4, 0]}>
-                {chartData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.fill} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ChartContainer>
-          <div className="flex items-center gap-4 mt-4 text-xs text-muted-foreground">
-            <div className="flex items-center gap-1.5">
-              <div className="size-3 rounded-sm" style={{ backgroundColor: 'hsl(var(--chart-2))' }} />
-              <span>Productive</span>
+                  <YAxis
+                    type="category"
+                    dataKey="app_name"
+                    width={120}
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fontSize: 12 }}
+                  />
+                  <ChartTooltip
+                    content={
+                      <ChartTooltipContent
+                        nameKey="app_name"
+                        labelKey="app_name"
+                        formatter={(value) => [formatAppDuration(Number(value)), 'Duration']}
+                      />
+                    }
+                  />
+                  <Bar dataKey="duration" radius={[0, 4, 4, 0]} minPointSize={2}>
+                    {chartData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.fill} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ChartContainer>
+              <div className="flex items-center gap-4 mt-4 text-xs text-muted-foreground">
+                <div className="flex items-center gap-1.5">
+                  <div className="size-3 rounded-sm" style={{ backgroundColor: 'hsl(var(--chart-2))' }} />
+                  <span>Productive</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="size-3 rounded-sm" style={{ backgroundColor: 'hsl(var(--destructive))' }} />
+                  <span>Unproductive</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="size-3 rounded-sm" style={{ backgroundColor: 'hsl(var(--muted-foreground))' }} />
+                  <span>Uncategorized</span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col items-center justify-center gap-2 py-10 text-muted-foreground">
+              <AppWindow className="size-10" />
+              <p className="font-medium">No usage data for this period</p>
+              <p className="text-sm">Application usage will appear here once the desktop agent records activity.</p>
             </div>
-            <div className="flex items-center gap-1.5">
-              <div className="size-3 rounded-sm" style={{ backgroundColor: 'hsl(var(--destructive))' }} />
-              <span>Unproductive</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div className="size-3 rounded-sm" style={{ backgroundColor: 'hsl(var(--muted-foreground))' }} />
-              <span>Uncategorized</span>
-            </div>
-          </div>
+          )}
         </CardContent>
       </Card>
 
@@ -298,7 +336,7 @@ function TopAppsChart({ entries }: { entries: TopAppEntry[] }) {
                 <TableRow key={`${entry.app_name}-${idx}`}>
                   <TableCell className="font-medium">{entry.app_name}</TableCell>
                   <TableCell>{formatAppDuration(entry.duration_seconds)}</TableCell>
-                  <TableCell>{getPercentOfTotal(entry.duration_seconds, totalSeconds)}</TableCell>
+                  <TableCell>{totalSeconds > 0 ? getPercentOfTotal(entry.duration_seconds, totalSeconds) : '—'}</TableCell>
                   <TableCell><ProductivityBadge isProductive={entry.is_productive} /></TableCell>
                 </TableRow>
               ))}
