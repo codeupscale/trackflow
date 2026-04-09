@@ -26,6 +26,7 @@ class EmployeeController extends Controller
         $employees = $this->service->getDirectory(
             $request->user()->organization_id,
             $request->only(['search', 'department_id', 'position_id', 'employment_status', 'employment_type', 'per_page']),
+            $request->user(),
         );
 
         // Transform flat join result to nested format expected by frontend

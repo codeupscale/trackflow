@@ -65,7 +65,7 @@ export const navigationConfig: NavGroup[] = [
     items: [
       { name: 'Departments', href: '/hr/departments', icon: Building2, requiredPermission: 'departments.view' },
       { name: 'Positions', href: '/hr/positions', icon: Briefcase, requiredPermission: 'positions.view' },
-      { name: 'Employees', href: '/hr/employees', icon: Users, requiredPermission: 'employees.view_directory' },
+      { name: 'Employees', href: '/hr/employees', icon: Users, requiredPermission: 'employees.view_directory', requiredScope: 'team' },
       { name: 'My Leave', href: '/hr/leave', icon: CalendarDays, requiredPermission: 'leave.apply' },
       { name: 'Leave Approvals', href: '/hr/leave/approvals', icon: ClipboardCheck, requiredPermission: 'leave.approve' },
       { name: 'Leave Calendar', href: '/hr/leave/calendar', icon: CalendarRange, requiredPermission: 'leave.view_calendar' },
