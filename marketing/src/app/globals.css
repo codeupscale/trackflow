@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-primary: oklch(0.555 0.163 48.998);
+  --color-primary-dark: oklch(0.473 0.137 46.201);
+  --color-primary-light: oklch(0.75 0.12 50);
+  --color-primary-50: oklch(0.96 0.03 50);
+  --color-primary-100: oklch(0.92 0.05 50);
+  --color-accent-cyan: #06B6D4;
+
+  --color-surface: #ffffff;
+  --color-surface-dark: oklch(0.147 0.004 49.25);
+  --color-surface-elevated: oklch(0.97 0.002 50);
+  --color-surface-elevated-dark: oklch(0.19 0.006 49);
+
+  --color-text: oklch(0.13 0.01 50);
+  --color-text-dark: oklch(0.93 0.01 50);
+  --color-text-muted: oklch(0.35 0.01 50);
+  --color-text-muted-dark: oklch(0.65 0.01 50);
+
+  --color-border: oklch(0.85 0.008 50);
+  --color-border-dark: oklch(0.25 0.008 50);
+
+  --radius-base: 0.45rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+
+  --font-heading: "Raleway", sans-serif;
+  --font-body: "Raleway", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    font-family: var(--font-body);
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  .dark body,
+  body.dark {
+    background-color: var(--color-surface-dark);
+    color: var(--color-text-dark);
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    background: linear-gradient(135deg, var(--color-primary), var(--color-primary-light));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .glass {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+}
+
+/* Dark mode via class */
+.dark {
+  --color-surface: oklch(0.147 0.004 49.25);
+  --color-surface-elevated: oklch(0.19 0.006 49);
+  --color-text: oklch(0.93 0.01 50);
+  --color-text-muted: oklch(0.65 0.01 50);
+  --color-border: oklch(0.28 0.008 50);
+}
