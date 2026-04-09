@@ -1,7 +1,7 @@
 "use client";
 
 import { FadeIn } from "../motion";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Download } from "lucide-react";
 
 export function FinalCta() {
   return (
@@ -13,10 +13,10 @@ export function FinalCta() {
       <div className="mx-auto max-w-3xl px-6 text-center">
         <FadeIn>
           <h2 className="text-3xl md:text-5xl font-extrabold text-[var(--color-text)] dark:text-[var(--color-text-dark)] leading-tight">
-            Start your 14-day free trial
+            One Platform. One Price. No Compromises.
           </h2>
           <p className="mt-4 text-lg text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)] max-w-xl mx-auto">
-            No credit card required. Full access to all features. Set up your team in under 5 minutes.
+            Join teams who replaced Hubstaff + their HR tool with TrackFlow.
           </p>
         </FadeIn>
 
@@ -41,7 +41,7 @@ export function FinalCta() {
           </form>
         </FadeIn>
 
-        <FadeIn delay={0.25}>
+        <FadeIn delay={0.2}>
           <div className="mt-6 flex items-center justify-center gap-6 text-sm text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)]">
             <div className="flex items-center gap-1.5">
               <svg className="size-4 text-green-500" viewBox="0 0 16 16" fill="none">
@@ -61,6 +61,46 @@ export function FinalCta() {
               </svg>
               No credit card
             </div>
+          </div>
+        </FadeIn>
+
+        {/* Second CTA track */}
+        <FadeIn delay={0.3}>
+          <div className="mt-10 flex flex-col items-center gap-4">
+            <div className="flex items-center gap-4 text-sm text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)]">
+              <div className="h-px w-10 bg-[var(--color-border)] dark:bg-[var(--color-border-dark)]" />
+              <span>OR</span>
+              <div className="h-px w-10 bg-[var(--color-border)] dark:bg-[var(--color-border-dark)]" />
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-4">
+              <a
+                href="https://github.com/codeupscale/trackflow/releases/tag/v1.0.31"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center gap-2 rounded-[var(--radius-base)] px-6 py-3 text-sm font-semibold text-[var(--color-text)] dark:text-[var(--color-text-dark)] ring-2 ring-[var(--color-primary)]/30 hover:ring-[var(--color-primary)]/50 hover:bg-[var(--color-primary)]/5 dark:hover:bg-[var(--color-primary)]/10 active:translate-y-px transition-all"
+              >
+                <Download className="size-4" />
+                Download Desktop App
+              </a>
+              <a
+                href="https://trackflow.codeupscale.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center gap-2 rounded-[var(--radius-base)] px-6 py-3 text-sm font-semibold text-[var(--color-text)] dark:text-[var(--color-text-dark)] ring-2 ring-[var(--color-primary)]/30 hover:ring-[var(--color-primary)]/50 hover:bg-[var(--color-primary)]/5 dark:hover:bg-[var(--color-primary)]/10 active:translate-y-px transition-all"
+              >
+                <ArrowRight className="size-4" />
+                See Live Demo
+              </a>
+            </div>
+            <p className="text-xs text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)]">
+              Already have an account?{" "}
+              <a
+                href="https://trackflow.codeupscale.com/login"
+                className="text-[var(--color-primary)] hover:underline"
+              >
+                Log in &rarr;
+              </a>
+            </p>
           </div>
         </FadeIn>
       </div>

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { FadeIn, FloatingAnimation } from "../motion";
-import { Play, ArrowRight, Calendar, DollarSign, Download } from "lucide-react";
+import { Play, ArrowRight, Calendar, DollarSign, Download, CheckCircle2 } from "lucide-react";
 import { DemoModal } from "../demo-modal";
 
 /* ─── Notification sequence ─── */
@@ -373,8 +373,28 @@ function DashboardMockup() {
   );
 }
 
+/* ─── OS auto-detection for download CTA ─── */
+function useDetectedOS(): string {
+  const [os, setOs] = useState("Download Desktop App");
+  useEffect(() => {
+    const ua = navigator.userAgent;
+    if (/Mac/i.test(ua)) setOs("Download for macOS");
+    else if (/Win/i.test(ua)) setOs("Download for Windows");
+    else if (/Linux/i.test(ua)) setOs("Download for Linux");
+  }, []);
+  return os;
+}
+
+const trustBarItems = [
+  "Never lose tracked time \u2014 even offline",
+  "Under 150MB RAM \u2014 lightest agent in the market",
+  "Replaces 2\u20133 tools \u2014 avg $340/yr saved per seat",
+  "14-day free trial \u2014 no credit card",
+];
+
 export function Hero() {
   const [showDemo, setShowDemo] = useState(false);
+  const osLabel = useDetectedOS();
 
   return (
     <section className="relative overflow-hidden pt-32 pb-20 md:pt-40 md:pb-28">
@@ -400,16 +420,14 @@ export function Hero() {
 
             <FadeIn delay={0.1}>
               <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold leading-[1.1] tracking-tight text-[var(--color-text)] dark:text-[var(--color-text-dark)]">
-                Track Time.{" "}
-                <span className="text-gradient">Monitor Activity.</span>{" "}
-                Manage HR.{" "}
-                <span className="text-[var(--color-primary)]">One Platform.</span>
+                The Only Platform That Tracks Time{" "}
+                <span className="text-gradient">AND Manages Your Entire HR.</span>
               </h1>
             </FadeIn>
 
             <FadeIn delay={0.2}>
               <p className="mt-6 text-lg text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)] leading-relaxed max-w-xl">
-                Replace your time tracker, activity monitor, screenshot tool, leave manager, and payroll system with a single workforce platform. Built for teams that value precision and privacy.
+                Replace Hubstaff + BambooHR with one platform. Time tracking, screenshots, activity monitoring, leave management, payroll, attendance, and shifts &mdash; all connected, all in sync.
               </p>
             </FadeIn>
 
@@ -436,25 +454,20 @@ export function Hero() {
                   className="inline-flex items-center justify-center gap-1.5 px-4 py-3.5 text-sm font-medium text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)] hover:text-[var(--color-text)] dark:hover:text-[var(--color-text-dark)] transition-colors"
                 >
                   <Download className="size-4" />
-                  Download Desktop App
+                  {osLabel}
                 </a>
               </div>
             </FadeIn>
 
+            {/* Trust bar */}
             <FadeIn delay={0.4}>
-              <div className="mt-10 flex items-center gap-6 text-sm text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)]">
-                <div className="flex items-center gap-1.5">
-                  <svg className="size-4 text-green-500" viewBox="0 0 16 16" fill="none">
-                    <path d="M3 8l4 4 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  14-day free trial
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <svg className="size-4 text-green-500" viewBox="0 0 16 16" fill="none">
-                    <path d="M3 8l4 4 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  No credit card required
-                </div>
+              <div className="mt-10 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {trustBarItems.map((item) => (
+                  <div key={item} className="flex items-start gap-2 text-sm text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)]">
+                    <CheckCircle2 className="size-4 shrink-0 mt-0.5 text-green-500" />
+                    <span>{item}</span>
+                  </div>
+                ))}
               </div>
             </FadeIn>
           </div>

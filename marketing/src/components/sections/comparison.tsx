@@ -18,15 +18,19 @@ const rows: ComparisonRow[] = [
   { feature: "Time Tracking", trackflow: true, hubstaff: true, timedoctor: true },
   { feature: "Activity Monitoring", trackflow: true, hubstaff: true, timedoctor: true },
   { feature: "Per-Display Screenshots", trackflow: true, hubstaff: false, timedoctor: false },
-  { feature: "Offline SQLite Queue", trackflow: true, hubstaff: false, timedoctor: false },
+  { feature: "Never Loses Data on Network Drop", trackflow: true, hubstaff: false, timedoctor: false },
   { feature: "Crash-Proof Local-First Timer", trackflow: true, hubstaff: false, timedoctor: false },
+  { feature: "Agent RAM Usage (Idle)", trackflow: "< 150MB", hubstaff: "~400MB", timedoctor: "~600MB" },
   { feature: "SAML2 SSO (No Premium Tier)", trackflow: true, hubstaff: "Enterprise only", timedoctor: "Enterprise only" },
   { feature: "Built-in Leave Management", trackflow: true, hubstaff: false, timedoctor: false },
-  { feature: "Built-in Payroll Engine", trackflow: true, hubstaff: "partial", timedoctor: false },
+  { feature: "Built-in Attendance Tracking", trackflow: true, hubstaff: false, timedoctor: false },
+  { feature: "Payroll Runs from Tracked Hours", trackflow: true, hubstaff: "partial", timedoctor: false },
+  { feature: "Employee Sees Their Own Data", trackflow: true, hubstaff: "partial", timedoctor: false },
   { feature: "Attendance & Shifts", trackflow: true, hubstaff: false, timedoctor: false },
   { feature: "Multi-Organization Login", trackflow: true, hubstaff: false, timedoctor: false },
   { feature: "Employee Records & Docs", trackflow: true, hubstaff: false, timedoctor: false },
   { feature: "Encrypted Salary Data", trackflow: true, hubstaff: false, timedoctor: false },
+  { feature: "Price per seat (mid tier)", trackflow: "See pricing", hubstaff: "$10/user/mo", timedoctor: "$11/user/mo" },
 ];
 
 function CellIcon({ value }: { value: CellValue }) {
@@ -69,10 +73,10 @@ export function Comparison() {
               Comparison
             </p>
             <h2 className="text-3xl md:text-4xl font-bold text-[var(--color-text)] dark:text-[var(--color-text-dark)]">
-              See how TrackFlow stacks up
+              Why Teams Switch to TrackFlow
             </h2>
             <p className="mt-4 text-lg text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)]">
-              More features, fewer tools, better price. No contest.
+              We built what Hubstaff and Time Doctor refused to.
             </p>
           </div>
         </FadeIn>

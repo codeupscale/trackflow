@@ -3,9 +3,9 @@
 import { useRef, useEffect, useState } from "react";
 import { useInView } from "framer-motion";
 import { FadeIn } from "../motion";
-import { Layers, Monitor, Briefcase, Shield } from "lucide-react";
+import { Layers, Monitor, Zap, Shield } from "lucide-react";
 
-function AnimatedCounter({ target, suffix = "" }: { target: number; suffix?: string }) {
+function AnimatedCounter({ target, suffix = "", prefix = "" }: { target: number; suffix?: string; prefix?: string }) {
   const [count, setCount] = useState(0);
   const ref = useRef<HTMLSpanElement>(null);
   const isInView = useInView(ref, { once: true });
@@ -29,17 +29,17 @@ function AnimatedCounter({ target, suffix = "" }: { target: number; suffix?: str
 
   return (
     <span ref={ref} className="font-mono text-3xl md:text-4xl font-bold text-[var(--color-primary)]">
-      {count}
+      {prefix}{count}
       {suffix}
     </span>
   );
 }
 
 const stats = [
-  { icon: Layers, value: 70, suffix: "+", label: "Features" },
-  { icon: Monitor, value: 3, suffix: "", label: "Platforms" },
-  { icon: Briefcase, value: 18, suffix: "", label: "HR Modules" },
-  { icon: Shield, value: 256, suffix: "-bit", label: "Encryption" },
+  { icon: Layers, value: 2, suffix: "+", label: "Tools Replaced", prefix: "" },
+  { icon: Zap, value: 150, suffix: "MB", label: "Lightest Agent", prefix: "< " },
+  { icon: Monitor, value: 3, suffix: "", label: "Platforms", prefix: "" },
+  { icon: Shield, value: 256, suffix: "-bit", label: "Encryption", prefix: "" },
 ];
 
 export function StatsBar() {
@@ -54,7 +54,7 @@ export function StatsBar() {
                   <stat.icon className="size-6 text-[var(--color-primary)]" />
                 </div>
                 <div>
-                  <AnimatedCounter target={stat.value} suffix={stat.suffix} />
+                  <AnimatedCounter target={stat.value} suffix={stat.suffix} prefix={stat.prefix} />
                 </div>
                 <div className="mt-1 text-sm font-medium text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)]">
                   {stat.label}
