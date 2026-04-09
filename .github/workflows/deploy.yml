@@ -44,6 +44,7 @@ on:
     paths:
       - 'backend/**'
       - 'web/**'
+      - 'marketing/**'
   workflow_dispatch:
     inputs:
       service:
@@ -55,11 +56,13 @@ on:
           - all
           - backend
           - web
+          - marketing
 
 env:
   REGISTRY: ghcr.io
   API_IMAGE: ghcr.io/codeupscale/trackflow-api
   WEB_IMAGE: ghcr.io/codeupscale/trackflow-web
+  MARKETING_IMAGE: ghcr.io/codeupscale/trackflow-marketing
 
 # Only one deploy at a time. Queue new runs, don't cancel in-flight deploys.
 concurrency:
@@ -79,6 +82,7 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       web: ${{ steps.filter.outputs.web }}
+      marketing: ${{ steps.filter.outputs.marketing }}
     steps:
       - uses: actions/checkout@v4
 
@@ -90,6 +94,8 @@ jobs:
               - 'backend/**'
             web:
               - 'web/**'
+            marketing:
+              - 'marketing/**'
 
   # ─── GATE: BACKEND TESTS ─────────────────────────────────────────────────
   # PHPUnit must pass before any deploy. Uses PostgreSQL + Redis service
@@ -314,6 +320,47 @@ jobs:
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
 
+  # ─── BUILD MARKETING IMAGE ──────────────────────────────────────────────
+
+  build-marketing:
+    name: Build Marketing image
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: |
+      always() &&
+      (
+        (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'marketing')) ||
+        (needs.changes.result == 'success' && needs.changes.outputs.marketing == 'true')
+      )
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Marketing image
+        uses: docker/build-push-action@v6
+        with:
+          context: marketing
+          file: marketing/Dockerfile.production
+          push: true
+          tags: |
+            ${{ env.MARKETING_IMAGE }}:latest
+            ${{ env.MARKETING_IMAGE }}:${{ github.sha }}
+          platforms: linux/amd64
+          cache-from: type=gha,scope=marketing
+          cache-to: type=gha,mode=max,scope=marketing
+
   # ─── DEPLOY TO PRODUCTION ────────────────────────────────────────────────
   # Zero-downtime deployment:
   #   1. Pull new images (old containers keep running)
@@ -327,12 +374,13 @@ jobs:
   deploy:
     name: Deploy to production
     runs-on: ubuntu-latest
-    needs: [changes, build-api, build-web]
+    needs: [changes, build-api, build-web, build-marketing]
     if: |
       always() &&
       (needs.build-api.result == 'success' || needs.build-api.result == 'skipped') &&
       (needs.build-web.result == 'success' || needs.build-web.result == 'skipped') &&
-      !(needs.build-api.result == 'skipped' && needs.build-web.result == 'skipped')
+      (needs.build-marketing.result == 'success' || needs.build-marketing.result == 'skipped') &&
+      !(needs.build-api.result == 'skipped' && needs.build-web.result == 'skipped' && needs.build-marketing.result == 'skipped')
     environment: production
     steps:
       - name: Determine which services changed
@@ -341,13 +389,15 @@ jobs:
           # For workflow_dispatch, use the input. For push, use change detection.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             case "${{ github.event.inputs.service }}" in
-              all)     echo "api=true" >> $GITHUB_OUTPUT; echo "web=true" >> $GITHUB_OUTPUT ;;
-              backend) echo "api=true" >> $GITHUB_OUTPUT; echo "web=false" >> $GITHUB_OUTPUT ;;
-              web)     echo "api=false" >> $GITHUB_OUTPUT; echo "web=true" >> $GITHUB_OUTPUT ;;
+              all)       echo "api=true" >> $GITHUB_OUTPUT; echo "web=true" >> $GITHUB_OUTPUT; echo "marketing=true" >> $GITHUB_OUTPUT ;;
+              backend)   echo "api=true" >> $GITHUB_OUTPUT; echo "web=false" >> $GITHUB_OUTPUT; echo "marketing=false" >> $GITHUB_OUTPUT ;;
+              web)       echo "api=false" >> $GITHUB_OUTPUT; echo "web=true" >> $GITHUB_OUTPUT; echo "marketing=false" >> $GITHUB_OUTPUT ;;
+              marketing) echo "api=false" >> $GITHUB_OUTPUT; echo "web=false" >> $GITHUB_OUTPUT; echo "marketing=true" >> $GITHUB_OUTPUT ;;
             esac
           else
             echo "api=${{ needs.changes.outputs.backend }}" >> $GITHUB_OUTPUT
             echo "web=${{ needs.changes.outputs.web }}" >> $GITHUB_OUTPUT
+            echo "marketing=${{ needs.changes.outputs.marketing }}" >> $GITHUB_OUTPUT
           fi
 
       - name: Deploy via SSH (zero-downtime rolling restart)
@@ -355,6 +405,7 @@ jobs:
         env:
           DEPLOY_API: ${{ steps.services.outputs.api }}
           DEPLOY_WEB: ${{ steps.services.outputs.web }}
+          DEPLOY_MARKETING: ${{ steps.services.outputs.marketing }}
           GH_ACTOR: ${{ github.actor }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMIT_SHA: ${{ github.sha }}
@@ -362,7 +413,7 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: DEPLOY_API,DEPLOY_WEB,GH_ACTOR,GH_TOKEN,COMMIT_SHA
+          envs: DEPLOY_API,DEPLOY_WEB,DEPLOY_MARKETING,GH_ACTOR,GH_TOKEN,COMMIT_SHA
           command_timeout: 5m
           script: |
             set -euo pipefail
@@ -375,6 +426,7 @@ jobs:
 
             API_OLD_DIGEST=""
             WEB_OLD_DIGEST=""
+            MARKETING_OLD_DIGEST=""
             if [ "${DEPLOY_API}" = "true" ]; then
               API_OLD_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/codeupscale/trackflow-api:latest 2>/dev/null || echo "")
               echo "==> Current API digest: ${API_OLD_DIGEST:-none}"
@@ -382,6 +434,10 @@ jobs:
             if [ "${DEPLOY_WEB}" = "true" ]; then
               WEB_OLD_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/codeupscale/trackflow-web:latest 2>/dev/null || echo "")
               echo "==> Current Web digest: ${WEB_OLD_DIGEST:-none}"
+            fi
+            if [ "${DEPLOY_MARKETING}" = "true" ]; then
+              MARKETING_OLD_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/codeupscale/trackflow-marketing:latest 2>/dev/null || echo "")
+              echo "==> Current Marketing digest: ${MARKETING_OLD_DIGEST:-none}"
             fi
 
             # ── 2. PULL: Download new images (old containers keep serving traffic) ──
@@ -393,6 +449,10 @@ jobs:
             if [ "${DEPLOY_WEB}" = "true" ]; then
               echo "==> Pulling Web image (sha: ${COMMIT_SHA:0:8})"
               docker pull ghcr.io/codeupscale/trackflow-web:latest
+            fi
+            if [ "${DEPLOY_MARKETING}" = "true" ]; then
+              echo "==> Pulling Marketing image (sha: ${COMMIT_SHA:0:8})"
+              docker pull ghcr.io/codeupscale/trackflow-marketing:latest
             fi
 
             # ── 3. ROLLING RESTART: Recreate containers one at a time ──
@@ -422,6 +482,11 @@ jobs:
               docker compose up -d --no-deps --force-recreate tf-web
             fi
 
+            if [ "${DEPLOY_MARKETING}" = "true" ]; then
+              echo "==> Rolling restart: tf-marketing"
+              docker compose up -d --no-deps --force-recreate tf-marketing
+            fi
+
             # ── 4. HEALTH CHECK GATE ──
             # Wait up to 90 seconds for all TrackFlow containers to report healthy.
             # If any container fails health check, trigger rollback.
@@ -435,6 +500,9 @@ jobs:
             fi
             if [ "${DEPLOY_WEB}" = "true" ]; then
               SERVICES_TO_CHECK="${SERVICES_TO_CHECK} tf-web"
+            fi
+            if [ "${DEPLOY_MARKETING}" = "true" ]; then
+              SERVICES_TO_CHECK="${SERVICES_TO_CHECK} tf-marketing"
             fi
 
             for svc in ${SERVICES_TO_CHECK}; do
@@ -475,6 +543,13 @@ jobs:
                 docker pull "${WEB_OLD_DIGEST}" 2>/dev/null || true
                 docker tag "${WEB_OLD_DIGEST}" ghcr.io/codeupscale/trackflow-web:latest 2>/dev/null || true
                 docker compose up -d --no-deps --force-recreate tf-web
+              fi
+
+              if [ "${DEPLOY_MARKETING}" = "true" ] && [ -n "${MARKETING_OLD_DIGEST}" ]; then
+                echo "==> Rolling back Marketing to: ${MARKETING_OLD_DIGEST}"
+                docker pull "${MARKETING_OLD_DIGEST}" 2>/dev/null || true
+                docker tag "${MARKETING_OLD_DIGEST}" ghcr.io/codeupscale/trackflow-marketing:latest 2>/dev/null || true
+                docker compose up -d --no-deps --force-recreate tf-marketing
               fi
 
               echo "==> Rollback complete. Waiting for rollback containers..."
