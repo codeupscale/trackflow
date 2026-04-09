@@ -630,14 +630,16 @@ export default function ReportsPage() {
                 {analytics.hours_change_percent !== null ? (
                   <span
                     className={cn(
-                      'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold',
+                      'inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-xs font-semibold',
                       analytics.hours_change_percent >= 0
                         ? 'bg-green-500/10 text-green-500'
                         : 'bg-red-500/10 text-red-500'
                     )}
                   >
-                    {analytics.hours_change_percent >= 0 ? '+' : ''}
-                    {analytics.hours_change_percent.toFixed(1)}%
+                    {analytics.hours_change_percent >= 0
+                      ? <ChevronUp className="size-3" />
+                      : <ChevronDown className="size-3" />}
+                    {Math.abs(analytics.hours_change_percent).toFixed(1)}%
                   </span>
                 ) : (
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-muted text-muted-foreground">
@@ -687,14 +689,16 @@ export default function ReportsPage() {
                 {analytics.budget_change_percent !== null ? (
                   <span
                     className={cn(
-                      'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold',
+                      'inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-xs font-semibold',
                       analytics.budget_change_percent >= 0
                         ? 'bg-green-500/10 text-green-500'
                         : 'bg-red-500/10 text-red-500'
                     )}
                   >
-                    {analytics.budget_change_percent >= 0 ? '+' : ''}
-                    {analytics.budget_change_percent.toFixed(1)}%
+                    {analytics.budget_change_percent >= 0
+                      ? <ChevronUp className="size-3" />
+                      : <ChevronDown className="size-3" />}
+                    {Math.abs(analytics.budget_change_percent).toFixed(1)}%
                   </span>
                 ) : (
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-muted text-muted-foreground">
