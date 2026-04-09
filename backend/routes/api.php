@@ -158,6 +158,17 @@ Route::prefix('v1')->group(function () {
             Route::get('attendance', [\App\Http\Controllers\Api\V1\ReportController::class, 'attendance']);
         });
 
+        // App Usage
+        Route::prefix('app-usage')->group(function () {
+            Route::get('daily', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'daily']);
+            Route::get('team', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'team']);
+            Route::get('top', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'top']);
+        });
+
+        // Report Subscriptions
+        Route::apiResource('report-subscriptions', \App\Http\Controllers\Api\V1\ReportSubscriptionController::class)
+            ->only(['index', 'store', 'destroy']);
+
         // Job status
         Route::get('jobs/{id}', [\App\Http\Controllers\Api\V1\ReportController::class, 'jobStatus']);
 

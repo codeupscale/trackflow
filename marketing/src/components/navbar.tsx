@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useTheme } from "next-themes";
 import { TrackFlowLogo } from "./logo";
-import { Sun, Moon, Menu, X } from "lucide-react";
+import { Sun, Moon, Menu, X, Download } from "lucide-react";
 
 const navLinks = [
   { href: "#features", label: "Features" },
@@ -52,6 +52,15 @@ export function Navbar() {
         </div>
 
         <div className="hidden md:flex items-center gap-3">
+          <a
+            href="https://github.com/codeupscale/trackflow/releases/tag/v1.0.31"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text)] dark:text-[var(--color-text-muted-dark)] dark:hover:text-[var(--color-text-dark)] transition-colors"
+          >
+            <Download className="size-4" />
+            Download
+          </a>
           {mounted && (
             <button
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}

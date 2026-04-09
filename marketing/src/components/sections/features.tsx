@@ -10,6 +10,8 @@ import {
   DollarSign,
   ClipboardCheck,
   BarChart3,
+  Layers,
+  Zap,
 } from "lucide-react";
 
 const features = [
@@ -36,10 +38,17 @@ const features = [
   },
   {
     icon: WifiOff,
-    title: "Offline Resilience",
+    title: "Never Lose a Second of Tracked Time",
     description:
-      "SQLite queue stores every event. Exponential backoff sync on reconnect. Idempotency keys prevent duplicates. Never lose data.",
+      "SQLite-first architecture saves every timer event locally before touching the network. VPN drops, server errors, and laptop sleeps never stop your timer or lose your data. Unlike Hubstaff and Time Doctor.",
     tag: "Core",
+  },
+  {
+    icon: Zap,
+    title: "Lightest Agent in the Market",
+    description:
+      "Under 150MB RAM when idle. Under 250MB when tracking. Screenshots captured in under 3 seconds. We benchmark every release \u2014 no memory bloat, no battery drain, no fan noise.",
+    tag: "Performance",
   },
   {
     icon: CalendarDays,
@@ -89,7 +98,31 @@ export function Features() {
           </div>
         </FadeIn>
 
-        <StaggerChildren className="grid sm:grid-cols-2 lg:grid-cols-4 gap-5" staggerDelay={0.08}>
+        {/* Hero feature card — full width */}
+        <FadeIn>
+          <div className="mb-8 rounded-[var(--radius-xl)] p-8 md:p-10 bg-gradient-to-br from-amber-500 to-orange-600 shadow-xl">
+            <div className="flex flex-col md:flex-row md:items-center gap-6">
+              <div className="inline-flex items-center justify-center size-14 rounded-[var(--radius-lg)] bg-white/20 shrink-0">
+                <Layers className="size-7 text-white" />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-3 mb-2">
+                  <h3 className="text-xl md:text-2xl font-bold text-white">
+                    One Platform. Zero Tool-Switching.
+                  </h3>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-white bg-white/20 px-2.5 py-1 rounded-full whitespace-nowrap">
+                    Only in TrackFlow
+                  </span>
+                </div>
+                <p className="text-white/90 leading-relaxed max-w-3xl">
+                  TrackFlow is the only workforce platform that connects time tracking directly to attendance, leave, and payroll. Clock in &rarr; attendance recorded &rarr; leave deducted &rarr; payroll calculated. Automatically.
+                </p>
+              </div>
+            </div>
+          </div>
+        </FadeIn>
+
+        <StaggerChildren className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5" staggerDelay={0.08}>
           {features.map((feature) => (
             <StaggerItem key={feature.title}>
               <ScaleOnHover>
