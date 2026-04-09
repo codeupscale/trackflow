@@ -36,7 +36,7 @@ class EmployeeServiceTest extends TestCase
         $admin = $this->createUser($org, 'admin');
         $this->actingAs($admin, 'sanctum');
 
-        $result = $this->service->getDirectory($org->id, ['per_page' => 10]);
+        $result = $this->service->getDirectory($org->id, ['per_page' => 10], $admin);
 
         $this->assertInstanceOf(\Illuminate\Contracts\Pagination\LengthAwarePaginator::class, $result);
         // 5 employees + 1 admin = 6
@@ -50,7 +50,7 @@ class EmployeeServiceTest extends TestCase
         $user2 = $this->createUser($org, 'employee', ['name' => 'Bob Smith']);
         $this->actingAs($user1, 'sanctum');
 
-        $result = $this->service->getDirectory($org->id, ['search' => 'Alice']);
+        $result = $this->service->getDirectory($org->id, ['search' => 'Alice'], $user1);
 
         $this->assertEquals(1, $result->total());
         $this->assertEquals('Alice Johnson', $result->first()->name);
@@ -63,7 +63,7 @@ class EmployeeServiceTest extends TestCase
         $user2 = $this->createUser($org, 'employee', ['email' => 'bob@example.com']);
         $this->actingAs($user1, 'sanctum');
 
-        $result = $this->service->getDirectory($org->id, ['search' => 'alice@']);
+        $result = $this->service->getDirectory($org->id, ['search' => 'alice@'], $user1);
 
         $this->assertEquals(1, $result->total());
     }
@@ -87,7 +87,7 @@ class EmployeeServiceTest extends TestCase
             'employee_id' => 'EMP-099',
         ]);
 
-        $result = $this->service->getDirectory($org->id, ['search' => 'EMP-042']);
+        $result = $this->service->getDirectory($org->id, ['search' => 'EMP-042'], $user1);
 
         $this->assertEquals(1, $result->total());
     }
@@ -109,7 +109,7 @@ class EmployeeServiceTest extends TestCase
         $this->createUser($org, 'employee', ['name' => 'TestXUser']);
         $this->actingAs($user, 'sanctum');
 
-        $result = $this->service->getDirectory($org->id, ['search' => 'Test_User']);
+        $result = $this->service->getDirectory($org->id, ['search' => 'Test_User'], $user);
 
         $this->assertGreaterThanOrEqual(1, $result->total());
         $names = $result->pluck('name')->toArray();
@@ -137,7 +137,7 @@ class EmployeeServiceTest extends TestCase
             'department_id' => null,
         ]);
 
-        $result = $this->service->getDirectory($org->id, ['department_id' => $dept->id]);
+        $result = $this->service->getDirectory($org->id, ['department_id' => $dept->id], $user1);
 
         $this->assertEquals(1, $result->total());
     }
@@ -161,7 +161,7 @@ class EmployeeServiceTest extends TestCase
             'employment_status' => 'probation',
         ]);
 
-        $result = $this->service->getDirectory($org->id, ['employment_status' => 'active']);
+        $result = $this->service->getDirectory($org->id, ['employment_status' => 'active'], $user1);
 
         $this->assertEquals(1, $result->total());
     }
