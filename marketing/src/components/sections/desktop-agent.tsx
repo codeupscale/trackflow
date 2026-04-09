@@ -1,7 +1,7 @@
 "use client";
 
 import { FadeIn, FloatingAnimation } from "../motion";
-import { Monitor, Cpu, Camera, Moon, WifiOff, RefreshCw } from "lucide-react";
+import { Monitor, Cpu, Camera, Moon, WifiOff, RefreshCw, Laptop, Terminal, Download } from "lucide-react";
 
 const agentFeatures = [
   { icon: Monitor, label: "System tray app", desc: "Runs silently, one-click start/stop" },
@@ -78,6 +78,14 @@ function DesktopMockup() {
   );
 }
 
+const RELEASE_URL = "https://github.com/codeupscale/trackflow/releases/tag/v1.0.31";
+
+const platformDownloads = [
+  { icon: Laptop, platform: "macOS", subtitle: "Download v1.0.31" },
+  { icon: Monitor, platform: "Windows", subtitle: "Download v1.0.31" },
+  { icon: Terminal, platform: "Linux", subtitle: "Download v1.0.31" },
+];
+
 export function DesktopAgent() {
   return (
     <section className="py-20 md:py-28">
@@ -85,9 +93,14 @@ export function DesktopAgent() {
         <div className="grid lg:grid-cols-2 gap-16 items-center">
           <div>
             <FadeIn>
-              <p className="text-sm font-semibold uppercase tracking-wider text-[var(--color-primary)] mb-3">
-                Desktop Agent
-              </p>
+              <div className="flex items-center gap-3 mb-3">
+                <p className="text-sm font-semibold uppercase tracking-wider text-[var(--color-primary)]">
+                  Desktop Agent
+                </p>
+                <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2.5 py-0.5 text-xs font-bold text-amber-600 dark:text-amber-400 ring-1 ring-amber-500/20">
+                  v1.0.31
+                </span>
+              </div>
               <h2 className="text-3xl md:text-4xl font-bold text-[var(--color-text)] dark:text-[var(--color-text-dark)] mb-4">
                 Lightweight. Invisible. Reliable.
               </h2>
@@ -117,6 +130,37 @@ export function DesktopAgent() {
                 </FadeIn>
               ))}
             </div>
+
+            {/* Download buttons */}
+            <FadeIn delay={0.5}>
+              <div className="mt-10">
+                <div className="flex flex-wrap gap-3">
+                  {platformDownloads.map((dl) => (
+                    <a
+                      key={dl.platform}
+                      href={RELEASE_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="group inline-flex items-center gap-3 rounded-full bg-[var(--color-text)] dark:bg-white/10 px-5 py-3 ring-1 ring-[var(--color-border)] dark:ring-[var(--color-border-dark)] hover:ring-[var(--color-primary)]/40 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-[var(--color-primary)]/10 transition-all duration-200"
+                    >
+                      <dl.icon className="size-5 text-white dark:text-[var(--color-text-dark)] group-hover:text-[var(--color-primary-light)] transition-colors" />
+                      <div className="flex flex-col">
+                        <span className="text-sm font-semibold text-white dark:text-[var(--color-text-dark)] leading-tight">
+                          {dl.platform}
+                        </span>
+                        <span className="text-[10px] text-white/60 dark:text-[var(--color-text-muted-dark)] leading-tight">
+                          {dl.subtitle}
+                        </span>
+                      </div>
+                      <Download className="size-4 text-white/40 dark:text-[var(--color-text-muted-dark)] group-hover:text-[var(--color-primary-light)] transition-colors" />
+                    </a>
+                  ))}
+                </div>
+                <p className="mt-4 text-xs text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)]">
+                  Open source &middot; Free forever &middot; Auto-updates included
+                </p>
+              </div>
+            </FadeIn>
           </div>
 
           <FadeIn direction="right" delay={0.2}>

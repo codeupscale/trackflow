@@ -62,6 +62,12 @@ export function Navbar() {
             </button>
           )}
           <a
+            href="https://trackflow.codeupscale.com/login"
+            className="inline-flex items-center justify-center rounded-[var(--radius-base)] border border-[var(--color-primary)] px-5 py-2.5 text-sm font-semibold text-[var(--color-primary)] bg-transparent hover:bg-[var(--color-primary)] hover:text-white active:translate-y-px transition-all"
+          >
+            Log In
+          </a>
+          <a
             href="#cta"
             className="inline-flex items-center justify-center rounded-[var(--radius-base)] bg-[var(--color-primary)] px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[var(--color-primary-dark)] active:translate-y-px transition-all"
           >
@@ -104,6 +110,13 @@ export function Navbar() {
                 {link.label}
               </a>
             ))}
+            <a
+              href="https://trackflow.codeupscale.com/login"
+              onClick={() => setMobileOpen(false)}
+              className="text-base font-medium text-[var(--color-text)] dark:text-[var(--color-text-dark)]"
+            >
+              Log In
+            </a>
             <a
               href="#cta"
               onClick={() => setMobileOpen(false)}
