@@ -8,8 +8,8 @@ const problems = [
     icon: WifiOff,
     title: "\u201cI got logged out and lost 3 hours of tracking\u201d",
     description:
-      "Time Doctor and Hubstaff users report losing hours of tracked time when network hiccups trigger automatic logouts. It happens on VPN switches, sleep/wake, and server blips.",
-    competitorTag: "Common with Time Doctor \u00b7 Hubstaff",
+      "Many time tracking tools lose hours of tracked time when network hiccups trigger automatic logouts. It happens on VPN switches, sleep/wake, and server blips.",
+    competitorTag: "A common complaint with legacy trackers",
     answer: "TrackFlow\u2019s local-first SQLite timer saves every event before touching the network. VPN drops, server errors, and laptop sleeps never lose a second.",
     color: "text-red-500",
     bg: "bg-red-500/10",
@@ -19,7 +19,7 @@ const problems = [
     title: "\u201cOur team refused to use it \u2014 said it felt like surveillance\u201d",
     description:
       "Fixed-interval screenshots, keyloggers, and opaque tracking create resentment. Employees push back, adoption fails, and the tool gets cancelled at renewal.",
-    competitorTag: "Common with ActivTrak \u00b7 Time Doctor",
+    competitorTag: "A common complaint with monitoring tools",
     answer: "TrackFlow gives employees full visibility into their own data. Configurable screenshot blur, transparent activity scoring, and no keylogging.",
     color: "text-amber-500",
     bg: "bg-amber-500/10",
@@ -28,8 +28,8 @@ const problems = [
     icon: Cpu,
     title: "\u201cThe desktop agent makes my laptop fan scream\u201d",
     description:
-      "Competing agents regularly consume 500MB\u20131GB RAM. Developers and designers run them on MacBook Pros with fan noise audible on video calls.",
-    competitorTag: "Common with Time Doctor \u00b7 Hubstaff",
+      "Many desktop tracking agents regularly consume 500MB\u20131GB RAM. Developers and designers notice the battery drain and fan noise on every video call.",
+    competitorTag: "A common complaint with desktop agents",
     answer: "TrackFlow\u2019s agent uses under 150MB idle, under 250MB tracking. Screenshots captured in under 3 seconds. No battery drain, no fan noise.",
     color: "text-purple-500",
     bg: "bg-purple-500/10",

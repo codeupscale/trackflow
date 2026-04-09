@@ -76,7 +76,7 @@ export function Comparison() {
               Why Teams Switch to TrackFlow
             </h2>
             <p className="mt-4 text-lg text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)]">
-              We built what Hubstaff and Time Doctor refused to.
+              We built what other tools refused to.
             </p>
           </div>
         </FadeIn>
@@ -95,10 +95,10 @@ export function Comparison() {
                     </div>
                   </th>
                   <th className="py-4 px-4 text-center text-sm font-medium text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)]">
-                    Hubstaff
+                    Typical Tracker
                   </th>
                   <th className="py-4 px-4 text-center text-sm font-medium text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)]">
-                    Time Doctor
+                    HR-Only Tool
                   </th>
                 </tr>
               </thead>
