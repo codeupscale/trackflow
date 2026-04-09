@@ -79,9 +79,12 @@ class LeaveTypeTest extends TestCase
             ->assertJsonPath('data.name', 'Annual Leave')
             ->assertJsonPath('data.code', 'AL')
             ->assertJsonPath('data.type', 'paid')
-            ->assertJsonPath('data.days_per_year', 20.0)
-            ->assertJsonPath('data.accrual_method', 'annual')
-            ->assertJsonPath('data.max_carry_over', 5.0);
+            ->assertJsonPath('data.accrual_method', 'annual');
+
+        // days_per_year and max_carry_over are floats; JSON serializes whole
+        // numbers without decimals (20.0 → 20), so use numeric comparison.
+        $this->assertEquals(20, $response->json('data.days_per_year'));
+        $this->assertEquals(5, $response->json('data.max_carry_over'));
 
         $this->assertDatabaseHas('leave_types', [
             'organization_id' => $user->organization_id,
