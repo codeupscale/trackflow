@@ -26,6 +26,13 @@
       "runtimeArgs": ["--prefix", "marketing", "run", "dev"],
       "port": 3001,
       "autoPort": true
+    },
+    {
+      "name": "video",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--prefix", "video", "remotion", "studio"],
+      "port": 3100,
+      "autoPort": true
     }
   ]
 }
