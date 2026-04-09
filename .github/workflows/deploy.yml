@@ -40,7 +40,9 @@ name: Build & Deploy
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - fix/web-frontend-and-desktop-app
     paths:
       - 'backend/**'
       - 'web/**'
@@ -106,9 +108,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes]
     if: |
-      always() &&
-      (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'backend')) ||
-      (needs.changes.result == 'success' && needs.changes.outputs.backend == 'true')
+      always() && (
+        (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'backend')) ||
+        (needs.changes.result == 'success' && needs.changes.outputs.backend == 'true')
+      )
     services:
       postgres:
         image: postgres:18
@@ -199,9 +202,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes]
     if: |
-      always() &&
-      (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'web')) ||
-      (needs.changes.result == 'success' && needs.changes.outputs.web == 'true')
+      always() && (
+        (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'web')) ||
+        (needs.changes.result == 'success' && needs.changes.outputs.web == 'true')
+      )
     defaults:
       run:
         working-directory: web
@@ -320,14 +324,51 @@ jobs:
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
 
+  # ─── GATE: MARKETING TYPE CHECK ──────────────────────────────────────────
+  # TypeScript must compile cleanly before building marketing image.
+
+  test-marketing:
+    name: Marketing type check
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: |
+      always() && (
+        (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'marketing')) ||
+        (needs.changes.result == 'success' && needs.changes.outputs.marketing == 'true')
+      )
+    defaults:
+      run:
+        working-directory: marketing
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: marketing/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+
+      - name: Audit dependencies (non-blocking)
+        if: always()
+        continue-on-error: true
+        run: npm audit --audit-level=critical
+
   # ─── BUILD MARKETING IMAGE ──────────────────────────────────────────────
 
   build-marketing:
     name: Build Marketing image
     runs-on: ubuntu-latest
-    needs: [changes]
+    needs: [changes, test-marketing]
     if: |
       always() &&
+      (needs.test-marketing.result == 'success' || needs.test-marketing.result == 'skipped') &&
       (
         (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'marketing')) ||
         (needs.changes.result == 'success' && needs.changes.outputs.marketing == 'true')
@@ -510,14 +551,40 @@ jobs:
               ATTEMPTS=0
               MAX_ATTEMPTS=18  # 18 * 5s = 90s
               while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
-                STATUS=$(docker inspect --format='{{.State.Health.Status}}' "infra-${svc}-1" 2>/dev/null || echo "missing")
-                if [ "${STATUS}" = "healthy" ]; then
-                  echo "  [OK] ${svc} is healthy"
-                  break
+                # Check if container exists first
+                CONTAINER_EXISTS=$(docker inspect "infra-${svc}-1" > /dev/null 2>&1 && echo "yes" || echo "no")
+                if [ "${CONTAINER_EXISTS}" = "no" ]; then
+                  ATTEMPTS=$((ATTEMPTS + 1))
+                  if [ $ATTEMPTS -ge $MAX_ATTEMPTS ]; then
+                    echo "  [FAIL] ${svc} container never started"
+                    HEALTH_OK=false
+                  fi
+                  sleep 5
+                  continue
                 fi
+
+                # Check if container has a healthcheck defined
+                HAS_HEALTH=$(docker inspect --format='{{if .State.Health}}yes{{else}}no{{end}}' "infra-${svc}-1" 2>/dev/null || echo "no")
+
+                if [ "${HAS_HEALTH}" = "no" ]; then
+                  # No healthcheck — just verify the container is running
+                  RUNNING=$(docker inspect --format='{{.State.Running}}' "infra-${svc}-1" 2>/dev/null || echo "false")
+                  if [ "${RUNNING}" = "true" ]; then
+                    echo "  [OK] ${svc} is running (no healthcheck defined)"
+                    break
+                  fi
+                else
+                  STATUS=$(docker inspect --format='{{.State.Health.Status}}' "infra-${svc}-1" 2>/dev/null || echo "unknown")
+                  if [ "${STATUS}" = "healthy" ]; then
+                    echo "  [OK] ${svc} is healthy"
+                    break
+                  fi
+                fi
+
                 ATTEMPTS=$((ATTEMPTS + 1))
                 if [ $ATTEMPTS -ge $MAX_ATTEMPTS ]; then
-                  echo "  [FAIL] ${svc} did not become healthy within 90s (status: ${STATUS})"
+                  FINAL_STATUS=$(docker inspect --format='{{.State.Health.Status}}' "infra-${svc}-1" 2>/dev/null || echo "unknown")
+                  echo "  [FAIL] ${svc} did not become healthy within 90s (status: ${FINAL_STATUS})"
                   HEALTH_OK=false
                 fi
                 sleep 5
