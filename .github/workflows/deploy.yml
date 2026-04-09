@@ -505,7 +505,19 @@ jobs:
               sleep 10
 
               echo "==> Running migrations"
-              docker compose exec tf-app php artisan migrate --force || true
+              if ! docker compose exec tf-app php artisan migrate --force; then
+                echo "!!! MIGRATION FAILED — aborting deploy !!!"
+                echo "==> Migration output:"
+                docker compose logs tf-app --tail 30
+                # Rollback tf-app to old image before exiting
+                if [ -n "${API_OLD_DIGEST}" ]; then
+                  echo "==> Rolling back tf-app to previous image"
+                  docker pull "${API_OLD_DIGEST}" 2>/dev/null || true
+                  docker tag "${API_OLD_DIGEST}" ghcr.io/codeupscale/trackflow-api:latest 2>/dev/null || true
+                  docker compose up -d --no-deps --force-recreate tf-app
+                fi
+                exit 1
+              fi
 
               echo "==> Rolling restart: tf-horizon"
               docker compose up -d --no-deps --force-recreate tf-horizon
@@ -598,6 +610,12 @@ jobs:
               echo "!!! HEALTH CHECK FAILED — INITIATING ROLLBACK !!!"
               echo ""
 
+              # Ensure infrastructure is healthy before rollback
+              echo "==> Verifying postgres and redis before rollback..."
+              docker compose up -d postgres redis
+              timeout 30 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-postgres-1 2>/dev/null | grep -q healthy; do sleep 2; done' || true
+              timeout 15 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-redis-1 2>/dev/null | grep -q healthy; do sleep 2; done' || true
+
               if [ "${DEPLOY_API}" = "true" ] && [ -n "${API_OLD_DIGEST}" ]; then
                 echo "==> Rolling back API to: ${API_OLD_DIGEST}"
                 docker pull "${API_OLD_DIGEST}" 2>/dev/null || true
@@ -627,7 +645,25 @@ jobs:
               exit 1
             fi
 
-            # ── 6. SUCCESS: Report status ──
+            # ── 6. SMOKE TEST: Verify app can serve real requests ──
+
+            if [ "${DEPLOY_API}" = "true" ]; then
+              echo "==> Smoke test: API health endpoint..."
+              SMOKE_OK=false
+              for i in 1 2 3; do
+                if docker compose exec tf-app curl -sf http://localhost/api/v1/health/live > /dev/null 2>&1; then
+                  SMOKE_OK=true
+                  echo "  [OK] API responding on attempt ${i}"
+                  break
+                fi
+                sleep 5
+              done
+              if [ "${SMOKE_OK}" != "true" ]; then
+                echo "  [WARN] API smoke test failed — container healthy but app not responding"
+              fi
+            fi
+
+            # ── 7. SUCCESS: Report status ──
 
             echo ""
             echo "==> Deploy successful! Container status:"
@@ -637,7 +673,7 @@ jobs:
             echo "==> Resource usage:"
             docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" | grep "tf-"
 
-            # ── 7. CLEANUP: Remove old images to reclaim disk ──
+            # ── 8. CLEANUP: Remove old images to reclaim disk ──
 
             echo ""
             echo "==> Pruning dangling images"
