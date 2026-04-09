@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1920">
+  <title>TrackFlow — Product Demo</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="presentation">
+  <div class="grid-bg"></div>
+
+  <!-- ════════════════════════════════════════
+       SLIDE 1: INTRO
+       ════════════════════════════════════════ -->
+  <div class="slide active" id="slide-intro" data-slide="intro">
+    <div class="radial-glow center"></div>
+    <div class="logo-container">
+      <svg class="logo-svg" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="logoGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#B87333"/>
+            <stop offset="100%" stop-color="#06B6D4"/>
+          </linearGradient>
+        </defs>
+        <!-- 255-degree arc -->
+        <path class="arc-path"
+              d="M 100 20
+                 A 80 80 0 1 1 43.4 156.6"
+              fill="none"
+              stroke="#B87333"
+              stroke-width="8"
+              stroke-linecap="round"/>
+        <!-- Arrowhead at arc end (pointing down-left) -->
+        <polygon class="arrow-head"
+                 points="43.4,156.6 55,162 50,148"
+                 fill="#06B6D4"/>
+        <!-- Clock hand from center to upper-right -->
+        <line class="clock-hand"
+              x1="100" y1="100"
+              x2="145" y2="55"
+              stroke="url(#logoGradient)"
+              stroke-width="6"
+              stroke-linecap="round"/>
+        <!-- Center pivot dot -->
+        <circle class="center-dot" cx="100" cy="100" r="8" fill="#B87333"/>
+      </svg>
+    </div>
+    <div class="brand-text">
+      <span class="brand-track">Track</span><span class="brand-flow">Flow</span>
+    </div>
+    <div class="tagline">Time. Activity. HR. One Platform.</div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       SLIDE 2: THE PROBLEM
+       ════════════════════════════════════════ -->
+  <div class="slide" id="slide-problem" data-slide="problem">
+    <div class="radial-glow top-right"></div>
+    <h2 class="heading-lg text-center" style="max-width: 1000px;">Managing Remote Teams Shouldn't Require 5 Different Tools</h2>
+    <div class="pain-points">
+      <!-- Pain point 1: Clock icon -->
+      <div class="pain-point">
+        <div class="pain-point-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <span class="pain-point-text">Scattered time tracking tools that don't talk to each other</span>
+      </div>
+      <!-- Pain point 2: Eye-off icon -->
+      <div class="pain-point">
+        <div class="pain-point-icon">
+          <svg viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+        </div>
+        <span class="pain-point-text">No visibility into actual work being done remotely</span>
+      </div>
+      <!-- Pain point 3: File stack icon -->
+      <div class="pain-point">
+        <div class="pain-point-icon">
+          <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        </div>
+        <span class="pain-point-text">Manual HR processes eating your entire week</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       SLIDE 3: THE SOLUTION
+       ════════════════════════════════════════ -->
+  <div class="slide" id="slide-solution" data-slide="solution">
+    <div class="radial-glow center"></div>
+    <div class="solution-content">
+      <h2 class="heading-xl">Meet <span class="text-primary-color">TrackFlow</span></h2>
+      <p class="text-lg" style="max-width: 900px;">One platform that replaces your time tracker, activity monitor, leave system, payroll tool, and attendance software</p>
+      <div style="margin-top: 16px;">
+        <div class="feature-counter">0</div>
+        <div class="feature-counter-label">features across 18 categories</div>
+      </div>
+      <div class="platform-badges">
+        <div class="platform-badge">
+          <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          Web
+        </div>
+        <div class="platform-badge">
+          <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>
+          Desktop
+        </div>
+        <div class="platform-badge">
+          <svg viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          API
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       SLIDE 4: TIME TRACKING
+       ════════════════════════════════════════ -->
+  <div class="slide" id="slide-time" data-slide="time">
+    <h2 class="heading-lg text-center" style="margin-bottom: 48px;">Precise, <span class="text-primary-color">Local-First</span> Time Tracking</h2>
+    <div class="time-tracking-layout">
+      <div>
+        <div class="timer-display">
+          <span class="timer-value">02:34:17</span>
+          <div class="timer-status">
+            <span class="dot"></span>
+            Tracking &mdash; Landing Page Design
+          </div>
+        </div>
+        <div class="sync-animation">
+          <div class="wifi-icon online">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12.55a11 11 0 0 1 14.08 0"/>
+              <path d="M1.42 9a16 16 0 0 1 21.16 0"/>
+              <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+              <line x1="12" y1="20" x2="12.01" y2="20"/>
+            </svg>
+          </div>
+          <span>Timer keeps running offline</span>
+          <span class="sync-status">&check; Synced!</span>
+        </div>
+      </div>
+      <div class="bullet-list">
+        <div class="bullet-item">
+          <div class="bullet-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>
+          <span>Start/stop with one click</span>
+        </div>
+        <div class="bullet-item">
+          <div class="bullet-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>
+          <span>Atomic project switching (zero gaps)</span>
+        </div>
+        <div class="bullet-item">
+          <div class="bullet-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>
+          <span>Never lose time &mdash; local SQLite backup</span>
+        </div>
+        <div class="bullet-item">
+          <div class="bullet-check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>
+          <span>Works offline, syncs when connected</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       SLIDE 5: ACTIVITY MONITORING
+       ════════════════════════════════════════ -->
+  <div class="slide" id="slide-activity" data-slide="activity">
+    <h2 class="heading-lg text-center" style="margin-bottom: 48px;">Know What's Happening, <span class="text-primary-color">Not Just When</span></h2>
+    <div class="activity-layout">
+      <div class="activity-score-container">
+        <div class="activity-ring">
+          <svg viewBox="0 0 220 220">
+            <defs>
+              <linearGradient id="activityGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="#B87333"/>
+                <stop offset="100%" stop-color="#06B6D4"/>
+              </linearGradient>
+            </defs>
+            <circle class="ring-bg" cx="110" cy="110" r="100"/>
+            <circle class="ring-fill" cx="110" cy="110" r="100"/>
+          </svg>
+          <div class="activity-percent">
+            <span class="activity-percent-value">0%</span>
+          </div>
+        </div>
+        <div class="input-stats">
+          <div class="input-stat">
+            <svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M8 16h8"/></svg>
+            Keyboard
+          </div>
+          <div class="input-stat">
+            <svg viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z"/><path d="M14 14h6v6h-6z" opacity="0.3"/><circle cx="20" cy="20" r="1"/></svg>
+            Mouse
+          </div>
+          <div class="input-stat" style="color: var(--text-muted); font-size: 13px;">
+            Active-seconds model = fair &amp; accurate
+          </div>
+        </div>
+      </div>
+      <div class="app-bars">
+        <h3 class="heading-sm" style="margin-bottom: 8px;">App Usage Today</h3>
+        <div class="app-bar-item">
+          <div class="app-bar-label">
+            <span class="app-bar-name">VS Code</span>
+            <span class="app-bar-time">3h 12m</span>
+          </div>
+          <div class="app-bar-track">
+            <div class="app-bar-fill vscode"></div>
+          </div>
+        </div>
+        <div class="app-bar-item">
+          <div class="app-bar-label">
+            <span class="app-bar-name">Chrome</span>
+            <span class="app-bar-time">1h 45m</span>
+          </div>
+          <div class="app-bar-track">
+            <div class="app-bar-fill chrome"></div>
+          </div>
+        </div>
+        <div class="app-bar-item">
+          <div class="app-bar-label">
+            <span class="app-bar-name">Slack</span>
+            <span class="app-bar-time">0h 32m</span>
+          </div>
+          <div class="app-bar-track">
+            <div class="app-bar-fill slack"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       SLIDE 6: SCREENSHOTS
+       ════════════════════════════════════════ -->
+  <div class="slide" id="slide-screenshots" data-slide="screenshots">
+    <h2 class="heading-lg text-center" style="margin-bottom: 48px;">Visual <span class="text-primary-color">Proof of Work</span></h2>
+    <div class="screenshots-layout">
+      <div class="screenshot-gallery">
+        <!-- Screenshot 1: Code editor -->
+        <div class="screenshot-frame">
+          <div class="ss-header">
+            <span class="ss-dot red"></span>
+            <span class="ss-dot yellow"></span>
+            <span class="ss-dot green"></span>
+            <span style="font-size:11px; color: var(--text-muted); margin-left: 8px;">main.tsx &mdash; VS Code</span>
+          </div>
+          <div class="ss-sidebar"></div>
+          <div class="ss-content" style="margin-left: 60px;">
+            <div class="ss-line long" style="background: rgba(6, 182, 212, 0.12);"></div>
+            <div class="ss-line medium" style="background: rgba(184, 115, 51, 0.12);"></div>
+            <div class="ss-line short" style="background: rgba(34, 197, 94, 0.08);"></div>
+            <div class="ss-line long" style="background: rgba(6, 182, 212, 0.08);"></div>
+            <div class="ss-line medium" style="background: rgba(184, 115, 51, 0.08);"></div>
+            <div class="ss-line short" style="background: rgba(34, 197, 94, 0.12);"></div>
+            <div class="ss-line long" style="background: rgba(6, 182, 212, 0.06);"></div>
+            <div class="ss-line medium" style="background: rgba(184, 115, 51, 0.06);"></div>
+          </div>
+        </div>
+        <!-- Screenshot 2: Browser -->
+        <div class="screenshot-frame">
+          <div class="ss-header">
+            <span class="ss-dot red"></span>
+            <span class="ss-dot yellow"></span>
+            <span class="ss-dot green"></span>
+            <span style="font-size:11px; color: var(--text-muted); margin-left: 8px;">Dashboard &mdash; Chrome</span>
+          </div>
+          <div class="ss-content">
+            <div style="display:flex; gap:8px; margin-bottom: 8px;">
+              <div style="width:48%; height: 50px; background: rgba(184, 115, 51, 0.06); border-radius: 6px;"></div>
+              <div style="width:48%; height: 50px; background: rgba(6, 182, 212, 0.06); border-radius: 6px;"></div>
+            </div>
+            <div class="ss-line long"></div>
+            <div class="ss-line medium"></div>
+            <div style="height: 60px; background: rgba(184, 115, 51, 0.04); border-radius: 6px; margin-top: 8px;"></div>
+          </div>
+        </div>
+        <!-- Screenshot 3: Design tool -->
+        <div class="screenshot-frame">
+          <div class="ss-header">
+            <span class="ss-dot red"></span>
+            <span class="ss-dot yellow"></span>
+            <span class="ss-dot green"></span>
+            <span style="font-size:11px; color: var(--text-muted); margin-left: 8px;">Figma &mdash; Design</span>
+          </div>
+          <div class="ss-content">
+            <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px;">
+              <div style="height: 70px; background: rgba(184, 115, 51, 0.06); border-radius: 4px;"></div>
+              <div style="height: 70px; background: rgba(6, 182, 212, 0.06); border-radius: 4px;"></div>
+              <div style="height: 70px; background: rgba(34, 197, 94, 0.06); border-radius: 4px;"></div>
+            </div>
+            <div class="ss-line long" style="margin-top: 12px;"></div>
+            <div class="ss-line short"></div>
+          </div>
+        </div>
+      </div>
+      <div class="screenshot-features">
+        <div class="ss-feature">
+          <div class="ss-feature-icon"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>
+          <span>Multi-monitor: each display captured separately</span>
+        </div>
+        <div class="ss-feature">
+          <div class="ss-feature-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+          <span>Configurable interval: 5, 10, or 15 min</span>
+        </div>
+        <div class="ss-feature">
+          <div class="ss-feature-icon"><svg viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><line x1="1" y1="1" x2="23" y2="23"/></svg></div>
+          <span>Privacy blur for sensitive content</span>
+        </div>
+        <div class="ss-feature">
+          <div class="ss-feature-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+          <span>HMAC-signed secure viewing</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       SLIDE 7: DASHBOARD
+       ════════════════════════════════════════ -->
+  <div class="slide" id="slide-dashboard" data-slide="dashboard">
+    <h2 class="heading-lg text-center" style="margin-bottom: 12px;"><span class="text-primary-color">Real-Time</span> Team Dashboard</h2>
+    <p class="text-md text-center" style="margin-bottom: 32px; max-width: 800px;">See who's working, what they're on, and how active they are &mdash; in real time</p>
+    <div class="dashboard-layout">
+      <div class="dashboard-mockup">
+        <div class="dash-header">
+          <span class="dash-logo">TrackFlow</span>
+          <span style="flex:1;"></span>
+          <div class="team-dots">
+            <div class="team-dot"><span class="dot"></span> Sarah</div>
+            <div class="team-dot"><span class="dot"></span> James</div>
+            <div class="team-dot"><span class="dot"></span> Maya</div>
+            <div class="team-dot"><span class="dot"></span> Alex</div>
+          </div>
+        </div>
+        <div class="dash-body">
+          <div class="dash-sidebar">
+            <div class="dash-nav-item active">
+              <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+              Dashboard
+            </div>
+            <div class="dash-nav-item">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              Time
+            </div>
+            <div class="dash-nav-item">
+              <svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              Projects
+            </div>
+            <div class="dash-nav-item">
+              <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              Screenshots
+            </div>
+            <div class="dash-nav-item">
+              <svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+              Reports
+            </div>
+            <div class="dash-nav-item">
+              <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              Team
+            </div>
+            <div class="dash-nav-item" style="margin-top: 16px; border-top: 1px solid rgba(184,115,51,0.08); padding-top: 16px;">
+              <svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
+              HR
+            </div>
+          </div>
+          <div class="dash-main">
+            <div class="dash-stats">
+              <div class="dash-stat-card">
+                <div class="dash-stat-label">Total Hours</div>
+                <div class="dash-stat-value">0h</div>
+              </div>
+              <div class="dash-stat-card">
+                <div class="dash-stat-label">Avg Activity</div>
+                <div class="dash-stat-value">0%</div>
+              </div>
+              <div class="dash-stat-card">
+                <div class="dash-stat-label">Active Now</div>
+                <div class="dash-stat-value">0</div>
+              </div>
+              <div class="dash-stat-card">
+                <div class="dash-stat-label">Projects</div>
+                <div class="dash-stat-value">0</div>
+              </div>
+            </div>
+            <div class="dash-chart">
+              <div class="dash-chart-title">Hours by Project (This Week)</div>
+              <div class="dash-chart-bars">
+                <div class="dash-bar" style="height: 4px;" data-label="Mon"></div>
+                <div class="dash-bar" style="height: 4px;" data-label="Tue"></div>
+                <div class="dash-bar" style="height: 4px;" data-label="Wed"></div>
+                <div class="dash-bar" style="height: 4px;" data-label="Thu"></div>
+                <div class="dash-bar" style="height: 4px;" data-label="Fri"></div>
+                <div class="dash-bar" style="height: 4px;" data-label="Sat"></div>
+                <div class="dash-bar" style="height: 4px;" data-label="Sun"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       SLIDE 8: HR SUITE
+       ════════════════════════════════════════ -->
+  <div class="slide" id="slide-hr" data-slide="hr">
+    <h2 class="heading-lg text-center">Complete <span class="text-primary-color">HR Management</span> &mdash; Built In</h2>
+    <div class="hr-cards">
+      <!-- Leave Management -->
+      <div class="hr-card">
+        <div class="hr-card-icon">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/></svg>
+        </div>
+        <div class="hr-card-title">Leave Management</div>
+        <div class="hr-card-desc">Apply, approve, track balances, team calendar. Auto-deducting leave balances with configurable leave types and policies.</div>
+      </div>
+      <!-- Payroll Engine -->
+      <div class="hr-card">
+        <div class="hr-card-icon">
+          <svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+        </div>
+        <div class="hr-card-title">Payroll Engine</div>
+        <div class="hr-card-desc">Salary structures, pay components, automated payslip generation. Support for allowances, deductions, bonuses, and tax calculations.</div>
+      </div>
+      <!-- Attendance -->
+      <div class="hr-card">
+        <div class="hr-card-icon">
+          <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>
+        </div>
+        <div class="hr-card-title">Attendance</div>
+        <div class="hr-card-desc">Auto-generated from time tracking data. Regularization workflows, overtime rules, and late-minutes calculation with shift grace periods.</div>
+      </div>
+      <!-- Shift Management -->
+      <div class="hr-card">
+        <div class="hr-card-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/><path d="M20.2 20.2L22 22" stroke-width="2"/></svg>
+        </div>
+        <div class="hr-card-title">Shift Management</div>
+        <div class="hr-card-desc">Templates, 7-day roster views, swap requests with approval workflow. Bulk assignment, break deductions, and timezone support.</div>
+      </div>
+    </div>
+    <div class="hr-bottom-text">No more Gusto, BambooHR, or <em>spreadsheet juggling</em></div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       SLIDE 9: SECURITY
+       ════════════════════════════════════════ -->
+  <div class="slide" id="slide-security" data-slide="security">
+    <h2 class="heading-lg text-center" style="margin-bottom: 16px;"><span class="text-primary-color">Enterprise-Grade</span> Security</h2>
+    <div class="security-layout">
+      <div class="shield-container">
+        <!-- Shield icon -->
+        <div class="shield-icon">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <polyline points="9 12 11 14 15 10" stroke-width="2" fill="none"/>
+          </svg>
+        </div>
+        <!-- Orbit items -->
+        <div class="orbit-item">SAML2 SSO</div>
+        <div class="orbit-item">AES-256-GCM</div>
+        <div class="orbit-item">GDPR Compliant</div>
+        <div class="orbit-item">Audit Logs</div>
+        <div class="orbit-item">Role-Based Access</div>
+        <div class="orbit-item">Data Retention</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       SLIDE 10: COMPARISON
+       ════════════════════════════════════════ -->
+  <div class="slide" id="slide-comparison" data-slide="comparison">
+    <h2 class="heading-lg text-center" style="margin-bottom: 12px;">Why Teams <span class="text-primary-color">Switch</span> to TrackFlow</h2>
+    <table class="comparison-table">
+      <thead>
+        <tr class="animate-in" style="opacity:1; transform:none;">
+          <th style="width: 40%;">Feature</th>
+          <th class="highlight highlight-col">TrackFlow</th>
+          <th>Hubstaff</th>
+          <th>Time Doctor</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Offline data resilience</td>
+          <td class="highlight-col"><span class="check">&check;</span></td>
+          <td><span class="cross">&times;</span></td>
+          <td><span class="cross">&times;</span></td>
+        </tr>
+        <tr>
+          <td>Per-display screenshots</td>
+          <td class="highlight-col"><span class="check">&check;</span></td>
+          <td><span class="cross">&times;</span></td>
+          <td><span class="check">&check;</span></td>
+        </tr>
+        <tr>
+          <td>SAML2 SSO (no premium)</td>
+          <td class="highlight-col"><span class="check">&check;</span></td>
+          <td><span class="cross">&times;</span></td>
+          <td><span class="cross">&times;</span></td>
+        </tr>
+        <tr>
+          <td>Built-in HR modules</td>
+          <td class="highlight-col"><span class="check">&check;</span></td>
+          <td><span class="cross">&times;</span></td>
+          <td><span class="cross">&times;</span></td>
+        </tr>
+        <tr>
+          <td>Built-in payroll</td>
+          <td class="highlight-col"><span class="check">&check;</span></td>
+          <td><span class="cross">&times;</span></td>
+          <td><span class="cross">&times;</span></td>
+        </tr>
+        <tr>
+          <td>Multi-org login</td>
+          <td class="highlight-col"><span class="check">&check;</span></td>
+          <td><span class="cross">&times;</span></td>
+          <td><span class="cross">&times;</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       SLIDE 11: PRICING
+       ════════════════════════════════════════ -->
+  <div class="slide" id="slide-pricing" data-slide="pricing">
+    <h2 class="heading-lg text-center" style="margin-bottom: 8px;">Simple, <span class="text-primary-color">Transparent</span> Pricing</h2>
+    <div class="pricing-cards">
+      <!-- Starter -->
+      <div class="pricing-card">
+        <div class="pricing-tier">Starter</div>
+        <div class="pricing-price">$5<span class="period">/user/mo</span></div>
+        <ul class="pricing-features">
+          <li><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Time tracking</li>
+          <li><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Basic reports</li>
+          <li><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Up to 10 users</li>
+          <li><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Email support</li>
+        </ul>
+      </div>
+      <!-- Pro -->
+      <div class="pricing-card featured">
+        <div class="pricing-tier" style="color: var(--primary-light);">Pro</div>
+        <div class="pricing-price">$10<span class="period">/user/mo</span></div>
+        <ul class="pricing-features">
+          <li><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Everything in Starter</li>
+          <li><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Screenshots &amp; activity</li>
+          <li><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Full HR suite</li>
+          <li><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Payroll &amp; attendance</li>
+          <li><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Unlimited users</li>
+        </ul>
+      </div>
+      <!-- Enterprise -->
+      <div class="pricing-card">
+        <div class="pricing-tier">Enterprise</div>
+        <div class="pricing-price" style="font-size: 40px;">Custom</div>
+        <ul class="pricing-features">
+          <li><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Everything in Pro</li>
+          <li><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> SAML2 SSO</li>
+          <li><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Dedicated support</li>
+          <li><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Custom integrations</li>
+          <li><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Data residency</li>
+        </ul>
+      </div>
+    </div>
+    <div class="trial-badge" style="align-self: center;">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      14-day free trial &mdash; no credit card required
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       SLIDE 12: CTA
+       ════════════════════════════════════════ -->
+  <div class="slide" id="slide-cta" data-slide="cta">
+    <div class="radial-glow center"></div>
+    <div class="cta-content">
+      <div class="particles">
+        <div class="particle" style="top: 10%; left: 20%;"></div>
+        <div class="particle" style="top: 15%; left: 75%;"></div>
+        <div class="particle" style="top: 80%; left: 15%;"></div>
+        <div class="particle" style="top: 85%; left: 80%;"></div>
+        <div class="particle" style="top: 5%; left: 50%;"></div>
+        <div class="particle" style="top: 50%; left: 5%;"></div>
+        <div class="particle" style="top: 50%; left: 95%;"></div>
+        <div class="particle" style="top: 95%; left: 50%;"></div>
+        <div class="particle" style="top: 30%; left: 10%;"></div>
+        <div class="particle" style="top: 30%; left: 90%;"></div>
+        <div class="particle" style="top: 70%; left: 10%;"></div>
+        <div class="particle" style="top: 70%; left: 90%;"></div>
+      </div>
+      <div class="cta-logo">
+        <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="ctaLogoGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stop-color="#B87333"/>
+              <stop offset="100%" stop-color="#06B6D4"/>
+            </linearGradient>
+          </defs>
+          <path d="M 100 20 A 80 80 0 1 1 43.4 156.6"
+                fill="none" stroke="#B87333" stroke-width="8" stroke-linecap="round"/>
+          <polygon points="43.4,156.6 55,162 50,148" fill="#06B6D4"/>
+          <line x1="100" y1="100" x2="145" y2="55"
+                stroke="url(#ctaLogoGrad)" stroke-width="6" stroke-linecap="round"/>
+          <circle cx="100" cy="100" r="8" fill="#B87333"/>
+        </svg>
+      </div>
+      <div class="cta-text">Start Your Free Trial Today</div>
+      <div class="cta-url">trackflow.app</div>
+    </div>
+  </div>
+
+  <!-- ── UI Overlays ── -->
+  <div class="progress-container">
+    <div class="progress-bar" style="width: 0%;"></div>
+  </div>
+
+  <div class="slide-counter">1 / 12</div>
+
+  <div class="controls-hint">Arrow keys: navigate &middot; Space: pause/play &middot; Click: next</div>
+
+  <div class="pause-indicator">
+    <div class="pause-icon"><span></span><span></span></div>
+    PAUSED
+  </div>
+
+</div><!-- .presentation -->
+
+<script src="script.js"></script>
+</body>
+</html>

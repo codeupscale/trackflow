@@ -13,6 +13,19 @@
       "runtimeArgs": ["--prefix", "web", "run", "dev"],
       "port": 3000,
       "autoPort": true
+    },
+    {
+      "name": "demo",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "marketing/demo", "-l", "8090", "--no-clipboard"],
+      "port": 8090
+    },
+    {
+      "name": "marketing",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "marketing", "run", "dev"],
+      "port": 3001,
+      "autoPort": true
     }
   ]
 }
