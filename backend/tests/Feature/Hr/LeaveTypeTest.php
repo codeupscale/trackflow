@@ -11,7 +11,8 @@ class LeaveTypeTest extends TestCase
 
     public function test_can_list_active_leave_types(): void
     {
-        $user = $this->actingAsUser('owner');
+        // Employees only see active types (apply-leave dropdown use case)
+        $user = $this->actingAsUser('employee');
 
         LeaveType::factory()->count(2)->create([
             'organization_id' => $user->organization_id,
@@ -27,14 +28,35 @@ class LeaveTypeTest extends TestCase
 
         $response->assertOk()
             ->assertJsonStructure([
-                'data' => [['id', 'name', 'code', 'is_paid', 'days_per_year']],
+                'data' => [['id', 'name', 'code', 'type', 'days_per_year', 'accrual_method', 'max_carry_over']],
                 'current_page',
                 'last_page',
                 'total',
             ]);
 
-        // Only the 2 active leave types should be returned
+        // Employees see only the 2 active leave types
         $this->assertCount(2, $response->json('data'));
+    }
+
+    public function test_admin_can_list_all_leave_types_including_inactive(): void
+    {
+        // Admins see all types (management page use case)
+        $user = $this->actingAsUser('admin');
+
+        LeaveType::factory()->count(2)->create([
+            'organization_id' => $user->organization_id,
+            'is_active' => true,
+        ]);
+
+        LeaveType::factory()->create([
+            'organization_id' => $user->organization_id,
+            'is_active' => false,
+        ]);
+
+        $response = $this->getJson('/api/v1/hr/leave-types');
+
+        $response->assertOk();
+        $this->assertCount(3, $response->json('data'));
     }
 
     // ── Store ────────────────────────────────────────────
@@ -44,27 +66,28 @@ class LeaveTypeTest extends TestCase
         $user = $this->actingAsUser('admin');
 
         $response = $this->postJson('/api/v1/hr/leave-types', [
-            'name' => 'Annual Leave',
-            'code' => 'AL',
-            'days_per_year' => 20,
-            'is_paid' => true,
-            'accrual_type' => 'upfront',
-            'carryover_days' => 5,
-            'max_consecutive_days' => 10,
-            'requires_document' => false,
-            'requires_approval' => true,
-            'applicable_genders' => 'all',
+            'name'           => 'Annual Leave',
+            'code'           => 'AL',
+            'type'           => 'paid',
+            'days_per_year'  => 20,
+            'accrual_method' => 'annual',
+            'max_carry_over' => 5,
+            'is_active'      => true,
         ]);
 
         $response->assertStatus(201)
             ->assertJsonPath('data.name', 'Annual Leave')
             ->assertJsonPath('data.code', 'AL')
-            ->assertJsonPath('data.days_per_year', '20.0');
+            ->assertJsonPath('data.type', 'paid')
+            ->assertJsonPath('data.days_per_year', 20.0)
+            ->assertJsonPath('data.accrual_method', 'annual')
+            ->assertJsonPath('data.max_carry_over', 5.0);
 
         $this->assertDatabaseHas('leave_types', [
             'organization_id' => $user->organization_id,
-            'name' => 'Annual Leave',
-            'code' => 'AL',
+            'name'            => 'Annual Leave',
+            'code'            => 'AL',
+            'is_paid'         => true,
         ]);
     }
 
@@ -104,8 +127,9 @@ class LeaveTypeTest extends TestCase
         $this->actingAs($adminB, 'sanctum');
 
         $response = $this->postJson('/api/v1/hr/leave-types', [
-            'name' => 'Annual Leave',
-            'code' => 'AL',
+            'name'          => 'Annual Leave',
+            'code'          => 'AL',
+            'type'          => 'paid',
             'days_per_year' => 20,
         ]);
 
@@ -137,6 +161,6 @@ class LeaveTypeTest extends TestCase
         $response = $this->postJson('/api/v1/hr/leave-types', []);
 
         $response->assertStatus(422)
-            ->assertJsonValidationErrors(['name', 'code', 'days_per_year']);
+            ->assertJsonValidationErrors(['name', 'code', 'type', 'days_per_year']);
     }
 }
