@@ -236,7 +236,7 @@ export default function MyAttendancePage() {
             />
             <AttendanceSummaryCard
               label="Overtime Hours"
-              value={summary.overtime_hours.toFixed(1)}
+              value={Number(summary.overtime_hours).toFixed(1)}
               icon={Timer}
               variant="purple"
             />
@@ -342,8 +342,8 @@ export default function MyAttendancePage() {
                       {record.clock_out || '—'}
                     </div>
                     <div className="text-sm text-foreground tabular-nums text-right">
-                      {record.total_hours > 0
-                        ? record.total_hours.toFixed(1)
+                      {Number(record.total_hours) > 0
+                        ? Number(record.total_hours).toFixed(1)
                         : '—'}
                     </div>
                     <div className="text-sm tabular-nums text-right">
