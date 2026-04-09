@@ -63,23 +63,34 @@ export const navigationConfig: NavGroup[] = [
   {
     label: 'HR',
     items: [
-      { name: 'Departments', href: '/hr/departments', icon: Building2, requiredPermission: 'departments.view' },
-      { name: 'Positions', href: '/hr/positions', icon: Briefcase, requiredPermission: 'positions.view' },
+      // Admin/Manager only — employees have departments.view but NOT departments.create
+      { name: 'Departments', href: '/hr/departments', icon: Building2, requiredPermission: 'departments.create' },
+      { name: 'Positions', href: '/hr/positions', icon: Briefcase, requiredPermission: 'positions.create' },
+      // Employees see own profile only (scoped at API level); managers+ see directory
       { name: 'Employees', href: '/hr/employees', icon: Users, requiredPermission: 'employees.view_directory', requiredScope: 'team' },
       { name: 'My Leave', href: '/hr/leave', icon: CalendarDays, requiredPermission: 'leave.apply' },
+      // Leave Approvals — managers/admins only
       { name: 'Leave Approvals', href: '/hr/leave/approvals', icon: ClipboardCheck, requiredPermission: 'leave.approve' },
       { name: 'Leave Calendar', href: '/hr/leave/calendar', icon: CalendarRange, requiredPermission: 'leave.view_calendar' },
+      // Leave Types — admin/HR only
       { name: 'Leave Types', href: '/hr/leave/types', icon: ListChecks, requiredPermission: 'leave.manage_types' },
       { name: 'Attendance', href: '/hr/attendance', icon: CalendarCheck, requiredPermission: 'attendance.view' },
+      // Team Attendance — managers/admins only
       { name: 'Team Attendance', href: '/hr/attendance/team', icon: UsersRound, requiredPermission: 'attendance.view', requiredScope: 'team' },
+      // Regularizations approvals — managers/admins only
       { name: 'Regularizations', href: '/hr/attendance/regularizations', icon: FileEdit, requiredPermission: 'attendance.approve_regularizations' },
-      { name: 'Shifts', href: '/hr/shifts', icon: Clock4, requiredPermission: 'shifts.view' },
-      { name: 'Shift Roster', href: '/hr/shifts/roster', icon: CalendarClock, requiredPermission: 'shifts.view' },
+      // Shifts management — managers/admins only (employees have shifts.view but NOT shifts.create)
+      { name: 'Shifts', href: '/hr/shifts', icon: Clock4, requiredPermission: 'shifts.create' },
+      { name: 'Shift Roster', href: '/hr/shifts/roster', icon: CalendarClock, requiredPermission: 'shifts.manage_assignments' },
       { name: 'Shift Assignments', href: '/hr/shifts/assignments', icon: UserCog, requiredPermission: 'shifts.manage_assignments' },
+      // Shift Swaps — employees can request swaps (shifts.view)
       { name: 'Shift Swaps', href: '/hr/shifts/swaps', icon: ArrowLeftRight, requiredPermission: 'shifts.view' },
+      // Payroll admin — managers/admins only
       { name: 'Payroll', href: '/hr/payroll', icon: DollarSign, requiredPermission: 'payroll.view_all' },
       { name: 'Payroll Periods', href: '/hr/payroll/periods', icon: CalendarDays, requiredPermission: 'payroll.run' },
+      // My Payslips — all employees
       { name: 'My Payslips', href: '/hr/payroll/my-payslips', icon: Receipt, requiredPermission: 'payroll.view_own' },
+      // Salary/Pay management — admin only
       { name: 'Salary Structures', href: '/hr/payroll/structures', icon: Layers, requiredPermission: 'payroll.manage_structures' },
       { name: 'Pay Components', href: '/hr/payroll/components', icon: Puzzle, requiredPermission: 'payroll.manage_components' },
     ],
@@ -87,8 +98,11 @@ export const navigationConfig: NavGroup[] = [
   {
     label: 'Team',
     items: [
-      { name: 'Team', href: '/team', icon: Users, requiredPermission: 'team.view_members' },
+      // Team page — managers/admins only
+      { name: 'Team', href: '/team', icon: Users, requiredPermission: 'team.view_members', requiredScope: 'team' },
+      // Roles — admin only
       { name: 'Roles', href: '/settings/roles', icon: Shield, requiredPermission: 'roles.view' },
+      // Settings — admin only
       { name: 'Settings', href: '/settings', icon: Settings, requiredPermission: 'settings.view_org' },
     ],
   },
