@@ -22,14 +22,11 @@ class StoreLeaveTypeRequest extends FormRequest
                 'required', 'string', 'max:20',
                 Rule::unique('leave_types', 'code')->where('organization_id', $orgId),
             ],
-            'is_paid' => 'sometimes|boolean',
-            'days_per_year' => 'required|numeric|min:0|max:365',
-            'accrual_type' => 'sometimes|string|in:upfront,monthly,anniversary',
-            'carryover_days' => 'sometimes|numeric|min:0',
-            'max_consecutive_days' => 'nullable|integer|min:1',
-            'requires_document' => 'sometimes|boolean',
-            'requires_approval' => 'sometimes|boolean',
-            'applicable_genders' => 'sometimes|string|in:all,male,female',
+            'type'           => 'required|string|in:paid,unpaid',
+            'days_per_year'  => 'required|numeric|min:0|max:365',
+            'accrual_method' => 'sometimes|string|in:annual,monthly,none',
+            'max_carry_over' => 'sometimes|numeric|min:0',
+            'is_active'      => 'sometimes|boolean',
         ];
     }
 }
