@@ -446,13 +446,14 @@ jobs:
             done
             echo "==> Port 3002 status: $(ss -tlnp 'sport = :3002' 2>/dev/null | grep ':3002' || echo 'free')"
 
-            # ── 0.5. ENSURE PGSQL AND REDIS ARE HEALTHY ──
-            # pgsql and redis must be healthy before any app container starts.
-            echo "==> Ensuring pgsql and redis are running"
-            docker compose up -d pgsql redis
-            echo "==> Waiting for pgsql to be healthy (up to 60s)..."
-            timeout 60 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-pgsql-1 2>/dev/null | grep -q healthy; do sleep 2; done' \
-              || { echo "FATAL: pgsql not healthy after 60s"; docker compose logs pgsql --tail 20; exit 1; }
+            # ── 0.5. ENSURE POSTGRES AND REDIS ARE HEALTHY ──
+            # postgres and redis must be healthy before any app container starts.
+            # Service name is "postgres" in docker-compose.yml, container is "infra-postgres-1".
+            echo "==> Ensuring postgres and redis are running"
+            docker compose up -d postgres redis
+            echo "==> Waiting for postgres to be healthy (up to 60s)..."
+            timeout 60 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-postgres-1 2>/dev/null | grep -q healthy; do sleep 2; done' \
+              || { echo "FATAL: postgres not healthy after 60s"; docker compose logs postgres --tail 20; exit 1; }
             echo "==> Waiting for redis to be healthy (up to 30s)..."
             timeout 30 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-redis-1 2>/dev/null | grep -q healthy; do sleep 2; done' \
               || { echo "FATAL: redis not healthy after 30s"; docker compose logs redis --tail 20; exit 1; }
