@@ -16,8 +16,13 @@ class EmployeeService
     /**
      * Paginated employee directory with search and filters.
      * Joins users + employee_profiles + department + position.
+     *
+     * Role-based scoping (enforced at service layer, not controller):
+     * - Employee: sees only their own profile
+     * - Manager: sees their own department + managed team members
+     * - Admin/Owner: sees all employees in the organization
      */
-    public function getDirectory(string $orgId, array $filters): LengthAwarePaginator
+    public function getDirectory(string $orgId, array $filters, User $viewer): LengthAwarePaginator
     {
         $query = User::where('users.organization_id', $orgId)
             ->where('users.is_active', true)
@@ -45,6 +50,35 @@ class EmployeeService
                 'positions.id as position_id',
                 'positions.title as position_title',
             ]);
+
+        // Role-based scoping
+        if ($viewer->hasRole('owner', 'admin')) {
+            // Owner/admin see all employees (no additional filter)
+        } elseif ($viewer->isManager()) {
+            // Managers see their managed team members + their own department colleagues
+            $teamMemberIds = $viewer->managedTeams()
+                ->with('members:id')
+                ->get()
+                ->flatMap(fn ($team) => $team->members->pluck('id'))
+                ->push($viewer->id)
+                ->unique()
+                ->values();
+
+            // Also include users in the same department as the manager
+            $viewerProfile = EmployeeProfile::where('user_id', $viewer->id)
+                ->where('organization_id', $orgId)
+                ->first();
+
+            $query->where(function ($q) use ($teamMemberIds, $viewerProfile) {
+                $q->whereIn('users.id', $teamMemberIds);
+                if ($viewerProfile && $viewerProfile->department_id) {
+                    $q->orWhere('employee_profiles.department_id', $viewerProfile->department_id);
+                }
+            });
+        } else {
+            // Employees see only their own profile
+            $query->where('users.id', $viewer->id);
+        }
 
         // Search by name, email, or employee_id (escape LIKE wildcards to prevent unexpected matches)
         if (! empty($filters['search'])) {

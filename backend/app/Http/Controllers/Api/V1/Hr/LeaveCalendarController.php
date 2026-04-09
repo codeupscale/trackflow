@@ -27,8 +27,8 @@ class LeaveCalendarController extends Controller
         $month = (int) $request->input('month');
         $year = (int) $request->input('year');
 
-        // Get leaves for the month
-        $calendar = $this->leaveService->getLeaveCalendar($orgId, $month, $year);
+        // Get leaves for the month (role-scoped: employee=own, manager=team, admin=all)
+        $calendar = $this->leaveService->getLeaveCalendar($orgId, $month, $year, $user);
 
         // Get public holidays for the month
         $startDate = Carbon::create($year, $month, 1)->startOfMonth()->toDateString();

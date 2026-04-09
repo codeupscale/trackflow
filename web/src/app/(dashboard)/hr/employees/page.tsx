@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useRef, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   Users,
   Search,
@@ -10,6 +11,7 @@ import {
 } from 'lucide-react';
 
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 import { useEmployees, type UseEmployeesParams } from '@/hooks/hr/use-employees';
 import type { EmployeeListItem } from '@/lib/validations/employee';
 import {
@@ -68,7 +70,20 @@ function getInitials(name: string): string {
 }
 
 export default function EmployeesPage() {
+  const router = useRouter();
   const { user } = useAuthStore();
+  const { hasPermissionWithScope } = usePermissionStore();
+
+  // Employees without team+ scope on employees.view_directory should see only
+  // their own profile. The API now enforces this on the backend too, but we
+  // redirect to avoid showing a confusing "1 employee" directory.
+  const isManagerOrAdmin = hasPermissionWithScope('employees.view_directory', 'team');
+
+  useEffect(() => {
+    if (user && !isManagerOrAdmin) {
+      router.push(`/hr/employees/${user.id}`);
+    }
+  }, [user, isManagerOrAdmin, router]);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -115,6 +130,18 @@ export default function EmployeesPage() {
   const handleFilterChange = () => {
     setPage(1);
   };
+
+  // Role gate: employee-role users are redirected to their own profile
+  if (!user || !isManagerOrAdmin) {
+    return (
+      <div className="flex items-center justify-center min-h-[50vh]">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <div className="size-5 animate-spin rounded-full border-2 border-muted border-t-primary" />
+          {!user ? 'Loading...' : 'Redirecting...'}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6">

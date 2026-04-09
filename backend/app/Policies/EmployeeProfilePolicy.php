@@ -9,7 +9,8 @@ use App\Services\PermissionService;
 class EmployeeProfilePolicy
 {
     /**
-     * All org members can see the employee directory.
+     * All authenticated org members can access the employee directory endpoint.
+     * Actual data scoping (own/team/all) is enforced in EmployeeService::getDirectory().
      */
     public function viewAny(User $user): bool
     {
