@@ -2,7 +2,7 @@
 # Tuned for shared server — total budget: ~1.4 CPU, ~1.4GB RAM
 # Usage: docker compose -f compose.production.yaml up -d
 services:
-    app:
+    tf-app:
         build:
             context: .
             dockerfile: backend/Dockerfile.production
@@ -43,7 +43,7 @@ services:
         networks:
             - production
 
-    web:
+    tf-web:
         build:
             context: ./web
             dockerfile: Dockerfile.production
@@ -60,7 +60,7 @@ services:
             # Limit V8 heap to prevent memory bloat in constrained container
             NODE_OPTIONS: '--max-old-space-size=160'
         depends_on:
-            app:
+            tf-app:
                 condition: service_healthy
         deploy:
             resources:
@@ -76,7 +76,7 @@ services:
         networks:
             - production
 
-    horizon:
+    tf-horizon:
         build:
             context: .
             dockerfile: backend/Dockerfile.production
@@ -99,10 +99,16 @@ services:
                 limits:
                     memory: 192M
                     cpus: '0.25'
+        healthcheck:
+            test: ['CMD-SHELL', 'php artisan horizon:status | grep -q -i running || exit 1']
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 30s
         networks:
             - production
 
-    scheduler:
+    tf-scheduler:
         build:
             context: .
             dockerfile: backend/Dockerfile.production
@@ -125,10 +131,16 @@ services:
                 limits:
                     memory: 128M
                     cpus: '0.10'
+        healthcheck:
+            test: ['CMD-SHELL', 'pgrep -f "schedule:run" > /dev/null || pgrep -f "while true" > /dev/null || exit 0']
+            interval: 60s
+            timeout: 5s
+            retries: 1
+            start_period: 15s
         networks:
             - production
 
-    marketing:
+    tf-marketing:
         build:
             context: ./marketing
             dockerfile: Dockerfile.production
@@ -152,7 +164,7 @@ services:
         networks:
             - production
 
-    reverb:
+    tf-reverb:
         build:
             context: .
             dockerfile: backend/Dockerfile.production
@@ -173,6 +185,12 @@ services:
                 limits:
                     memory: 96M
                     cpus: '0.10'
+        healthcheck:
+            test: ['CMD-SHELL', 'nc -z localhost 8080 || exit 1']
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 20s
         networks:
             - production
 
