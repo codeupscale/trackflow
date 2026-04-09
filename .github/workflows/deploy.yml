@@ -437,17 +437,26 @@ jobs:
 
             # ── 0. FULL STACK TEARDOWN before redeploy ──
             echo "==> Tearing down existing stack"
-            docker compose down --remove-orphans --timeout 30 2>/dev/null || true
+            docker compose down --remove-orphans --timeout 30 || true
 
-            # docker-proxy processes (spawned per port-binding) sometimes survive
-            # container removal. Kill them directly so ports are fully released.
-            echo "==> Killing lingering docker-proxy processes"
+            # Force-remove any containers in this project that may still be running
+            # (catches containers in 'Created' state that docker compose down misses)
+            docker ps -aq --filter "name=infra-" | xargs -r docker rm -f 2>/dev/null || true
+
+            # Kill any lingering docker-proxy processes
             pkill -9 -f docker-proxy 2>/dev/null || true
-            sleep 3
 
-            # Diagnostic: confirm port 3002 is free before proceeding
-            echo "==> Port 3002 status:"
-            ss -tlnp 'sport = :3002' 2>/dev/null || netstat -tlnp 2>/dev/null | grep ':3002' || echo "  port 3002 is free"
+            # Restart Docker daemon to fully clear its in-memory port allocation table.
+            # This is the only reliable fix for "port already allocated" after teardown.
+            echo "==> Restarting Docker daemon to clear port allocation state"
+            sudo systemctl restart docker
+            sleep 5
+
+            echo "==> Port 3002 status after daemon restart:"
+            ss -tlnp 'sport = :3002' 2>/dev/null | grep ':3002' || echo "  port 3002 is free"
+
+            echo "==> Re-logging in to GHCR after daemon restart"
+            echo "${GH_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin
 
             # ── 1. SNAPSHOT: Record current image digests for rollback ──
 
