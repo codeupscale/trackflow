@@ -100,12 +100,11 @@ class LeaveTypeController extends Controller
         };
     }
 
-    private function toAccrualType(?string $accrualMethod): ?string
+    private function toAccrualType(?string $accrualMethod): string
     {
         return match ($accrualMethod) {
             'monthly' => 'monthly',
-            'annual'  => 'upfront',
-            default   => null,
+            default   => 'upfront', // 'annual', 'none', null → upfront (column is NOT NULL)
         };
     }
 }
