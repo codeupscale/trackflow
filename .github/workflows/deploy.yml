@@ -107,11 +107,8 @@ jobs:
     name: Backend tests (PHPUnit)
     runs-on: ubuntu-latest
     needs: [changes]
-    if: |
-      always() && (
-        (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'backend')) ||
-        (needs.changes.result == 'success' && needs.changes.outputs.backend == 'true')
-      )
+    if: >-
+      always() && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'backend')) || (needs.changes.result == 'success' && needs.changes.outputs.backend == 'true'))
     services:
       postgres:
         image: postgres:18
@@ -201,11 +198,8 @@ jobs:
     name: Frontend type check
     runs-on: ubuntu-latest
     needs: [changes]
-    if: |
-      always() && (
-        (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'web')) ||
-        (needs.changes.result == 'success' && needs.changes.outputs.web == 'true')
-      )
+    if: >-
+      always() && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'web')) || (needs.changes.result == 'success' && needs.changes.outputs.web == 'true'))
     defaults:
       run:
         working-directory: web
@@ -238,13 +232,8 @@ jobs:
     name: Build API image
     runs-on: ubuntu-latest
     needs: [changes, test-backend]
-    if: |
-      always() &&
-      (needs.test-backend.result == 'success' || needs.test-backend.result == 'skipped') &&
-      (
-        (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'backend')) ||
-        (needs.changes.result == 'success' && needs.changes.outputs.backend == 'true')
-      )
+    if: >-
+      always() && (needs.test-backend.result == 'success' || needs.test-backend.result == 'skipped') && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'backend')) || (needs.changes.result == 'success' && needs.changes.outputs.backend == 'true'))
     permissions:
       contents: read
       packages: write
@@ -280,13 +269,8 @@ jobs:
     name: Build Web image
     runs-on: ubuntu-latest
     needs: [changes, test-frontend]
-    if: |
-      always() &&
-      (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped') &&
-      (
-        (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'web')) ||
-        (needs.changes.result == 'success' && needs.changes.outputs.web == 'true')
-      )
+    if: >-
+      always() && (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped') && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'web')) || (needs.changes.result == 'success' && needs.changes.outputs.web == 'true'))
     permissions:
       contents: read
       packages: write
@@ -331,11 +315,8 @@ jobs:
     name: Marketing type check
     runs-on: ubuntu-latest
     needs: [changes]
-    if: |
-      always() && (
-        (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'marketing')) ||
-        (needs.changes.result == 'success' && needs.changes.outputs.marketing == 'true')
-      )
+    if: >-
+      always() && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'marketing')) || (needs.changes.result == 'success' && needs.changes.outputs.marketing == 'true'))
     defaults:
       run:
         working-directory: marketing
@@ -366,13 +347,8 @@ jobs:
     name: Build Marketing image
     runs-on: ubuntu-latest
     needs: [changes, test-marketing]
-    if: |
-      always() &&
-      (needs.test-marketing.result == 'success' || needs.test-marketing.result == 'skipped') &&
-      (
-        (needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'marketing')) ||
-        (needs.changes.result == 'success' && needs.changes.outputs.marketing == 'true')
-      )
+    if: >-
+      always() && (needs.test-marketing.result == 'success' || needs.test-marketing.result == 'skipped') && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'marketing')) || (needs.changes.result == 'success' && needs.changes.outputs.marketing == 'true'))
     permissions:
       contents: read
       packages: write
@@ -416,12 +392,8 @@ jobs:
     name: Deploy to production
     runs-on: ubuntu-latest
     needs: [changes, build-api, build-web, build-marketing]
-    if: |
-      always() &&
-      (needs.build-api.result == 'success' || needs.build-api.result == 'skipped') &&
-      (needs.build-web.result == 'success' || needs.build-web.result == 'skipped') &&
-      (needs.build-marketing.result == 'success' || needs.build-marketing.result == 'skipped') &&
-      !(needs.build-api.result == 'skipped' && needs.build-web.result == 'skipped' && needs.build-marketing.result == 'skipped')
+    if: >-
+      always() && (needs.build-api.result == 'success' || needs.build-api.result == 'skipped') && (needs.build-web.result == 'success' || needs.build-web.result == 'skipped') && (needs.build-marketing.result == 'success' || needs.build-marketing.result == 'skipped') && !(needs.build-api.result == 'skipped' && needs.build-web.result == 'skipped' && needs.build-marketing.result == 'skipped')
     environment: production
     steps:
       - name: Determine which services changed
@@ -462,6 +434,19 @@ jobs:
 
             echo "==> Logging in to GitHub Container Registry"
             echo "${GH_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin
+
+            # ── 0. CLEANUP: Remove legacy containers from before the tf- rename ──
+            # The service rename (app→tf-app, marketing→tf-marketing, etc.) means old
+            # containers are no longer tracked by docker compose and must be removed
+            # manually to free their port bindings before new containers start.
+            for old_svc in app web horizon scheduler marketing reverb; do
+              OLD_CONTAINER="infra-${old_svc}-1"
+              if docker inspect "${OLD_CONTAINER}" > /dev/null 2>&1; then
+                echo "==> Removing legacy container: ${OLD_CONTAINER}"
+                docker stop "${OLD_CONTAINER}" 2>/dev/null || true
+                docker rm "${OLD_CONTAINER}" 2>/dev/null || true
+              fi
+            done
 
             # ── 1. SNAPSHOT: Record current image digests for rollback ──
 
