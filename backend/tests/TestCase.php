@@ -70,7 +70,9 @@ abstract class TestCase extends BaseTestCase
 
         foreach ($permissions as [$key, $module, $action, $description, $hasScope]) {
             $id = Str::uuid()->toString();
-            DB::table('permissions')->insert([
+            // insertOrIgnore handles the case where a data migration already
+            // seeded this permission row (e.g. seed_shifts_payroll_permissions).
+            DB::table('permissions')->insertOrIgnore([
                 'id'          => $id,
                 'key'         => $key,
                 'module'      => $module,
@@ -78,7 +80,8 @@ abstract class TestCase extends BaseTestCase
                 'description' => $description,
                 'has_scope'   => $hasScope,
             ]);
-            $this->permissionMap[$key] = $id;
+            // Read back the real ID — may differ from $id if the row pre-existed.
+            $this->permissionMap[$key] = DB::table('permissions')->where('key', $key)->value('id');
         }
     }
 
