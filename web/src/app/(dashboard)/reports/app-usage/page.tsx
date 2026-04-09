@@ -50,13 +50,17 @@ import {
 
 // ─── Helpers ──────────────────────────────────────────────────────
 
-function formatAppDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
+function formatAppDuration(seconds: number | string | null | undefined): string {
+  const s = Math.round(Number(seconds) || 0);
+  if (s <= 0) return '0s';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
   if (h > 0 && m > 0) return `${h}h ${m}m`;
   if (h > 0) return `${h}h`;
+  if (m > 0 && sec > 0) return `${m}m ${sec}s`;
   if (m > 0) return `${m}m`;
-  return '<1m';
+  return `${sec}s`;
 }
 
 function formatTickDuration(seconds: number): string {
@@ -73,9 +77,11 @@ function productivityColor(isProductive: boolean | null): string {
   return 'hsl(var(--muted-foreground))';
 }
 
-function getPercentOfTotal(seconds: number, totalSeconds: number): string {
-  if (totalSeconds === 0) return '0%';
-  return `${Math.round((seconds / totalSeconds) * 100)}%`;
+function getPercentOfTotal(seconds: number | string | null | undefined, totalSeconds: number): string {
+  const s = Number(seconds) || 0;
+  if (!totalSeconds || isNaN(totalSeconds) || totalSeconds === 0) return '0%';
+  const pct = Math.round((s / totalSeconds) * 100);
+  return `${isNaN(pct) ? 0 : pct}%`;
 }
 
 // ─── Chart Config ─────────────────────────────────────────────────
@@ -171,7 +177,7 @@ function TeamUsageTable({ entries }: { entries: TeamAppUsageEntry[] }) {
     return <EmptyState title="No team usage data" description="No team application usage was recorded for this period." />;
   }
 
-  const totalSeconds = entries.reduce((sum, e) => sum + e.duration_seconds, 0);
+  const totalSeconds = entries.reduce((sum, e) => sum + (Number(e.duration_seconds) || 0), 0);
 
   return (
     <Card>
@@ -215,7 +221,7 @@ function TopAppsChart({ entries }: { entries: TopAppEntry[] }) {
     fill: productivityColor(entry.is_productive),
   }));
 
-  const totalSeconds = entries.reduce((sum, e) => sum + e.duration_seconds, 0);
+  const totalSeconds = entries.reduce((sum, e) => sum + (Number(e.duration_seconds) || 0), 0);
 
   return (
     <div className="flex flex-col gap-6">
@@ -326,7 +332,7 @@ export default function AppUsagePage() {
   const topApps = useTopApps(startDate, endDate);
 
   const myTotalSeconds = useMemo(
-    () => (myUsage.data?.data ?? []).reduce((sum, e) => sum + e.duration_seconds, 0),
+    () => (myUsage.data?.data ?? []).reduce((sum, e) => sum + (Number(e.duration_seconds) || 0), 0),
     [myUsage.data]
   );
 
