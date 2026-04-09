@@ -435,16 +435,17 @@ jobs:
             echo "==> Logging in to GitHub Container Registry"
             echo "${GH_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin
 
-            # ── 0. CLEANUP: Remove legacy containers from before the tf- rename ──
-            # The service rename (app→tf-app, marketing→tf-marketing, etc.) means old
-            # containers are no longer tracked by docker compose and must be removed
-            # manually to free their port bindings before new containers start.
-            for old_svc in app web horizon scheduler marketing reverb; do
-              OLD_CONTAINER="infra-${old_svc}-1"
-              if docker inspect "${OLD_CONTAINER}" > /dev/null 2>&1; then
-                echo "==> Removing legacy container: ${OLD_CONTAINER}"
-                docker stop "${OLD_CONTAINER}" 2>/dev/null || true
-                docker rm "${OLD_CONTAINER}" 2>/dev/null || true
+            # ── 0. CLEANUP: Stop and remove ALL tf-* and legacy containers ──
+            # This clears Docker's internal port-allocation map before we recreate,
+            # preventing "port already allocated" errors from stale container state
+            # (broken containers left by previous failed deploys, or pre-rename names).
+            echo "==> Cleaning up stale containers to free port bindings"
+            for svc in tf-app tf-web tf-horizon tf-scheduler tf-reverb tf-marketing app web horizon scheduler marketing reverb; do
+              CNAME="infra-${svc}-1"
+              if docker inspect "${CNAME}" > /dev/null 2>&1; then
+                echo "  Removing: ${CNAME}"
+                docker stop "${CNAME}" 2>/dev/null || true
+                docker rm -f "${CNAME}" 2>/dev/null || true
               fi
             done
 
@@ -487,30 +488,30 @@ jobs:
 
             if [ "${DEPLOY_API}" = "true" ]; then
               echo "==> Rolling restart: tf-app"
-              docker compose up -d --no-deps --force-recreate tf-app
+              docker compose up -d --no-deps tf-app
 
               echo "==> Running migrations"
               docker compose exec tf-app php artisan migrate --force || true
 
               echo "==> Rolling restart: tf-horizon"
-              docker compose up -d --no-deps --force-recreate tf-horizon
+              docker compose up -d --no-deps tf-horizon
               docker compose exec tf-horizon php artisan horizon:terminate 2>/dev/null || true
 
               echo "==> Rolling restart: tf-scheduler"
-              docker compose up -d --no-deps --force-recreate tf-scheduler
+              docker compose up -d --no-deps tf-scheduler
 
               echo "==> Rolling restart: tf-reverb"
-              docker compose up -d --no-deps --force-recreate tf-reverb
+              docker compose up -d --no-deps tf-reverb
             fi
 
             if [ "${DEPLOY_WEB}" = "true" ]; then
               echo "==> Rolling restart: tf-web"
-              docker compose up -d --no-deps --force-recreate tf-web
+              docker compose up -d --no-deps tf-web
             fi
 
             if [ "${DEPLOY_MARKETING}" = "true" ]; then
               echo "==> Rolling restart: tf-marketing"
-              docker compose up -d --no-deps --force-recreate tf-marketing
+              docker compose up -d --no-deps tf-marketing
             fi
 
             # ── 4. HEALTH CHECK GATE ──
@@ -587,21 +588,21 @@ jobs:
                 echo "==> Rolling back API to: ${API_OLD_DIGEST}"
                 docker pull "${API_OLD_DIGEST}" 2>/dev/null || true
                 docker tag "${API_OLD_DIGEST}" ghcr.io/codeupscale/trackflow-api:latest 2>/dev/null || true
-                docker compose up -d --no-deps --force-recreate tf-app tf-horizon tf-scheduler tf-reverb
+                docker compose up -d --no-deps tf-app tf-horizon tf-scheduler tf-reverb
               fi
 
               if [ "${DEPLOY_WEB}" = "true" ] && [ -n "${WEB_OLD_DIGEST}" ]; then
                 echo "==> Rolling back Web to: ${WEB_OLD_DIGEST}"
                 docker pull "${WEB_OLD_DIGEST}" 2>/dev/null || true
                 docker tag "${WEB_OLD_DIGEST}" ghcr.io/codeupscale/trackflow-web:latest 2>/dev/null || true
-                docker compose up -d --no-deps --force-recreate tf-web
+                docker compose up -d --no-deps tf-web
               fi
 
               if [ "${DEPLOY_MARKETING}" = "true" ] && [ -n "${MARKETING_OLD_DIGEST}" ]; then
                 echo "==> Rolling back Marketing to: ${MARKETING_OLD_DIGEST}"
                 docker pull "${MARKETING_OLD_DIGEST}" 2>/dev/null || true
                 docker tag "${MARKETING_OLD_DIGEST}" ghcr.io/codeupscale/trackflow-marketing:latest 2>/dev/null || true
-                docker compose up -d --no-deps --force-recreate tf-marketing
+                docker compose up -d --no-deps tf-marketing
               fi
 
               echo "==> Rollback complete. Waiting for rollback containers..."
