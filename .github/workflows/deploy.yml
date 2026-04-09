@@ -427,7 +427,7 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           envs: DEPLOY_API,DEPLOY_WEB,DEPLOY_MARKETING,GH_ACTOR,GH_TOKEN,COMMIT_SHA
-          command_timeout: 10m
+          command_timeout: 15m
           script: |
             set -euo pipefail
             cd /home/ubuntu/infra
@@ -435,19 +435,28 @@ jobs:
             echo "==> Logging in to GitHub Container Registry"
             echo "${GH_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin
 
-            # ── 0. FULL STACK TEARDOWN before redeploy ──
-            echo "==> Tearing down existing stack"
-            docker compose down --remove-orphans --timeout 60 || true
+            # ── 0. REMOVE ORPHAN/LEGACY CONTAINERS (free any held ports) ──
+            # Before the tf- rename, services were named app/web/marketing/etc.
+            # Those old containers may still be running and holding ports (e.g. 3002).
+            # Also remove current tf-* containers so --force-recreate has a clean slate.
+            echo "==> Removing legacy and existing app containers"
+            for svc in app web marketing horizon scheduler reverb \
+                        tf-app tf-web tf-marketing tf-horizon tf-scheduler tf-reverb; do
+              docker rm -f "infra-${svc}-1" 2>/dev/null || true
+            done
+            echo "==> Port 3002 status: $(ss -tlnp 'sport = :3002' 2>/dev/null | grep ':3002' || echo 'free')"
 
-            # Force-remove ALL Docker containers (safest way to clear every port binding)
-            echo "==> Force-removing all remaining containers"
-            docker ps -aq | xargs -r docker rm -f 2>/dev/null || true
-
-            # Show what's on our ports for diagnostics
-            echo "==> Port status after cleanup:"
-            ss -tlnp 'sport = :3002' 2>/dev/null | grep -q ':3002' && echo "  3002 STILL IN USE" || echo "  port 3002 is free"
-            ss -tlnp 'sport = :3001' 2>/dev/null | grep -q ':3001' && echo "  3001 STILL IN USE" || echo "  port 3001 is free"
-            ss -tlnp 'sport = :8080' 2>/dev/null | grep -q ':8080' && echo "  8080 STILL IN USE" || echo "  port 8080 is free"
+            # ── 0.5. ENSURE PGSQL AND REDIS ARE HEALTHY ──
+            # pgsql and redis must be healthy before any app container starts.
+            echo "==> Ensuring pgsql and redis are running"
+            docker compose up -d pgsql redis
+            echo "==> Waiting for pgsql to be healthy (up to 60s)..."
+            timeout 60 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-pgsql-1 2>/dev/null | grep -q healthy; do sleep 2; done' \
+              || { echo "FATAL: pgsql not healthy after 60s"; docker compose logs pgsql --tail 20; exit 1; }
+            echo "==> Waiting for redis to be healthy (up to 30s)..."
+            timeout 30 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-redis-1 2>/dev/null | grep -q healthy; do sleep 2; done' \
+              || { echo "FATAL: redis not healthy after 30s"; docker compose logs redis --tail 20; exit 1; }
+            echo "==> Shared infrastructure is healthy"
 
             # ── 1. SNAPSHOT: Record current image digests for rollback ──
 
@@ -482,43 +491,47 @@ jobs:
               docker pull ghcr.io/codeupscale/trackflow-marketing:latest
             fi
 
-            # ── 3. ROLLING RESTART: Recreate containers one at a time ──
-            # Each container's stop_grace_period (configured in compose) ensures
-            # in-flight requests complete before the old container is killed.
+            # ── 3. ROLLING RESTART: Recreate only changed app containers ──
+            # Uses --no-deps to avoid restarting postgres/redis (they're already healthy).
+            # Uses --force-recreate to ensure the new image is used even if config unchanged.
 
             if [ "${DEPLOY_API}" = "true" ]; then
               echo "==> Rolling restart: tf-app"
-              docker compose up -d --no-deps tf-app
+              docker compose up -d --no-deps --force-recreate tf-app
+
+              # Wait for tf-app to be ready before running migrations
+              echo "==> Waiting for tf-app to accept connections..."
+              sleep 10
 
               echo "==> Running migrations"
               docker compose exec tf-app php artisan migrate --force || true
 
               echo "==> Rolling restart: tf-horizon"
-              docker compose up -d --no-deps tf-horizon
+              docker compose up -d --no-deps --force-recreate tf-horizon
               docker compose exec tf-horizon php artisan horizon:terminate 2>/dev/null || true
 
               echo "==> Rolling restart: tf-scheduler"
-              docker compose up -d --no-deps tf-scheduler
+              docker compose up -d --no-deps --force-recreate tf-scheduler
 
               echo "==> Rolling restart: tf-reverb"
-              docker compose up -d --no-deps tf-reverb
+              docker compose up -d --no-deps --force-recreate tf-reverb
             fi
 
             if [ "${DEPLOY_WEB}" = "true" ]; then
               echo "==> Rolling restart: tf-web"
-              docker compose up -d --no-deps tf-web
+              docker compose up -d --no-deps --force-recreate tf-web
             fi
 
             if [ "${DEPLOY_MARKETING}" = "true" ]; then
               echo "==> Rolling restart: tf-marketing"
-              docker compose up -d --no-deps tf-marketing
+              docker compose up -d --no-deps --force-recreate tf-marketing
             fi
 
             # ── 4. HEALTH CHECK GATE ──
             # Wait up to 90 seconds for all TrackFlow containers to report healthy.
             # If any container fails health check, trigger rollback.
 
-            echo "==> Waiting for containers to become healthy (timeout: 90s)..."
+            echo "==> Waiting for containers to become healthy (timeout: 150s)..."
             HEALTH_OK=true
             SERVICES_TO_CHECK=""
 
@@ -535,7 +548,7 @@ jobs:
             for svc in ${SERVICES_TO_CHECK}; do
               echo "  Checking health: ${svc}..."
               ATTEMPTS=0
-              MAX_ATTEMPTS=18  # 18 * 5s = 90s
+              MAX_ATTEMPTS=30  # 30 * 5s = 150s (covers tf-app start_period:30s + retries:3 * interval:30s)
               while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
                 # Check if container exists first
                 CONTAINER_EXISTS=$(docker inspect "infra-${svc}-1" > /dev/null 2>&1 && echo "yes" || echo "no")
@@ -570,7 +583,7 @@ jobs:
                 ATTEMPTS=$((ATTEMPTS + 1))
                 if [ $ATTEMPTS -ge $MAX_ATTEMPTS ]; then
                   FINAL_STATUS=$(docker inspect --format='{{.State.Health.Status}}' "infra-${svc}-1" 2>/dev/null || echo "unknown")
-                  echo "  [FAIL] ${svc} did not become healthy within 90s (status: ${FINAL_STATUS})"
+                  echo "  [FAIL] ${svc} did not become healthy within 150s (status: ${FINAL_STATUS})"
                   HEALTH_OK=false
                 fi
                 sleep 5
