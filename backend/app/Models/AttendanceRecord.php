@@ -38,7 +38,7 @@ class AttendanceRecord extends Model
         return [
             'date' => 'date',
             'is_regularized' => 'boolean',
-            'total_hours' => 'decimal:2',
+            'total_hours' => 'float',
             'late_minutes' => 'integer',
             'early_departure_minutes' => 'integer',
             'overtime_minutes' => 'integer',
