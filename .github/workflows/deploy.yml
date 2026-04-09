@@ -436,16 +436,18 @@ jobs:
             echo "${GH_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin
 
             # ── 0. FULL STACK TEARDOWN before redeploy ──
-            # docker compose down tears down containers AND their network endpoints
-            # (including docker-proxy processes that hold port bindings).
-            # --remove-orphans also kills containers from old service names (pre tf- rename).
-            # This is the only reliable way to clear Docker's internal port-allocation map.
-            echo "==> Tearing down existing stack (frees all port bindings)"
+            echo "==> Tearing down existing stack"
             docker compose down --remove-orphans --timeout 30 2>/dev/null || true
-            # Belt-and-suspenders: kill any remaining docker-proxy on ports we use
-            for port in 8080 3001 3002 8081; do
-              fuser -k ${port}/tcp 2>/dev/null || true
-            done
+
+            # docker-proxy processes (spawned per port-binding) sometimes survive
+            # container removal. Kill them directly so ports are fully released.
+            echo "==> Killing lingering docker-proxy processes"
+            pkill -9 -f docker-proxy 2>/dev/null || true
+            sleep 3
+
+            # Diagnostic: confirm port 3002 is free before proceeding
+            echo "==> Port 3002 status:"
+            ss -tlnp 'sport = :3002' 2>/dev/null || netstat -tlnp 2>/dev/null | grep ':3002' || echo "  port 3002 is free"
 
             # ── 1. SNAPSHOT: Record current image digests for rollback ──
 
