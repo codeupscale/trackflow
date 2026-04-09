@@ -24,6 +24,7 @@ import {
   Receipt,
   Layers,
   Puzzle,
+  Monitor,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -55,6 +56,7 @@ export const navigationConfig: NavGroup[] = [
     label: 'Analytics',
     items: [
       { name: 'Reports', href: '/reports', icon: BarChart3, requiredPermission: 'reports.view' },
+      { name: 'App Usage', href: '/reports/app-usage', icon: Monitor, requiredPermission: 'reports.view' },
       { name: 'Projects', href: '/projects', icon: FolderOpen, requiredPermission: 'projects.view' },
     ],
   },
