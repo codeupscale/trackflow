@@ -435,18 +435,16 @@ jobs:
             echo "==> Logging in to GitHub Container Registry"
             echo "${GH_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin
 
-            # ── 0. CLEANUP: Stop and remove ALL tf-* and legacy containers ──
-            # This clears Docker's internal port-allocation map before we recreate,
-            # preventing "port already allocated" errors from stale container state
-            # (broken containers left by previous failed deploys, or pre-rename names).
-            echo "==> Cleaning up stale containers to free port bindings"
-            for svc in tf-app tf-web tf-horizon tf-scheduler tf-reverb tf-marketing app web horizon scheduler marketing reverb; do
-              CNAME="infra-${svc}-1"
-              if docker inspect "${CNAME}" > /dev/null 2>&1; then
-                echo "  Removing: ${CNAME}"
-                docker stop "${CNAME}" 2>/dev/null || true
-                docker rm -f "${CNAME}" 2>/dev/null || true
-              fi
+            # ── 0. FULL STACK TEARDOWN before redeploy ──
+            # docker compose down tears down containers AND their network endpoints
+            # (including docker-proxy processes that hold port bindings).
+            # --remove-orphans also kills containers from old service names (pre tf- rename).
+            # This is the only reliable way to clear Docker's internal port-allocation map.
+            echo "==> Tearing down existing stack (frees all port bindings)"
+            docker compose down --remove-orphans --timeout 30 2>/dev/null || true
+            # Belt-and-suspenders: kill any remaining docker-proxy on ports we use
+            for port in 8080 3001 3002 8081; do
+              fuser -k ${port}/tcp 2>/dev/null || true
             done
 
             # ── 1. SNAPSHOT: Record current image digests for rollback ──
