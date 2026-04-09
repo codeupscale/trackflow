@@ -10,6 +10,7 @@ interface DemoModalProps {
 
 export function DemoModal({ isOpen, onClose }: DemoModalProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -22,8 +23,15 @@ export function DemoModal({ isOpen, onClose }: DemoModalProps) {
     if (isOpen) {
       document.body.style.overflow = "hidden";
       document.addEventListener("keydown", handleKeyDown);
+      // Auto-play video when modal opens
+      videoRef.current?.play();
     } else {
       document.body.style.overflow = "";
+      // Pause and reset when closed
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.currentTime = 0;
+      }
     }
     return () => {
       document.body.style.overflow = "";
@@ -36,7 +44,7 @@ export function DemoModal({ isOpen, onClose }: DemoModalProps) {
   return (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-md"
       onClick={(e) => {
         if (e.target === overlayRef.current) onClose();
       }}
@@ -50,30 +58,22 @@ export function DemoModal({ isOpen, onClose }: DemoModalProps) {
         <X className="size-5" />
       </button>
 
-      {/* Demo iframe container — 16:9 aspect ratio */}
-      <div className="relative w-[95vw] max-w-[1920px] aspect-video rounded-xl overflow-hidden shadow-2xl ring-1 ring-white/10">
-        <iframe
-          src="/demo/index.html"
-          className="w-full h-full border-0"
-          title="TrackFlow Product Demo"
-          allow="autoplay"
+      {/* Video container — 16:9 aspect ratio */}
+      <div className="relative w-[92vw] max-w-[1280px] aspect-video rounded-2xl overflow-hidden shadow-2xl ring-1 ring-white/10">
+        <video
+          ref={videoRef}
+          src="/trackflow-demo.mp4"
+          className="w-full h-full object-cover"
+          controls
+          autoPlay
+          playsInline
+          preload="auto"
         />
       </div>
 
-      {/* Controls hint */}
-      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 text-white/60 text-sm">
-        <span className="flex items-center gap-1.5">
-          <kbd className="px-1.5 py-0.5 rounded bg-white/10 text-xs font-mono">Space</kbd>
-          Pause/Resume
-        </span>
-        <span className="flex items-center gap-1.5">
-          <kbd className="px-1.5 py-0.5 rounded bg-white/10 text-xs font-mono">&larr; &rarr;</kbd>
-          Navigate
-        </span>
-        <span className="flex items-center gap-1.5">
-          <kbd className="px-1.5 py-0.5 rounded bg-white/10 text-xs font-mono">Esc</kbd>
-          Close
-        </span>
+      {/* Hint */}
+      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 text-white/40 text-sm">
+        Press <kbd className="px-1.5 py-0.5 rounded bg-white/10 text-xs font-mono">Esc</kbd> to close
       </div>
     </div>
   );

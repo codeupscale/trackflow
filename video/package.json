@@ -1,0 +1,24 @@
+{
+  "name": "trackflow-video",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TrackFlow product demo video built with Remotion",
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "remotion render TrackFlowDemo out/trackflow-demo.mp4",
+    "render:social": "remotion render TrackFlowDemoSocial out/trackflow-demo-social.mp4",
+    "render:all": "npm run render && npm run render:social"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.242",
+    "@remotion/google-fonts": "4.0.242",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "remotion": "4.0.242"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.8.0"
+  }
+}
