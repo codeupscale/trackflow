@@ -427,7 +427,7 @@ export function Hero() {
 
             <FadeIn delay={0.2}>
               <p className="mt-6 text-lg text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)] leading-relaxed max-w-xl">
-                Replace Hubstaff + BambooHR with one platform. Time tracking, screenshots, activity monitoring, leave management, payroll, attendance, and shifts &mdash; all connected, all in sync.
+                Replace your time tracker, HR tool, and payroll system with one platform. Time tracking, screenshots, activity monitoring, leave management, payroll, attendance, and shifts &mdash; all connected, all in sync.
               </p>
             </FadeIn>
 

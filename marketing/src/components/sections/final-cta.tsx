@@ -16,7 +16,7 @@ export function FinalCta() {
             One Platform. One Price. No Compromises.
           </h2>
           <p className="mt-4 text-lg text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)] max-w-xl mx-auto">
-            Join teams who replaced Hubstaff + their HR tool with TrackFlow.
+            Join teams who replaced multiple tools with TrackFlow.
           </p>
         </FadeIn>
 

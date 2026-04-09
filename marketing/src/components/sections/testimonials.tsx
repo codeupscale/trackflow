@@ -6,7 +6,7 @@ import { Star } from "lucide-react";
 const testimonials = [
   {
     quote:
-      "We replaced Hubstaff, BambooHR, and a spreadsheet payroll system with TrackFlow. One platform, one bill, and my team actually likes using it.",
+      "We replaced three separate tools — a time tracker, an HR platform, and a spreadsheet payroll system — with TrackFlow. One platform, one bill, and my team actually likes using it.",
     author: "Sarah Chen",
     role: "VP of Operations",
     company: "NovaTech Solutions",

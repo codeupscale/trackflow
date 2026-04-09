@@ -40,7 +40,7 @@ const features = [
     icon: WifiOff,
     title: "Never Lose a Second of Tracked Time",
     description:
-      "SQLite-first architecture saves every timer event locally before touching the network. VPN drops, server errors, and laptop sleeps never stop your timer or lose your data. Unlike Hubstaff and Time Doctor.",
+      "SQLite-first architecture saves every timer event locally before touching the network. VPN drops, server errors, and laptop sleeps never stop your timer or lose your data. Other tools can't say the same.",
     tag: "Core",
   },
   {
