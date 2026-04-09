@@ -9,6 +9,13 @@ const footerLinks = {
     { label: "Integrations", href: "#" },
     { label: "Changelog", href: "#" },
   ],
+  Downloads: [
+    { label: "Desktop App (v1.0.31)", href: "https://github.com/codeupscale/trackflow/releases/tag/v1.0.31" },
+    { label: "macOS", href: "https://github.com/codeupscale/trackflow/releases/tag/v1.0.31" },
+    { label: "Windows", href: "https://github.com/codeupscale/trackflow/releases/tag/v1.0.31" },
+    { label: "Linux", href: "https://github.com/codeupscale/trackflow/releases/tag/v1.0.31" },
+    { label: "Release Notes", href: "https://github.com/codeupscale/trackflow/releases/tag/v1.0.31" },
+  ],
   Company: [
     { label: "About", href: "#" },
     { label: "Blog", href: "#" },
@@ -54,7 +61,7 @@ export function Footer() {
   return (
     <footer className="border-t border-[var(--color-border)] dark:border-[var(--color-border-dark)] bg-[var(--color-surface)] dark:bg-[var(--color-surface-dark)]">
       <div className="mx-auto max-w-7xl px-6 py-16">
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-8">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-8">
           {/* Brand */}
           <div className="col-span-2">
             <TrackFlowLogo />
@@ -86,6 +93,7 @@ export function Footer() {
                   <li key={link.label}>
                     <a
                       href={link.href}
+                      {...(link.href.startsWith("http") ? { target: "_blank", rel: "noopener noreferrer" } : {})}
                       className="text-sm text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)] hover:text-[var(--color-text)] dark:hover:text-[var(--color-text-dark)] transition-colors"
                     >
                       {link.label}
