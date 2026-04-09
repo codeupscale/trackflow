@@ -427,7 +427,7 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           envs: DEPLOY_API,DEPLOY_WEB,DEPLOY_MARKETING,GH_ACTOR,GH_TOKEN,COMMIT_SHA
-          command_timeout: 5m
+          command_timeout: 10m
           script: |
             set -euo pipefail
             cd /home/ubuntu/infra
@@ -437,26 +437,17 @@ jobs:
 
             # ── 0. FULL STACK TEARDOWN before redeploy ──
             echo "==> Tearing down existing stack"
-            docker compose down --remove-orphans --timeout 30 || true
+            docker compose down --remove-orphans --timeout 60 || true
 
-            # Force-remove any containers in this project that may still be running
-            # (catches containers in 'Created' state that docker compose down misses)
-            docker ps -aq --filter "name=infra-" | xargs -r docker rm -f 2>/dev/null || true
+            # Force-remove ALL Docker containers (safest way to clear every port binding)
+            echo "==> Force-removing all remaining containers"
+            docker ps -aq | xargs -r docker rm -f 2>/dev/null || true
 
-            # Kill any lingering docker-proxy processes
-            pkill -9 -f docker-proxy 2>/dev/null || true
-
-            # Restart Docker daemon to fully clear its in-memory port allocation table.
-            # This is the only reliable fix for "port already allocated" after teardown.
-            echo "==> Restarting Docker daemon to clear port allocation state"
-            sudo systemctl restart docker
-            sleep 5
-
-            echo "==> Port 3002 status after daemon restart:"
-            ss -tlnp 'sport = :3002' 2>/dev/null | grep ':3002' || echo "  port 3002 is free"
-
-            echo "==> Re-logging in to GHCR after daemon restart"
-            echo "${GH_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin
+            # Show what's on our ports for diagnostics
+            echo "==> Port status after cleanup:"
+            ss -tlnp 'sport = :3002' 2>/dev/null | grep -q ':3002' && echo "  3002 STILL IN USE" || echo "  port 3002 is free"
+            ss -tlnp 'sport = :3001' 2>/dev/null | grep -q ':3001' && echo "  3001 STILL IN USE" || echo "  port 3001 is free"
+            ss -tlnp 'sport = :8080' 2>/dev/null | grep -q ':8080' && echo "  8080 STILL IN USE" || echo "  port 8080 is free"
 
             # ── 1. SNAPSHOT: Record current image digests for rollback ──
 
