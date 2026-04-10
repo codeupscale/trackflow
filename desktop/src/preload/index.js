@@ -63,6 +63,10 @@ contextBridge.exposeInMainWorld('trackflow', {
   getNetworkStatus: () => ipcRenderer.invoke('get-network-status'),
   onNetworkStatus: (callback) => safeOn('network-status', (_, data) => callback(data)),
 
+  // Activity & screenshot info (for status footer)
+  getActivityInfo: () => ipcRenderer.invoke('get-activity-info'),
+  onActivityUpdate: (callback) => safeOn('activity-update', (_, data) => callback(data)),
+
   // Auto-update
   onUpdateReady: (callback) => safeOn('update-ready', (_, data) => callback(data)),
   installUpdate: () => ipcRenderer.invoke('install-update'),

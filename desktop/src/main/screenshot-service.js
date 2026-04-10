@@ -87,6 +87,8 @@ class ScreenshotService {
     this._onPermissionDialogSave = null;
     // Optional callback when wallpaper-only capture is detected
     this._onWallpaperDetected = null;
+    // Optional callback when a screenshot is captured (uploaded or queued)
+    this._onScreenshotCaptured = null;
   }
 
   // Set a callback that saves restart state before showing the permission dialog
@@ -97,6 +99,11 @@ class ScreenshotService {
   // Set a callback that fires when wallpaper-only capture is detected
   setWallpaperDetectedCallback(fn) {
     this._onWallpaperDetected = typeof fn === 'function' ? fn : null;
+  }
+
+  // Set a callback that fires when a screenshot is captured (uploaded or queued for offline)
+  setScreenshotCapturedCallback(fn) {
+    this._onScreenshotCaptured = typeof fn === 'function' ? fn : null;
   }
 
   // ── Wallpaper-Only Detection via Image Hash ──────────────────────
@@ -896,6 +903,7 @@ class ScreenshotService {
       try {
         await this.apiClient.uploadScreenshot(formData);
         console.log(`[SS] Uploaded successfully${displayLabel} on attempt ${attempt} (${Math.round(buffer.length / 1024)}KB)`);
+        if (this._onScreenshotCaptured) try { this._onScreenshotCaptured(); } catch {}
         return;
       } catch (e) {
         console.warn(`[SS] Upload attempt ${attempt}/3 failed${displayLabel}: ${e.message}`);
@@ -951,6 +959,7 @@ class ScreenshotService {
       }
       this.offlineQueue.add('screenshot', data);
       console.log(`[SS] Queued for offline sync${displayInfo ? ` [display ${displayInfo.display_index}]` : ''}`);
+      if (this._onScreenshotCaptured) try { this._onScreenshotCaptured(); } catch {}
     } else {
       console.warn(`[SS] Too large for offline queue (${Math.round(buffer.length / 1024)}KB), skipping`);
     }
