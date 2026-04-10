@@ -333,7 +333,7 @@ export default function SettingsPage() {
     const rawIdle = idleTimeout === '0' ? 0 : (idleTimeout === 'custom' ? idleTimeoutCustom : idleTimeout);
     const idleVal = rawIdle === '' || rawIdle === '0' ? 0 : Math.min(30, Math.max(0, parseInt(String(rawIdle), 10) || 0));
     const idleAutoStopMinVal = Math.min(
-      60,
+      10080,
       Math.max(1, parseInt(String(idleAlertAutoStopMin), 10) || 10)
     );
     const idleEmailCooldownMinVal = Math.min(
@@ -1077,7 +1077,7 @@ export default function SettingsPage() {
                 <Input
                   type="number"
                   min="1"
-                  max="60"
+                  max="10080"
                   value={idleAlertAutoStopMin}
                   onChange={(e) => setIdleAlertAutoStopMin(e.target.value)}
                   disabled={!isAdmin}
