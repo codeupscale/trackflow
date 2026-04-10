@@ -1848,9 +1848,17 @@ function setupIPC() {
     screenshotService?.stop();
     idleDetector?.stop();
 
-    // 4. Install and restart
-    const { autoUpdater } = require('electron-updater');
-    autoUpdater.quitAndInstall(false, true);
+    // 4. Install and restart — try native first, fall back to manual on macOS
+    try {
+      const { autoUpdater } = require('electron-updater');
+      autoUpdater.quitAndInstall(false, true);
+    } catch (e) {
+      console.warn('[updater] quitAndInstall failed:', e.message);
+      if (process.platform === 'darwin') {
+        console.log('[updater] Falling back to manual macOS update');
+        await performManualMacUpdate();
+      }
+    }
   });
 
   ipcMain.handle('get-timer-state', async (_, projectId) => {
@@ -3298,6 +3306,121 @@ function _friendlyLoginError(e) {
   return e.message || 'Login failed. Please try again.';
 }
 
+// ── Manual macOS Update (ad-hoc signing workaround) ─────────────────────────
+// When ShipIt rejects the code signature, we manually:
+// 1. Find the downloaded update zip in the electron-updater cache
+// 2. Extract it to a temp directory
+// 3. Replace the current .app bundle with the new one
+// 4. Relaunch the app
+async function performManualMacUpdate() {
+  try {
+    const { execFile: execFileCb } = require('child_process');
+    const { promisify } = require('util');
+    const execFileAsync = promisify(execFileCb);
+
+    // Find the downloaded zip in electron-updater's cache
+    const cacheDir = path.join(app.getPath('userData'), 'update-cache');
+    const pendingDir = path.join(app.getPath('home'), 'Library', 'Caches', `${app.name}.ShipIt`);
+
+    // electron-updater stores the downloaded zip in the cache directory
+    const updaterCacheDir = path.join(app.getPath('userData'));
+    let updateZip = null;
+
+    // Search for the update zip in common locations
+    const searchDirs = [
+      path.join(app.getPath('userData')),
+      path.join(app.getPath('home'), 'Library', 'Caches', app.name),
+      path.join(app.getPath('home'), 'Library', 'Caches', `${app.getName()}-updater`),
+    ];
+
+    for (const dir of searchDirs) {
+      if (!fs.existsSync(dir)) continue;
+      const files = fs.readdirSync(dir).filter(f => f.endsWith('.zip') && f.includes('TrackFlow'));
+      if (files.length > 0) {
+        // Use the most recently modified zip
+        const sorted = files.map(f => ({ name: f, mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+          .sort((a, b) => b.mtime - a.mtime);
+        updateZip = path.join(dir, sorted[0].name);
+        break;
+      }
+    }
+
+    if (!updateZip || !fs.existsSync(updateZip)) {
+      console.error('[updater] Manual update failed — cannot find downloaded zip');
+      return;
+    }
+
+    console.log(`[updater] Found update zip: ${updateZip}`);
+
+    // Save restart state before updating
+    if (isTimerRunning) saveRestartState();
+
+    // Stop timer on server
+    if (isTimerRunning && apiClient) {
+      try {
+        await Promise.race([apiClient.stopTimer(), new Promise(r => setTimeout(r, 3000))]);
+      } catch {}
+    }
+
+    const appPath = app.getPath('exe').replace(/\/Contents\/MacOS\/.*$/, '');
+    const tempDir = path.join(app.getPath('temp'), 'trackflow-update');
+
+    console.log(`[updater] Extracting ${updateZip} to ${tempDir}`);
+    console.log(`[updater] Will replace ${appPath}`);
+
+    // Create a shell script that waits for app to quit, then replaces and relaunches
+    const scriptPath = path.join(app.getPath('temp'), 'trackflow-update.sh');
+    const script = `#!/bin/bash
+# Wait for the old app to fully quit
+sleep 2
+
+# Extract update zip to temp
+rm -rf "${tempDir}"
+mkdir -p "${tempDir}"
+unzip -o -q "${updateZip}" -d "${tempDir}"
+
+# Find the .app in the extracted directory
+NEW_APP=$(find "${tempDir}" -name "*.app" -maxdepth 2 -type d | head -1)
+if [ -z "$NEW_APP" ]; then
+  echo "ERROR: No .app found in update zip"
+  exit 1
+fi
+
+# Replace the old app with the new one
+rm -rf "${appPath}"
+cp -R "$NEW_APP" "${appPath}"
+
+# Clear quarantine attribute
+xattr -cr "${appPath}" 2>/dev/null
+
+# Clean up
+rm -rf "${tempDir}"
+rm -f "${updateZip}"
+
+# Relaunch
+open "${appPath}"
+
+# Self-delete
+rm -f "${scriptPath}"
+`;
+
+    fs.writeFileSync(scriptPath, script, { mode: 0o755 });
+    console.log('[updater] Manual update script written, quitting app...');
+
+    // Launch the update script detached and quit
+    const child = require('child_process').spawn('bash', [scriptPath], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+
+    // Quit the app — the script will replace and relaunch
+    app.exit(0);
+  } catch (e) {
+    console.error('[updater] Manual update failed:', e.message);
+  }
+}
+
 function checkForUpdates() {
   console.log(`[updater] Checking... (packaged=${app.isPackaged}, env=${process.env.NODE_ENV || 'production'})`);
   if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
@@ -3313,6 +3436,12 @@ function checkForUpdates() {
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.logger = null; // Suppress default electron-updater logging (we do our own)
+
+    // AD-HOC SIGNING FIX: On macOS, ShipIt (Squirrel's native updater) validates
+    // code signatures and rejects ad-hoc signed updates with:
+    //   "code failed to satisfy specified code requirement(s)"
+    // We handle this by catching the error and doing a manual update:
+    // download the zip, extract over the existing .app, then relaunch.
 
     // Track whether an update is ready to install
     let _pendingUpdate = false;
@@ -3360,8 +3489,17 @@ function checkForUpdates() {
     const _updateRetryDelays = [2 * 60 * 1000, 4 * 60 * 1000, 8 * 60 * 1000]; // 2m, 4m, 8m
 
     autoUpdater.on('error', (err) => {
-      console.warn(`[updater] Error: ${err?.message || err}`);
+      const errMsg = err?.message || String(err);
+      console.warn(`[updater] Error: ${errMsg}`);
       posthog.captureError(null, err || new Error('auto_update_error'), { type: 'auto_update' });
+
+      // AD-HOC SIGNING FIX: If macOS ShipIt rejects the code signature,
+      // perform a manual update by extracting the downloaded zip over the app.
+      if (process.platform === 'darwin' && _pendingUpdate && errMsg.includes('code requirement')) {
+        console.log('[updater] macOS code signature rejected — attempting manual update');
+        performManualMacUpdate();
+        return; // Don't retry — we're handling it manually
+      }
 
       // L11: Retry with backoff
       if (_updateRetryCount < _updateMaxRetries) {
