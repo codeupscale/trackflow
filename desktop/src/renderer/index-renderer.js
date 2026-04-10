@@ -1,8 +1,13 @@
-// ── Theme: always light for the timer window (white background per design) ──
-document.documentElement.setAttribute('data-theme', 'light');
-// No-op theme listeners — timer window is always light regardless of OS theme
-window.trackflow.getTheme().catch(() => {});
-window.trackflow.onThemeChange(() => {});
+// ── Theme: follow system preference (dark/light) ──
+function applyTheme(theme) {
+  if (theme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+  }
+}
+window.trackflow.getTheme().then(applyTheme).catch(() => {});
+window.trackflow.onThemeChange(applyTheme);
 
 // ── Platform detection for shortcut labels ──
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
@@ -45,14 +50,89 @@ const fixPermissionBtn = document.getElementById('fixPermissionBtn');
 const wallpaperBanner = document.getElementById('wallpaperBanner');
 const fixWallpaperBtn = document.getElementById('fixWallpaperBtn');
 const offlineBanner = document.getElementById('offlineBanner');
+const activitySection = document.getElementById('activitySection');
+const activityValue = document.getElementById('activityValue');
+const activityBarFill = document.getElementById('activityBarFill');
+const connDot = document.getElementById('connDot');
+const connText = document.getElementById('connText');
+const lastSsText = document.getElementById('lastSsText');
+const lastSsSep = document.getElementById('lastSsSep');
+
+let _currentActivityScore = 0;
+let _lastScreenshotAt = null;
+let _isOnline = true;
 
 // CONNECTIVITY FIX: Network status indicator
 window.trackflow.getNetworkStatus().then((status) => {
+  _isOnline = status.online;
   if (offlineBanner) offlineBanner.style.display = status.online ? 'none' : 'flex';
+  updateConnStatus();
 }).catch(() => {});
 window.trackflow.onNetworkStatus((data) => {
+  _isOnline = data.online;
   if (offlineBanner) offlineBanner.style.display = data.online ? 'none' : 'flex';
+  updateConnStatus();
 });
+
+// ── Activity & Status Footer Helpers ──
+function getActivityLevel(score) {
+  if (score < 30) return 'low';
+  if (score < 60) return 'medium';
+  return 'high';
+}
+
+function updateActivityDisplay(score) {
+  _currentActivityScore = score;
+  const level = getActivityLevel(score);
+  activityValue.textContent = `${score}%`;
+  activityValue.className = `activity-value ${level}`;
+  activityBarFill.style.width = `${score}%`;
+  activityBarFill.className = `activity-bar-fill ${level}`;
+}
+
+function formatTimeAgo(isoString) {
+  if (!isoString) return '';
+  const diff = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
+  if (diff < 10) return 'just now';
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  return `${Math.floor(diff / 3600)}h ago`;
+}
+
+function updateConnStatus() {
+  connDot.className = `dot ${_isOnline ? 'online' : 'offline'}`;
+  connText.textContent = _isOnline ? 'Online' : 'Offline';
+  const ssAgo = _lastScreenshotAt ? formatTimeAgo(_lastScreenshotAt) : null;
+  if (ssAgo) {
+    lastSsSep.style.display = '';
+    lastSsText.textContent = `Last SS ${ssAgo}`;
+  } else {
+    lastSsSep.style.display = 'none';
+    lastSsText.textContent = '';
+  }
+}
+
+function showTrackingInfo(visible) {
+  activitySection.classList.toggle('visible', visible);
+}
+
+// Listen for activity updates from main process (on screenshot capture)
+window.trackflow.onActivityUpdate((data) => {
+  if (data.activityScore != null) updateActivityDisplay(data.activityScore);
+  if (data.lastScreenshotAt) _lastScreenshotAt = data.lastScreenshotAt;
+  if (data.isOnline != null) _isOnline = data.isOnline;
+  updateConnStatus();
+});
+
+// Fetch initial activity info
+window.trackflow.getActivityInfo().then((info) => {
+  if (info) {
+    if (info.activityScore != null) updateActivityDisplay(info.activityScore);
+    if (info.lastScreenshotAt) _lastScreenshotAt = info.lastScreenshotAt;
+    if (info.isOnline != null) _isOnline = info.isOnline;
+    updateConnStatus();
+  }
+}).catch(() => {});
 
 function formatTime(seconds) {
   const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
@@ -87,6 +167,12 @@ function updateDisplay(running) {
   stopBtn.style.display = running ? 'flex' : 'none';
   projectSelect.disabled = running || projectSelect.options.length <= 1;
   startBtn.disabled = isRunning;
+  showTrackingInfo(running);
+  if (!running) {
+    updateActivityDisplay(0);
+    _lastScreenshotAt = null;
+    updateConnStatus();
+  }
 }
 
 // The main process is the single source of truth for elapsed time.
@@ -102,6 +188,11 @@ function startTicking() {
       if (!isRunning) return;
       elapsedSeconds = data.totalSeconds;
       timerDisplay.textContent = data.formatted;
+      // Update activity and connection status from tick data
+      if (data.activityScore != null) updateActivityDisplay(data.activityScore);
+      if (data.lastScreenshotAt) _lastScreenshotAt = data.lastScreenshotAt;
+      if (data.isOnline != null) _isOnline = data.isOnline;
+      updateConnStatus();
     });
   }
 }
@@ -137,7 +228,11 @@ async function syncTimerState() {
   }
 }
 
+let _loadProjectsInFlight = false;
 async function loadProjects(retryCount = 0) {
+  // Prevent concurrent calls from racing and duplicating options
+  if (retryCount === 0 && _loadProjectsInFlight) return;
+  if (retryCount === 0) _loadProjectsInFlight = true;
   const MAX_RETRIES = 3;
   try {
     const projects = await window.trackflow.getProjects();
@@ -154,8 +249,16 @@ async function loadProjects(retryCount = 0) {
       return;
     }
 
+    // OFFLINE FIX: Don't clear the dropdown if we got empty and already have options
+    if (list.length === 0 && projectSelect.options.length > 1) {
+      console.log('[loadProjects] Empty list but dropdown has options — keeping current');
+      _loadProjectsInFlight = false;
+      return;
+    }
+
     const currentValue = projectSelect.value || '';
     projectSelect.innerHTML = '<option value="">Select a project</option>';
+    _loadProjectsInFlight = false;
     list.forEach(p => {
       const option = document.createElement('option');
       option.value = p.id;
@@ -173,6 +276,8 @@ async function loadProjects(retryCount = 0) {
       const delay = 1000 * (retryCount + 1);
       console.log(`[loadProjects] Error, retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`);
       setTimeout(() => loadProjects(retryCount + 1), delay);
+    } else {
+      _loadProjectsInFlight = false;
     }
   }
 }
@@ -445,7 +550,9 @@ let _pendingUpdateVersion = null;
 
 function showUpdateDialog(version) {
   _pendingUpdateVersion = version;
-  updateBody.textContent = `TrackFlow v${version} is ready to install. Restart now to get the latest features and bug fixes.`;
+  const isMacPlatform = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+  const permNote = isMacPlatform ? ' On macOS, you may need to re-grant screen recording permission after the update.' : '';
+  updateBody.textContent = `TrackFlow v${version} is ready to install. Restart now to get the latest features and bug fixes.${permNote}`;
   updateOverlay.classList.add('visible');
   updateRestartBtn.focus();
 }

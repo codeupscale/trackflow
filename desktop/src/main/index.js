@@ -146,6 +146,39 @@ function saveLastProjectId(projectId) {
   }
 }
 
+// ── Cached Projects Persistence (Offline Resilience) ────────────────────────
+// Cache the project list locally so it survives network outages.
+// When the API is unreachable, the renderer gets the cached list instead of empty.
+function loadCachedProjects() {
+  try {
+    const p = getPrefsPath();
+    if (!p || !fs.existsSync(p)) return [];
+    const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return Array.isArray(data.cachedProjects) ? data.cachedProjects : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCachedProjects(projects) {
+  try {
+    const p = getPrefsPath();
+    if (!p) return;
+    let data = {};
+    if (fs.existsSync(p)) {
+      try { data = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { data = {}; }
+    }
+    data.cachedProjects = Array.isArray(projects) ? projects : [];
+    fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) {
+    console.error('Failed to save cached projects:', e);
+  }
+}
+
+// ── Activity/Screenshot Info for Renderer ───────────────────────────────────
+// Tracks last screenshot time and exposes activity score to the UI.
+let _lastScreenshotAt = null; // ISO string of last successful screenshot capture/queue
+
 // ── Always-on-Top (Pin) Persistence ──────────────────────────────────────────
 // Persists the "always on top" / "pin" state so it survives app restarts.
 // Uses the same user-prefs.json file as lastSelectedProjectId.
@@ -210,10 +243,12 @@ function loadRestartState() {
     const p = getRestartStatePath();
     if (!p || !fs.existsSync(p)) return null;
     const data = JSON.parse(fs.readFileSync(p, 'utf8'));
-    // Only honour restart state if it was saved within the last 5 minutes
+    // Only honour restart state if it was saved within the last 10 minutes.
+    // 10-minute TTL accommodates app updates where the user needs to re-grant
+    // macOS screen recording permission before the session auto-resumes.
     const savedAt = new Date(data.savedAt).getTime();
-    if (Date.now() - savedAt > 5 * 60 * 1000) {
-      console.log('[RestartState] Expired (older than 5 minutes), ignoring');
+    if (Date.now() - savedAt > 10 * 60 * 1000) {
+      console.log('[RestartState] Expired (older than 10 minutes), ignoring');
       clearRestartState();
       return null;
     }
@@ -707,6 +742,7 @@ async function forceLogout() {
   currentEntry = null;
   _cachedStartedAtMs = null;
   isAuthenticated = false;
+  _lastScreenshotAt = null;
 
   activityMonitor?.stop();
   screenshotService?.stop();
@@ -815,8 +851,12 @@ async function initializeApp() {
   const posthogHost = process.env.POSTHOG_HOST || 'https://us.i.posthog.com';
   posthog.init(posthogKey, { host: posthogHost });
 
-  // Test token validity with retry for transient network errors
+  // Test token validity with retry for transient network errors.
+  // CRITICAL: Only delete token on explicit server rejection (401/403).
+  // Network errors, timeouts, and DNS failures must NOT delete the token —
+  // the user should stay authenticated in offline/degraded mode.
   let tokenValid = false;
+  let tokenRejected = false; // true only if server explicitly returned 401/403
   let user = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -825,9 +865,14 @@ async function initializeApp() {
       break;
     } catch (e) {
       const status = e.response?.status;
-      // If 401/403 after refresh attempt, token is truly invalid
-      if (status === 401 || status === 403) break;
-      // Transient error — retry after short delay
+      // If 401/403 after refresh attempt, token is truly invalid — stop retrying
+      if (status === 401 || status === 403) {
+        tokenRejected = true;
+        console.warn(`[Auth] Token rejected by server (HTTP ${status}) — will require login`);
+        break;
+      }
+      // Transient error (network, timeout, DNS) — retry after short delay
+      console.log(`[Auth] Token validation attempt ${attempt + 1}/3 failed (${e.message}) — retrying...`);
       if (attempt < 2) {
         await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
       }
@@ -835,11 +880,20 @@ async function initializeApp() {
   }
 
   if (!tokenValid) {
-    await deleteToken();
-    isAuthenticated = false;
-    createTray();
-    createLoginWindow();
-    return;
+    if (tokenRejected) {
+      // Server explicitly said token is invalid — delete and require login
+      console.warn('[Auth] Token invalid — deleting and showing login');
+      await deleteToken();
+      isAuthenticated = false;
+      createTray();
+      createLoginWindow();
+      return;
+    }
+    // Network error — keep token, start in offline/degraded mode.
+    // The token is likely still valid; we just can't reach the server right now.
+    // When network returns, reconcileTimerState() will re-validate.
+    console.log('[Auth] Cannot reach server but token exists — starting in offline mode');
+    tokenValid = true; // Trust the local token
   }
 
   isAuthenticated = true;
@@ -877,6 +931,14 @@ async function initializeApp() {
     notifyPopup('screenshot-permission-issue', {
       type: 'wallpaper-detected',
       message: 'Screenshots may only show your wallpaper. Screen Recording permission needs to be refreshed.',
+    });
+  });
+  screenshotService.setScreenshotCapturedCallback(() => {
+    _lastScreenshotAt = new Date().toISOString();
+    notifyPopup('activity-update', {
+      activityScore: activityMonitor ? activityMonitor.getCurrentScore() : 0,
+      lastScreenshotAt: _lastScreenshotAt,
+      isOnline: networkMonitor?.isOnline ?? true,
     });
   });
   idleDetector = new IdleDetector(config);
@@ -1277,8 +1339,15 @@ async function loadProjects() {
   try {
     const projects = await apiClient.getProjects();
     cachedProjects = Array.isArray(projects) ? projects : [];
+    if (cachedProjects.length > 0) {
+      saveCachedProjects(cachedProjects);
+    }
   } catch {
-    cachedProjects = [];
+    // Offline — load from local cache so project selector isn't empty
+    if (cachedProjects.length === 0) {
+      cachedProjects = loadCachedProjects();
+      console.log(`[loadProjects] API failed, loaded ${cachedProjects.length} projects from local cache`);
+    }
   }
 }
 
@@ -1464,23 +1533,24 @@ function showPopup() {
 
   const trayBounds = tray.getBounds();
   const windowWidth = 320;
-  const windowHeight = 400;
+  const windowHeight = 440;
 
-  // Calculate position — platform-aware:
-  //   macOS: tray is at the top → popup below tray
-  //   Windows: taskbar is at bottom → popup above tray
-  //   Linux: taskbar can be anywhere → detect and adapt
-  let x = Math.round(trayBounds.x - windowWidth / 2 + trayBounds.width / 2);
-  let y;
+  // MULTI-MONITOR FIX: Always position popup on the display where the tray icon
+  // actually lives. Use the tray center point to find the correct display,
+  // then calculate coordinates relative to that display's work area.
+  let x, y;
 
   try {
-    const display = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
+    const trayCenterX = Math.round(trayBounds.x + trayBounds.width / 2);
+    const trayCenterY = Math.round(trayBounds.y + trayBounds.height / 2);
+    const display = screen.getDisplayNearestPoint({ x: trayCenterX, y: trayCenterY });
     const workArea = display.workArea;
 
-    // Determine if tray is in the top or bottom half of the screen
-    const trayCenter = trayBounds.y + trayBounds.height / 2;
-    const screenCenter = workArea.y + workArea.height / 2;
-    const trayIsAtTop = trayCenter < screenCenter;
+    // Center popup horizontally on the tray icon
+    x = Math.round(trayCenterX - windowWidth / 2);
+
+    // Determine if tray is in the top or bottom half of the display
+    const trayIsAtTop = trayCenterY < (workArea.y + workArea.height / 2);
 
     if (trayIsAtTop) {
       // macOS / Linux top panel: popup below tray
@@ -1490,12 +1560,14 @@ function showPopup() {
       y = trayBounds.y - windowHeight - 4;
     }
 
-    // Clamp to work area so popup never goes off-screen
+    // Clamp to THIS display's work area so popup stays on the correct monitor
     x = Math.max(workArea.x, Math.min(x, workArea.x + workArea.width - windowWidth));
     y = Math.max(workArea.y, Math.min(y, workArea.y + workArea.height - windowHeight));
   } catch {
-    // Fallback: below tray
-    y = trayBounds.y + trayBounds.height + 4;
+    // Fallback: below tray on primary display
+    const primary = screen.getPrimaryDisplay();
+    x = Math.round(primary.workArea.x + primary.workArea.width / 2 - windowWidth / 2);
+    y = primary.workArea.y + 40;
   }
 
   popupWindow = new BrowserWindow({
@@ -1507,7 +1579,7 @@ function showPopup() {
     resizable: false,
     skipTaskbar: true,
     show: false,
-    backgroundColor: '#0a0a0a',   // Prevent white flash on all platforms
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#121110' : '#ffffff',
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
@@ -1601,6 +1673,7 @@ async function performLogout() {
   currentEntry = null;
   _cachedStartedAtMs = null;
   isAuthenticated = false;
+  _lastScreenshotAt = null;
   activityMonitor?.stop();
   screenshotService?.stop();
   idleDetector?.stop();
@@ -1683,6 +1756,7 @@ function setupIPC() {
   ipcMain.removeHandler('toggle-pin');
   ipcMain.removeHandler('get-pin-state');
   ipcMain.removeHandler('install-update');
+  ipcMain.removeHandler('get-activity-info');
 
   ipcMain.handle('hide-window', () => {
     if (popupWindow && !popupWindow.isDestroyed()) {
@@ -1742,8 +1816,39 @@ function setupIPC() {
     online: networkMonitor?.isOnline ?? true,
   }));
 
-  ipcMain.handle('install-update', () => {
-    console.log('[updater] User clicked Restart Now — installing update');
+  ipcMain.handle('install-update', async () => {
+    console.log('[updater] User clicked Restart Now — preparing to install update');
+
+    // 1. Save restart state so the tracking session survives the update.
+    //    On restart, the app will detect the binary change, re-probe permission,
+    //    and auto-resume tracking once permission is confirmed.
+    if (isTimerRunning) {
+      saveRestartState();
+      console.log('[updater] Restart state saved — timer was running, will auto-resume after update');
+    }
+
+    // 2. Stop timer on the server gracefully (3-second timeout)
+    if (isTimerRunning && apiClient) {
+      try {
+        const stopPayload = currentEntry?.started_at
+          ? { started_at: currentEntry.started_at, ended_at: new Date().toISOString() }
+          : {};
+        await Promise.race([
+          apiClient.stopTimer(stopPayload),
+          new Promise(r => setTimeout(r, 3000)),
+        ]);
+        console.log('[updater] Timer stopped on server before update');
+      } catch (e) {
+        console.warn('[updater] Failed to stop timer on server (will reconcile on restart):', e.message);
+      }
+    }
+
+    // 3. Clean up services
+    activityMonitor?.stop();
+    screenshotService?.stop();
+    idleDetector?.stop();
+
+    // 4. Install and restart
     const { autoUpdater } = require('electron-updater');
     autoUpdater.quitAndInstall(false, true);
   });
@@ -1799,16 +1904,33 @@ function setupIPC() {
   });
 
   ipcMain.handle('get-projects', async () => {
-    if (!apiClient) return [];
+    if (!apiClient) return cachedProjects.length > 0 ? cachedProjects : loadCachedProjects();
     try {
-      return await apiClient.getProjects();
+      const projects = await apiClient.getProjects();
+      const list = Array.isArray(projects) ? projects : [];
+      if (list.length > 0) {
+        cachedProjects = list;
+        saveCachedProjects(list);
+      }
+      return list;
     } catch {
-      return [];
+      // Offline — return locally cached projects
+      if (cachedProjects.length > 0) return cachedProjects;
+      return loadCachedProjects();
     }
   });
 
   ipcMain.handle('get-last-project', () => {
     return loadLastProjectId();
+  });
+
+  ipcMain.removeHandler('get-activity-info');
+  ipcMain.handle('get-activity-info', () => {
+    return {
+      activityScore: activityMonitor ? activityMonitor.getCurrentScore() : 0,
+      lastScreenshotAt: _lastScreenshotAt,
+      isOnline: networkMonitor?.isOnline ?? true,
+    };
   });
 
   ipcMain.handle('set-last-project', (_, projectId) => {
@@ -2481,7 +2603,13 @@ function startTrayTimer() {
     setTrayText(formatted);
     // L12: Only send IPC to renderer when window is visible — avoids wasted work
     if (popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible()) {
-      popupWindow.webContents.send('timer-tick', { totalSeconds, formatted });
+      popupWindow.webContents.send('timer-tick', {
+        totalSeconds,
+        formatted,
+        activityScore: activityMonitor ? activityMonitor.getCurrentScore() : 0,
+        lastScreenshotAt: _lastScreenshotAt,
+        isOnline: networkMonitor?.isOnline ?? true,
+      });
     }
   }, 1000);
 }
@@ -2497,6 +2625,87 @@ function notifyPopup(event, data) {
   if (popupWindow && !popupWindow.isDestroyed()) {
     popupWindow.webContents.send(event, data);
   }
+}
+
+// ── Attention Request — cross-platform tray/dock bounce ──────────────────────
+// Draws user attention via dock bounce (macOS) or taskbar flash (Windows/Linux).
+// For 'critical' type: bounces/flashes continuously until cancelUserAttention() is called.
+let _dockBounceId = null;
+let _flashInterval = null;
+let _idleRefocusInterval = null;
+
+function requestUserAttention(type = 'informational') {
+  try {
+    // macOS: dock bounce. 'critical' bounces until user focuses app
+    if (process.platform === 'darwin' && app.dock) {
+      // Cancel any previous bounce first
+      if (_dockBounceId != null) { try { app.dock.cancelBounce(_dockBounceId); } catch {} }
+      _dockBounceId = app.dock.bounce(type === 'critical' ? 'critical' : 'informational');
+    }
+    // Windows/Linux: flash the taskbar/tray
+    if (process.platform !== 'darwin') {
+      const win = idleAlertWindow && !idleAlertWindow.isDestroyed()
+        ? idleAlertWindow
+        : (popupWindow && !popupWindow.isDestroyed() ? popupWindow : null);
+      if (win) {
+        win.flashFrame(true);
+        if (type === 'critical') {
+          // Keep flashing every 3 seconds until cancelled
+          if (_flashInterval) clearInterval(_flashInterval);
+          _flashInterval = setInterval(() => {
+            try { if (!win.isDestroyed()) win.flashFrame(true); } catch {}
+          }, 3000);
+        } else {
+          // Single flash for 5 seconds
+          setTimeout(() => { try { win.flashFrame(false); } catch {} }, 5000);
+        }
+      }
+    }
+
+    // For critical (idle alert): periodically re-focus the window so it stays on top
+    // even if the user clicks another app. Re-focus every 5 seconds while alert is visible.
+    if (type === 'critical') {
+      if (_idleRefocusInterval) clearInterval(_idleRefocusInterval);
+      _idleRefocusInterval = setInterval(() => {
+        if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
+          idleAlertWindow.setAlwaysOnTop(true, 'screen-saver'); // highest z-level
+          if (typeof idleAlertWindow.moveTop === 'function') idleAlertWindow.moveTop();
+        } else {
+          // Window gone — stop refocusing
+          clearInterval(_idleRefocusInterval);
+          _idleRefocusInterval = null;
+        }
+      }, 5000);
+    }
+  } catch (e) {
+    console.warn('[Attention] Failed to request attention:', e.message);
+  }
+}
+
+function cancelUserAttention() {
+  try {
+    // macOS: stop dock bounce
+    if (process.platform === 'darwin' && app.dock && _dockBounceId != null) {
+      app.dock.cancelBounce(_dockBounceId);
+      _dockBounceId = null;
+    }
+    // Windows/Linux: stop flashing
+    if (_flashInterval) {
+      clearInterval(_flashInterval);
+      _flashInterval = null;
+    }
+    const win = idleAlertWindow && !idleAlertWindow.isDestroyed()
+      ? idleAlertWindow
+      : (popupWindow && !popupWindow.isDestroyed() ? popupWindow : null);
+    if (win && process.platform !== 'darwin') {
+      try { win.flashFrame(false); } catch {}
+    }
+    // Stop refocusing
+    if (_idleRefocusInterval) {
+      clearInterval(_idleRefocusInterval);
+      _idleRefocusInterval = null;
+    }
+  } catch {}
 }
 
 // ── Idle Alert System ────────────────────────────────────────────────────────
@@ -2553,20 +2762,31 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
   const preloadPath = path.join(__dirname, '..', 'preload', 'index.js');
   console.log(`[IdleAlert] Creating window — htmlPath=${htmlPath}, preloadPath=${preloadPath}, __dirname=${__dirname}`);
 
+  // ALWAYS position idle alert on the PRIMARY display — even if user has extended monitors.
+  // This ensures the alert is visible on the main screen where the user is most likely looking.
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const idleWinWidth = 380;
+  const idleWinHeight = 520;
+  const idleX = Math.round(primaryDisplay.workArea.x + (primaryDisplay.workArea.width - idleWinWidth) / 2);
+  const idleY = Math.round(primaryDisplay.workArea.y + (primaryDisplay.workArea.height - idleWinHeight) / 2);
+
   idleAlertWindow = new BrowserWindow({
-    width: 380,
-    height: 520,
+    width: idleWinWidth,
+    height: idleWinHeight,
+    x: idleX,
+    y: idleY,
     frame: false,
     resizable: false,
     alwaysOnTop: true,
     skipTaskbar: false,
-    center: true,
     show: false,
+    // Force the window to appear above everything — even full-screen apps
+    focusable: true,
     // Ensure the idle alert appears on whichever macOS Space / Linux workspace the
     // user is currently viewing. Without this the window can open on a different
     // desktop and appear invisible.
     visibleOnAllWorkspaces: true,
-    backgroundColor: '#0a0a0a',   // Prevent white flash on all platforms
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#121110' : '#ffffff',
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
@@ -2591,6 +2811,9 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     console.log('[IdleAlert] Showing idle alert window');
     win.show();
     win.focus();
+    if (typeof win.moveTop === 'function') win.moveTop();
+    // Request user attention — dock bounce (macOS) / taskbar flash (Windows)
+    requestUserAttention('critical');
     win.webContents.send('idle-data', {
       idleStartedAt,
       idleSeconds,
@@ -2657,6 +2880,8 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
 }
 
 function dismissIdleAlert() {
+  // Stop dock bounce / taskbar flash / refocus interval
+  cancelUserAttention();
   if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
     // Mark as programmatic dismissal so the 'closed' handler doesn't
     // re-arm the idle detector (handleIdleAction already did that).
@@ -2821,7 +3046,7 @@ function createLoginWindow() {
     frame: false,        // Custom titlebar for identical look on macOS/Windows/Linux
     resizable: false,
     center: true,
-    backgroundColor: '#0a0a0a',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#121110' : '#ffffff',
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
@@ -3108,6 +3333,9 @@ function checkForUpdates() {
         }
       } catch {}
 
+      // Request attention for the update
+      requestUserAttention('informational');
+
       // Also show a system notification as a fallback
       try {
         const notification = new Notification({
@@ -3117,6 +3345,7 @@ function checkForUpdates() {
         });
         notification.on('click', () => {
           console.log('[updater] User clicked notification — installing update now');
+          if (isTimerRunning) saveRestartState();
           autoUpdater.quitAndInstall(false, true);
         });
         notification.show();
@@ -3152,6 +3381,7 @@ function checkForUpdates() {
     app.on('before-quit', () => {
       if (_pendingUpdate) {
         console.log('[updater] App quitting — installing pending update');
+        if (isTimerRunning) saveRestartState();
         try {
           autoUpdater.quitAndInstall(false, true);
         } catch (e) {
