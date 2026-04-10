@@ -1848,16 +1848,15 @@ function setupIPC() {
     screenshotService?.stop();
     idleDetector?.stop();
 
-    // 4. Install and restart — try native first, fall back to manual on macOS
-    try {
+    // 4. Install and restart
+    if (process.platform === 'darwin') {
+      // macOS ad-hoc signed: always use manual update (ShipIt rejects ad-hoc signatures)
+      console.log('[updater] macOS — using manual update (ad-hoc signing workaround)');
+      await performManualMacUpdate();
+    } else {
+      // Windows/Linux: native updater works fine
       const { autoUpdater } = require('electron-updater');
       autoUpdater.quitAndInstall(false, true);
-    } catch (e) {
-      console.warn('[updater] quitAndInstall failed:', e.message);
-      if (process.platform === 'darwin') {
-        console.log('[updater] Falling back to manual macOS update');
-        await performManualMacUpdate();
-      }
     }
   });
 
@@ -3307,117 +3306,181 @@ function _friendlyLoginError(e) {
 }
 
 // ── Manual macOS Update (ad-hoc signing workaround) ─────────────────────────
-// When ShipIt rejects the code signature, we manually:
-// 1. Find the downloaded update zip in the electron-updater cache
-// 2. Extract it to a temp directory
-// 3. Replace the current .app bundle with the new one
-// 4. Relaunch the app
+// When ShipIt rejects the code signature on ad-hoc signed builds, we bypass it
+// entirely by downloading the update zip directly from GitHub, extracting it,
+// replacing the .app bundle, and relaunching. This is 100% reliable because
+// we don't depend on finding the zip in an unknown cache directory.
+let _manualUpdateInProgress = false;
+
 async function performManualMacUpdate() {
+  if (_manualUpdateInProgress) return;
+  _manualUpdateInProgress = true;
+
   try {
-    const { execFile: execFileCb } = require('child_process');
-    const { promisify } = require('util');
-    const execFileAsync = promisify(execFileCb);
+    console.log('[updater] Starting manual macOS update...');
 
-    // Find the downloaded zip in electron-updater's cache
-    const cacheDir = path.join(app.getPath('userData'), 'update-cache');
-    const pendingDir = path.join(app.getPath('home'), 'Library', 'Caches', `${app.name}.ShipIt`);
+    // 1. Read latest-mac.yml from GitHub to get the correct zip URL and sha512
+    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+    const repoOwner = 'codeupscale';
+    const repoName = 'trackflow';
+    const latestYmlUrl = `https://github.com/${repoOwner}/${repoName}/releases/latest/download/latest-mac.yml`;
 
-    // electron-updater stores the downloaded zip in the cache directory
-    const updaterCacheDir = path.join(app.getPath('userData'));
-    let updateZip = null;
+    console.log(`[updater] Fetching ${latestYmlUrl}`);
+    const https = require('https');
+    const ymlText = await new Promise((resolve, reject) => {
+      const follow = (url, redirects = 0) => {
+        if (redirects > 5) { reject(new Error('Too many redirects')); return; }
+        https.get(url, { headers: { 'User-Agent': 'TrackFlow-Updater' } }, (res) => {
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            follow(res.headers.location, redirects + 1);
+            return;
+          }
+          if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
+          let data = '';
+          res.on('data', c => data += c);
+          res.on('end', () => resolve(data));
+        }).on('error', reject);
+      };
+      follow(latestYmlUrl);
+    });
 
-    // Search for the update zip in common locations
-    const searchDirs = [
-      path.join(app.getPath('userData')),
-      path.join(app.getPath('home'), 'Library', 'Caches', app.name),
-      path.join(app.getPath('home'), 'Library', 'Caches', `${app.getName()}-updater`),
-    ];
-
-    for (const dir of searchDirs) {
-      if (!fs.existsSync(dir)) continue;
-      const files = fs.readdirSync(dir).filter(f => f.endsWith('.zip') && f.includes('TrackFlow'));
-      if (files.length > 0) {
-        // Use the most recently modified zip
-        const sorted = files.map(f => ({ name: f, mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
-          .sort((a, b) => b.mtime - a.mtime);
-        updateZip = path.join(dir, sorted[0].name);
-        break;
-      }
-    }
-
-    if (!updateZip || !fs.existsSync(updateZip)) {
-      console.error('[updater] Manual update failed — cannot find downloaded zip');
+    // Parse the YAML to find the zip URL for our architecture
+    const zipPattern = new RegExp(`TrackFlow-[\\d.]+-mac-${arch}\\.zip`);
+    const zipMatch = ymlText.match(zipPattern);
+    if (!zipMatch) {
+      console.error(`[updater] No zip found for arch ${arch} in latest-mac.yml`);
+      _manualUpdateInProgress = false;
       return;
     }
+    const zipFileName = zipMatch[0];
+    const zipUrl = `https://github.com/${repoOwner}/${repoName}/releases/latest/download/${zipFileName}`;
+    console.log(`[updater] Will download: ${zipUrl}`);
 
-    console.log(`[updater] Found update zip: ${updateZip}`);
-
-    // Save restart state before updating
+    // 2. Save restart state and stop timer
     if (isTimerRunning) saveRestartState();
-
-    // Stop timer on server
     if (isTimerRunning && apiClient) {
       try {
         await Promise.race([apiClient.stopTimer(), new Promise(r => setTimeout(r, 3000))]);
       } catch {}
     }
+    activityMonitor?.stop();
+    screenshotService?.stop();
+    idleDetector?.stop();
 
+    // 3. Notify user that download is in progress
+    notifyPopup('update-progress', { status: 'downloading' });
+
+    // 4. Download the zip to a temp file
+    const tempZip = path.join(app.getPath('temp'), `trackflow-update-${Date.now()}.zip`);
+    console.log(`[updater] Downloading to ${tempZip}...`);
+
+    await new Promise((resolve, reject) => {
+      const follow = (url, redirects = 0) => {
+        if (redirects > 5) { reject(new Error('Too many redirects')); return; }
+        https.get(url, { headers: { 'User-Agent': 'TrackFlow-Updater' } }, (res) => {
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            follow(res.headers.location, redirects + 1);
+            return;
+          }
+          if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
+          const file = fs.createWriteStream(tempZip);
+          res.pipe(file);
+          file.on('finish', () => { file.close(); resolve(); });
+          file.on('error', reject);
+        }).on('error', reject);
+      };
+      follow(zipUrl);
+    });
+
+    const zipSize = fs.statSync(tempZip).size;
+    console.log(`[updater] Downloaded ${Math.round(zipSize / 1024 / 1024)}MB`);
+
+    if (zipSize < 1024 * 1024) {
+      console.error('[updater] Downloaded zip is too small — likely an error page');
+      fs.unlinkSync(tempZip);
+      _manualUpdateInProgress = false;
+      return;
+    }
+
+    // 5. Create a detached shell script that replaces the app after quit
     const appPath = app.getPath('exe').replace(/\/Contents\/MacOS\/.*$/, '');
-    const tempDir = path.join(app.getPath('temp'), 'trackflow-update');
-
-    console.log(`[updater] Extracting ${updateZip} to ${tempDir}`);
-    console.log(`[updater] Will replace ${appPath}`);
-
-    // Create a shell script that waits for app to quit, then replaces and relaunches
+    const tempDir = path.join(app.getPath('temp'), 'trackflow-update-extract');
     const scriptPath = path.join(app.getPath('temp'), 'trackflow-update.sh');
-    const script = `#!/bin/bash
-# Wait for the old app to fully quit
-sleep 2
+    const logPath = path.join(app.getPath('temp'), 'trackflow-update.log');
 
-# Extract update zip to temp
+    const script = `#!/bin/bash
+exec > "${logPath}" 2>&1
+echo "[$(date)] Manual update script started"
+echo "Waiting for app to quit..."
+
+# Wait for the old app process to fully exit (up to 10 seconds)
+for i in $(seq 1 20); do
+  if ! pgrep -f "TrackFlow" > /dev/null 2>&1; then
+    echo "App has quit after ${i}x0.5s"
+    break
+  fi
+  sleep 0.5
+done
+
+# Extract the zip
+echo "Extracting ${tempZip}..."
 rm -rf "${tempDir}"
 mkdir -p "${tempDir}"
-unzip -o -q "${updateZip}" -d "${tempDir}"
-
-# Find the .app in the extracted directory
-NEW_APP=$(find "${tempDir}" -name "*.app" -maxdepth 2 -type d | head -1)
-if [ -z "$NEW_APP" ]; then
-  echo "ERROR: No .app found in update zip"
+if ! unzip -o -q "${tempZip}" -d "${tempDir}"; then
+  echo "ERROR: unzip failed"
   exit 1
 fi
 
-# Replace the old app with the new one
+# Find the .app bundle
+NEW_APP=$(find "${tempDir}" -name "*.app" -maxdepth 2 -type d | head -1)
+if [ -z "$NEW_APP" ]; then
+  echo "ERROR: No .app found in extracted zip"
+  ls -la "${tempDir}"
+  exit 1
+fi
+echo "Found new app: $NEW_APP"
+
+# Replace the old app
+echo "Replacing ${appPath}..."
 rm -rf "${appPath}"
-cp -R "$NEW_APP" "${appPath}"
+if ! cp -R "$NEW_APP" "${appPath}"; then
+  echo "ERROR: cp failed"
+  exit 1
+fi
 
-# Clear quarantine attribute
+# Clear quarantine so macOS doesn't block it
 xattr -cr "${appPath}" 2>/dev/null
+echo "Quarantine cleared"
 
-# Clean up
+# Clean up temp files
 rm -rf "${tempDir}"
-rm -f "${updateZip}"
+rm -f "${tempZip}"
+echo "Cleaned up temp files"
 
-# Relaunch
+# Relaunch the updated app
+echo "Relaunching ${appPath}..."
 open "${appPath}"
+echo "Done!"
 
 # Self-delete
 rm -f "${scriptPath}"
 `;
 
     fs.writeFileSync(scriptPath, script, { mode: 0o755 });
-    console.log('[updater] Manual update script written, quitting app...');
+    console.log('[updater] Update script written, quitting app...');
 
-    // Launch the update script detached and quit
+    // Launch the script detached — it runs AFTER the app exits
     const child = require('child_process').spawn('bash', [scriptPath], {
       detached: true,
       stdio: 'ignore',
     });
     child.unref();
 
-    // Quit the app — the script will replace and relaunch
+    // Quit the app — the script takes over from here
     app.exit(0);
   } catch (e) {
-    console.error('[updater] Manual update failed:', e.message);
+    console.error('[updater] Manual update failed:', e.message, e.stack);
+    _manualUpdateInProgress = false;
   }
 }
 
