@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Services\ShiftService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -33,6 +34,28 @@ class AgentController extends Controller
             'idle_check_interval_sec' => (int) $org->getSetting('idle_check_interval_sec', 10),
             'capture_only_when_visible' => (bool) $org->getSetting('capture_only_when_visible', false),
             'capture_multi_monitor' => (bool) $org->getSetting('capture_multi_monitor', false),
+        ]);
+    }
+
+    public function myShift(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $shift = app(ShiftService::class)->getUserCurrentShift($user->organization_id, $user->id);
+
+        if (!$shift) {
+            return response()->json(['shift' => null]);
+        }
+
+        return response()->json([
+            'shift' => [
+                'id' => $shift->id,
+                'name' => $shift->name,
+                'start_time' => $shift->start_time,
+                'end_time' => $shift->end_time,
+                'break_minutes' => $shift->break_minutes,
+                'timezone' => $shift->timezone,
+                'grace_period_minutes' => $shift->grace_period_minutes,
+            ],
         ]);
     }
 

@@ -163,6 +163,20 @@ describe('ApiClient', () => {
     expect(client._onTokenRefreshed).toBe(callback);
   });
 
+  test('getMyShift should return shift data', async () => {
+    const shiftData = { shift: { id: 's1', name: 'Morning', start_time: '09:00:00', end_time: '17:00:00' } };
+    mockAxios.get.mockResolvedValueOnce({ data: shiftData });
+    const result = await client.getMyShift();
+    expect(mockAxios.get).toHaveBeenCalledWith('/agent/my-shift', { timeout: 10000 });
+    expect(result.shift.name).toBe('Morning');
+  });
+
+  test('getMyShift should handle null shift', async () => {
+    mockAxios.get.mockResolvedValueOnce({ data: { shift: null } });
+    const result = await client.getMyShift();
+    expect(result.shift).toBeNull();
+  });
+
   describe('token refresh coalescing', () => {
     test('_doRefresh should coalesce concurrent calls', async () => {
       axios.post.mockResolvedValueOnce({

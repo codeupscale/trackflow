@@ -587,6 +587,35 @@ window.trackflow.onUpdateReady((data) => {
   }
 });
 
+// ── Shift Info ──────────────────────────────────────────
+function formatShiftTime(timeStr) {
+  if (!timeStr) return '';
+  return timeStr.substring(0, 5);
+}
+
+function updateShiftDisplay(shift) {
+  const el = document.getElementById('shiftInfo');
+  const nameEl = document.getElementById('shiftName');
+  const timeEl = document.getElementById('shiftTime');
+  if (!el) return;
+
+  if (shift) {
+    nameEl.textContent = shift.name;
+    timeEl.textContent = `${formatShiftTime(shift.start_time)} - ${formatShiftTime(shift.end_time)}`;
+    el.style.display = 'flex';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+window.trackflow.getShiftInfo().then(data => {
+  updateShiftDisplay(data?.shift);
+}).catch(() => {});
+
+window.trackflow.onShiftUpdate(data => {
+  updateShiftDisplay(data?.shift);
+});
+
 window.addEventListener('error', (e) => console.error('Renderer error:', e.message));
 window.addEventListener('unhandledrejection', (e) => console.error('Renderer unhandled rejection:', e.reason));
 
