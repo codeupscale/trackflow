@@ -109,6 +109,8 @@ const DEFAULT_CONFIG = {
   can_add_manual_time: true,
 };
 
+let currentShift = null; // Current user's assigned shift (from /agent/my-shift)
+
 // ── Last Selected Project Persistence ────────────────────────────────────────
 // Persist the last selected project ID to a JSON file in userData so it
 // survives logout/login cycles and app restarts.
@@ -145,39 +147,6 @@ function saveLastProjectId(projectId) {
     console.error('Failed to save last project ID:', e);
   }
 }
-
-// ── Cached Projects Persistence (Offline Resilience) ────────────────────────
-// Cache the project list locally so it survives network outages.
-// When the API is unreachable, the renderer gets the cached list instead of empty.
-function loadCachedProjects() {
-  try {
-    const p = getPrefsPath();
-    if (!p || !fs.existsSync(p)) return [];
-    const data = JSON.parse(fs.readFileSync(p, 'utf8'));
-    return Array.isArray(data.cachedProjects) ? data.cachedProjects : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveCachedProjects(projects) {
-  try {
-    const p = getPrefsPath();
-    if (!p) return;
-    let data = {};
-    if (fs.existsSync(p)) {
-      try { data = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { data = {}; }
-    }
-    data.cachedProjects = Array.isArray(projects) ? projects : [];
-    fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
-  } catch (e) {
-    console.error('Failed to save cached projects:', e);
-  }
-}
-
-// ── Activity/Screenshot Info for Renderer ───────────────────────────────────
-// Tracks last screenshot time and exposes activity score to the UI.
-let _lastScreenshotAt = null; // ISO string of last successful screenshot capture/queue
 
 // ── Always-on-Top (Pin) Persistence ──────────────────────────────────────────
 // Persists the "always on top" / "pin" state so it survives app restarts.
@@ -243,12 +212,10 @@ function loadRestartState() {
     const p = getRestartStatePath();
     if (!p || !fs.existsSync(p)) return null;
     const data = JSON.parse(fs.readFileSync(p, 'utf8'));
-    // Only honour restart state if it was saved within the last 10 minutes.
-    // 10-minute TTL accommodates app updates where the user needs to re-grant
-    // macOS screen recording permission before the session auto-resumes.
+    // Only honour restart state if it was saved within the last 5 minutes
     const savedAt = new Date(data.savedAt).getTime();
-    if (Date.now() - savedAt > 10 * 60 * 1000) {
-      console.log('[RestartState] Expired (older than 10 minutes), ignoring');
+    if (Date.now() - savedAt > 5 * 60 * 1000) {
+      console.log('[RestartState] Expired (older than 5 minutes), ignoring');
       clearRestartState();
       return null;
     }
@@ -494,14 +461,10 @@ let trayTimerInterval = null;
 let isQuitting = false;
 // Idle action mutex — prevents double-action from auto-stop + user click race
 let _idleActionInProgress = false;
+// Tray click timestamp — used to suppress spurious blur events on macOS/Windows
+let _lastTrayClickAt = 0;
 // Cache parsed started_at timestamp to avoid re-parsing every second
 let _cachedStartedAtMs = null;
-// RACE-FIX: Monotonic version counter for timer state changes.
-// Every start/stop increments this. Notifications carry the version so the
-// renderer can discard stale out-of-order messages from async follow-ups.
-let _timerStateVersion = 0;
-// RACE-FIX: Mutex to prevent concurrent stopTimer calls
-let _stopTimerInProgress = false;
 // M8 FIX: Clock skew compensation — server time minus local time
 let _clockOffsetMs = 0;
 // NOTE: _suspendedAt is declared inside initializeApp() as a closure variable
@@ -742,7 +705,6 @@ async function forceLogout() {
   currentEntry = null;
   _cachedStartedAtMs = null;
   isAuthenticated = false;
-  _lastScreenshotAt = null;
 
   activityMonitor?.stop();
   screenshotService?.stop();
@@ -772,6 +734,7 @@ async function forceLogout() {
   todayTotalGlobal = 0;
   todayTotalCurrentProject = 0;
   config = {};
+  currentShift = null;
 
   if (popupWindow && !popupWindow.isDestroyed()) {
     popupWindow.destroy();
@@ -790,37 +753,6 @@ async function initializeApp() {
   // Register theme handler early — needed by both login and main windows
   ipcMain.removeHandler('get-theme');
   ipcMain.handle('get-theme', () => getOSTheme());
-
-  // ── Early Screen Recording Permission Check (macOS) ──────────────────────
-  // Run BEFORE auth check so the permission prompt appears on first launch,
-  // even before the user logs in. This ensures the app registers in macOS
-  // System Settings > Screen Recording list immediately.
-  if (process.platform === 'darwin') {
-    const apiStatus = checkScreenRecordingPermission();
-    if (apiStatus) {
-      console.log('[Permission] Screen recording granted (API) — skipping probe');
-      _screenPermissionGranted = true;
-    } else {
-      // Not granted — probe to register app in System Settings list,
-      // then show onboarding dialog. Await so the user can grant before proceeding.
-      try {
-        const probeGranted = await probeScreenRecordingPermission();
-        if (probeGranted) {
-          console.log('[Permission] Probe confirmed permission — no onboarding needed');
-          _screenPermissionGranted = true;
-        } else {
-          console.log('[Permission] Screen recording NOT granted at launch — showing onboarding');
-          _screenPermissionGranted = false;
-          saveScreenPermissionState(false);
-          await showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false });
-        }
-      } catch {
-        _screenPermissionGranted = false;
-        saveScreenPermissionState(false);
-        await showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
-      }
-    }
-  }
 
   // Load saved tokens
   const token = await getToken();
@@ -851,12 +783,8 @@ async function initializeApp() {
   const posthogHost = process.env.POSTHOG_HOST || 'https://us.i.posthog.com';
   posthog.init(posthogKey, { host: posthogHost });
 
-  // Test token validity with retry for transient network errors.
-  // CRITICAL: Only delete token on explicit server rejection (401/403).
-  // Network errors, timeouts, and DNS failures must NOT delete the token —
-  // the user should stay authenticated in offline/degraded mode.
+  // Test token validity with retry for transient network errors
   let tokenValid = false;
-  let tokenRejected = false; // true only if server explicitly returned 401/403
   let user = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -865,14 +793,9 @@ async function initializeApp() {
       break;
     } catch (e) {
       const status = e.response?.status;
-      // If 401/403 after refresh attempt, token is truly invalid — stop retrying
-      if (status === 401 || status === 403) {
-        tokenRejected = true;
-        console.warn(`[Auth] Token rejected by server (HTTP ${status}) — will require login`);
-        break;
-      }
-      // Transient error (network, timeout, DNS) — retry after short delay
-      console.log(`[Auth] Token validation attempt ${attempt + 1}/3 failed (${e.message}) — retrying...`);
+      // If 401/403 after refresh attempt, token is truly invalid
+      if (status === 401 || status === 403) break;
+      // Transient error — retry after short delay
       if (attempt < 2) {
         await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
       }
@@ -880,20 +803,11 @@ async function initializeApp() {
   }
 
   if (!tokenValid) {
-    if (tokenRejected) {
-      // Server explicitly said token is invalid — delete and require login
-      console.warn('[Auth] Token invalid — deleting and showing login');
-      await deleteToken();
-      isAuthenticated = false;
-      createTray();
-      createLoginWindow();
-      return;
-    }
-    // Network error — keep token, start in offline/degraded mode.
-    // The token is likely still valid; we just can't reach the server right now.
-    // When network returns, reconcileTimerState() will re-validate.
-    console.log('[Auth] Cannot reach server but token exists — starting in offline mode');
-    tokenValid = true; // Trust the local token
+    await deleteToken();
+    isAuthenticated = false;
+    createTray();
+    createLoginWindow();
+    return;
   }
 
   isAuthenticated = true;
@@ -920,6 +834,12 @@ async function initializeApp() {
     config = { ...DEFAULT_CONFIG };
   }
 
+  // Fetch initial shift data
+  try {
+    const shiftData = await apiClient.getMyShift();
+    currentShift = shiftData?.shift || null;
+  } catch {}
+
   // Initialize services
   offlineQueue = new OfflineQueue();
   activityMonitor = new ActivityMonitor(apiClient, offlineQueue);
@@ -931,14 +851,6 @@ async function initializeApp() {
     notifyPopup('screenshot-permission-issue', {
       type: 'wallpaper-detected',
       message: 'Screenshots may only show your wallpaper. Screen Recording permission needs to be refreshed.',
-    });
-  });
-  screenshotService.setScreenshotCapturedCallback(() => {
-    _lastScreenshotAt = new Date().toISOString();
-    notifyPopup('activity-update', {
-      activityScore: activityMonitor ? activityMonitor.getCurrentScore() : 0,
-      lastScreenshotAt: _lastScreenshotAt,
-      isOnline: networkMonitor?.isOnline ?? true,
     });
   });
   idleDetector = new IdleDetector(config);
@@ -961,7 +873,6 @@ async function initializeApp() {
 
   // Wire idle detection events
   idleDetector.onIdleDetected((idleSeconds, idleStartedAt, actionId) => {
-    console.log(`[IdleDetector] Idle detected! idleSeconds=${idleSeconds}, actionId=${actionId}, policy=${config.keep_idle_time || 'prompt'}`);
     // Pause both screenshot and activity capture during idle.
     // This prevents zero-event heartbeats from dragging down the activity score.
     screenshotService?.stop();
@@ -994,42 +905,19 @@ async function initializeApp() {
   });
 
   idleDetector.onAutoStop((totalIdleSeconds, actionId) => {
-    console.log(`[IdleAlert] Auto-stop fired: totalIdleSeconds=${totalIdleSeconds}, actionId=${actionId}`);
     handleIdleAction('stop', actionId, totalIdleSeconds);
+    dismissIdleAlert();
 
-    // Keep the idle alert window visible — update it to show "Timer Stopped"
-    // so the user sees it when they return. Do NOT dismiss.
-    if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
-      idleAlertWindow._autoStopped = true;
-      idleAlertWindow.webContents.send('auto-stopped', {
-        idleDuration: totalIdleSeconds,
-        stoppedAt: Date.now(),
-      });
-      // Play notification sound to alert the user
-      try {
-        if (Notification.isSupported()) {
-          const n = new Notification({
-            title: 'TrackFlow — Timer Stopped',
-            body: `Timer was automatically stopped after ${Math.floor(totalIdleSeconds / 60)} minutes of inactivity.`,
-            silent: false,
-          });
-          n.show();
-          setTimeout(() => { try { n.close(); } catch {} }, 5000);
-        }
-      } catch {}
-    } else {
-      // Popup was already closed — just show a notification
-      try {
-        if (Notification.isSupported()) {
-          const n = new Notification({
-            title: 'TrackFlow — Timer Stopped',
-            body: `Timer was automatically stopped after ${Math.floor(totalIdleSeconds / 60)} minutes of inactivity.`,
-            silent: false,
-          });
-          n.show();
-        }
-      } catch {}
-    }
+    try {
+      if (Notification.isSupported()) {
+        const n = new Notification({
+          title: 'TrackFlow — Timer Stopped',
+          body: `Timer was automatically stopped after ${Math.floor(totalIdleSeconds / 60)} minutes of inactivity.`,
+          silent: false,
+        });
+        n.show();
+      }
+    } catch {}
   });
 
   // Keep dock icon visible on macOS — the app has both tray and dock presence
@@ -1050,6 +938,37 @@ async function initializeApp() {
 
   // Flush offline queue (L7: orphan cleanup also runs after each successful flush)
   offlineQueue.flush(apiClient);
+
+  // ── Early Screen Recording Permission Check (macOS) ──────────────────────
+  // Check if permission is granted using systemPreferences API first.
+  // Only probe desktopCapturer when permission is NOT granted (to register
+  // the app in the macOS Screen Recording list). Probing when permission IS
+  // granted triggers an unnecessary native macOS popup dialog.
+  if (process.platform === 'darwin') {
+    const apiStatus = checkScreenRecordingPermission();
+    if (apiStatus) {
+      // systemPreferences says granted — trust it, no probe needed.
+      // This avoids the native macOS "TrackFlow would like to record" popup.
+      console.log('[Permission] Screen recording granted (API) — skipping probe');
+      _screenPermissionGranted = true;
+    } else {
+      // Not granted — probe to register app in System Settings list,
+      // then show onboarding dialog.
+      probeScreenRecordingPermission().then((probeGranted) => {
+        if (probeGranted) {
+          console.log('[Permission] Probe confirmed permission — no onboarding needed');
+          _screenPermissionGranted = true;
+          return;
+        }
+        console.log('[Permission] Screen recording NOT granted at launch — showing onboarding');
+        _screenPermissionGranted = false;
+        showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
+      }).catch(() => {
+        _screenPermissionGranted = false;
+        showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
+      });
+    }
+  }
 
   // ── Restart State Auto-Resume ────────────────────────────────────────────
   // If the app was restarted after granting Screen Recording permission,
@@ -1123,16 +1042,8 @@ async function initializeApp() {
 
   const handleSuspend = () => {
     if (!isTimerRunning) return;
-    // Only record the FIRST suspend timestamp — macOS fires both 'suspend'
-    // and 'lock-screen' on lid close. The second event must NOT overwrite
-    // _suspendedAt or the sleep duration calculation will be too short.
-    if (!_suspendedAt) {
-      _suspendedAt = Date.now();
-      console.log('[power] Suspended/locked — pausing capture');
-    } else {
-      console.log('[power] Duplicate suspend/lock event ignored — already suspended since', new Date(_suspendedAt).toISOString());
-      return;
-    }
+    _suspendedAt = Date.now();
+    console.log('[power] Suspended/locked — pausing capture');
     // Send final heartbeat to capture any pending activity data
     if (activityMonitor) {
       activityMonitor.sendFinalHeartbeat().catch(() => {});
@@ -1146,7 +1057,6 @@ async function initializeApp() {
 
   const handleResume = () => {
     if (!isTimerRunning || !_suspendedAt) {
-      console.log(`[power] Resume ignored — isTimerRunning=${isTimerRunning}, _suspendedAt=${_suspendedAt}`);
       _suspendedAt = null;
       _idleStateAtSuspend = null;
       return;
@@ -1174,7 +1084,6 @@ async function initializeApp() {
     }
 
     const idleThresholdSec = idleDetector?.idleTimeoutSec || (config.idle_timeout || 5) * 60;
-    console.log(`[power] Idle check: sleepDuration=${sleepDurationSec}s vs threshold=${idleThresholdSec}s (config.idle_timeout=${config.idle_timeout}min), policy=${config.keep_idle_time || 'prompt'}`);
 
     if (sleepDurationSec >= idleThresholdSec) {
       // Long sleep — treat as idle.
@@ -1268,8 +1177,7 @@ async function initializeApp() {
           idleDetector?.start();
           startTrayTimer();
           updateTrayIcon(true);
-          _timerStateVersion++;
-          notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject, _stateVersion: _timerStateVersion });
+          notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
         } else if (!status.running && isTimerRunning) {
           // BUG-2 FIX: Don't override local state while idle alert is showing
           if (idleDetector?.isIdleActive()) {
@@ -1287,8 +1195,7 @@ async function initializeApp() {
           stopTrayTimer();
           updateTrayTitle();
           updateTrayIcon(false);
-          _timerStateVersion++;
-          notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal, _stateVersion: _timerStateVersion });
+          notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal });
         }
       } catch {}
     })();
@@ -1315,6 +1222,7 @@ function createTray() {
   // macOS: left-click toggles popup window visibility
   // Windows/Linux: left-click also toggles popup
   tray.on('click', () => {
+    _lastTrayClickAt = Date.now();
     if (!isAuthenticated) {
       createLoginWindow();
       return;
@@ -1339,15 +1247,8 @@ async function loadProjects() {
   try {
     const projects = await apiClient.getProjects();
     cachedProjects = Array.isArray(projects) ? projects : [];
-    if (cachedProjects.length > 0) {
-      saveCachedProjects(cachedProjects);
-    }
   } catch {
-    // Offline — load from local cache so project selector isn't empty
-    if (cachedProjects.length === 0) {
-      cachedProjects = loadCachedProjects();
-      console.log(`[loadProjects] API failed, loaded ${cachedProjects.length} projects from local cache`);
-    }
+    cachedProjects = [];
   }
 }
 
@@ -1533,24 +1434,23 @@ function showPopup() {
 
   const trayBounds = tray.getBounds();
   const windowWidth = 320;
-  const windowHeight = 440;
+  const windowHeight = 400;
 
-  // MULTI-MONITOR FIX: Always position popup on the display where the tray icon
-  // actually lives. Use the tray center point to find the correct display,
-  // then calculate coordinates relative to that display's work area.
-  let x, y;
+  // Calculate position — platform-aware:
+  //   macOS: tray is at the top → popup below tray
+  //   Windows: taskbar is at bottom → popup above tray
+  //   Linux: taskbar can be anywhere → detect and adapt
+  let x = Math.round(trayBounds.x - windowWidth / 2 + trayBounds.width / 2);
+  let y;
 
   try {
-    const trayCenterX = Math.round(trayBounds.x + trayBounds.width / 2);
-    const trayCenterY = Math.round(trayBounds.y + trayBounds.height / 2);
-    const display = screen.getDisplayNearestPoint({ x: trayCenterX, y: trayCenterY });
+    const display = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
     const workArea = display.workArea;
 
-    // Center popup horizontally on the tray icon
-    x = Math.round(trayCenterX - windowWidth / 2);
-
-    // Determine if tray is in the top or bottom half of the display
-    const trayIsAtTop = trayCenterY < (workArea.y + workArea.height / 2);
+    // Determine if tray is in the top or bottom half of the screen
+    const trayCenter = trayBounds.y + trayBounds.height / 2;
+    const screenCenter = workArea.y + workArea.height / 2;
+    const trayIsAtTop = trayCenter < screenCenter;
 
     if (trayIsAtTop) {
       // macOS / Linux top panel: popup below tray
@@ -1560,14 +1460,12 @@ function showPopup() {
       y = trayBounds.y - windowHeight - 4;
     }
 
-    // Clamp to THIS display's work area so popup stays on the correct monitor
+    // Clamp to work area so popup never goes off-screen
     x = Math.max(workArea.x, Math.min(x, workArea.x + workArea.width - windowWidth));
     y = Math.max(workArea.y, Math.min(y, workArea.y + workArea.height - windowHeight));
   } catch {
-    // Fallback: below tray on primary display
-    const primary = screen.getPrimaryDisplay();
-    x = Math.round(primary.workArea.x + primary.workArea.width / 2 - windowWidth / 2);
-    y = primary.workArea.y + 40;
+    // Fallback: below tray
+    y = trayBounds.y + trayBounds.height + 4;
   }
 
   popupWindow = new BrowserWindow({
@@ -1579,7 +1477,7 @@ function showPopup() {
     resizable: false,
     skipTaskbar: true,
     show: false,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#121110' : '#ffffff',
+    backgroundColor: '#0a0a0a',   // Prevent white flash on all platforms
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
@@ -1615,19 +1513,17 @@ function showPopup() {
     });
   });
 
-  // Hide on blur — with debounce for Linux DEs that fire spurious blur events
-  // (e.g. KDE fires blur then immediately re-focuses when clicking tray)
+  // Hide on blur — debounced on all platforms to prevent show-then-immediately-hide
+  // race when the tray icon click steals focus before the popup can render
   let blurTimeout = null;
   popupWindow.on('blur', () => {
-    if (process.platform === 'linux') {
-      blurTimeout = setTimeout(() => {
-        if (popupWindow && !popupWindow.isDestroyed() && !popupWindow.isFocused()) {
-          popupWindow.hide();
-        }
-      }, 150);
-    } else {
-      popupWindow.hide();
-    }
+    if (blurTimeout) { clearTimeout(blurTimeout); blurTimeout = null; }
+    if (Date.now() - _lastTrayClickAt < 300) return;
+    blurTimeout = setTimeout(() => {
+      if (popupWindow && !popupWindow.isDestroyed() && !popupWindow.isFocused()) {
+        popupWindow.hide();
+      }
+    }, 150);
   });
   popupWindow.on('focus', () => {
     if (blurTimeout) { clearTimeout(blurTimeout); blurTimeout = null; }
@@ -1655,7 +1551,7 @@ function validateProjectId(id) {
 }
 
 function validateIdleAction(action) {
-  const valid = ['keep', 'discard', 'stop', 'reassign', 'dismiss'];
+  const valid = ['keep', 'discard', 'stop', 'reassign'];
   return valid.includes(action) ? action : null;
 }
 
@@ -1673,7 +1569,6 @@ async function performLogout() {
   currentEntry = null;
   _cachedStartedAtMs = null;
   isAuthenticated = false;
-  _lastScreenshotAt = null;
   activityMonitor?.stop();
   screenshotService?.stop();
   idleDetector?.stop();
@@ -1704,6 +1599,7 @@ async function performLogout() {
   todayTotalGlobal = 0;
   todayTotalCurrentProject = 0;
   config = {};
+  currentShift = null;
 
   if (popupWindow && !popupWindow.isDestroyed()) {
     popupWindow.destroy();
@@ -1756,7 +1652,6 @@ function setupIPC() {
   ipcMain.removeHandler('toggle-pin');
   ipcMain.removeHandler('get-pin-state');
   ipcMain.removeHandler('install-update');
-  ipcMain.removeHandler('get-activity-info');
 
   ipcMain.handle('hide-window', () => {
     if (popupWindow && !popupWindow.isDestroyed()) {
@@ -1816,48 +1711,15 @@ function setupIPC() {
     online: networkMonitor?.isOnline ?? true,
   }));
 
-  ipcMain.handle('install-update', async () => {
-    console.log('[updater] User clicked Restart Now — preparing to install update');
+  ipcMain.handle('install-update', () => {
+    console.log('[updater] User clicked Restart Now — installing update');
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.quitAndInstall(false, true);
+  });
 
-    // 1. Save restart state so the tracking session survives the update.
-    //    On restart, the app will detect the binary change, re-probe permission,
-    //    and auto-resume tracking once permission is confirmed.
-    if (isTimerRunning) {
-      saveRestartState();
-      console.log('[updater] Restart state saved — timer was running, will auto-resume after update');
-    }
-
-    // 2. Stop timer on the server gracefully (3-second timeout)
-    if (isTimerRunning && apiClient) {
-      try {
-        const stopPayload = currentEntry?.started_at
-          ? { started_at: currentEntry.started_at, ended_at: new Date().toISOString() }
-          : {};
-        await Promise.race([
-          apiClient.stopTimer(stopPayload),
-          new Promise(r => setTimeout(r, 3000)),
-        ]);
-        console.log('[updater] Timer stopped on server before update');
-      } catch (e) {
-        console.warn('[updater] Failed to stop timer on server (will reconcile on restart):', e.message);
-      }
-    }
-
-    // 3. Clean up services
-    activityMonitor?.stop();
-    screenshotService?.stop();
-    idleDetector?.stop();
-
-    // 4. Install and restart
-    if (process.platform === 'darwin') {
-      // macOS ad-hoc signed: always use manual update (ShipIt rejects ad-hoc signatures)
-      console.log('[updater] macOS — using manual update (ad-hoc signing workaround)');
-      await performManualMacUpdate();
-    } else {
-      // Windows/Linux: native updater works fine
-      const { autoUpdater } = require('electron-updater');
-      autoUpdater.quitAndInstall(false, true);
-    }
+  ipcMain.removeHandler('get-shift-info');
+  ipcMain.handle('get-shift-info', async () => {
+    return { shift: currentShift };
   });
 
   ipcMain.handle('get-timer-state', async (_, projectId) => {
@@ -1911,33 +1773,16 @@ function setupIPC() {
   });
 
   ipcMain.handle('get-projects', async () => {
-    if (!apiClient) return cachedProjects.length > 0 ? cachedProjects : loadCachedProjects();
+    if (!apiClient) return [];
     try {
-      const projects = await apiClient.getProjects();
-      const list = Array.isArray(projects) ? projects : [];
-      if (list.length > 0) {
-        cachedProjects = list;
-        saveCachedProjects(list);
-      }
-      return list;
+      return await apiClient.getProjects();
     } catch {
-      // Offline — return locally cached projects
-      if (cachedProjects.length > 0) return cachedProjects;
-      return loadCachedProjects();
+      return [];
     }
   });
 
   ipcMain.handle('get-last-project', () => {
     return loadLastProjectId();
-  });
-
-  ipcMain.removeHandler('get-activity-info');
-  ipcMain.handle('get-activity-info', () => {
-    return {
-      activityScore: activityMonitor ? activityMonitor.getCurrentScore() : 0,
-      lastScreenshotAt: _lastScreenshotAt,
-      isOnline: networkMonitor?.isOnline ?? true,
-    };
   });
 
   ipcMain.handle('set-last-project', (_, projectId) => {
@@ -1957,11 +1802,6 @@ function setupIPC() {
   ipcMain.handle('resolve-idle', async (_, action, projectId = null, actionId = null) => {
     const validAction = validateIdleAction(action);
     if (!validAction) return { error: 'Invalid action' };
-    // 'dismiss' — timer was already auto-stopped, just close the popup
-    if (validAction === 'dismiss') {
-      dismissIdleAlert();
-      return { success: true };
-    }
     const validProjectId = validateProjectId(projectId);
     await handleIdleAction(validAction, actionId, null, validProjectId);
     dismissIdleAlert();
@@ -2041,8 +1881,7 @@ async function switchProject(projectId) {
     idleDetector?.stop();
     idleDetector?.start();
 
-    _timerStateVersion++;
-    notifyPopup('timer-started', { ...newEntry, todayTotal: todayTotalCurrentProject, _stateVersion: _timerStateVersion });
+    notifyPopup('timer-started', { ...newEntry, todayTotal: todayTotalCurrentProject });
     updateTrayTitle();
 
     return { success: true, entry: newEntry, todayTotal: todayTotalCurrentProject };
@@ -2101,12 +1940,8 @@ async function startTimer(projectId = null) {
     const localStartedAt = new Date().toISOString();
     _cachedStartedAtMs = Date.now();
 
-    // RACE-FIX: Increment state version — all notifications from this start carry this version
-    _timerStateVersion++;
-    const startVersion = _timerStateVersion;
-
     saveLocalTimerStart(localId, idempotencyKey, projectId, localStartedAt);
-    console.log(`[Timer] Local start recorded: ${localId}, key=${idempotencyKey}, stateVersion=${startVersion}`);
+    console.log(`[Timer] Local start recorded: ${localId}, key=${idempotencyKey}`);
 
     // Set local state immediately — timer is running regardless of network
     const localEntry = {
@@ -2132,10 +1967,7 @@ async function startTimer(projectId = null) {
       posthog.capture(currentEntry?.user_id || 'unknown', 'timer_started', { project_id: projectId });
 
       const todayTotalForPopup = todayTotalCurrentProject;
-      // RACE-FIX: Only notify if this start is still current (no stop raced us during await)
-      if (_timerStateVersion === startVersion) {
-        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup, _stateVersion: startVersion });
-      }
+      notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup });
       setImmediate(() => afterStartTimer(projectId, todayTotalForPopup));
       return { success: true, entry: currentEntry, todayTotal: todayTotalForPopup };
     } catch (e) {
@@ -2154,9 +1986,7 @@ async function startTimer(projectId = null) {
           isTimerRunning = true;
           todayTotalCurrentProject = retryResult.today_total ?? 0;
           markLocalTimerStartSynced(localId, retryResult.entry.id);
-          if (_timerStateVersion === startVersion) {
-            notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject, _stateVersion: startVersion });
-          }
+          notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
           setImmediate(() => afterStartTimer(projectId, todayTotalCurrentProject));
           return { success: true, entry: currentEntry, todayTotal: todayTotalCurrentProject };
         } catch (retryErr) {
@@ -2173,9 +2003,7 @@ async function startTimer(projectId = null) {
         idempotency_key: idempotencyKey,
         started_at: localStartedAt,
       });
-      if (_timerStateVersion === startVersion) {
-        notifyPopup('timer-started', { ...localEntry, todayTotal: 0, offline: true, _stateVersion: startVersion });
-      }
+      notifyPopup('timer-started', { ...localEntry, todayTotal: 0, offline: true });
       setImmediate(() => afterStartTimer(projectId, 0));
       return { success: true, entry: localEntry, todayTotal: 0, offline: true };
     }
@@ -2185,17 +2013,6 @@ async function startTimer(projectId = null) {
 }
 
 async function stopTimer() {
-  // RACE-FIX: Prevent concurrent stop calls from racing with each other
-  if (_stopTimerInProgress) {
-    console.log('[Timer] Stop already in progress — ignoring duplicate call');
-    return { success: true, entry: null, todayTotal: 0 };
-  }
-  _stopTimerInProgress = true;
-
-  // RACE-FIX: Increment state version so any stale async notifications are discarded
-  _timerStateVersion++;
-  const stopVersion = _timerStateVersion;
-
   const sessionElapsed = currentEntry && _cachedStartedAtMs
     ? Math.max(0, Math.floor((Date.now() - _cachedStartedAtMs) / 1000))
     : 0;
@@ -2276,11 +2093,7 @@ async function stopTimer() {
   stopTrayTimer();
   updateTrayIcon(false);
 
-  notifyPopup('timer-stopped', { entry: null, todayTotal: localStoppedProjectTotal, _stateVersion: stopVersion });
-
-  // RACE-FIX: Release stop mutex BEFORE async follow-up work.
-  // The synchronous state transition is complete — the timer is stopped.
-  _stopTimerInProgress = false;
+  notifyPopup('timer-stopped', { entry: null, todayTotal: localStoppedProjectTotal });
 
   // Post-stop async work (non-blocking)
   (async () => {
@@ -2305,14 +2118,7 @@ async function stopTimer() {
     try {
       todayTotalForPopup = await apiClient.getTodayTotal(stoppedProjectId);
     } catch {}
-    // RACE-FIX: Only send the follow-up notification if no new start/stop has happened
-    // since this stop began. Without this guard, the async follow-up overwrites a
-    // subsequent 'timer-started' notification, causing the "Start button while running" bug.
-    if (_timerStateVersion === stopVersion) {
-      notifyPopup('timer-stopped', { entry: result?.entry ?? null, todayTotal: todayTotalForPopup, _stateVersion: stopVersion });
-    } else {
-      console.log(`[Timer] Skipping stale post-stop notification (stopVersion=${stopVersion}, current=${_timerStateVersion})`);
-    }
+    notifyPopup('timer-stopped', { entry: result?.entry ?? null, todayTotal: todayTotalForPopup });
   })().catch(() => {});
 
   return { success: true, entry: null, todayTotal: localStoppedProjectTotal };
@@ -2470,6 +2276,14 @@ function startTimerSync() {
       } catch (e) {
         // Silent failure — keep using existing config
       }
+      try {
+        const shiftData = await apiClient.getMyShift();
+        currentShift = shiftData?.shift || null;
+        notifyPopup('shift-update', { shift: currentShift });
+        console.log('[Shift] Fetched:', currentShift?.name || 'none');
+      } catch (e) {
+        // Silent failure — keep using existing shift data
+      }
     }
 
     // CONNECTIVITY FIX: Skip sync when offline to avoid unnecessary errors
@@ -2502,8 +2316,7 @@ function startTimerSync() {
         idleDetector?.start();
         startTrayTimer();
         updateTrayIcon(true);
-        _timerStateVersion++;
-        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject, _stateVersion: _timerStateVersion });
+        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
       } else if (!status.running && isTimerRunning) {
         // BUG-2 FIX: Don't override local state while idle alert is showing — the server may show
         // timer as stopped because idle-discard split the entry, but locally we're still
@@ -2524,8 +2337,7 @@ function startTimerSync() {
         stopTrayTimer();
         updateTrayTitle();
         updateTrayIcon(false);
-        _timerStateVersion++;
-        notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal, _stateVersion: _timerStateVersion });
+        notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal });
       }
     } catch (err) {
       if (isTransientTimerSyncError(err)) {
@@ -2610,13 +2422,7 @@ function startTrayTimer() {
     setTrayText(formatted);
     // L12: Only send IPC to renderer when window is visible — avoids wasted work
     if (popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible()) {
-      popupWindow.webContents.send('timer-tick', {
-        totalSeconds,
-        formatted,
-        activityScore: activityMonitor ? activityMonitor.getCurrentScore() : 0,
-        lastScreenshotAt: _lastScreenshotAt,
-        isOnline: networkMonitor?.isOnline ?? true,
-      });
+      popupWindow.webContents.send('timer-tick', { totalSeconds, formatted });
     }
   }, 1000);
 }
@@ -2634,91 +2440,9 @@ function notifyPopup(event, data) {
   }
 }
 
-// ── Attention Request — cross-platform tray/dock bounce ──────────────────────
-// Draws user attention via dock bounce (macOS) or taskbar flash (Windows/Linux).
-// For 'critical' type: bounces/flashes continuously until cancelUserAttention() is called.
-let _dockBounceId = null;
-let _flashInterval = null;
-let _idleRefocusInterval = null;
-
-function requestUserAttention(type = 'informational') {
-  try {
-    // macOS: dock bounce. 'critical' bounces until user focuses app
-    if (process.platform === 'darwin' && app.dock) {
-      // Cancel any previous bounce first
-      if (_dockBounceId != null) { try { app.dock.cancelBounce(_dockBounceId); } catch {} }
-      _dockBounceId = app.dock.bounce(type === 'critical' ? 'critical' : 'informational');
-    }
-    // Windows/Linux: flash the taskbar/tray
-    if (process.platform !== 'darwin') {
-      const win = idleAlertWindow && !idleAlertWindow.isDestroyed()
-        ? idleAlertWindow
-        : (popupWindow && !popupWindow.isDestroyed() ? popupWindow : null);
-      if (win) {
-        win.flashFrame(true);
-        if (type === 'critical') {
-          // Keep flashing every 3 seconds until cancelled
-          if (_flashInterval) clearInterval(_flashInterval);
-          _flashInterval = setInterval(() => {
-            try { if (!win.isDestroyed()) win.flashFrame(true); } catch {}
-          }, 3000);
-        } else {
-          // Single flash for 5 seconds
-          setTimeout(() => { try { win.flashFrame(false); } catch {} }, 5000);
-        }
-      }
-    }
-
-    // For critical (idle alert): periodically re-focus the window so it stays on top
-    // even if the user clicks another app. Re-focus every 5 seconds while alert is visible.
-    if (type === 'critical') {
-      if (_idleRefocusInterval) clearInterval(_idleRefocusInterval);
-      _idleRefocusInterval = setInterval(() => {
-        if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
-          idleAlertWindow.setAlwaysOnTop(true, 'screen-saver'); // highest z-level
-          if (typeof idleAlertWindow.moveTop === 'function') idleAlertWindow.moveTop();
-        } else {
-          // Window gone — stop refocusing
-          clearInterval(_idleRefocusInterval);
-          _idleRefocusInterval = null;
-        }
-      }, 5000);
-    }
-  } catch (e) {
-    console.warn('[Attention] Failed to request attention:', e.message);
-  }
-}
-
-function cancelUserAttention() {
-  try {
-    // macOS: stop dock bounce
-    if (process.platform === 'darwin' && app.dock && _dockBounceId != null) {
-      app.dock.cancelBounce(_dockBounceId);
-      _dockBounceId = null;
-    }
-    // Windows/Linux: stop flashing
-    if (_flashInterval) {
-      clearInterval(_flashInterval);
-      _flashInterval = null;
-    }
-    const win = idleAlertWindow && !idleAlertWindow.isDestroyed()
-      ? idleAlertWindow
-      : (popupWindow && !popupWindow.isDestroyed() ? popupWindow : null);
-    if (win && process.platform !== 'darwin') {
-      try { win.flashFrame(false); } catch {}
-    }
-    // Stop refocusing
-    if (_idleRefocusInterval) {
-      clearInterval(_idleRefocusInterval);
-      _idleRefocusInterval = null;
-    }
-  } catch {}
-}
-
 // ── Idle Alert System ────────────────────────────────────────────────────────
 
 async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
-  console.log(`[IdleAlert] showIdleAlert called: idleSeconds=${idleSeconds}, actionId=${actionId}, detectorState=${idleDetector?.state}, isIdleActive=${idleDetector?.isIdleActive()}`);
   // Capture the actionId at call time; if not provided, read from detector
   const alertActionId = actionId ?? idleDetector?.getActionId() ?? 0;
 
@@ -2742,10 +2466,7 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
   // BUG-2 FIX: Check idle detector state instead of isTimerRunning to avoid race condition
   // where a concurrent sync cycle temporarily sets isTimerRunning=false, preventing the
   // modal from appearing. The idle detector is the authoritative source of idle state.
-  if (!idleDetector?.isIdleActive()) {
-    console.warn('[IdleAlert] showIdleAlert aborted — idleDetector not in idle-active state');
-    return;
-  }
+  if (!idleDetector?.isIdleActive()) return;
 
   screenshotService?.stop();
 
@@ -2765,35 +2486,20 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
   // Refresh project list so idle reassign dropdown is up-to-date
   await loadProjects();
 
-  const htmlPath = path.join(__dirname, '..', 'renderer', 'idle-alert.html');
-  const preloadPath = path.join(__dirname, '..', 'preload', 'index.js');
-  console.log(`[IdleAlert] Creating window — htmlPath=${htmlPath}, preloadPath=${preloadPath}, __dirname=${__dirname}`);
-
-  // ALWAYS position idle alert on the PRIMARY display — even if user has extended monitors.
-  // This ensures the alert is visible on the main screen where the user is most likely looking.
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const idleWinWidth = 380;
-  const idleWinHeight = 520;
-  const idleX = Math.round(primaryDisplay.workArea.x + (primaryDisplay.workArea.width - idleWinWidth) / 2);
-  const idleY = Math.round(primaryDisplay.workArea.y + (primaryDisplay.workArea.height - idleWinHeight) / 2);
-
   idleAlertWindow = new BrowserWindow({
-    width: idleWinWidth,
-    height: idleWinHeight,
-    x: idleX,
-    y: idleY,
+    width: 380,
+    height: 520,
     frame: false,
     resizable: false,
     alwaysOnTop: true,
     skipTaskbar: false,
+    center: true,
     show: false,
-    // Force the window to appear above everything — even full-screen apps
-    focusable: true,
     // Ensure the idle alert appears on whichever macOS Space / Linux workspace the
     // user is currently viewing. Without this the window can open on a different
     // desktop and appear invisible.
     visibleOnAllWorkspaces: true,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#121110' : '#ffffff',
+    backgroundColor: '#0a0a0a',   // Prevent white flash on all platforms
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
@@ -2813,14 +2519,10 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
 
   function showAndSendData() {
     if (shown) return;
-    if (win.isDestroyed()) { console.warn('[IdleAlert] Window destroyed before show'); return; }
+    if (win.isDestroyed()) return;
     shown = true;
-    console.log('[IdleAlert] Showing idle alert window');
     win.show();
     win.focus();
-    if (typeof win.moveTop === 'function') win.moveTop();
-    // Request user attention — dock bounce (macOS) / taskbar flash (Windows)
-    requestUserAttention('critical');
     win.webContents.send('idle-data', {
       idleStartedAt,
       idleSeconds,
@@ -2841,54 +2543,50 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
   // If the idle alert window is closed without the user clicking an action
   // button (e.g., Cmd+W, dock close, OS memory pressure), treat as "keep"
   // (safest default — does not discard tracked time) and re-arm the detector.
-  // Exception: if auto-stop already fired (_autoStopped=true), timer is already
-  // stopped — just clean up, don't re-arm.
   win._dismissedProgrammatically = false;
-  win._autoStopped = false;
 
   win.on('closed', () => {
     idleAlertWindow = null;
     if (!win._dismissedProgrammatically) {
-      if (win._autoStopped) {
-        // Auto-stop already stopped the timer — just clean up
-        console.log('[IdleAlert] Window closed after auto-stop — timer already stopped, no action needed');
-        updateTrayIcon(isTimerRunning);
-        return;
-      }
-      console.log('[IdleAlert] Window closed without user action — treating as "keep" and re-arming idle detector');
-      // Use the action ID stored on the window to resolve the correct idle cycle
-      const windowActionId = win._actionId;
-      const resolved = idleDetector?.resolveIdle(windowActionId);
-      if (resolved) {
-        // Only restart services if resolve succeeded (not stale)
-        activityMonitor?.start();
-        if (isTimerRunning && currentEntry) {
-          screenshotService?.start(currentEntry.id, {
-            immediateCapture: config.screenshot_capture_immediate_after_idle === true,
-          });
+      if (idleDetector?.isIdleActive() && isTimerRunning) {
+        console.log('[IdleAlert] Window closed without user action — re-showing in 3s');
+        setTimeout(() => {
+          if (idleDetector?.isIdleActive() && isTimerRunning) {
+            const idleDuration = idleDetector.getIdleDuration();
+            const idleStart = idleDetector.idleStartedAt;
+            const actionId = idleDetector.getActionId();
+            showIdleAlert(idleDuration, idleStart, actionId);
+          }
+        }, 3000);
+      } else {
+        console.log('[IdleAlert] Window closed without user action — idle already resolved, treating as keep');
+        const windowActionId = win._actionId;
+        const resolved = idleDetector?.resolveIdle(windowActionId);
+        if (resolved) {
+          activityMonitor?.start();
+          if (isTimerRunning && currentEntry) {
+            screenshotService?.start(currentEntry.id, {
+              immediateCapture: config.screenshot_capture_immediate_after_idle === true,
+            });
+          }
+          idleDetector?.start();
         }
-        idleDetector?.start();
-      }
-      // Restore tray regardless
-      updateTrayIcon(isTimerRunning);
-      if (isTimerRunning) {
-        updateTrayTitle();
-        startTrayTimer();
+        updateTrayIcon(isTimerRunning);
+        if (isTimerRunning) {
+          updateTrayTitle();
+          startTrayTimer();
+        }
       }
     }
   });
 
-  win.loadFile(htmlPath).then(() => {
-    console.log('[IdleAlert] idle-alert.html loaded successfully');
-  }).catch((err) => {
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'idle-alert.html')).catch((err) => {
     console.error('[IdleAlert] Failed to load idle-alert.html:', err.message);
   });
 
 }
 
 function dismissIdleAlert() {
-  // Stop dock bounce / taskbar flash / refocus interval
-  cancelUserAttention();
   if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
     // Mark as programmatic dismissal so the 'closed' handler doesn't
     // re-arm the idle detector (handleIdleAction already did that).
@@ -3053,7 +2751,7 @@ function createLoginWindow() {
     frame: false,        // Custom titlebar for identical look on macOS/Windows/Linux
     resizable: false,
     center: true,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#121110' : '#ffffff',
+    backgroundColor: '#0a0a0a',
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
@@ -3305,185 +3003,6 @@ function _friendlyLoginError(e) {
   return e.message || 'Login failed. Please try again.';
 }
 
-// ── Manual macOS Update (ad-hoc signing workaround) ─────────────────────────
-// When ShipIt rejects the code signature on ad-hoc signed builds, we bypass it
-// entirely by downloading the update zip directly from GitHub, extracting it,
-// replacing the .app bundle, and relaunching. This is 100% reliable because
-// we don't depend on finding the zip in an unknown cache directory.
-let _manualUpdateInProgress = false;
-
-async function performManualMacUpdate() {
-  if (_manualUpdateInProgress) return;
-  _manualUpdateInProgress = true;
-
-  try {
-    console.log('[updater] Starting manual macOS update...');
-
-    // 1. Read latest-mac.yml from GitHub to get the correct zip URL and sha512
-    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
-    const repoOwner = 'codeupscale';
-    const repoName = 'trackflow';
-    const latestYmlUrl = `https://github.com/${repoOwner}/${repoName}/releases/latest/download/latest-mac.yml`;
-
-    console.log(`[updater] Fetching ${latestYmlUrl}`);
-    const https = require('https');
-    const ymlText = await new Promise((resolve, reject) => {
-      const follow = (url, redirects = 0) => {
-        if (redirects > 5) { reject(new Error('Too many redirects')); return; }
-        https.get(url, { headers: { 'User-Agent': 'TrackFlow-Updater' } }, (res) => {
-          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            follow(res.headers.location, redirects + 1);
-            return;
-          }
-          if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
-          let data = '';
-          res.on('data', c => data += c);
-          res.on('end', () => resolve(data));
-        }).on('error', reject);
-      };
-      follow(latestYmlUrl);
-    });
-
-    // Parse the YAML to find the zip URL for our architecture
-    const zipPattern = new RegExp(`TrackFlow-[\\d.]+-mac-${arch}\\.zip`);
-    const zipMatch = ymlText.match(zipPattern);
-    if (!zipMatch) {
-      console.error(`[updater] No zip found for arch ${arch} in latest-mac.yml`);
-      _manualUpdateInProgress = false;
-      return;
-    }
-    const zipFileName = zipMatch[0];
-    const zipUrl = `https://github.com/${repoOwner}/${repoName}/releases/latest/download/${zipFileName}`;
-    console.log(`[updater] Will download: ${zipUrl}`);
-
-    // 2. Save restart state and stop timer
-    if (isTimerRunning) saveRestartState();
-    if (isTimerRunning && apiClient) {
-      try {
-        await Promise.race([apiClient.stopTimer(), new Promise(r => setTimeout(r, 3000))]);
-      } catch {}
-    }
-    activityMonitor?.stop();
-    screenshotService?.stop();
-    idleDetector?.stop();
-
-    // 3. Notify user that download is in progress
-    notifyPopup('update-progress', { status: 'downloading' });
-
-    // 4. Download the zip to a temp file
-    const tempZip = path.join(app.getPath('temp'), `trackflow-update-${Date.now()}.zip`);
-    console.log(`[updater] Downloading to ${tempZip}...`);
-
-    await new Promise((resolve, reject) => {
-      const follow = (url, redirects = 0) => {
-        if (redirects > 5) { reject(new Error('Too many redirects')); return; }
-        https.get(url, { headers: { 'User-Agent': 'TrackFlow-Updater' } }, (res) => {
-          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            follow(res.headers.location, redirects + 1);
-            return;
-          }
-          if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
-          const file = fs.createWriteStream(tempZip);
-          res.pipe(file);
-          file.on('finish', () => { file.close(); resolve(); });
-          file.on('error', reject);
-        }).on('error', reject);
-      };
-      follow(zipUrl);
-    });
-
-    const zipSize = fs.statSync(tempZip).size;
-    console.log(`[updater] Downloaded ${Math.round(zipSize / 1024 / 1024)}MB`);
-
-    if (zipSize < 1024 * 1024) {
-      console.error('[updater] Downloaded zip is too small — likely an error page');
-      fs.unlinkSync(tempZip);
-      _manualUpdateInProgress = false;
-      return;
-    }
-
-    // 5. Create a detached shell script that replaces the app after quit
-    const appPath = app.getPath('exe').replace(/\/Contents\/MacOS\/.*$/, '');
-    const tempDir = path.join(app.getPath('temp'), 'trackflow-update-extract');
-    const scriptPath = path.join(app.getPath('temp'), 'trackflow-update.sh');
-    const logPath = path.join(app.getPath('temp'), 'trackflow-update.log');
-
-    const script = `#!/bin/bash
-exec > "${logPath}" 2>&1
-echo "[$(date)] Manual update script started"
-echo "Waiting for app to quit..."
-
-# Wait for the old app process to fully exit (up to 10 seconds)
-for i in $(seq 1 20); do
-  if ! pgrep -f "TrackFlow" > /dev/null 2>&1; then
-    echo "App has quit after ${i}x0.5s"
-    break
-  fi
-  sleep 0.5
-done
-
-# Extract the zip
-echo "Extracting ${tempZip}..."
-rm -rf "${tempDir}"
-mkdir -p "${tempDir}"
-if ! unzip -o -q "${tempZip}" -d "${tempDir}"; then
-  echo "ERROR: unzip failed"
-  exit 1
-fi
-
-# Find the .app bundle
-NEW_APP=$(find "${tempDir}" -name "*.app" -maxdepth 2 -type d | head -1)
-if [ -z "$NEW_APP" ]; then
-  echo "ERROR: No .app found in extracted zip"
-  ls -la "${tempDir}"
-  exit 1
-fi
-echo "Found new app: $NEW_APP"
-
-# Replace the old app
-echo "Replacing ${appPath}..."
-rm -rf "${appPath}"
-if ! cp -R "$NEW_APP" "${appPath}"; then
-  echo "ERROR: cp failed"
-  exit 1
-fi
-
-# Clear quarantine so macOS doesn't block it
-xattr -cr "${appPath}" 2>/dev/null
-echo "Quarantine cleared"
-
-# Clean up temp files
-rm -rf "${tempDir}"
-rm -f "${tempZip}"
-echo "Cleaned up temp files"
-
-# Relaunch the updated app
-echo "Relaunching ${appPath}..."
-open "${appPath}"
-echo "Done!"
-
-# Self-delete
-rm -f "${scriptPath}"
-`;
-
-    fs.writeFileSync(scriptPath, script, { mode: 0o755 });
-    console.log('[updater] Update script written, quitting app...');
-
-    // Launch the script detached — it runs AFTER the app exits
-    const child = require('child_process').spawn('bash', [scriptPath], {
-      detached: true,
-      stdio: 'ignore',
-    });
-    child.unref();
-
-    // Quit the app — the script takes over from here
-    app.exit(0);
-  } catch (e) {
-    console.error('[updater] Manual update failed:', e.message, e.stack);
-    _manualUpdateInProgress = false;
-  }
-}
-
 function checkForUpdates() {
   console.log(`[updater] Checking... (packaged=${app.isPackaged}, env=${process.env.NODE_ENV || 'production'})`);
   if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
@@ -3499,12 +3018,6 @@ function checkForUpdates() {
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.logger = null; // Suppress default electron-updater logging (we do our own)
-
-    // AD-HOC SIGNING FIX: On macOS, ShipIt (Squirrel's native updater) validates
-    // code signatures and rejects ad-hoc signed updates with:
-    //   "code failed to satisfy specified code requirement(s)"
-    // We handle this by catching the error and doing a manual update:
-    // download the zip, extract over the existing .app, then relaunch.
 
     // Track whether an update is ready to install
     let _pendingUpdate = false;
@@ -3525,9 +3038,6 @@ function checkForUpdates() {
         }
       } catch {}
 
-      // Request attention for the update
-      requestUserAttention('informational');
-
       // Also show a system notification as a fallback
       try {
         const notification = new Notification({
@@ -3537,7 +3047,6 @@ function checkForUpdates() {
         });
         notification.on('click', () => {
           console.log('[updater] User clicked notification — installing update now');
-          if (isTimerRunning) saveRestartState();
           autoUpdater.quitAndInstall(false, true);
         });
         notification.show();
@@ -3552,17 +3061,8 @@ function checkForUpdates() {
     const _updateRetryDelays = [2 * 60 * 1000, 4 * 60 * 1000, 8 * 60 * 1000]; // 2m, 4m, 8m
 
     autoUpdater.on('error', (err) => {
-      const errMsg = err?.message || String(err);
-      console.warn(`[updater] Error: ${errMsg}`);
+      console.warn(`[updater] Error: ${err?.message || err}`);
       posthog.captureError(null, err || new Error('auto_update_error'), { type: 'auto_update' });
-
-      // AD-HOC SIGNING FIX: If macOS ShipIt rejects the code signature,
-      // perform a manual update by extracting the downloaded zip over the app.
-      if (process.platform === 'darwin' && _pendingUpdate && errMsg.includes('code requirement')) {
-        console.log('[updater] macOS code signature rejected — attempting manual update');
-        performManualMacUpdate();
-        return; // Don't retry — we're handling it manually
-      }
 
       // L11: Retry with backoff
       if (_updateRetryCount < _updateMaxRetries) {
@@ -3582,7 +3082,6 @@ function checkForUpdates() {
     app.on('before-quit', () => {
       if (_pendingUpdate) {
         console.log('[updater] App quitting — installing pending update');
-        if (isTimerRunning) saveRestartState();
         try {
           autoUpdater.quitAndInstall(false, true);
         } catch (e) {
