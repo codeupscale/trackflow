@@ -134,6 +134,7 @@ Route::prefix('v1')->group(function () {
 
         // Agent (desktop safety — auth:sanctum only)
         Route::get('agent/config', [\App\Http\Controllers\Api\V1\AgentController::class, 'config']);
+        Route::get('agent/my-shift', [\App\Http\Controllers\Api\V1\AgentController::class, 'myShift']);
         Route::post('agent/logs', [\App\Http\Controllers\Api\V1\AgentController::class, 'bulkLogs'])->middleware('throttle:30,1');
 
         // Screenshots (store + signed-cookies are desktop safety — auth:sanctum only)

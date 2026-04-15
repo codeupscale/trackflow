@@ -70,4 +70,8 @@ contextBridge.exposeInMainWorld('trackflow', {
   // Auto-update
   onUpdateReady: (callback) => safeOn('update-ready', (_, data) => callback(data)),
   installUpdate: () => ipcRenderer.invoke('install-update'),
+
+  // Shift info
+  getShiftInfo: () => ipcRenderer.invoke('get-shift-info'),
+  onShiftUpdate: (callback) => safeOn('shift-update', (_, data) => callback(data)),
 });

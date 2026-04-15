@@ -123,6 +123,27 @@
     .activity-bar-fill.medium { background: var(--accent-amber); }
     .activity-bar-fill.high { background: var(--accent-green); }
 
+    /* ── Shift Info Banner ──────────────────────────────────── */
+    .shift-info {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      margin: 4px 0;
+      border-radius: 6px;
+      background: rgba(99, 102, 241, 0.1);
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .shift-info svg { color: var(--accent-primary, #6366f1); flex-shrink: 0; }
+    .shift-time {
+      margin-left: auto;
+      font-variant-numeric: tabular-nums;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
     /* ── Connection Status (always visible, above timer) ──── */
     .conn-status {
       display: flex;
@@ -386,6 +407,13 @@
         <span id="connText">Online</span>
         <span class="conn-sep" id="lastSsSep" style="display:none">&middot;</span>
         <span id="lastSsText"></span>
+      </div>
+
+      <!-- Shift info banner — visible when user has an assigned shift -->
+      <div class="shift-info" id="shiftInfo" style="display:none">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        <span id="shiftName"></span>
+        <span class="shift-time" id="shiftTime"></span>
       </div>
 
       <div class="timer-display">
