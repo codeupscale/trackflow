@@ -303,37 +303,10 @@ class OfflineQueue {
           } else if (item.type === 'idle_discard') {
             await apiClient.reportIdleTime(data);
             deleteIds.push(item.id);
-          } else if (item.type === 'timer_start') {
-            // Offline timer start — push to server with idempotency key
-            try {
-              await apiClient.startTimer(data.project_id || null, data.idempotency_key || null);
-              deleteIds.push(item.id);
-            } catch (startErr) {
-              // 200/201 = success (idempotency hit or new entry)
-              // 409 = timer already running — also success for our purpose
-              if (startErr.response?.status === 409) {
-                deleteIds.push(item.id);
-              } else {
-                throw startErr;
-              }
-            }
-          } else if (item.type === 'timer_stop') {
-            // CONNECTIVITY FIX: Retry stopping timer with offline timestamps
-            try {
-              const stopPayload = {};
-              if (data.started_at) stopPayload.started_at = data.started_at;
-              if (data.ended_at) stopPayload.ended_at = data.ended_at;
-              await apiClient.stopTimer(stopPayload);
-              deleteIds.push(item.id);
-            } catch (stopErr) {
-              // If 404 (no timer running), the timer was already stopped — success
-              if (stopErr.response?.status === 404) {
-                deleteIds.push(item.id);
-              } else {
-                throw stopErr; // Let outer catch handle retry logic
-              }
-            }
           }
+          // NOTE: timer_start and timer_stop are no longer queued here.
+          // Timer sync is handled exclusively by timer_sessions table + reconcileTimerState().
+          // This eliminates the dual-replay bug that caused duplicate time entries.
         } catch (e) {
           console.warn(`[OfflineQueue] Flush item failed (type=${item.type}, attempt=${item.attempts + 1}): ${e.message}`);
           // Update attempt count

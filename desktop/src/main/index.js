@@ -861,7 +861,7 @@ async function initializeApp() {
     console.log('[Network] Back online — reconciling and flushing');
     // Reconcile local timer state with server before flushing queue
     await reconcileTimerState();
-    offlineQueue?.flush(apiClient);
+    await offlineQueue?.flush(apiClient);
     // Notify renderer of status change
     notifyPopup('network-status', { online: true });
   });
@@ -1997,13 +1997,12 @@ async function startTimer(projectId = null) {
 
       // Network failure or any other error — timer is already running locally
       console.log('[Timer] API start failed, continuing in local-first mode:', e.message);
-      // Queue the start for later sync
-      offlineQueue?.add('timer_start', {
-        project_id: projectId,
-        idempotency_key: idempotencyKey,
-        started_at: localStartedAt,
-      });
-      notifyPopup('timer-started', { ...localEntry, todayTotal: 0, offline: true });
+      // Timer start is already saved in timer_sessions SQLite table via saveLocalTimerStart().
+      // reconcileTimerState() will sync it on reconnect. Do NOT also queue in offlineQueue
+      // to avoid dual-replay causing duplicate time entries.
+      if (_timerStateVersion === startVersion) {
+        notifyPopup('timer-started', { ...localEntry, todayTotal: 0, offline: true, _stateVersion: startVersion });
+      }
       setImmediate(() => afterStartTimer(projectId, 0));
       return { success: true, entry: localEntry, todayTotal: 0, offline: true };
     }
@@ -2058,26 +2057,14 @@ async function stopTimer() {
   } catch (e) {
     serverStopFailed = true;
     if (!e.response || e.code === 'ECONNABORTED') {
-      // Network error or timeout — stop locally, queue for sync
-      console.warn('[Timer] Server stop failed (offline/timeout) — queueing');
-      offlineQueue?.add('timer_stop', {
-        entry_id: currentEntry?.id,
-        started_at: localStartedAtIso,
-        ended_at: localEndedAt,
-        idempotency_key: currentEntry?.idempotency_key || null,
-        project_id: currentEntry?.project_id,
-      });
+      // Network error or timeout — stop is already saved in timer_sessions via saveLocalTimerStop().
+      // reconcileTimerState() will sync it on reconnect. Do NOT also queue in offlineQueue
+      // to avoid dual-replay causing duplicate time entries.
+      console.warn('[Timer] Server stop failed (offline/timeout) — saved locally, will reconcile on reconnect');
     } else {
       // Server returned an error but we already stopped locally
+      // timer_sessions has the stop recorded; reconcileTimerState() handles sync.
       console.error('[Timer] Server stop returned error:', e.message);
-      // Queue it anyway — time must not be lost
-      offlineQueue?.add('timer_stop', {
-        entry_id: currentEntry?.id,
-        started_at: localStartedAtIso,
-        ended_at: localEndedAt,
-        idempotency_key: currentEntry?.idempotency_key || null,
-        project_id: currentEntry?.project_id,
-      });
     }
   }
 
@@ -2133,6 +2120,49 @@ async function reconcileTimerState() {
     const serverStatus = await apiClient.getTimerStatus();
     const localActive = getActiveLocalTimer();
 
+    // ── Phase 1: Sync completed (stopped) sessions FIRST ──────────────────
+    // This ensures stopped sessions are flushed to the server BEFORE we push
+    // any new starts. Prevents the Redis key mismatch bug where pushing a new
+    // start auto-stops the wrong entry on the server.
+    const unsynced = getUnsyncedTimerSessions();
+
+    // Pass 1a: sync sessions that have a synced start but unsynced stop (stop-only)
+    for (const session of unsynced) {
+      if (session.id === currentEntry?._localId) continue; // Skip active session
+      if (session.synced_start && session.ended_at && !session.synced_stop) {
+        try {
+          await apiClient.stopTimer({
+            started_at: session.started_at,
+            ended_at: session.ended_at,
+          });
+          markLocalTimerStopSynced(session.id);
+        } catch (e) {
+          console.warn(`[Reconcile] Session ${session.id} stop sync failed:`, e.message);
+        }
+      }
+    }
+
+    // Pass 1b: sync sessions that need both start + stop (fully unsynced, completed)
+    for (const session of unsynced) {
+      if (session.id === currentEntry?._localId) continue; // Skip active session
+      if (!session.synced_start) {
+        try {
+          const result = await apiClient.startTimer(session.project_id || null, session.idempotency_key);
+          markLocalTimerStartSynced(session.id, result.entry.id);
+          if (session.ended_at) {
+            await apiClient.stopTimer({
+              started_at: session.started_at,
+              ended_at: session.ended_at,
+            });
+            markLocalTimerStopSynced(session.id);
+          }
+        } catch (e) {
+          console.warn(`[Reconcile] Session ${session.id} sync failed:`, e.message);
+        }
+      }
+    }
+
+    // ── Phase 2: Handle the currently active timer ────────────────────────
     if (localActive && !localActive.synced_start) {
       // Local has an unsynced start — push it to server
       console.log('[Reconcile] Pushing unsynced local start to server');
@@ -2188,37 +2218,6 @@ async function reconcileTimerState() {
         console.log('[Reconcile] Adopted server entry (earlier started_at)');
       } else {
         console.log('[Reconcile] Kept local entry (earlier started_at)');
-      }
-    }
-
-    // Also sync any fully unsynced sessions from the DB
-    const unsynced = getUnsyncedTimerSessions();
-    for (const session of unsynced) {
-      if (session.id === currentEntry?._localId) continue; // Skip active session
-      if (!session.synced_start) {
-        try {
-          const result = await apiClient.startTimer(session.project_id || null, session.idempotency_key);
-          markLocalTimerStartSynced(session.id, result.entry.id);
-          if (session.ended_at) {
-            await apiClient.stopTimer({
-              started_at: session.started_at,
-              ended_at: session.ended_at,
-            });
-            markLocalTimerStopSynced(session.id);
-          }
-        } catch (e) {
-          console.warn(`[Reconcile] Session ${session.id} sync failed:`, e.message);
-        }
-      } else if (session.ended_at && !session.synced_stop) {
-        try {
-          await apiClient.stopTimer({
-            started_at: session.started_at,
-            ended_at: session.ended_at,
-          });
-          markLocalTimerStopSynced(session.id);
-        } catch (e) {
-          console.warn(`[Reconcile] Session ${session.id} stop sync failed:`, e.message);
-        }
       }
     }
 
