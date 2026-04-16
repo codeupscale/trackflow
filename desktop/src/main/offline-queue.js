@@ -233,11 +233,16 @@ class OfflineQueue {
       const items = this._stmtSelect.all();
 
       if (items.length === 0) {
+        console.log('[OfflineQueue] Flush — queue empty, nothing to sync');
         this.flushing = false;
         this._backoffStep = 0;
         this.retryDelay = BACKOFF_SCHEDULE[0];
         return;
       }
+
+      const typeCounts = {};
+      for (const item of items) { typeCounts[item.type] = (typeCounts[item.type] || 0) + 1; }
+      console.log(`[OfflineQueue] Flush starting — ${items.length} items:`, typeCounts);
 
       const heartbeats = [];
       const heartbeatIds = [];  // Track separately — only delete after successful bulk upload
@@ -289,6 +294,7 @@ class OfflineQueue {
             if (data.window_title) formData.append('window_title', data.window_title);
 
             await apiClient.uploadScreenshot(formData);
+            console.log(`[OfflineQueue] Screenshot uploaded successfully (entry=${data.time_entry_id}, captured=${data.captured_at})`);
             deleteIds.push(item.id);
             // Track file for deletion after successful upload
             if (data.file_path) {
@@ -297,43 +303,18 @@ class OfflineQueue {
           } else if (item.type === 'idle_discard') {
             await apiClient.reportIdleTime(data);
             deleteIds.push(item.id);
-          } else if (item.type === 'timer_start') {
-            // Offline timer start — push to server with idempotency key
-            try {
-              await apiClient.startTimer(data.project_id || null, data.idempotency_key || null);
-              deleteIds.push(item.id);
-            } catch (startErr) {
-              // 200/201 = success (idempotency hit or new entry)
-              // 409 = timer already running — also success for our purpose
-              if (startErr.response?.status === 409) {
-                deleteIds.push(item.id);
-              } else {
-                throw startErr;
-              }
-            }
-          } else if (item.type === 'timer_stop') {
-            // CONNECTIVITY FIX: Retry stopping timer with offline timestamps
-            try {
-              const stopPayload = {};
-              if (data.started_at) stopPayload.started_at = data.started_at;
-              if (data.ended_at) stopPayload.ended_at = data.ended_at;
-              await apiClient.stopTimer(stopPayload);
-              deleteIds.push(item.id);
-            } catch (stopErr) {
-              // If 404 (no timer running), the timer was already stopped — success
-              if (stopErr.response?.status === 404) {
-                deleteIds.push(item.id);
-              } else {
-                throw stopErr; // Let outer catch handle retry logic
-              }
-            }
           }
+          // NOTE: timer_start and timer_stop are no longer queued here.
+          // Timer sync is handled exclusively by timer_sessions table + reconcileTimerState().
+          // This eliminates the dual-replay bug that caused duplicate time entries.
         } catch (e) {
+          console.warn(`[OfflineQueue] Flush item failed (type=${item.type}, attempt=${item.attempts + 1}): ${e.message}`);
           // Update attempt count
           this._stmtIncAttempt.run(item.id);
 
           // Remove items that have failed too many times
           if (item.attempts >= 4) { // Will be 5 after the update above
+            console.warn(`[OfflineQueue] Dropping item after 5 failed attempts (type=${item.type}, id=${item.id})`);
             deleteIds.push(item.id);
             if (data.file_path && fs.existsSync(data.file_path)) {
               screenshotFilesToDelete.push(data.file_path);
@@ -358,6 +339,7 @@ class OfflineQueue {
 
       // Delete successfully processed items from SQLite
       if (deleteIds.length > 0) {
+        console.log(`[OfflineQueue] Flush complete — ${deleteIds.length} items processed, ${screenshotFilesToDelete.length} screenshots uploaded`);
         const placeholders = deleteIds.map(() => '?').join(',');
         this.db.prepare(`DELETE FROM queue WHERE id IN (${placeholders})`).run(...deleteIds);
       }

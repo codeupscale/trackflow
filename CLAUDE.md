@@ -147,12 +147,12 @@ Adds department/position org structure and leave management under `/api/v1/hr/`.
 | `PUT /hr/leave-requests/{id}/approve` | Manager/admin only |
 | `PUT /hr/leave-requests/{id}/reject` | Manager/admin only |
 | `DELETE /hr/leave-requests/{id}` | Cancel (own request only) |
-| `GET /hr/leave-calendar` | Team calendar; requires `month` + `year` query params |
+| `GET /hr/leave-calendar` | **Role-scoped** team calendar (employee=own, manager=team, admin=all); requires `month` + `year` query params |
 | `GET/POST /hr/public-holidays` | Admin only for POST |
 
 ### Employee Records & Documents (Module 2)
 - Tables: `employee_profiles` (personal/financial fields, encrypted bank fields), `employee_documents` (S3-backed, signed-URL access), `employee_notes` (confidential filtering)
-- `EmployeeService`: `getDirectory()` (joined query with LIKE-safe escaping), `generateEmployeeId()` (lockForUpdate), `getNotes()` (viewer-based confidential filtering), `maskFinancialField()` (last-4 visible)
+- `EmployeeService`: `getDirectory()` (**role-scoped**: employee=own profile only, manager=own department + managed team, admin=all; joined query with LIKE-safe escaping), `generateEmployeeId()` (lockForUpdate), `getNotes()` (viewer-based confidential filtering), `maskFinancialField()` (last-4 visible)
 - **Encrypted fields**: `bank_name`, `bank_account_number`, `bank_routing_number`, `tax_id` on `EmployeeProfile` use Laravel `encrypted` cast + `$hidden`. Never expose raw values in API responses.
 - **Signed URLs**: `file_path` is `$hidden` on `EmployeeDocument`; `download_url` accessor generates 15-min S3 `temporaryUrl()`. Never return raw S3 paths.
 - **Field-level auth**: employees can only edit personal fields on their own profile (enforced in `EmployeeService::updateProfile()`); admins can edit all fields

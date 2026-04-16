@@ -93,6 +93,9 @@ Schedule::call(function () {
     Cache::put('scheduler:last_run', now()->toIso8601String(), 300); // 5 min TTL
 })->everyMinute()->name('scheduler-heartbeat');
 
+// JOB-10: Weekly report emails — runs daily at 08:00 UTC, job filters by day_of_week match
+Schedule::job(new \App\Jobs\SendWeeklyReportJob)->dailyAt('08:00')->withoutOverlapping()->name('weekly-report-emails');
+
 // Self-check: verify daily activity summary ran for every org, re-dispatch if missed.
 // The main job fires at 23:00. This check runs at 23:30 as a safety net.
 Schedule::call(function () {

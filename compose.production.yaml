@@ -2,7 +2,7 @@
 # Tuned for shared server — total budget: ~1.4 CPU, ~1.4GB RAM
 # Usage: docker compose -f compose.production.yaml up -d
 services:
-    app:
+    tf-app:
         build:
             context: .
             dockerfile: backend/Dockerfile.production
@@ -23,7 +23,7 @@ services:
             APP_DEBUG: 'false'
             LOG_CHANNEL: stderr
         depends_on:
-            pgsql:
+            postgres:
                 condition: service_healthy
             redis:
                 condition: service_healthy
@@ -43,7 +43,7 @@ services:
         networks:
             - production
 
-    web:
+    tf-web:
         build:
             context: ./web
             dockerfile: Dockerfile.production
@@ -60,7 +60,7 @@ services:
             # Limit V8 heap to prevent memory bloat in constrained container
             NODE_OPTIONS: '--max-old-space-size=160'
         depends_on:
-            app:
+            tf-app:
                 condition: service_healthy
         deploy:
             resources:
@@ -76,7 +76,7 @@ services:
         networks:
             - production
 
-    horizon:
+    tf-horizon:
         build:
             context: .
             dockerfile: backend/Dockerfile.production
@@ -90,7 +90,7 @@ services:
             APP_DEBUG: 'false'
             LOG_CHANNEL: stderr
         depends_on:
-            pgsql:
+            postgres:
                 condition: service_healthy
             redis:
                 condition: service_healthy
@@ -99,10 +99,16 @@ services:
                 limits:
                     memory: 192M
                     cpus: '0.25'
+        healthcheck:
+            test: ['CMD-SHELL', 'php artisan horizon:status | grep -q -i running || exit 1']
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 30s
         networks:
             - production
 
-    scheduler:
+    tf-scheduler:
         build:
             context: .
             dockerfile: backend/Dockerfile.production
@@ -116,7 +122,7 @@ services:
             APP_DEBUG: 'false'
             LOG_CHANNEL: stderr
         depends_on:
-            pgsql:
+            postgres:
                 condition: service_healthy
             redis:
                 condition: service_healthy
@@ -125,10 +131,40 @@ services:
                 limits:
                     memory: 128M
                     cpus: '0.10'
+        healthcheck:
+            test: ['CMD-SHELL', 'pgrep -f "schedule:run" > /dev/null || pgrep -f "while true" > /dev/null || exit 0']
+            interval: 60s
+            timeout: 5s
+            retries: 1
+            start_period: 15s
         networks:
             - production
 
-    reverb:
+    tf-marketing:
+        build:
+            context: ./marketing
+            dockerfile: Dockerfile.production
+        restart: unless-stopped
+        ports:
+            - '3002:3000'
+        environment:
+            NODE_ENV: production
+            NODE_OPTIONS: '--max-old-space-size=100'
+        deploy:
+            resources:
+                limits:
+                    memory: 128M
+                    cpus: '0.15'
+        healthcheck:
+            test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3000/']
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 30s
+        networks:
+            - production
+
+    tf-reverb:
         build:
             context: .
             dockerfile: backend/Dockerfile.production
@@ -149,10 +185,16 @@ services:
                 limits:
                     memory: 96M
                     cpus: '0.10'
+        healthcheck:
+            test: ['CMD-SHELL', 'nc -z localhost 8080 || exit 1']
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 20s
         networks:
             - production
 
-    pgsql:
+    postgres:
         image: 'postgres:17-alpine'
         restart: unless-stopped
         ports:
@@ -179,7 +221,7 @@ services:
             - '-c'
             - 'checkpoint_completion_target=0.9'
         volumes:
-            - 'prod-pgsql:/var/lib/postgresql/data'
+            - 'prod-postgres:/var/lib/postgresql/data'
         networks:
             - production
         healthcheck:
@@ -217,7 +259,7 @@ networks:
         driver: bridge
 
 volumes:
-    prod-pgsql:
+    prod-postgres:
         driver: local
     prod-redis:
         driver: local

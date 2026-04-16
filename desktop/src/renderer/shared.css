@@ -5,46 +5,50 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* ── Theme Variables ───────────────────────────────────────────────────── */
+/* Color scheme matches the TrackFlow marketing site:
+   - Primary: Warm amber (#C47D2E / oklch warm tones)
+   - Accent: Cyan #06B6D4
+   - Surfaces: Warm-tinted grays (not pure achromatic)
+   - Both light and dark themes follow system preference
+*/
 :root {
-  /* Dark theme (default) — colors match the web portal's .dark theme exactly
-     Web uses oklch achromatic grays; hex equivalents below.
-     oklch(0.145 0 0) = #0a0a0a  (background)
-     oklch(0.205 0 0) = #171717  (card / secondary surface)
-     oklch(0.269 0 0) = #262626  (muted / tertiary surface)
-     oklch(0.985 0 0) = #fafafa  (foreground text)
-     oklch(0.708 0 0) = #a1a1a1  (muted foreground)
-     oklch(0.556 0 0) = #737373  (ring / muted text)
-     oklch(1 0 0 / 10%) = rgba(255,255,255,0.1) (border)
-     oklch(1 0 0 / 15%) = rgba(255,255,255,0.15) (input border)
-  */
-  --bg-primary: #0a0a0a;
-  --bg-secondary: #171717;
-  --bg-tertiary: #262626;
-  --text-primary: #fafafa;
-  --text-secondary: #a1a1a1;
-  --text-muted: #737373;
-  --text-xs-muted: #525252;
-  --border-color: rgba(255, 255, 255, 0.1);
-  --border-input: rgba(255, 255, 255, 0.15);
-  --accent-blue: #3b82f6;
-  --accent-blue-hover: #2563eb;
-  --accent-blue-active: #1d4ed8;
-  --accent-blue-ring: rgba(59, 130, 246, 0.15);
+  /* Dark theme (default) — warm-tinted surfaces from marketing site */
+  --bg-primary: #121110;
+  --bg-secondary: #1c1a18;
+  --bg-tertiary: #2a2725;
+  --text-primary: #f5f0eb;
+  --text-secondary: #a8a29e;
+  --text-muted: #78716c;
+  --text-xs-muted: #57534e;
+  --border-color: rgba(255, 255, 255, 0.08);
+  --border-input: rgba(255, 255, 255, 0.12);
+  /* Primary accent — warm amber from marketing */
+  --accent-primary: #c47d2e;
+  --accent-primary-hover: #a86a25;
+  --accent-primary-active: #8e591f;
+  --accent-primary-ring: rgba(196, 125, 46, 0.2);
+  --accent-primary-light: #d4a574;
+  /* Keep blue alias for backward compat (maps to primary now) */
+  --accent-blue: #c47d2e;
+  --accent-blue-hover: #a86a25;
+  --accent-blue-active: #8e591f;
+  --accent-blue-ring: rgba(196, 125, 46, 0.2);
   --accent-red: #ff6467;
   --accent-red-hover: #ef4444;
   --accent-red-active: #dc2626;
   --accent-green: #22c55e;
-  --scrollbar-thumb: #262626;
-  --scrollbar-thumb-hover: #525252;
-  --btn-ghost-hover-bg: #171717;
-  --btn-ghost-active-bg: #262626;
-  --select-bg: #171717;
-  --select-option-bg: #171717;
-  --kbd-bg: #171717;
-  --kbd-border: #262626;
+  --accent-cyan: #06b6d4;
+  --scrollbar-thumb: #2a2725;
+  --scrollbar-thumb-hover: #57534e;
+  --btn-ghost-hover-bg: #1c1a18;
+  --btn-ghost-active-bg: #2a2725;
+  --select-bg: #1c1a18;
+  --select-option-bg: #1c1a18;
+  --kbd-bg: #1c1a18;
+  --kbd-border: #2a2725;
   --notification-shadow: rgba(0, 0, 0, 0.4);
-  --focus-ring-outer: #0a0a0a;
-  --autofill-bg: #0a0a0a;
+  --focus-ring-outer: #121110;
+  --autofill-bg: #121110;
   --accent-amber: #f59e0b;
   --accent-amber-hover: #d97706;
   --accent-amber-active: #b45309;
@@ -54,39 +58,47 @@
   --accent-indigo-ring: rgba(99, 102, 241, 0.15);
   --accent-green-hover: #16a34a;
   --accent-green-active: #15803d;
-  --link-primary-hover: #60a5fa;
+  --link-primary-hover: #d4a574;
   --close-btn-bg: #ff6467;
   --error-bg: rgba(255, 100, 103, 0.1);
   --error-border: rgba(255, 100, 103, 0.2);
 }
 
 [data-theme="light"] {
+  /* Light theme — warm-tinted surfaces from marketing site */
   --bg-primary: #ffffff;
-  --bg-secondary: #f8fafc;
-  --bg-tertiary: #e2e8f0;
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #64748b;
-  --text-xs-muted: #94a3b8;
-  --border-color: #e2e8f0;
-  --border-input: #cbd5e1;
-  --accent-blue: #3b82f6;
-  --accent-blue-hover: #2563eb;
-  --accent-blue-active: #1d4ed8;
-  --accent-blue-ring: rgba(59, 130, 246, 0.2);
+  --bg-secondary: #faf8f6;
+  --bg-tertiary: #f0ece8;
+  --text-primary: #1c1410;
+  --text-secondary: #57534e;
+  --text-muted: #78716c;
+  --text-xs-muted: #a8a29e;
+  --border-color: #e7e2dc;
+  --border-input: #d6cfc7;
+  /* Primary accent — warm amber */
+  --accent-primary: #c47d2e;
+  --accent-primary-hover: #a86a25;
+  --accent-primary-active: #8e591f;
+  --accent-primary-ring: rgba(196, 125, 46, 0.15);
+  --accent-primary-light: #d4a574;
+  --accent-blue: #c47d2e;
+  --accent-blue-hover: #a86a25;
+  --accent-blue-active: #8e591f;
+  --accent-blue-ring: rgba(196, 125, 46, 0.15);
   --accent-red: #ef4444;
   --accent-red-hover: #dc2626;
   --accent-red-active: #b91c1c;
   --accent-green: #16a34a;
-  --scrollbar-thumb: #cbd5e1;
-  --scrollbar-thumb-hover: #94a3b8;
-  --btn-ghost-hover-bg: #f1f5f9;
-  --btn-ghost-active-bg: #e2e8f0;
-  --select-bg: #f8fafc;
+  --accent-cyan: #0891b2;
+  --scrollbar-thumb: #d6cfc7;
+  --scrollbar-thumb-hover: #a8a29e;
+  --btn-ghost-hover-bg: #faf8f6;
+  --btn-ghost-active-bg: #f0ece8;
+  --select-bg: #faf8f6;
   --select-option-bg: #ffffff;
-  --kbd-bg: #f1f5f9;
-  --kbd-border: #e2e8f0;
-  --notification-shadow: rgba(0, 0, 0, 0.15);
+  --kbd-bg: #faf8f6;
+  --kbd-border: #f0ece8;
+  --notification-shadow: rgba(0, 0, 0, 0.12);
   --focus-ring-outer: #ffffff;
   --autofill-bg: #ffffff;
   --accent-amber: #f59e0b;
@@ -98,10 +110,10 @@
   --accent-indigo-ring: rgba(99, 102, 241, 0.15);
   --accent-green-hover: #16a34a;
   --accent-green-active: #15803d;
-  --link-primary-hover: #2563eb;
+  --link-primary-hover: #a86a25;
   --close-btn-bg: #ef4444;
-  --error-bg: rgba(239, 68, 68, 0.1);
-  --error-border: rgba(239, 68, 68, 0.2);
+  --error-bg: rgba(239, 68, 68, 0.08);
+  --error-border: rgba(239, 68, 68, 0.15);
 }
 
 /* ── Reset & Normalization ──────────────────────────────────────────────── */
@@ -311,9 +323,9 @@ input, textarea {
   font-size: 14px;
   line-height: 1.5;
   color: var(--text-primary);
-  background: var(--bg-primary);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-input);
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 10px 12px;
   outline: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -324,8 +336,8 @@ input, textarea {
   width: 100%;
 }
 input:focus, textarea:focus {
-  border-color: var(--accent-blue);
-  box-shadow: 0 0 0 3px var(--accent-blue-ring);
+  border-color: var(--accent-primary, var(--accent-blue));
+  box-shadow: 0 0 0 3px var(--accent-primary-ring, var(--accent-blue-ring));
 }
 input::placeholder, textarea::placeholder {
   color: var(--text-xs-muted);

@@ -18,15 +18,16 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 16px;
+      padding: 24px 28px;
     }
 
     .login-card {
-      width: 340px;
-      padding: 32px;
-      background: var(--bg-secondary);
-      border-radius: 12px;
-      border: 1px solid var(--bg-tertiary);
+      width: 100%;
+      max-width: 340px;
+      padding: 0;
+      background: transparent;
+      border: none;
+      border-radius: 0;
     }
 
     /* .logo styles are in shared.css */
@@ -105,7 +106,7 @@
     .divider {
       display: flex;
       align-items: center;
-      margin: 16px 0;
+      margin: 20px 0;
       gap: 12px;
     }
     .divider::before,
@@ -113,7 +114,7 @@
       content: '';
       flex: 1;
       height: 1px;
-      background: var(--bg-tertiary);
+      background: var(--border-color);
     }
     .divider span {
       font-size: 11px;
@@ -125,15 +126,16 @@
     /* Google button */
     .google-btn {
       width: 100%;
-      padding: 10px;
+      padding: 11px;
       font-size: 14px;
+      font-weight: 500;
       display: flex;
       align-items: center;
       justify-content: center;
       gap: 8px;
-      background: var(--bg-primary);
-      border: 1px solid var(--bg-tertiary);
-      border-radius: 6px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-input);
+      border-radius: 8px;
       color: var(--text-primary);
       cursor: pointer;
       transition: background 0.15s, border-color 0.15s;
@@ -142,6 +144,10 @@
     .google-btn:hover {
       background: var(--bg-tertiary);
       border-color: var(--text-muted);
+    }
+    .google-btn:focus-visible {
+      border-color: var(--accent-primary, var(--accent-blue));
+      box-shadow: 0 0 0 3px var(--accent-primary-ring, var(--accent-blue-ring));
     }
     .google-btn:disabled {
       opacity: 0.5;
@@ -173,8 +179,8 @@
       align-items: center;
       gap: 12px;
       padding: 12px;
-      background: var(--bg-primary);
-      border: 1px solid var(--bg-tertiary);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-input);
       border-radius: 8px;
       cursor: pointer;
       transition: background 0.15s, border-color 0.15s;
@@ -185,7 +191,7 @@
     }
     .org-item:hover {
       background: var(--bg-tertiary);
-      border-color: var(--accent-blue);
+      border-color: var(--text-muted);
     }
     .org-item:disabled {
       opacity: 0.5;
@@ -195,8 +201,8 @@
       width: 36px;
       height: 36px;
       border-radius: 8px;
-      background: rgba(59, 130, 246, 0.1);
-      color: var(--accent-blue);
+      background: var(--accent-primary-ring, rgba(196, 125, 46, 0.15));
+      color: var(--accent-primary, var(--accent-blue));
       display: flex;
       align-items: center;
       justify-content: center;

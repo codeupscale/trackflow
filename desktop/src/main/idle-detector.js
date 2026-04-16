@@ -272,12 +272,16 @@ class IdleDetector {
       this._lastLoggedAt = Date.now();
     }
 
-    // Cooldown: after resolution, wait for fresh user input before re-detecting
+    // Cooldown: after resolution, wait for fresh user input AND a minimum
+    // cooldown period (60s) before re-detecting. This prevents the alert from
+    // immediately reappearing when the user clicks an action while still idle.
     if (this._lastResolvedAt) {
-      if (systemIdleSec < this.idleTimeoutSec) {
-        this._lastResolvedAt = null; // Fresh input — resume detection
+      const cooldownElapsed = Date.now() - this._lastResolvedAt;
+      const MIN_COOLDOWN_MS = 60000; // 60 seconds minimum after user action
+      if (systemIdleSec < this.idleTimeoutSec && cooldownElapsed >= MIN_COOLDOWN_MS) {
+        this._lastResolvedAt = null; // Fresh input + cooldown elapsed — resume detection
       } else {
-        return; // Still idle from before resolution
+        return; // Still in cooldown or still idle from before resolution
       }
     }
 

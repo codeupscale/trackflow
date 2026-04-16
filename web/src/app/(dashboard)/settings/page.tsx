@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Settings,
@@ -11,6 +11,7 @@ import {
   Lock,
   Linkedin,
   Github,
+  Mail,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
@@ -31,6 +32,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { DatePicker } from '@/components/ui/date-picker';
 import { Separator } from '@/components/ui/separator';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -43,6 +45,11 @@ import {
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
+import {
+  useReportSubscriptions,
+  useUpsertReportSubscription,
+  type ReportSubscription,
+} from '@/hooks/settings/use-report-subscriptions';
 import { User as UserIcon } from 'lucide-react';
 
 interface OrgSettings {
@@ -326,7 +333,7 @@ export default function SettingsPage() {
     const rawIdle = idleTimeout === '0' ? 0 : (idleTimeout === 'custom' ? idleTimeoutCustom : idleTimeout);
     const idleVal = rawIdle === '' || rawIdle === '0' ? 0 : Math.min(30, Math.max(0, parseInt(String(rawIdle), 10) || 0));
     const idleAutoStopMinVal = Math.min(
-      60,
+      10080,
       Math.max(1, parseInt(String(idleAlertAutoStopMin), 10) || 10)
     );
     const idleEmailCooldownMinVal = Math.min(
@@ -468,6 +475,7 @@ export default function SettingsPage() {
           <TabsTrigger value="profile">Profile</TabsTrigger>
           <TabsTrigger value="general">General</TabsTrigger>
           {isAdmin && <TabsTrigger value="tracking">Tracking</TabsTrigger>}
+          <TabsTrigger value="notifications">Notifications</TabsTrigger>
         </TabsList>
 
         {/* Profile Tab */}
@@ -1069,7 +1077,7 @@ export default function SettingsPage() {
                 <Input
                   type="number"
                   min="1"
-                  max="60"
+                  max="10080"
                   value={idleAlertAutoStopMin}
                   onChange={(e) => setIdleAlertAutoStopMin(e.target.value)}
                   disabled={!isAdmin}
@@ -1172,7 +1180,212 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
         </TabsContent>}
+
+        {/* Notifications Tab */}
+        <TabsContent value="notifications" className="space-y-6 mt-6">
+          <EmailReportsCard />
+        </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+// ─── Email Reports Card (Notifications Tab) ────────────────────────
+
+const DAY_OPTIONS = [
+  { value: '1', label: 'Monday' },
+  { value: '2', label: 'Tuesday' },
+  { value: '3', label: 'Wednesday' },
+  { value: '4', label: 'Thursday' },
+  { value: '5', label: 'Friday' },
+  { value: '6', label: 'Saturday' },
+  { value: '0', label: 'Sunday' },
+];
+
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, i) => ({
+  value: `${String(i).padStart(2, '0')}:00`,
+  label: `${String(i).padStart(2, '0')}:00`,
+}));
+
+const COMMON_TIMEZONES = [
+  'UTC',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Anchorage',
+  'Pacific/Honolulu',
+  'Europe/London',
+  'Europe/Paris',
+  'Europe/Berlin',
+  'Europe/Moscow',
+  'Asia/Dubai',
+  'Asia/Karachi',
+  'Asia/Kolkata',
+  'Asia/Shanghai',
+  'Asia/Tokyo',
+  'Australia/Sydney',
+  'Pacific/Auckland',
+];
+
+function EmailReportsCard() {
+  const { data, isLoading, isError } = useReportSubscriptions();
+  const upsertMutation = useUpsertReportSubscription();
+
+  // Find existing weekly_summary subscription if any
+  const existing = data?.data?.find(
+    (s: ReportSubscription) => s.report_type === 'weekly_summary'
+  );
+
+  const detectedTimezone = typeof window !== 'undefined'
+    ? Intl.DateTimeFormat().resolvedOptions().timeZone
+    : 'UTC';
+
+  const [isActive, setIsActive] = useState(false);
+  const [dayOfWeek, setDayOfWeek] = useState('1');
+  const [sendTime, setSendTime] = useState('08:00');
+  const [timezone, setTimezone] = useState(detectedTimezone);
+  const [initialized, setInitialized] = useState(false);
+
+  useEffect(() => {
+    if (!data || initialized) return;
+    if (existing) {
+      setIsActive(existing.is_active);
+      setDayOfWeek(String(existing.day_of_week));
+      setSendTime(existing.send_time);
+      setTimezone(existing.timezone);
+    } else {
+      setTimezone(detectedTimezone);
+    }
+    setInitialized(true);
+  }, [data, existing, initialized, detectedTimezone]);
+
+  const handleSave = useCallback(() => {
+    upsertMutation.mutate({
+      report_type: 'weekly_summary',
+      is_active: isActive,
+      day_of_week: Number(dayOfWeek),
+      send_time: sendTime,
+      timezone,
+    });
+  }, [upsertMutation, isActive, dayOfWeek, sendTime, timezone]);
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-6 w-40" />
+          <Skeleton className="h-4 w-60" />
+        </CardHeader>
+        <CardContent>
+          <Skeleton className="h-32 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (isError) {
+    return (
+      <Card className="border-destructive/50">
+        <CardContent className="pt-6">
+          <p className="text-destructive">Failed to load email report settings.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Mail className="size-5 text-muted-foreground" />
+          <CardTitle>Email Reports</CardTitle>
+        </div>
+        <CardDescription>Receive automated summaries by email</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-6">
+        {/* Toggle */}
+        <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-sm font-medium">Weekly Summary</span>
+            <span className="text-xs text-muted-foreground">
+              Get a weekly overview of your tracked hours and activity
+            </span>
+          </div>
+          <Switch
+            checked={isActive}
+            onCheckedChange={setIsActive}
+          />
+        </div>
+
+        {isActive && (
+          <div className="flex flex-wrap items-end gap-4">
+            {/* Day of week */}
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="email-day">Day</Label>
+              <Select value={dayOfWeek} onValueChange={(v) => { if (v) setDayOfWeek(v); }}>
+                <SelectTrigger className="w-[160px]" id="email-day">
+                  <SelectValue placeholder="Select day" />
+                </SelectTrigger>
+                <SelectContent>
+                  {DAY_OPTIONS.map((d) => (
+                    <SelectItem key={d.value} value={d.value}>
+                      {d.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Time */}
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="email-time">Time</Label>
+              <Select value={sendTime} onValueChange={(v) => { if (v) setSendTime(v); }}>
+                <SelectTrigger className="w-[120px]" id="email-time">
+                  <SelectValue placeholder="Select time" />
+                </SelectTrigger>
+                <SelectContent>
+                  {HOUR_OPTIONS.map((h) => (
+                    <SelectItem key={h.value} value={h.value}>
+                      {h.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Timezone */}
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="email-tz">Timezone</Label>
+              <Select value={timezone} onValueChange={(v) => { if (v) setTimezone(v); }}>
+                <SelectTrigger className="w-[220px]" id="email-tz">
+                  <SelectValue placeholder="Select timezone" />
+                </SelectTrigger>
+                <SelectContent>
+                  {COMMON_TIMEZONES.map((tz) => (
+                    <SelectItem key={tz} value={tz}>
+                      {tz}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        )}
+
+        {/* Save */}
+        <div className="flex justify-end">
+          <Button
+            onClick={handleSave}
+            disabled={upsertMutation.isPending}
+          >
+            {upsertMutation.isPending && (
+              <Loader2 className="animate-spin mr-2" />
+            )}
+            Save Changes
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

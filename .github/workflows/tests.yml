@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - '*.x'
+      - fix/web-frontend-and-desktop-app
   pull_request:
   workflow_dispatch:
   schedule:
@@ -141,6 +142,34 @@ jobs:
         run: npm audit --audit-level=high --omit=dev
 
       - name: Audit dev dependencies (non-blocking)
+        if: always()
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+  marketing-checks:
+    runs-on: ubuntu-latest
+    name: Marketing (TypeScript + Build)
+    defaults:
+      run:
+        working-directory: marketing
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: marketing/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+
+      - name: Audit dependencies (non-blocking)
         if: always()
         continue-on-error: true
         run: npm audit --audit-level=high

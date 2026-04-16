@@ -109,6 +109,8 @@ const DEFAULT_CONFIG = {
   can_add_manual_time: true,
 };
 
+let currentShift = null; // Current user's assigned shift (from /agent/my-shift)
+
 // ── Last Selected Project Persistence ────────────────────────────────────────
 // Persist the last selected project ID to a JSON file in userData so it
 // survives logout/login cycles and app restarts.
@@ -459,14 +461,10 @@ let trayTimerInterval = null;
 let isQuitting = false;
 // Idle action mutex — prevents double-action from auto-stop + user click race
 let _idleActionInProgress = false;
+// Tray click timestamp — used to suppress spurious blur events on macOS/Windows
+let _lastTrayClickAt = 0;
 // Cache parsed started_at timestamp to avoid re-parsing every second
 let _cachedStartedAtMs = null;
-// RACE-FIX: Monotonic version counter for timer state changes.
-// Every start/stop increments this. Notifications carry the version so the
-// renderer can discard stale out-of-order messages from async follow-ups.
-let _timerStateVersion = 0;
-// RACE-FIX: Mutex to prevent concurrent stopTimer calls
-let _stopTimerInProgress = false;
 // M8 FIX: Clock skew compensation — server time minus local time
 let _clockOffsetMs = 0;
 // NOTE: _suspendedAt is declared inside initializeApp() as a closure variable
@@ -736,6 +734,7 @@ async function forceLogout() {
   todayTotalGlobal = 0;
   todayTotalCurrentProject = 0;
   config = {};
+  currentShift = null;
 
   if (popupWindow && !popupWindow.isDestroyed()) {
     popupWindow.destroy();
@@ -754,37 +753,6 @@ async function initializeApp() {
   // Register theme handler early — needed by both login and main windows
   ipcMain.removeHandler('get-theme');
   ipcMain.handle('get-theme', () => getOSTheme());
-
-  // ── Early Screen Recording Permission Check (macOS) ──────────────────────
-  // Run BEFORE auth check so the permission prompt appears on first launch,
-  // even before the user logs in. This ensures the app registers in macOS
-  // System Settings > Screen Recording list immediately.
-  if (process.platform === 'darwin') {
-    const apiStatus = checkScreenRecordingPermission();
-    if (apiStatus) {
-      console.log('[Permission] Screen recording granted (API) — skipping probe');
-      _screenPermissionGranted = true;
-    } else {
-      // Not granted — probe to register app in System Settings list,
-      // then show onboarding dialog. Await so the user can grant before proceeding.
-      try {
-        const probeGranted = await probeScreenRecordingPermission();
-        if (probeGranted) {
-          console.log('[Permission] Probe confirmed permission — no onboarding needed');
-          _screenPermissionGranted = true;
-        } else {
-          console.log('[Permission] Screen recording NOT granted at launch — showing onboarding');
-          _screenPermissionGranted = false;
-          saveScreenPermissionState(false);
-          await showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false });
-        }
-      } catch {
-        _screenPermissionGranted = false;
-        saveScreenPermissionState(false);
-        await showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
-      }
-    }
-  }
 
   // Load saved tokens
   const token = await getToken();
@@ -866,6 +834,12 @@ async function initializeApp() {
     config = { ...DEFAULT_CONFIG };
   }
 
+  // Fetch initial shift data
+  try {
+    const shiftData = await apiClient.getMyShift();
+    currentShift = shiftData?.shift || null;
+  } catch {}
+
   // Initialize services
   offlineQueue = new OfflineQueue();
   activityMonitor = new ActivityMonitor(apiClient, offlineQueue);
@@ -887,7 +861,7 @@ async function initializeApp() {
     console.log('[Network] Back online — reconciling and flushing');
     // Reconcile local timer state with server before flushing queue
     await reconcileTimerState();
-    offlineQueue?.flush(apiClient);
+    await offlineQueue?.flush(apiClient);
     // Notify renderer of status change
     notifyPopup('network-status', { online: true });
   });
@@ -899,7 +873,6 @@ async function initializeApp() {
 
   // Wire idle detection events
   idleDetector.onIdleDetected((idleSeconds, idleStartedAt, actionId) => {
-    console.log(`[IdleDetector] Idle detected! idleSeconds=${idleSeconds}, actionId=${actionId}, policy=${config.keep_idle_time || 'prompt'}`);
     // Pause both screenshot and activity capture during idle.
     // This prevents zero-event heartbeats from dragging down the activity score.
     screenshotService?.stop();
@@ -932,42 +905,19 @@ async function initializeApp() {
   });
 
   idleDetector.onAutoStop((totalIdleSeconds, actionId) => {
-    console.log(`[IdleAlert] Auto-stop fired: totalIdleSeconds=${totalIdleSeconds}, actionId=${actionId}`);
     handleIdleAction('stop', actionId, totalIdleSeconds);
+    dismissIdleAlert();
 
-    // Keep the idle alert window visible — update it to show "Timer Stopped"
-    // so the user sees it when they return. Do NOT dismiss.
-    if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
-      idleAlertWindow._autoStopped = true;
-      idleAlertWindow.webContents.send('auto-stopped', {
-        idleDuration: totalIdleSeconds,
-        stoppedAt: Date.now(),
-      });
-      // Play notification sound to alert the user
-      try {
-        if (Notification.isSupported()) {
-          const n = new Notification({
-            title: 'TrackFlow — Timer Stopped',
-            body: `Timer was automatically stopped after ${Math.floor(totalIdleSeconds / 60)} minutes of inactivity.`,
-            silent: false,
-          });
-          n.show();
-          setTimeout(() => { try { n.close(); } catch {} }, 5000);
-        }
-      } catch {}
-    } else {
-      // Popup was already closed — just show a notification
-      try {
-        if (Notification.isSupported()) {
-          const n = new Notification({
-            title: 'TrackFlow — Timer Stopped',
-            body: `Timer was automatically stopped after ${Math.floor(totalIdleSeconds / 60)} minutes of inactivity.`,
-            silent: false,
-          });
-          n.show();
-        }
-      } catch {}
-    }
+    try {
+      if (Notification.isSupported()) {
+        const n = new Notification({
+          title: 'TrackFlow — Timer Stopped',
+          body: `Timer was automatically stopped after ${Math.floor(totalIdleSeconds / 60)} minutes of inactivity.`,
+          silent: false,
+        });
+        n.show();
+      }
+    } catch {}
   });
 
   // Keep dock icon visible on macOS — the app has both tray and dock presence
@@ -988,6 +938,37 @@ async function initializeApp() {
 
   // Flush offline queue (L7: orphan cleanup also runs after each successful flush)
   offlineQueue.flush(apiClient);
+
+  // ── Early Screen Recording Permission Check (macOS) ──────────────────────
+  // Check if permission is granted using systemPreferences API first.
+  // Only probe desktopCapturer when permission is NOT granted (to register
+  // the app in the macOS Screen Recording list). Probing when permission IS
+  // granted triggers an unnecessary native macOS popup dialog.
+  if (process.platform === 'darwin') {
+    const apiStatus = checkScreenRecordingPermission();
+    if (apiStatus) {
+      // systemPreferences says granted — trust it, no probe needed.
+      // This avoids the native macOS "TrackFlow would like to record" popup.
+      console.log('[Permission] Screen recording granted (API) — skipping probe');
+      _screenPermissionGranted = true;
+    } else {
+      // Not granted — probe to register app in System Settings list,
+      // then show onboarding dialog.
+      probeScreenRecordingPermission().then((probeGranted) => {
+        if (probeGranted) {
+          console.log('[Permission] Probe confirmed permission — no onboarding needed');
+          _screenPermissionGranted = true;
+          return;
+        }
+        console.log('[Permission] Screen recording NOT granted at launch — showing onboarding');
+        _screenPermissionGranted = false;
+        showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
+      }).catch(() => {
+        _screenPermissionGranted = false;
+        showScreenPermissionOnboarding({ isPreStart: false, wasTracking: false }).catch(() => {});
+      });
+    }
+  }
 
   // ── Restart State Auto-Resume ────────────────────────────────────────────
   // If the app was restarted after granting Screen Recording permission,
@@ -1061,16 +1042,8 @@ async function initializeApp() {
 
   const handleSuspend = () => {
     if (!isTimerRunning) return;
-    // Only record the FIRST suspend timestamp — macOS fires both 'suspend'
-    // and 'lock-screen' on lid close. The second event must NOT overwrite
-    // _suspendedAt or the sleep duration calculation will be too short.
-    if (!_suspendedAt) {
-      _suspendedAt = Date.now();
-      console.log('[power] Suspended/locked — pausing capture');
-    } else {
-      console.log('[power] Duplicate suspend/lock event ignored — already suspended since', new Date(_suspendedAt).toISOString());
-      return;
-    }
+    _suspendedAt = Date.now();
+    console.log('[power] Suspended/locked — pausing capture');
     // Send final heartbeat to capture any pending activity data
     if (activityMonitor) {
       activityMonitor.sendFinalHeartbeat().catch(() => {});
@@ -1084,7 +1057,6 @@ async function initializeApp() {
 
   const handleResume = () => {
     if (!isTimerRunning || !_suspendedAt) {
-      console.log(`[power] Resume ignored — isTimerRunning=${isTimerRunning}, _suspendedAt=${_suspendedAt}`);
       _suspendedAt = null;
       _idleStateAtSuspend = null;
       return;
@@ -1112,7 +1084,6 @@ async function initializeApp() {
     }
 
     const idleThresholdSec = idleDetector?.idleTimeoutSec || (config.idle_timeout || 5) * 60;
-    console.log(`[power] Idle check: sleepDuration=${sleepDurationSec}s vs threshold=${idleThresholdSec}s (config.idle_timeout=${config.idle_timeout}min), policy=${config.keep_idle_time || 'prompt'}`);
 
     if (sleepDurationSec >= idleThresholdSec) {
       // Long sleep — treat as idle.
@@ -1206,8 +1177,7 @@ async function initializeApp() {
           idleDetector?.start();
           startTrayTimer();
           updateTrayIcon(true);
-          _timerStateVersion++;
-          notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject, _stateVersion: _timerStateVersion });
+          notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
         } else if (!status.running && isTimerRunning) {
           // BUG-2 FIX: Don't override local state while idle alert is showing
           if (idleDetector?.isIdleActive()) {
@@ -1225,8 +1195,7 @@ async function initializeApp() {
           stopTrayTimer();
           updateTrayTitle();
           updateTrayIcon(false);
-          _timerStateVersion++;
-          notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal, _stateVersion: _timerStateVersion });
+          notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal });
         }
       } catch {}
     })();
@@ -1253,6 +1222,7 @@ function createTray() {
   // macOS: left-click toggles popup window visibility
   // Windows/Linux: left-click also toggles popup
   tray.on('click', () => {
+    _lastTrayClickAt = Date.now();
     if (!isAuthenticated) {
       createLoginWindow();
       return;
@@ -1543,19 +1513,17 @@ function showPopup() {
     });
   });
 
-  // Hide on blur — with debounce for Linux DEs that fire spurious blur events
-  // (e.g. KDE fires blur then immediately re-focuses when clicking tray)
+  // Hide on blur — debounced on all platforms to prevent show-then-immediately-hide
+  // race when the tray icon click steals focus before the popup can render
   let blurTimeout = null;
   popupWindow.on('blur', () => {
-    if (process.platform === 'linux') {
-      blurTimeout = setTimeout(() => {
-        if (popupWindow && !popupWindow.isDestroyed() && !popupWindow.isFocused()) {
-          popupWindow.hide();
-        }
-      }, 150);
-    } else {
-      popupWindow.hide();
-    }
+    if (blurTimeout) { clearTimeout(blurTimeout); blurTimeout = null; }
+    if (Date.now() - _lastTrayClickAt < 300) return;
+    blurTimeout = setTimeout(() => {
+      if (popupWindow && !popupWindow.isDestroyed() && !popupWindow.isFocused()) {
+        popupWindow.hide();
+      }
+    }, 150);
   });
   popupWindow.on('focus', () => {
     if (blurTimeout) { clearTimeout(blurTimeout); blurTimeout = null; }
@@ -1583,7 +1551,7 @@ function validateProjectId(id) {
 }
 
 function validateIdleAction(action) {
-  const valid = ['keep', 'discard', 'stop', 'reassign', 'dismiss'];
+  const valid = ['keep', 'discard', 'stop', 'reassign'];
   return valid.includes(action) ? action : null;
 }
 
@@ -1631,6 +1599,7 @@ async function performLogout() {
   todayTotalGlobal = 0;
   todayTotalCurrentProject = 0;
   config = {};
+  currentShift = null;
 
   if (popupWindow && !popupWindow.isDestroyed()) {
     popupWindow.destroy();
@@ -1748,6 +1717,11 @@ function setupIPC() {
     autoUpdater.quitAndInstall(false, true);
   });
 
+  ipcMain.removeHandler('get-shift-info');
+  ipcMain.handle('get-shift-info', async () => {
+    return { shift: currentShift };
+  });
+
   ipcMain.handle('get-timer-state', async (_, projectId) => {
     const validProjectId = validateProjectId(projectId);
     let todayTotalForDisplay = 0;
@@ -1828,11 +1802,6 @@ function setupIPC() {
   ipcMain.handle('resolve-idle', async (_, action, projectId = null, actionId = null) => {
     const validAction = validateIdleAction(action);
     if (!validAction) return { error: 'Invalid action' };
-    // 'dismiss' — timer was already auto-stopped, just close the popup
-    if (validAction === 'dismiss') {
-      dismissIdleAlert();
-      return { success: true };
-    }
     const validProjectId = validateProjectId(projectId);
     await handleIdleAction(validAction, actionId, null, validProjectId);
     dismissIdleAlert();
@@ -1912,8 +1881,7 @@ async function switchProject(projectId) {
     idleDetector?.stop();
     idleDetector?.start();
 
-    _timerStateVersion++;
-    notifyPopup('timer-started', { ...newEntry, todayTotal: todayTotalCurrentProject, _stateVersion: _timerStateVersion });
+    notifyPopup('timer-started', { ...newEntry, todayTotal: todayTotalCurrentProject });
     updateTrayTitle();
 
     return { success: true, entry: newEntry, todayTotal: todayTotalCurrentProject };
@@ -1972,12 +1940,8 @@ async function startTimer(projectId = null) {
     const localStartedAt = new Date().toISOString();
     _cachedStartedAtMs = Date.now();
 
-    // RACE-FIX: Increment state version — all notifications from this start carry this version
-    _timerStateVersion++;
-    const startVersion = _timerStateVersion;
-
     saveLocalTimerStart(localId, idempotencyKey, projectId, localStartedAt);
-    console.log(`[Timer] Local start recorded: ${localId}, key=${idempotencyKey}, stateVersion=${startVersion}`);
+    console.log(`[Timer] Local start recorded: ${localId}, key=${idempotencyKey}`);
 
     // Set local state immediately — timer is running regardless of network
     const localEntry = {
@@ -2003,10 +1967,7 @@ async function startTimer(projectId = null) {
       posthog.capture(currentEntry?.user_id || 'unknown', 'timer_started', { project_id: projectId });
 
       const todayTotalForPopup = todayTotalCurrentProject;
-      // RACE-FIX: Only notify if this start is still current (no stop raced us during await)
-      if (_timerStateVersion === startVersion) {
-        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup, _stateVersion: startVersion });
-      }
+      notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup });
       setImmediate(() => afterStartTimer(projectId, todayTotalForPopup));
       return { success: true, entry: currentEntry, todayTotal: todayTotalForPopup };
     } catch (e) {
@@ -2025,9 +1986,7 @@ async function startTimer(projectId = null) {
           isTimerRunning = true;
           todayTotalCurrentProject = retryResult.today_total ?? 0;
           markLocalTimerStartSynced(localId, retryResult.entry.id);
-          if (_timerStateVersion === startVersion) {
-            notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject, _stateVersion: startVersion });
-          }
+          notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
           setImmediate(() => afterStartTimer(projectId, todayTotalCurrentProject));
           return { success: true, entry: currentEntry, todayTotal: todayTotalCurrentProject };
         } catch (retryErr) {
@@ -2038,12 +1997,9 @@ async function startTimer(projectId = null) {
 
       // Network failure or any other error — timer is already running locally
       console.log('[Timer] API start failed, continuing in local-first mode:', e.message);
-      // Queue the start for later sync
-      offlineQueue?.add('timer_start', {
-        project_id: projectId,
-        idempotency_key: idempotencyKey,
-        started_at: localStartedAt,
-      });
+      // Timer start is already saved in timer_sessions SQLite table via saveLocalTimerStart().
+      // reconcileTimerState() will sync it on reconnect. Do NOT also queue in offlineQueue
+      // to avoid dual-replay causing duplicate time entries.
       if (_timerStateVersion === startVersion) {
         notifyPopup('timer-started', { ...localEntry, todayTotal: 0, offline: true, _stateVersion: startVersion });
       }
@@ -2056,17 +2012,6 @@ async function startTimer(projectId = null) {
 }
 
 async function stopTimer() {
-  // RACE-FIX: Prevent concurrent stop calls from racing with each other
-  if (_stopTimerInProgress) {
-    console.log('[Timer] Stop already in progress — ignoring duplicate call');
-    return { success: true, entry: null, todayTotal: 0 };
-  }
-  _stopTimerInProgress = true;
-
-  // RACE-FIX: Increment state version so any stale async notifications are discarded
-  _timerStateVersion++;
-  const stopVersion = _timerStateVersion;
-
   const sessionElapsed = currentEntry && _cachedStartedAtMs
     ? Math.max(0, Math.floor((Date.now() - _cachedStartedAtMs) / 1000))
     : 0;
@@ -2112,26 +2057,14 @@ async function stopTimer() {
   } catch (e) {
     serverStopFailed = true;
     if (!e.response || e.code === 'ECONNABORTED') {
-      // Network error or timeout — stop locally, queue for sync
-      console.warn('[Timer] Server stop failed (offline/timeout) — queueing');
-      offlineQueue?.add('timer_stop', {
-        entry_id: currentEntry?.id,
-        started_at: localStartedAtIso,
-        ended_at: localEndedAt,
-        idempotency_key: currentEntry?.idempotency_key || null,
-        project_id: currentEntry?.project_id,
-      });
+      // Network error or timeout — stop is already saved in timer_sessions via saveLocalTimerStop().
+      // reconcileTimerState() will sync it on reconnect. Do NOT also queue in offlineQueue
+      // to avoid dual-replay causing duplicate time entries.
+      console.warn('[Timer] Server stop failed (offline/timeout) — saved locally, will reconcile on reconnect');
     } else {
       // Server returned an error but we already stopped locally
+      // timer_sessions has the stop recorded; reconcileTimerState() handles sync.
       console.error('[Timer] Server stop returned error:', e.message);
-      // Queue it anyway — time must not be lost
-      offlineQueue?.add('timer_stop', {
-        entry_id: currentEntry?.id,
-        started_at: localStartedAtIso,
-        ended_at: localEndedAt,
-        idempotency_key: currentEntry?.idempotency_key || null,
-        project_id: currentEntry?.project_id,
-      });
     }
   }
 
@@ -2147,11 +2080,7 @@ async function stopTimer() {
   stopTrayTimer();
   updateTrayIcon(false);
 
-  notifyPopup('timer-stopped', { entry: null, todayTotal: localStoppedProjectTotal, _stateVersion: stopVersion });
-
-  // RACE-FIX: Release stop mutex BEFORE async follow-up work.
-  // The synchronous state transition is complete — the timer is stopped.
-  _stopTimerInProgress = false;
+  notifyPopup('timer-stopped', { entry: null, todayTotal: localStoppedProjectTotal });
 
   // Post-stop async work (non-blocking)
   (async () => {
@@ -2176,14 +2105,7 @@ async function stopTimer() {
     try {
       todayTotalForPopup = await apiClient.getTodayTotal(stoppedProjectId);
     } catch {}
-    // RACE-FIX: Only send the follow-up notification if no new start/stop has happened
-    // since this stop began. Without this guard, the async follow-up overwrites a
-    // subsequent 'timer-started' notification, causing the "Start button while running" bug.
-    if (_timerStateVersion === stopVersion) {
-      notifyPopup('timer-stopped', { entry: result?.entry ?? null, todayTotal: todayTotalForPopup, _stateVersion: stopVersion });
-    } else {
-      console.log(`[Timer] Skipping stale post-stop notification (stopVersion=${stopVersion}, current=${_timerStateVersion})`);
-    }
+    notifyPopup('timer-stopped', { entry: result?.entry ?? null, todayTotal: todayTotalForPopup });
   })().catch(() => {});
 
   return { success: true, entry: null, todayTotal: localStoppedProjectTotal };
@@ -2198,6 +2120,49 @@ async function reconcileTimerState() {
     const serverStatus = await apiClient.getTimerStatus();
     const localActive = getActiveLocalTimer();
 
+    // ── Phase 1: Sync completed (stopped) sessions FIRST ──────────────────
+    // This ensures stopped sessions are flushed to the server BEFORE we push
+    // any new starts. Prevents the Redis key mismatch bug where pushing a new
+    // start auto-stops the wrong entry on the server.
+    const unsynced = getUnsyncedTimerSessions();
+
+    // Pass 1a: sync sessions that have a synced start but unsynced stop (stop-only)
+    for (const session of unsynced) {
+      if (session.id === currentEntry?._localId) continue; // Skip active session
+      if (session.synced_start && session.ended_at && !session.synced_stop) {
+        try {
+          await apiClient.stopTimer({
+            started_at: session.started_at,
+            ended_at: session.ended_at,
+          });
+          markLocalTimerStopSynced(session.id);
+        } catch (e) {
+          console.warn(`[Reconcile] Session ${session.id} stop sync failed:`, e.message);
+        }
+      }
+    }
+
+    // Pass 1b: sync sessions that need both start + stop (fully unsynced, completed)
+    for (const session of unsynced) {
+      if (session.id === currentEntry?._localId) continue; // Skip active session
+      if (!session.synced_start) {
+        try {
+          const result = await apiClient.startTimer(session.project_id || null, session.idempotency_key);
+          markLocalTimerStartSynced(session.id, result.entry.id);
+          if (session.ended_at) {
+            await apiClient.stopTimer({
+              started_at: session.started_at,
+              ended_at: session.ended_at,
+            });
+            markLocalTimerStopSynced(session.id);
+          }
+        } catch (e) {
+          console.warn(`[Reconcile] Session ${session.id} sync failed:`, e.message);
+        }
+      }
+    }
+
+    // ── Phase 2: Handle the currently active timer ────────────────────────
     if (localActive && !localActive.synced_start) {
       // Local has an unsynced start — push it to server
       console.log('[Reconcile] Pushing unsynced local start to server');
@@ -2256,37 +2221,6 @@ async function reconcileTimerState() {
       }
     }
 
-    // Also sync any fully unsynced sessions from the DB
-    const unsynced = getUnsyncedTimerSessions();
-    for (const session of unsynced) {
-      if (session.id === currentEntry?._localId) continue; // Skip active session
-      if (!session.synced_start) {
-        try {
-          const result = await apiClient.startTimer(session.project_id || null, session.idempotency_key);
-          markLocalTimerStartSynced(session.id, result.entry.id);
-          if (session.ended_at) {
-            await apiClient.stopTimer({
-              started_at: session.started_at,
-              ended_at: session.ended_at,
-            });
-            markLocalTimerStopSynced(session.id);
-          }
-        } catch (e) {
-          console.warn(`[Reconcile] Session ${session.id} sync failed:`, e.message);
-        }
-      } else if (session.ended_at && !session.synced_stop) {
-        try {
-          await apiClient.stopTimer({
-            started_at: session.started_at,
-            ended_at: session.ended_at,
-          });
-          markLocalTimerStopSynced(session.id);
-        } catch (e) {
-          console.warn(`[Reconcile] Session ${session.id} stop sync failed:`, e.message);
-        }
-      }
-    }
-
     cleanOldLocalTimerSessions();
   } catch (e) {
     console.error('[Reconcile] Failed:', e.message);
@@ -2341,6 +2275,14 @@ function startTimerSync() {
       } catch (e) {
         // Silent failure — keep using existing config
       }
+      try {
+        const shiftData = await apiClient.getMyShift();
+        currentShift = shiftData?.shift || null;
+        notifyPopup('shift-update', { shift: currentShift });
+        console.log('[Shift] Fetched:', currentShift?.name || 'none');
+      } catch (e) {
+        // Silent failure — keep using existing shift data
+      }
     }
 
     // CONNECTIVITY FIX: Skip sync when offline to avoid unnecessary errors
@@ -2373,8 +2315,7 @@ function startTimerSync() {
         idleDetector?.start();
         startTrayTimer();
         updateTrayIcon(true);
-        _timerStateVersion++;
-        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject, _stateVersion: _timerStateVersion });
+        notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
       } else if (!status.running && isTimerRunning) {
         // BUG-2 FIX: Don't override local state while idle alert is showing — the server may show
         // timer as stopped because idle-discard split the entry, but locally we're still
@@ -2395,8 +2336,7 @@ function startTimerSync() {
         stopTrayTimer();
         updateTrayTitle();
         updateTrayIcon(false);
-        _timerStateVersion++;
-        notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal, _stateVersion: _timerStateVersion });
+        notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal });
       }
     } catch (err) {
       if (isTransientTimerSyncError(err)) {
@@ -2502,7 +2442,6 @@ function notifyPopup(event, data) {
 // ── Idle Alert System ────────────────────────────────────────────────────────
 
 async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
-  console.log(`[IdleAlert] showIdleAlert called: idleSeconds=${idleSeconds}, actionId=${actionId}, detectorState=${idleDetector?.state}, isIdleActive=${idleDetector?.isIdleActive()}`);
   // Capture the actionId at call time; if not provided, read from detector
   const alertActionId = actionId ?? idleDetector?.getActionId() ?? 0;
 
@@ -2526,10 +2465,7 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
   // BUG-2 FIX: Check idle detector state instead of isTimerRunning to avoid race condition
   // where a concurrent sync cycle temporarily sets isTimerRunning=false, preventing the
   // modal from appearing. The idle detector is the authoritative source of idle state.
-  if (!idleDetector?.isIdleActive()) {
-    console.warn('[IdleAlert] showIdleAlert aborted — idleDetector not in idle-active state');
-    return;
-  }
+  if (!idleDetector?.isIdleActive()) return;
 
   screenshotService?.stop();
 
@@ -2548,10 +2484,6 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
 
   // Refresh project list so idle reassign dropdown is up-to-date
   await loadProjects();
-
-  const htmlPath = path.join(__dirname, '..', 'renderer', 'idle-alert.html');
-  const preloadPath = path.join(__dirname, '..', 'preload', 'index.js');
-  console.log(`[IdleAlert] Creating window — htmlPath=${htmlPath}, preloadPath=${preloadPath}, __dirname=${__dirname}`);
 
   idleAlertWindow = new BrowserWindow({
     width: 380,
@@ -2586,9 +2518,8 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
 
   function showAndSendData() {
     if (shown) return;
-    if (win.isDestroyed()) { console.warn('[IdleAlert] Window destroyed before show'); return; }
+    if (win.isDestroyed()) return;
     shown = true;
-    console.log('[IdleAlert] Showing idle alert window');
     win.show();
     win.focus();
     win.webContents.send('idle-data', {
@@ -2611,46 +2542,44 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
   // If the idle alert window is closed without the user clicking an action
   // button (e.g., Cmd+W, dock close, OS memory pressure), treat as "keep"
   // (safest default — does not discard tracked time) and re-arm the detector.
-  // Exception: if auto-stop already fired (_autoStopped=true), timer is already
-  // stopped — just clean up, don't re-arm.
   win._dismissedProgrammatically = false;
-  win._autoStopped = false;
 
   win.on('closed', () => {
     idleAlertWindow = null;
     if (!win._dismissedProgrammatically) {
-      if (win._autoStopped) {
-        // Auto-stop already stopped the timer — just clean up
-        console.log('[IdleAlert] Window closed after auto-stop — timer already stopped, no action needed');
-        updateTrayIcon(isTimerRunning);
-        return;
-      }
-      console.log('[IdleAlert] Window closed without user action — treating as "keep" and re-arming idle detector');
-      // Use the action ID stored on the window to resolve the correct idle cycle
-      const windowActionId = win._actionId;
-      const resolved = idleDetector?.resolveIdle(windowActionId);
-      if (resolved) {
-        // Only restart services if resolve succeeded (not stale)
-        activityMonitor?.start();
-        if (isTimerRunning && currentEntry) {
-          screenshotService?.start(currentEntry.id, {
-            immediateCapture: config.screenshot_capture_immediate_after_idle === true,
-          });
+      if (idleDetector?.isIdleActive() && isTimerRunning) {
+        console.log('[IdleAlert] Window closed without user action — re-showing in 3s');
+        setTimeout(() => {
+          if (idleDetector?.isIdleActive() && isTimerRunning) {
+            const idleDuration = idleDetector.getIdleDuration();
+            const idleStart = idleDetector.idleStartedAt;
+            const actionId = idleDetector.getActionId();
+            showIdleAlert(idleDuration, idleStart, actionId);
+          }
+        }, 3000);
+      } else {
+        console.log('[IdleAlert] Window closed without user action — idle already resolved, treating as keep');
+        const windowActionId = win._actionId;
+        const resolved = idleDetector?.resolveIdle(windowActionId);
+        if (resolved) {
+          activityMonitor?.start();
+          if (isTimerRunning && currentEntry) {
+            screenshotService?.start(currentEntry.id, {
+              immediateCapture: config.screenshot_capture_immediate_after_idle === true,
+            });
+          }
+          idleDetector?.start();
         }
-        idleDetector?.start();
-      }
-      // Restore tray regardless
-      updateTrayIcon(isTimerRunning);
-      if (isTimerRunning) {
-        updateTrayTitle();
-        startTrayTimer();
+        updateTrayIcon(isTimerRunning);
+        if (isTimerRunning) {
+          updateTrayTitle();
+          startTrayTimer();
+        }
       }
     }
   });
 
-  win.loadFile(htmlPath).then(() => {
-    console.log('[IdleAlert] idle-alert.html loaded successfully');
-  }).catch((err) => {
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'idle-alert.html')).catch((err) => {
     console.error('[IdleAlert] Failed to load idle-alert.html:', err.message);
   });
 

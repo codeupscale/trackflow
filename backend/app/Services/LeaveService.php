@@ -203,18 +203,44 @@ class LeaveService
     /**
      * Get team leave calendar for a given month/year.
      * Returns leave requests with user details for the given period.
+     *
+     * Role-based scoping:
+     * - Employee: sees only their own leave requests
+     * - Manager: sees their own + managed team members' requests
+     * - Admin/Owner: sees all org leave requests
      */
-    public function getLeaveCalendar(string $orgId, int $month, int $year): array
+    public function getLeaveCalendar(string $orgId, int $month, int $year, ?User $viewer = null): array
     {
         $startOfMonth = Carbon::create($year, $month, 1)->startOfMonth();
         $endOfMonth = $startOfMonth->copy()->endOfMonth();
 
-        $requests = LeaveRequest::where('organization_id', $orgId)
+        $query = LeaveRequest::where('organization_id', $orgId)
             ->whereIn('status', ['approved', 'pending'])
             ->where('start_date', '<=', $endOfMonth)
             ->where('end_date', '>=', $startOfMonth)
-            ->with(['user:id,name,email,avatar_url', 'leaveType:id,name,code'])
-            ->get();
+            ->with(['user:id,name,email,avatar_url', 'leaveType:id,name,code']);
+
+        // Role-based scoping when viewer is provided
+        if ($viewer !== null) {
+            if ($viewer->hasRole('owner', 'admin')) {
+                // Owner/admin see all org leave requests
+            } elseif ($viewer->isManager()) {
+                // Managers see their own + their managed team members' requests
+                $teamMemberIds = $viewer->managedTeams()
+                    ->with('members:id')
+                    ->get()
+                    ->flatMap(fn ($team) => $team->members->pluck('id'))
+                    ->push($viewer->id)
+                    ->unique()
+                    ->values();
+                $query->whereIn('user_id', $teamMemberIds);
+            } else {
+                // Employees see only their own leave requests
+                $query->where('user_id', $viewer->id);
+            }
+        }
+
+        $requests = $query->get();
 
         // Group by date
         $calendar = [];
