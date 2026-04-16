@@ -64,10 +64,10 @@ type ReportType = 'summary' | 'team' | 'projects' | 'apps' | 'payroll' | 'attend
 
 interface AnalyticsData {
   total_hours: number;
-  hours_change_percent: number;
+  hours_change_percent: number | null;
   average_activity: number;
   total_budget_used: number;
-  budget_change_percent: number;
+  budget_change_percent: number | null;
   billable_ratio: number;
   non_billable_ratio: number;
   time_per_project: TimePerProject[];
@@ -343,10 +343,10 @@ export default function ReportsPage() {
       const kpis = raw.kpis ?? {};
       return {
         total_hours: kpis.total_tracked_hours?.value ?? 0,
-        hours_change_percent: kpis.total_tracked_hours?.change_percent ?? 0,
+        hours_change_percent: kpis.total_tracked_hours?.change_percent ?? null,
         average_activity: kpis.avg_activity_percent?.value ?? 0,
         total_budget_used: kpis.total_budget_used?.value ?? 0,
-        budget_change_percent: kpis.total_budget_used?.change_percent ?? 0,
+        budget_change_percent: kpis.total_budget_used?.change_percent ?? null,
         billable_ratio: kpis.billable_ratio?.billable ?? 0,
         non_billable_ratio: kpis.billable_ratio?.non_billable ?? 0,
         time_per_project: raw.time_per_project ?? [],
@@ -627,17 +627,25 @@ export default function ReportsPage() {
                 <div className="flex items-center justify-center size-10 rounded-lg bg-blue-500/10">
                   <Clock className="size-5 text-blue-500" />
                 </div>
-                <span
-                  className={cn(
-                    'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold',
-                    analytics.hours_change_percent >= 0
-                      ? 'bg-green-500/10 text-green-500'
-                      : 'bg-red-500/10 text-red-500'
-                  )}
-                >
-                  {analytics.hours_change_percent >= 0 ? '+' : ''}
-                  {analytics.hours_change_percent.toFixed(1)}%
-                </span>
+                {analytics.hours_change_percent !== null ? (
+                  <span
+                    className={cn(
+                      'inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-xs font-semibold',
+                      analytics.hours_change_percent >= 0
+                        ? 'bg-green-500/10 text-green-500'
+                        : 'bg-red-500/10 text-red-500'
+                    )}
+                  >
+                    {analytics.hours_change_percent >= 0
+                      ? <ChevronUp className="size-3" />
+                      : <ChevronDown className="size-3" />}
+                    {Math.abs(analytics.hours_change_percent).toFixed(1)}%
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-muted text-muted-foreground">
+                    No prior data
+                  </span>
+                )}
               </div>
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
                 Total Tracked Hours
@@ -678,17 +686,25 @@ export default function ReportsPage() {
                 <div className="flex items-center justify-center size-10 rounded-lg bg-emerald-500/10">
                   <DollarSign className="size-5 text-emerald-500" />
                 </div>
-                <span
-                  className={cn(
-                    'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold',
-                    analytics.budget_change_percent >= 0
-                      ? 'bg-green-500/10 text-green-500'
-                      : 'bg-red-500/10 text-red-500'
-                  )}
-                >
-                  {analytics.budget_change_percent >= 0 ? '+' : ''}
-                  {analytics.budget_change_percent.toFixed(1)}%
-                </span>
+                {analytics.budget_change_percent !== null ? (
+                  <span
+                    className={cn(
+                      'inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-xs font-semibold',
+                      analytics.budget_change_percent >= 0
+                        ? 'bg-green-500/10 text-green-500'
+                        : 'bg-red-500/10 text-red-500'
+                    )}
+                  >
+                    {analytics.budget_change_percent >= 0
+                      ? <ChevronUp className="size-3" />
+                      : <ChevronDown className="size-3" />}
+                    {Math.abs(analytics.budget_change_percent).toFixed(1)}%
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-muted text-muted-foreground">
+                    No prior data
+                  </span>
+                )}
               </div>
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
                 Total Budget Used

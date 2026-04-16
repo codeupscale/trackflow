@@ -7,6 +7,7 @@ use App\Events\TimerStopped;
 use App\Models\Project;
 use App\Models\TimeEntry;
 use App\Models\ActivityLog;
+use App\Services\AppUsageService;
 use Illuminate\Auth\Access\AuthorizationException;
 use App\Support\TimezoneAwareDateRange;
 use Carbon\Carbon;
@@ -691,6 +692,17 @@ class TimerService
         }
 
         $user->update(['last_active_at' => now()]);
+
+        // Record app usage duration for the app usage tracking feature
+        if (!empty($data['active_app'])) {
+            $intervalSeconds = isset($data['active_seconds']) ? (int) $data['active_seconds'] : 30;
+            app(AppUsageService::class)->recordHeartbeat(
+                $user,
+                $data['active_app'],
+                $data['active_window_title'] ?? null,
+                $intervalSeconds
+            );
+        }
 
         return $log;
     }

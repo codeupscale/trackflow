@@ -113,7 +113,10 @@ describe('Offline Sync — Exponential Backoff', () => {
   });
 });
 
-describe('Offline Sync — Timer Entry Handling in Flush', () => {
+describe('Offline Sync — Timer Events Are Not Queued (dual-replay fix)', () => {
+  // Timer start/stop events are NO LONGER added to the offline queue.
+  // Timer sync is handled exclusively by timer_sessions table + reconcileTimerState().
+  // This eliminates the dual-replay bug that caused duplicate time entries on reconnect.
   let queue;
 
   beforeEach(() => {
@@ -125,8 +128,9 @@ describe('Offline Sync — Timer Entry Handling in Flush', () => {
     queue.close();
   });
 
-  test('flush processes timer_start items with correct API call', async () => {
-    // Override the select statement to return a timer_start item
+  test('flush ignores legacy timer_start items without calling API', async () => {
+    // If a timer_start item somehow exists in the queue (from before the fix),
+    // it should be skipped — no startTimer API call should be made.
     const timerStartItem = {
       id: 1,
       type: 'timer_start',
@@ -140,27 +144,23 @@ describe('Offline Sync — Timer Entry Handling in Flush', () => {
       priority: 1,
     };
 
-    // Mock the select to return our item
     queue._stmtSelect = { all: jest.fn(() => [timerStartItem]) };
     queue._stmtCount = { get: jest.fn(() => ({ count: 0 })) };
     queue._stmtIncAttempt = { run: jest.fn() };
-    const deleteSpy = jest.fn();
-    queue.db.prepare = jest.fn(() => ({ run: deleteSpy }));
+    queue.db.prepare = jest.fn(() => ({ run: jest.fn() }));
 
     const mockApiClient = {
-      startTimer: jest.fn().mockResolvedValue({
-        entry: { id: 'server-entry-1' },
-        today_total: 0,
-      }),
+      startTimer: jest.fn(),
       bulkUploadLogs: jest.fn().mockResolvedValue({}),
     };
 
     await queue.flush(mockApiClient);
 
-    expect(mockApiClient.startTimer).toHaveBeenCalledWith('proj-1', 'idem-key-abc');
+    // startTimer should NOT be called — timer sync is handled by reconcileTimerState()
+    expect(mockApiClient.startTimer).not.toHaveBeenCalled();
   });
 
-  test('flush processes timer_stop items with timestamps', async () => {
+  test('flush ignores legacy timer_stop items without calling API', async () => {
     const timerStopItem = {
       id: 2,
       type: 'timer_stop',
@@ -181,113 +181,14 @@ describe('Offline Sync — Timer Entry Handling in Flush', () => {
     queue.db.prepare = jest.fn(() => ({ run: jest.fn() }));
 
     const mockApiClient = {
-      stopTimer: jest.fn().mockResolvedValue({
-        entry: { id: 'entry-1' },
-        today_total: 3600,
-      }),
+      stopTimer: jest.fn(),
       bulkUploadLogs: jest.fn().mockResolvedValue({}),
     };
 
     await queue.flush(mockApiClient);
 
-    expect(mockApiClient.stopTimer).toHaveBeenCalledWith({
-      started_at: '2026-04-06T10:00:00Z',
-      ended_at: '2026-04-06T11:00:00Z',
-    });
-  });
-
-  test('timer_start with 409 is removed from queue', async () => {
-    const timerStartItem = {
-      id: 1,
-      type: 'timer_start',
-      data: JSON.stringify({
-        project_id: 'proj-1',
-        idempotency_key: 'idem-dup',
-      }),
-      created_at: '2026-04-06T10:00:00',
-      attempts: 0,
-      priority: 1,
-    };
-
-    queue._stmtSelect = { all: jest.fn(() => [timerStartItem]) };
-    queue._stmtCount = { get: jest.fn(() => ({ count: 0 })) };
-    queue._stmtIncAttempt = { run: jest.fn() };
-    const deleteRunSpy = jest.fn();
-    queue.db.prepare = jest.fn(() => ({ run: deleteRunSpy }));
-
-    const error409 = new Error('Conflict');
-    error409.response = { status: 409 };
-    const mockApiClient = {
-      startTimer: jest.fn().mockRejectedValue(error409),
-      bulkUploadLogs: jest.fn().mockResolvedValue({}),
-    };
-
-    await queue.flush(mockApiClient);
-
-    // The item should have been added to deleteIds (409 is a success for idempotent start)
-    expect(deleteRunSpy).toHaveBeenCalled();
-  });
-
-  test('timer_stop with 404 is removed from queue', async () => {
-    const timerStopItem = {
-      id: 2,
-      type: 'timer_stop',
-      data: JSON.stringify({
-        entry_id: 'entry-1',
-        ended_at: '2026-04-06T11:00:00Z',
-      }),
-      created_at: '2026-04-06T10:00:00',
-      attempts: 0,
-      priority: 0,
-    };
-
-    queue._stmtSelect = { all: jest.fn(() => [timerStopItem]) };
-    queue._stmtCount = { get: jest.fn(() => ({ count: 0 })) };
-    queue._stmtIncAttempt = { run: jest.fn() };
-    const deleteRunSpy = jest.fn();
-    queue.db.prepare = jest.fn(() => ({ run: deleteRunSpy }));
-
-    const error404 = new Error('Not Found');
-    error404.response = { status: 404 };
-    const mockApiClient = {
-      stopTimer: jest.fn().mockRejectedValue(error404),
-      bulkUploadLogs: jest.fn().mockResolvedValue({}),
-    };
-
-    await queue.flush(mockApiClient);
-
-    expect(deleteRunSpy).toHaveBeenCalled();
-  });
-
-  test('server error on timer_stop increments attempt count', async () => {
-    const timerStopItem = {
-      id: 3,
-      type: 'timer_stop',
-      data: JSON.stringify({
-        entry_id: 'entry-1',
-        ended_at: '2026-04-06T11:00:00Z',
-      }),
-      created_at: '2026-04-06T10:00:00',
-      attempts: 0,
-      priority: 0,
-    };
-
-    queue._stmtSelect = { all: jest.fn(() => [timerStopItem]) };
-    queue._stmtCount = { get: jest.fn(() => ({ count: 1 })) };
-    const incAttemptSpy = jest.fn();
-    queue._stmtIncAttempt = { run: incAttemptSpy };
-    queue.db.prepare = jest.fn(() => ({ run: jest.fn() }));
-
-    const serverError = new Error('Server Error');
-    serverError.response = { status: 500 };
-    const mockApiClient = {
-      stopTimer: jest.fn().mockRejectedValue(serverError),
-      bulkUploadLogs: jest.fn().mockResolvedValue({}),
-    };
-
-    await queue.flush(mockApiClient);
-
-    expect(incAttemptSpy).toHaveBeenCalledWith(3);
+    // stopTimer should NOT be called — timer sync is handled by reconcileTimerState()
+    expect(mockApiClient.stopTimer).not.toHaveBeenCalled();
   });
 
   test('corrupt data entries are removed during flush', async () => {

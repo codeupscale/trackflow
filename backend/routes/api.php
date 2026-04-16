@@ -134,6 +134,7 @@ Route::prefix('v1')->group(function () {
 
         // Agent (desktop safety — auth:sanctum only)
         Route::get('agent/config', [\App\Http\Controllers\Api\V1\AgentController::class, 'config']);
+        Route::get('agent/my-shift', [\App\Http\Controllers\Api\V1\AgentController::class, 'myShift']);
         Route::post('agent/logs', [\App\Http\Controllers\Api\V1\AgentController::class, 'bulkLogs'])->middleware('throttle:30,1');
 
         // Screenshots (store + signed-cookies are desktop safety — auth:sanctum only)
@@ -157,6 +158,17 @@ Route::prefix('v1')->group(function () {
             Route::get('payroll', [\App\Http\Controllers\Api\V1\ReportController::class, 'payroll']);
             Route::get('attendance', [\App\Http\Controllers\Api\V1\ReportController::class, 'attendance']);
         });
+
+        // App Usage
+        Route::prefix('app-usage')->group(function () {
+            Route::get('daily', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'daily']);
+            Route::get('team', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'team']);
+            Route::get('top', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'top']);
+        });
+
+        // Report Subscriptions
+        Route::apiResource('report-subscriptions', \App\Http\Controllers\Api\V1\ReportSubscriptionController::class)
+            ->only(['index', 'store', 'destroy']);
 
         // Job status
         Route::get('jobs/{id}', [\App\Http\Controllers\Api\V1\ReportController::class, 'jobStatus']);

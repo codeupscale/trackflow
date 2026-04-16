@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -39,7 +39,7 @@
       letter-spacing: 2px;
       transition: color 0.2s;
     }
-    .time.running { color: var(--accent-green); }
+    .time.running { color: var(--accent-primary, var(--accent-blue)); }
     .time.stopped { color: var(--text-muted); }
 
     .status {
@@ -58,7 +58,7 @@
       border-radius: 50%;
       flex-shrink: 0;
     }
-    .dot.green { background: var(--accent-green); animation: pulse 2s infinite; }
+    .dot.green { background: var(--accent-primary, var(--accent-blue)); animation: pulse 2s infinite; }
     .dot.gray { background: var(--text-muted); }
 
     /* ── Project Select ─────────────────────────────────────── */
@@ -78,6 +78,89 @@
       padding: 10px;
       font-size: 14px;
     }
+
+    /* ── Activity Bar ───────────────────────────────────────── */
+    .activity-section {
+      display: none;
+      margin: 4px 0 8px;
+    }
+    .activity-section.visible {
+      display: block;
+    }
+    .activity-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+      font-size: 12px;
+    }
+    .activity-label {
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+    .activity-value {
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--accent-green);
+    }
+    .activity-value.low { color: var(--accent-red); }
+    .activity-value.medium { color: var(--accent-amber); }
+    .activity-value.high { color: var(--accent-green); }
+    .activity-bar {
+      width: 100%;
+      height: 6px;
+      background: var(--bg-tertiary);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .activity-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.6s ease, background-color 0.3s ease;
+      background: var(--accent-green);
+    }
+    .activity-bar-fill.low { background: var(--accent-red); }
+    .activity-bar-fill.medium { background: var(--accent-amber); }
+    .activity-bar-fill.high { background: var(--accent-green); }
+
+    /* ── Shift Info Banner ──────────────────────────────────── */
+    .shift-info {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      margin: 4px 0;
+      border-radius: 6px;
+      background: rgba(99, 102, 241, 0.1);
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .shift-info svg { color: var(--accent-primary, #6366f1); flex-shrink: 0; }
+    .shift-time {
+      margin-left: auto;
+      font-variant-numeric: tabular-nums;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    /* ── Connection Status (always visible, above timer) ──── */
+    .conn-status {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      padding: 2px 0;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .conn-status .dot {
+      width: 6px;
+      height: 6px;
+    }
+    .conn-status .dot.online { background: var(--accent-green); }
+    .conn-status .dot.offline { background: var(--accent-red); animation: pulse 2s infinite; }
+    .conn-status .conn-sep { color: var(--text-xs-muted); }
 
     /* ── Footer ─────────────────────────────────────────────── */
     .footer {
@@ -160,8 +243,8 @@
       to   { opacity: 1; transform: scale(1) translateY(0); }
     }
     .update-card {
-      background: var(--bg-secondary, #171717);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
       border-radius: 12px;
       padding: 24px;
       max-width: 340px;
@@ -173,14 +256,14 @@
       width: 44px;
       height: 44px;
       border-radius: 50%;
-      background: rgba(59, 130, 246, 0.15);
+      background: var(--accent-primary-ring, rgba(196, 125, 46, 0.15));
       display: flex;
       align-items: center;
       justify-content: center;
       margin: 0 auto 16px;
     }
     .update-icon svg {
-      color: #3b82f6;
+      color: var(--accent-primary, #c47d2e);
     }
     .update-title {
       font-size: 17px;
@@ -207,12 +290,12 @@
       font-size: 14px;
       font-weight: 600;
       cursor: pointer;
-      background: #3b82f6;
+      background: var(--accent-primary, #c47d2e);
       color: #fff;
       transition: background 0.15s;
     }
     .update-btn-primary:hover {
-      background: #2563eb;
+      background: var(--accent-primary-hover, #a86a25);
     }
     .update-btn-secondary {
       width: 100%;
@@ -239,7 +322,7 @@
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: #3b82f6;
+      background: var(--accent-primary, #c47d2e);
       cursor: pointer;
       animation: pulse 2s infinite;
     }
@@ -318,6 +401,21 @@
         </div>
       </div>
 
+      <!-- Connection status — always visible -->
+      <div class="conn-status" id="connStatus">
+        <span class="dot online" id="connDot"></span>
+        <span id="connText">Online</span>
+        <span class="conn-sep" id="lastSsSep" style="display:none">&middot;</span>
+        <span id="lastSsText"></span>
+      </div>
+
+      <!-- Shift info banner — visible when user has an assigned shift -->
+      <div class="shift-info" id="shiftInfo" style="display:none">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        <span id="shiftName"></span>
+        <span class="shift-time" id="shiftTime"></span>
+      </div>
+
       <div class="timer-display">
         <div class="time stopped" id="timerDisplay" role="timer" aria-live="polite">00:00:00</div>
         <div class="status">
@@ -331,6 +429,17 @@
         <select id="projectSelect" aria-label="Select project">
           <option value="">No Project</option>
         </select>
+      </div>
+
+      <!-- Activity bar — visible only when timer is running -->
+      <div class="activity-section" id="activitySection">
+        <div class="activity-header">
+          <span class="activity-label">Activity</span>
+          <span class="activity-value high" id="activityValue">0%</span>
+        </div>
+        <div class="activity-bar">
+          <div class="activity-bar-fill high" id="activityBarFill" style="width: 0%"></div>
+        </div>
       </div>
 
       <div class="actions">

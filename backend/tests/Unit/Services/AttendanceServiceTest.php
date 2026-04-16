@@ -329,7 +329,11 @@ class AttendanceServiceTest extends TestCase
         $user = $this->createUser($org, 'employee');
         $this->actingAs($user, 'sanctum');
 
-        AttendanceRecord::factory()->count(3)->create([
+        AttendanceRecord::factory()->count(3)->sequence(
+            ['date' => '2026-01-10'],
+            ['date' => '2026-01-11'],
+            ['date' => '2026-01-12'],
+        )->create([
             'organization_id' => $org->id,
             'user_id' => $user->id,
         ]);

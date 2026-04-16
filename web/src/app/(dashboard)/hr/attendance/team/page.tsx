@@ -195,14 +195,14 @@ export default function TeamAttendancePage() {
                       {record.clock_out || '—'}
                     </div>
                     <div className="text-sm text-foreground tabular-nums text-right">
-                      {record.total_hours > 0
-                        ? record.total_hours.toFixed(1)
+                      {Number(record.total_hours) > 0
+                        ? Number(record.total_hours).toFixed(1)
                         : '—'}
                     </div>
                     <div className="text-sm tabular-nums text-right">
-                      {record.overtime_hours > 0 ? (
+                      {Number(record.overtime_hours) > 0 ? (
                         <span className="text-purple-600 dark:text-purple-400">
-                          {record.overtime_hours.toFixed(1)}h
+                          {Number(record.overtime_hours).toFixed(1)}h
                         </span>
                       ) : (
                         '—'
