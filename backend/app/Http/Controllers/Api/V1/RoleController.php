@@ -236,8 +236,10 @@ class RoleController extends Controller
 
             // Insert new
             DB::table('user_roles')->insert([
-                'user_id' => $targetUser->id,
-                'role_id' => $role->id,
+                'id'          => \Illuminate\Support\Str::uuid()->toString(),
+                'user_id'     => $targetUser->id,
+                'role_id'     => $role->id,
+                'assigned_by' => null,
                 'assigned_at' => now(),
             ]);
 
