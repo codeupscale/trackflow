@@ -78,7 +78,8 @@ class TimerService
 
         try {
             // Duplicate timer guard: if a timer is already running, auto-stop it first.
-            // This prevents orphaned entries when desktop is tracking and user starts from web (or vice versa).
+            // Checks Redis first (fast path), then falls back to DB (catches orphaned entries
+            // where Redis key was lost due to the non-transactional Redis::del bug).
             $existing = Redis::get($redisKey);
             if ($existing) {
                 $existingData = json_decode($existing, true);
@@ -112,6 +113,33 @@ class TimerService
                         // Redis key is stale (entry already closed or missing) — clean it up
                         Redis::del($redisKey);
                     }
+                }
+            } else {
+                // Redis key missing — check DB for any orphaned open entry.
+                // This catches the case where Redis::del fired inside a rolled-back transaction,
+                // leaving an open entry in DB with no corresponding Redis key.
+                $orphan = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                    ->where('user_id', $user->id)
+                    ->where('organization_id', $user->organization_id)
+                    ->whereNull('ended_at')
+                    ->whereNull('deleted_at')
+                    ->latest('started_at')
+                    ->first();
+
+                if ($orphan) {
+                    $now = now();
+                    $endedAt = $now->lt($orphan->started_at) ? $orphan->started_at->copy() : $now;
+                    $duration = min(
+                        (int) abs($orphan->started_at->diffInSeconds($endedAt)),
+                        self::MAX_ENTRY_DURATION
+                    );
+                    $finalScore = $this->computeFinalActivityScore($orphan->id);
+                    $orphan->update([
+                        'ended_at'         => $endedAt,
+                        'duration_seconds' => $duration,
+                        'activity_score'   => $finalScore ?? $orphan->activity_score ?? 0,
+                    ]);
+                    TimerStopped::dispatch($orphan);
                 }
             }
 
@@ -195,8 +223,42 @@ class TimerService
 
         $timerData = Redis::get($redisKey);
         if (!$timerData) {
-            // No Redis key — check if the most recent entry for this user is already stopped.
-            // This handles the case where desktop queued a stop that already completed.
+            // Redis key is missing — the DB is source of truth.
+            // Root cause: Redis::del() inside a DB transaction fires immediately even if
+            // the transaction rolls back (Redis is not transactional). This leaves the entry
+            // with ended_at=NULL but no Redis key, making it invisible to subsequent stops.
+            // Fix: always check for an open entry in the DB before declaring "already stopped".
+            $openEntry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                ->where('user_id', $user->id)
+                ->where('organization_id', $user->organization_id)
+                ->whereNull('ended_at')
+                ->whereNull('deleted_at')
+                ->latest('started_at')
+                ->first();
+
+            if ($openEntry) {
+                // Orphaned open entry — close it now using the requested timestamps if provided
+                $stopTime = $overrideEndedAt ?? now();
+                // Clock skew guard
+                if ($stopTime->lt($openEntry->started_at)) {
+                    $stopTime = $openEntry->started_at->copy();
+                }
+                $duration = min(
+                    (int) abs($stopTime->diffInSeconds($openEntry->started_at)),
+                    self::MAX_ENTRY_DURATION
+                );
+                $finalScore = $this->computeFinalActivityScore($openEntry->id);
+                $openEntry->update([
+                    'started_at' => $overrideStartedAt ?? $openEntry->started_at,
+                    'ended_at'   => $stopTime,
+                    'duration_seconds' => $duration,
+                    'activity_score'   => $finalScore ?? $openEntry->activity_score ?? 0,
+                ]);
+                TimerStopped::dispatch($openEntry->fresh());
+                return ['entry' => $openEntry->fresh(), 'already_stopped' => false];
+            }
+
+            // No open entry — check if the most recent entry is already stopped (idempotent stop).
             $lastEntry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
                 ->where('user_id', $user->id)
                 ->whereNotNull('ended_at')
@@ -264,9 +326,17 @@ class TimerService
                     'activity_score' => $finalScore ?? $entry->activity_score ?? 0,
                 ]);
 
-                Redis::del($redisKey);
                 return $entry->fresh();
+                // NOTE: Redis::del($redisKey) intentionally moved OUTSIDE this transaction.
+                // Redis is not transactional — deleting the key inside the callback fires
+                // immediately even if the DB transaction rolls back, leaving an orphaned
+                // open entry with no Redis key. The key is deleted after commit below.
             });
+
+            // Delete Redis key only after the DB transaction has committed successfully.
+            // If this delete fails (Redis down), the next stop will see ended_at != null
+            // and clean up the stale key gracefully — no data loss.
+            Redis::del($redisKey);
 
             TimerStopped::dispatch($entry);
 
