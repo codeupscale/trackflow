@@ -41,7 +41,7 @@ jobs:
       - name: Set version
         if: ${{ inputs.version != '' }}
         working-directory: desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version --allow-same-version
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Create .env for desktop build
         working-directory: desktop
