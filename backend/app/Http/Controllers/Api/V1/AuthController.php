@@ -570,34 +570,52 @@ class AuthController extends Controller
     /** Verify a Google ID token and return the payload, or null on failure. */
     private function verifyGoogleToken(string $idToken): ?array
     {
-        $webClientId = config('services.google.client_id');
+        $webClientId     = config('services.google.client_id');
         $desktopClientId = config('services.google.desktop_client_id');
 
         if (empty($webClientId) && empty($desktopClientId)) {
+            \Log::warning('[GoogleAuth] No Google client IDs configured — check GOOGLE_CLIENT_ID and GOOGLE_DESKTOP_CLIENT_ID in .env');
             return null;
         }
 
-        $response = \Illuminate\Support\Facades\Http::get('https://oauth2.googleapis.com/tokeninfo', [
-            'id_token' => $idToken,
-        ]);
+        // Call Google's tokeninfo endpoint with a hard timeout and one automatic retry
+        // so transient network blips (DNS hiccup, slow response) don't fail the login.
+        try {
+            $response = \Illuminate\Support\Facades\Http::timeout(10)
+                ->retry(2, 500, function (\Exception $e) {
+                    // Only retry on connection/timeout errors, not on 4xx responses
+                    return $e instanceof \Illuminate\Http\Client\ConnectionException;
+                })
+                ->get('https://oauth2.googleapis.com/tokeninfo', ['id_token' => $idToken]);
+        } catch (\Exception $e) {
+            \Log::error('[GoogleAuth] tokeninfo request failed: ' . $e->getMessage());
+            return null;
+        }
 
         if ($response->failed()) {
+            \Log::warning('[GoogleAuth] tokeninfo returned HTTP ' . $response->status() . ': ' . $response->body());
             return null;
         }
 
         $payload = $response->json();
 
-        // Verify audience matches either the web or desktop client ID
+        // Google puts the requesting client_id in 'aud'.
+        // For cross-client tokens it may also appear in 'azp' (authorized party).
+        // Accept either field matching web or desktop client ID.
         $aud = $payload['aud'] ?? '';
+        $azp = $payload['azp'] ?? '';
         $validClientIds = array_filter([$webClientId, $desktopClientId]);
-        if (!in_array($aud, $validClientIds, true)) {
+
+        if (!in_array($aud, $validClientIds, true) && !in_array($azp, $validClientIds, true)) {
+            \Log::warning('[GoogleAuth] Client ID mismatch — token_aud=' . $aud . ' token_azp=' . $azp . ' valid=[' . implode(', ', $validClientIds) . ']');
             return null;
         }
 
-        $email = $payload['email'] ?? null;
-        $googleId = $payload['sub'] ?? null;
+        $email    = $payload['email'] ?? null;
+        $googleId = $payload['sub']   ?? null;
 
         if (!$email || !$googleId) {
+            \Log::warning('[GoogleAuth] tokeninfo payload missing email or sub');
             return null;
         }
 

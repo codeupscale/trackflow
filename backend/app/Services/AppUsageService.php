@@ -69,11 +69,11 @@ class AppUsageService
                 'app_usage_summaries.user_id',
                 'users.name as user_name',
                 'app_usage_summaries.app_name',
-                DB::raw('SUM(app_usage_summaries.duration_seconds) as total_seconds'),
+                DB::raw('SUM(app_usage_summaries.duration_seconds) as duration_seconds'),
                 DB::raw('COUNT(DISTINCT app_usage_summaries.date) as days_used')
             )
             ->groupBy('app_usage_summaries.user_id', 'users.name', 'app_usage_summaries.app_name')
-            ->orderByDesc('total_seconds')
+            ->orderByDesc('duration_seconds')
             ->paginate(30);
     }
 
@@ -88,12 +88,12 @@ class AppUsageService
             ->whereBetween('date', [$startDate, $endDate])
             ->select(
                 'app_name',
-                DB::raw('SUM(duration_seconds) as total_seconds'),
+                DB::raw('SUM(duration_seconds) as duration_seconds'),
                 DB::raw('COUNT(DISTINCT user_id) as user_count'),
                 DB::raw('COUNT(DISTINCT date) as days_active')
             )
             ->groupBy('app_name')
-            ->orderByDesc('total_seconds')
+            ->orderByDesc('duration_seconds')
             ->paginate($limit);
     }
 }
