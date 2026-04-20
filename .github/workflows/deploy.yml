@@ -556,22 +556,22 @@ jobs:
               tf-app tf-web tf-marketing tf-horizon tf-scheduler tf-reverb 2>/dev/null || true
 
             # ── 4. HEALTH CHECK GATE ──
-            # Wait up to 90 seconds for all TrackFlow containers to report healthy.
-            # If any container fails health check, trigger rollback.
+            # Check ALL running tf-* containers, not just the ones deployed in
+            # this run. This catches regressions in services we didn't touch
+            # (e.g. tf-web was healthy before a backend-only deploy — it must
+            # still be healthy after).
 
             echo "==> Waiting for containers to become healthy (timeout: 150s)..."
             HEALTH_OK=true
-            SERVICES_TO_CHECK=""
 
-            if [ "${DEPLOY_API}" = "true" ]; then
-              SERVICES_TO_CHECK="tf-app tf-horizon tf-scheduler tf-reverb"
-            fi
-            if [ "${DEPLOY_WEB}" = "true" ]; then
-              SERVICES_TO_CHECK="${SERVICES_TO_CHECK} tf-web"
-            fi
-            if [ "${DEPLOY_MARKETING}" = "true" ]; then
-              SERVICES_TO_CHECK="${SERVICES_TO_CHECK} tf-marketing"
-            fi
+            # Discover every tf-* container that exists (running or starting)
+            SERVICES_TO_CHECK=""
+            for svc in tf-app tf-web tf-marketing tf-horizon tf-scheduler tf-reverb; do
+              if docker inspect "infra-${svc}-1" > /dev/null 2>&1; then
+                SERVICES_TO_CHECK="${SERVICES_TO_CHECK} ${svc}"
+              fi
+            done
+            echo "==> Services to health-check:${SERVICES_TO_CHECK}"
 
             for svc in ${SERVICES_TO_CHECK}; do
               echo "  Checking health: ${svc}..."
