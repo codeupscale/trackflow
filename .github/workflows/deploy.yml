@@ -111,7 +111,7 @@ jobs:
       always() && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'backend')) || (needs.changes.result == 'success' && needs.changes.outputs.backend == 'true'))
     services:
       postgres:
-        image: postgres:18
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_USER: trackflow
           POSTGRES_PASSWORD: trackflow_test
@@ -438,10 +438,11 @@ jobs:
             # ── 0. REMOVE ORPHAN/LEGACY CONTAINERS (free any held ports) ──
             # Before the tf- rename, services were named app/web/marketing/etc.
             # Those old containers may still be running and holding ports (e.g. 3002).
-            # Also remove current tf-* containers so --force-recreate has a clean slate.
-            echo "==> Removing legacy and existing app containers"
-            for svc in app web marketing horizon scheduler reverb \
-                        tf-app tf-web tf-marketing tf-horizon tf-scheduler tf-reverb; do
+            # Only remove the legacy names — current tf-* containers stay up until
+            # --force-recreate replaces them individually, so non-deployed services
+            # (e.g. tf-web on a backend-only deploy) are never taken offline.
+            echo "==> Removing legacy app containers (pre-rename names only)"
+            for svc in app web marketing horizon scheduler reverb; do
               docker rm -f "infra-${svc}-1" 2>/dev/null || true
             done
             echo "==> Port 3002 status: $(ss -tlnp 'sport = :3002' 2>/dev/null | grep ':3002' || echo 'free')"
@@ -504,6 +505,11 @@ jobs:
               echo "==> Waiting for tf-app to accept connections..."
               sleep 10
 
+              echo "==> Rebuilding Laravel config/route/view caches from current env"
+              docker compose exec tf-app php artisan config:cache
+              docker compose exec tf-app php artisan route:cache
+              docker compose exec tf-app php artisan view:cache
+
               echo "==> Running migrations"
               if ! docker compose exec tf-app php artisan migrate --force; then
                 echo "!!! MIGRATION FAILED — aborting deploy !!!"
@@ -540,23 +546,32 @@ jobs:
               docker compose up -d --no-deps --force-recreate tf-marketing
             fi
 
+            # ── 3.5. SAFETY NET: ensure every tf-* service is running ──
+            # Guards against any service that was stopped before this deploy
+            # (e.g. manual docker stop, or a previous incomplete deploy).
+            # --no-deps: never restart postgres/redis. This is a no-op for
+            # containers that are already healthy.
+            echo "==> Safety net: ensuring all TrackFlow services are up"
+            docker compose up -d --no-deps \
+              tf-app tf-web tf-marketing tf-horizon tf-scheduler tf-reverb 2>/dev/null || true
+
             # ── 4. HEALTH CHECK GATE ──
-            # Wait up to 90 seconds for all TrackFlow containers to report healthy.
-            # If any container fails health check, trigger rollback.
+            # Check ALL running tf-* containers, not just the ones deployed in
+            # this run. This catches regressions in services we didn't touch
+            # (e.g. tf-web was healthy before a backend-only deploy — it must
+            # still be healthy after).
 
             echo "==> Waiting for containers to become healthy (timeout: 150s)..."
             HEALTH_OK=true
-            SERVICES_TO_CHECK=""
 
-            if [ "${DEPLOY_API}" = "true" ]; then
-              SERVICES_TO_CHECK="tf-app tf-horizon tf-scheduler tf-reverb"
-            fi
-            if [ "${DEPLOY_WEB}" = "true" ]; then
-              SERVICES_TO_CHECK="${SERVICES_TO_CHECK} tf-web"
-            fi
-            if [ "${DEPLOY_MARKETING}" = "true" ]; then
-              SERVICES_TO_CHECK="${SERVICES_TO_CHECK} tf-marketing"
-            fi
+            # Discover every tf-* container that exists (running or starting)
+            SERVICES_TO_CHECK=""
+            for svc in tf-app tf-web tf-marketing tf-horizon tf-scheduler tf-reverb; do
+              if docker inspect "infra-${svc}-1" > /dev/null 2>&1; then
+                SERVICES_TO_CHECK="${SERVICES_TO_CHECK} ${svc}"
+              fi
+            done
+            echo "==> Services to health-check:${SERVICES_TO_CHECK}"
 
             for svc in ${SERVICES_TO_CHECK}; do
               echo "  Checking health: ${svc}..."

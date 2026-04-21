@@ -20,7 +20,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_USER: trackflow
           POSTGRES_PASSWORD: trackflow_test
