@@ -66,7 +66,10 @@ RUN mkdir -p /var/www/html/storage/app/public/screenshots \
 # Create storage symlink so public/storage -> storage/app/public
 RUN php artisan storage:link 2>/dev/null || ln -sf /var/www/html/storage/app/public /var/www/html/public/storage
 
-# Optimization will be done at container startup via entrypoint
+# Entrypoint: rebuilds config/route/view caches from live env on every start.
+# This ensures new env vars are always picked up without a manual config:cache.
+COPY backend/docker/production/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
@@ -74,4 +77,5 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
 
 EXPOSE 80
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

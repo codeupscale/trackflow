@@ -41,7 +41,7 @@ jobs:
       - name: Set version
         if: ${{ inputs.version != '' }}
         working-directory: desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version --allow-same-version
+        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Create .env for desktop build
         working-directory: desktop
@@ -222,25 +222,19 @@ jobs:
 
           ### What's New
 
-          **Bug Fixes**
-          - Fixed pin/always-on-top not keeping window above other apps on macOS Sequoia — now uses NSFloatingWindowLevel + moveTop() re-asserted every 300ms
-          - Fixed empty project list after logout and re-login
-          - Fixed empty project list after laptop restart
-          - Fixed password reset through web causing empty projects on desktop
-          - Fixed Windows installer error \"Failed to uninstall old application files\" — app is now killed before install/uninstall
-          - Fixed tray timer text showing blue/purple artifacts on macOS — now uses clean system color
-          - Fixed timer window appearing with dark background instead of white
-          - Fixed idle alert popup not showing after first idle cycle on macOS — window closure without action no longer breaks idle detection permanently
-
           **New Features**
-          - **Pin / Always on Top** — thumbtack button in titlebar to keep the timer visible on top of other windows. Also available in tray right-click menu. State persists across restarts.
+          - **Shift info display** — timer window now shows assigned shift name, time range, and break duration when tracking
+          - **Branded icons** — new TrackFlow-branded tray icon, app icon, and notification icon across all platforms
+          - **Simplified authentication** — streamlined login flow with reduced API overhead
 
           **Improvements**
-          - Added TrackFlow logo branding to login screen, titlebar, and idle alert
-          - Added hide-to-tray button (X) in titlebar — minimizes to tray instead of quitting
-          - Timer text turns green when actively tracking
-          - Light theme enforced on timer window for better readability
-          - Monospaced digits for timer display (no layout shift)
+          - Redesigned tray icons with idle/tracking states and color variants for better system tray visibility
+          - Added dedicated notification icon for macOS/Windows alerts
+          - Retina (@2x) tray icon support for high-DPI displays
+          - Cleaner main process code — refactored for maintainability
+
+          **Testing**
+          - New test coverage: API client error handling, idle alert reappearance after window close, tray click behavior
 
           ---
 
@@ -321,11 +315,10 @@ jobs:
           Then retry login — no app restart needed.
 
           **Windows: \"Failed to uninstall old application files\"**
-          This is fixed in v${VER}. The installer now automatically closes the running app.
-          If you still see this on older versions, close TrackFlow from the system tray before running the installer.
+          The installer automatically closes the running app. If you still see this, close TrackFlow from the system tray before running the installer.
 
           **Empty project list after login**
-          Fixed in v${VER}. If you still experience this, try: Sign out → close app completely → reopen → sign in.
+          Sign out → close app completely → reopen → sign in.
 
           **View logs:**
           - macOS: \`~/Library/Application Support/trackflow-agent/trackflow.log\`
