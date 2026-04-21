@@ -21,6 +21,12 @@ use Illuminate\Support\Facades\DB;
  */
 return new class extends Migration
 {
+    /**
+     * Disable the implicit transaction Laravel wraps around migrations.
+     * PostgreSQL's `CREATE INDEX CONCURRENTLY` cannot run inside a transaction block.
+     */
+    public $withinTransaction = false;
+
     public function up(): void
     {
         // First, resolve any existing duplicate open entries before adding the constraint.
@@ -51,6 +57,8 @@ return new class extends Migration
 
         // Add partial unique index: only one open (ended_at IS NULL) non-deleted entry
         // per user per organisation is allowed.
+        // CONCURRENTLY avoids locking writes on the table during index creation in
+        // production, which is critical for a high-traffic table like time_entries.
         DB::statement("
             CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS
                 idx_one_active_timer_per_user
