@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { FadeIn, FloatingAnimation } from "../motion";
 import { Play, ArrowRight, Calendar, DollarSign, Download, CheckCircle2 } from "lucide-react";
 import { DemoModal } from "../demo-modal";
+import { RELEASE_URL } from "../../lib/version";
 
 /* ─── Notification sequence ─── */
 const NOTIFICATIONS = [
@@ -448,7 +449,7 @@ export function Hero() {
                   Watch Demo
                 </button>
                 <a
-                  href="https://github.com/codeupscale/trackflow/releases/tag/v1.0.31"
+                  href={RELEASE_URL}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center justify-center gap-1.5 px-4 py-3.5 text-sm font-medium text-[var(--color-text-muted)] dark:text-[var(--color-text-muted-dark)] hover:text-[var(--color-text)] dark:hover:text-[var(--color-text-dark)] transition-colors"

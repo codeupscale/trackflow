@@ -2,6 +2,7 @@
 
 import { FadeIn, FloatingAnimation } from "../motion";
 import { Monitor, Cpu, Camera, Moon, WifiOff, RefreshCw, Laptop, Terminal, Download } from "lucide-react";
+import { DESKTOP_VERSION, RELEASE_URL } from "../../lib/version";
 
 const agentFeatures = [
   { icon: Monitor, label: "System tray app", desc: "Runs silently, one-click start/stop" },
@@ -78,12 +79,10 @@ function DesktopMockup() {
   );
 }
 
-const RELEASE_URL = "https://github.com/codeupscale/trackflow/releases/tag/v1.0.31";
-
 const platformDownloads = [
-  { icon: Laptop, platform: "macOS", subtitle: "Download v1.0.31" },
-  { icon: Monitor, platform: "Windows", subtitle: "Download v1.0.31" },
-  { icon: Terminal, platform: "Linux", subtitle: "Download v1.0.31" },
+  { icon: Laptop, platform: "macOS", subtitle: `Download ${DESKTOP_VERSION}` },
+  { icon: Monitor, platform: "Windows", subtitle: `Download ${DESKTOP_VERSION}` },
+  { icon: Terminal, platform: "Linux", subtitle: `Download ${DESKTOP_VERSION}` },
 ];
 
 export function DesktopAgent() {
@@ -98,7 +97,7 @@ export function DesktopAgent() {
                   Desktop Agent
                 </p>
                 <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2.5 py-0.5 text-xs font-bold text-amber-600 dark:text-amber-400 ring-1 ring-amber-500/20">
-                  v1.0.31
+                  {DESKTOP_VERSION}
                 </span>
               </div>
               <h2 className="text-3xl md:text-4xl font-bold text-[var(--color-text)] dark:text-[var(--color-text-dark)] mb-4">

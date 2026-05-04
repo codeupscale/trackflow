@@ -223,17 +223,52 @@ class ApiClient {
     return res.data;
   }
 
-  async uploadScreenshot(formData) {
-    // Use FormData's own headers (includes correct boundary for multipart)
-    const res = await this.client.post('/screenshots', formData, {
-      headers: {
-        ...formData.getHeaders(),
-      },
-      timeout: 30000, // Screenshot uploads: 30s timeout
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
+  async presignScreenshot(metadata) {
+    const res = await this.client.post('/screenshots/presign', metadata, {
+      timeout: 10000,
     });
-    return res.data;
+    return res.data; // { screenshot_id, upload_url }
+  }
+
+  async uploadToS3(uploadUrl, buffer) {
+    // Direct PUT to S3 — bypasses the API server entirely (no Authorization header)
+    const https = require('https');
+    const http = require('http');
+    const url = new URL(uploadUrl);
+    const lib = url.protocol === 'https:' ? https : http;
+
+    return new Promise((resolve, reject) => {
+      const req = lib.request(uploadUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'image/jpeg',
+          'Content-Length': buffer.length,
+        },
+      }, (res) => {
+        let body = '';
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve();
+          } else {
+            reject(new Error(`S3 PUT failed: HTTP ${res.statusCode} — ${body.slice(0, 200)}`));
+          }
+        });
+      });
+      req.setTimeout(30000, () => {
+        req.destroy(new Error('S3 PUT timed out after 30s'));
+      });
+      req.on('error', reject);
+      req.write(buffer);
+      req.end();
+    });
+  }
+
+  async confirmScreenshot(screenshotId) {
+    const res = await this.client.post('/screenshots/confirm', { screenshot_id: screenshotId }, {
+      timeout: 10000,
+    });
+    return res.data; // { screenshot: {...} }
   }
 
   async getProjects() {

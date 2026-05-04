@@ -17,13 +17,18 @@ class Screenshot extends Model
         'organization_id',
         'user_id',
         'time_entry_id',
+        'project_id',
         's3_key',
         'thumbnail_key',
         'display_key',
+        'idempotency_key',
+        'status',
         'captured_at',
         'activity_score_at_capture',
         'app_name',
         'window_title',
+        'display_index',
+        'display_count',
         'is_blurred',
         'processed_at',
         'width',
@@ -38,6 +43,8 @@ class Screenshot extends Model
             'processed_at' => 'datetime',
             'width' => 'integer',
             'height' => 'integer',
+            'display_index' => 'integer',
+            'display_count' => 'integer',
         ];
     }
 
@@ -49,5 +56,10 @@ class Screenshot extends Model
     public function timeEntry(): BelongsTo
     {
         return $this->belongsTo(TimeEntry::class);
+    }
+
+    public function project(): BelongsTo
+    {
+        return $this->belongsTo(Project::class);
     }
 }

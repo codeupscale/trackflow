@@ -16,7 +16,7 @@ class ProcessScreenshotJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries = 3;
-    public int $timeout = 60;
+    public int $timeout = 120;
 
     public function __construct(public Screenshot $screenshot)
     {
@@ -25,12 +25,11 @@ class ProcessScreenshotJob implements ShouldQueue
 
     private function disk(): string
     {
-        return config('filesystems.disks.s3.key') ? 's3' : 'public';
+        return config('filesystems.default');
     }
 
     public function handle(): void
     {
-        // Idempotency guard — skip if already processed
         if ($this->screenshot->processed_at !== null) {
             return;
         }
@@ -38,66 +37,118 @@ class ProcessScreenshotJob implements ShouldQueue
         $disk = $this->disk();
         $storageKey = "screenshots/{$this->screenshot->s3_key}";
 
+        if (!Storage::disk($disk)->exists($storageKey)) {
+            Log::warning('ProcessScreenshotJob: source file not found', [
+                'screenshot_id' => $this->screenshot->id,
+                'key'           => $storageKey,
+            ]);
+            return;
+        }
+
+        // Stream from S3 into a local temp file — never holds full image in PHP string memory.
+        // GD would require loading the entire file as a string (75–100 MB peak for 2 workers).
+        // Imagick reads from file path and manages its own memory pool.
+        $tmpInput = tempnam(sys_get_temp_dir(), 'ss_in_');
         try {
-            if (!Storage::disk($disk)->exists($storageKey)) {
-                Log::warning('ProcessScreenshotJob: source file not found', [
-                    'screenshot_id' => $this->screenshot->id,
-                    'key' => $storageKey,
-                ]);
-                return;
-            }
+            $stream = Storage::disk($disk)->readStream($storageKey);
+            $out = fopen($tmpInput, 'wb');
+            stream_copy_to_stream($stream, $out);
+            fclose($out);
+            if (is_resource($stream)) fclose($stream);
 
-            if (!class_exists(\Intervention\Image\ImageManager::class)) {
-                Log::warning('ProcessScreenshotJob: Intervention Image not available, skipping thumbnail generation', [
-                    'screenshot_id' => $this->screenshot->id,
-                ]);
-                $this->screenshot->update(['processed_at' => now()]);
-                return;
-            }
+            [$thumbnailData, $displayData] = $this->processWithImagick($tmpInput);
 
-            $contents = Storage::disk($disk)->get($storageKey);
-            $manager = new \Intervention\Image\ImageManager(
-                new \Intervention\Image\Drivers\Gd\Driver()
-            );
-
-            // Derive storage keys for thumbnail and display variants
-            $s3Key = $this->screenshot->s3_key;
-            $baseKey = preg_replace('/\.[^.]+$/', '', $s3Key);
-
+            $baseKey      = preg_replace('/\.[^.]+$/', '', $this->screenshot->s3_key);
             $thumbnailKey = $baseKey . '_thumb.jpg';
-            $displayKey = $baseKey . '_display.jpg';
+            $displayKey   = $baseKey . '_display.jpg';
 
-            // Generate thumbnail: 320px wide, JPEG quality 70
-            $thumbImage = $manager->read($contents);
-            $thumbImage->scaleDown(width: 320);
-            $thumbData = $thumbImage->toJpeg(quality: 70)->toString();
-            Storage::disk($disk)->put("screenshots/{$thumbnailKey}", $thumbData);
-
-            // Generate display version: 1280px wide, JPEG quality 80, blur if needed
-            $displayImage = $manager->read($contents);
-            if ($displayImage->width() > 1280) {
-                $displayImage->scaleDown(width: 1280);
-            }
-            if ($this->screenshot->is_blurred) {
-                $displayImage->blur(15);
-            }
-            $displayData = $displayImage->toJpeg(quality: 80)->toString();
+            Storage::disk($disk)->put("screenshots/{$thumbnailKey}", $thumbnailData);
             Storage::disk($disk)->put("screenshots/{$displayKey}", $displayData);
 
-            // Update model with generated keys
             $this->screenshot->update([
                 'thumbnail_key' => $thumbnailKey,
-                'display_key' => $displayKey,
-                'processed_at' => now(),
+                'display_key'   => $displayKey,
+                'processed_at'  => now(),
             ]);
         } catch (\Exception $e) {
             Log::error('ProcessScreenshotJob error', [
                 'screenshot_id' => $this->screenshot->id,
-                'error' => $e->getMessage(),
-                'key' => $storageKey,
+                'error'         => $e->getMessage(),
             ]);
             throw $e;
+        } finally {
+            if (file_exists($tmpInput)) @unlink($tmpInput);
         }
+    }
+
+    /**
+     * Process thumbnail (320px) and display (1280px) variants using Imagick.
+     * Falls back to Intervention/GD if Imagick is not loaded.
+     * Returns [thumbnailBlob, displayBlob].
+     */
+    private function processWithImagick(string $filePath): array
+    {
+        if (extension_loaded('imagick')) {
+            return $this->imagickProcess($filePath);
+        }
+
+        if (class_exists(\Intervention\Image\ImageManager::class)) {
+            return $this->interventionProcess($filePath);
+        }
+
+        // No image library — mark processed so the job doesn't retry forever
+        $raw = file_get_contents($filePath);
+        return [$raw, $raw];
+    }
+
+    private function imagickProcess(string $filePath): array
+    {
+        // Thumbnail — 320px wide, JPEG quality 70
+        $thumb = new \Imagick($filePath);
+        $thumb->setImageCompressionQuality(70);
+        $thumb->stripImage(); // remove EXIF to shrink size
+        $thumb->thumbnailImage(320, 0); // 0 = auto height preserving ratio
+        $thumb->setImageFormat('jpeg');
+        $thumbnailData = $thumb->getImageBlob();
+        $thumb->destroy();
+
+        // Display — 1280px wide max, JPEG quality 80, optional blur
+        $display = new \Imagick($filePath);
+        $display->setImageCompressionQuality(80);
+        $display->stripImage();
+        if ($display->getImageWidth() > 1280) {
+            $display->thumbnailImage(1280, 0);
+        }
+        if ($this->screenshot->is_blurred) {
+            $display->blurImage(0, 8); // sigma=8 gives a strong privacy blur
+        }
+        $display->setImageFormat('jpeg');
+        $displayData = $display->getImageBlob();
+        $display->destroy();
+
+        return [$thumbnailData, $displayData];
+    }
+
+    private function interventionProcess(string $filePath): array
+    {
+        $manager = new \Intervention\Image\ImageManager(
+            new \Intervention\Image\Drivers\Gd\Driver()
+        );
+
+        $thumbImage = $manager->read($filePath);
+        $thumbImage->scaleDown(width: 320);
+        $thumbnailData = $thumbImage->toJpeg(quality: 70)->toString();
+
+        $displayImage = $manager->read($filePath);
+        if ($displayImage->width() > 1280) {
+            $displayImage->scaleDown(width: 1280);
+        }
+        if ($this->screenshot->is_blurred) {
+            $displayImage->blur(15);
+        }
+        $displayData = $displayImage->toJpeg(quality: 80)->toString();
+
+        return [$thumbnailData, $displayData];
     }
 
     public function backoff(): array
@@ -109,7 +160,7 @@ class ProcessScreenshotJob implements ShouldQueue
     {
         Log::critical('ProcessScreenshotJob failed permanently', [
             'screenshot_id' => $this->screenshot->id,
-            'error' => $exception->getMessage(),
+            'error'         => $exception->getMessage(),
         ]);
     }
 }
