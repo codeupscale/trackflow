@@ -706,17 +706,23 @@ jobs:
             echo "==> Deploy complete (commit: ${COMMIT_SHA:0:8})"
 
       - name: Notify Slack on failure
-        if: failure()
+        if: failure() && secrets.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+          [ -z "$SLACK_WEBHOOK_URL" ] && exit 0
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
             -H 'Content-type: application/json' \
             --data "{\"text\":\"🚨 *TrackFlow deploy FAILED* on \`${{ github.ref_name }}\`\nCommit: \`${{ github.sha }}\`\nTriggered by: ${{ github.actor }}\nSee: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
             2>/dev/null || true
 
       - name: Notify Slack on success
-        if: success()
+        if: success() && secrets.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+          [ -z "$SLACK_WEBHOOK_URL" ] && exit 0
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
             -H 'Content-type: application/json' \
             --data "{\"text\":\"✅ *TrackFlow deployed successfully* on \`${{ github.ref_name }}\`\nCommit: \`${{ github.sha }}\`\nTriggered by: ${{ github.actor }}\"}" \
             2>/dev/null || true
