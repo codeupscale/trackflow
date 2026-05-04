@@ -244,13 +244,29 @@ jobs:
             desktop/dist/latest-linux.yml
           retention-days: 5
 
-  # ── Update release notes ──────────────────────────────────────────────────────
+  # ── Update release notes + marketing version ─────────────────────────────────
   update-release-notes:
     needs: [preflight, build-mac, build-windows, build-linux]
     if: always() && (needs.build-mac.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update marketing version
+        run: |
+          VER="${{ needs.preflight.outputs.version }}"
+          cat > marketing/src/lib/version.ts <<EOF
+          export const DESKTOP_VERSION = 'v${VER}'
+          export const RELEASE_URL = \`https://github.com/codeupscale/trackflow/releases/tag/v\${VER}\`
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add marketing/src/lib/version.ts
+          git diff --staged --quiet || git commit -m "chore: bump marketing desktop version to v${VER}"
+          git push origin main
 
       - name: Update release notes
         env:
