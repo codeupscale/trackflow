@@ -42,7 +42,6 @@ on:
   push:
     branches:
       - main
-      - fix/web-frontend-and-desktop-app
     paths:
       - 'backend/**'
       - 'web/**'
@@ -501,9 +500,9 @@ jobs:
               echo "==> Rolling restart: tf-app"
               docker compose up -d --no-deps --force-recreate tf-app
 
-              # Wait for tf-app to be ready before running migrations
-              echo "==> Waiting for tf-app to accept connections..."
-              sleep 10
+              echo "==> Waiting for tf-app to be healthy (up to 120s)..."
+              timeout 120 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-tf-app-1 2>/dev/null | grep -q healthy; do sleep 3; done' \
+                || { echo "FATAL: tf-app did not become healthy in time"; docker compose logs tf-app --tail 20; exit 1; }
 
               echo "==> Rebuilding Laravel config/route/view caches from current env"
               docker compose exec tf-app php artisan config:cache
@@ -525,9 +524,11 @@ jobs:
                 exit 1
               fi
 
+              echo "==> Draining tf-horizon queue (terminate before recreate)..."
+              docker compose exec tf-horizon php artisan horizon:terminate 2>/dev/null || true
+              sleep 8
               echo "==> Rolling restart: tf-horizon"
               docker compose up -d --no-deps --force-recreate tf-horizon
-              docker compose exec tf-horizon php artisan horizon:terminate 2>/dev/null || true
 
               echo "==> Rolling restart: tf-scheduler"
               docker compose up -d --no-deps --force-recreate tf-scheduler
@@ -674,7 +675,14 @@ jobs:
                 sleep 5
               done
               if [ "${SMOKE_OK}" != "true" ]; then
-                echo "  [WARN] API smoke test failed — container healthy but app not responding"
+                echo "  [FATAL] API smoke test failed — container healthy but app not responding"
+                if [ -n "${API_OLD_DIGEST}" ]; then
+                  echo "==> Rolling back tf-app to previous image"
+                  docker pull "${API_OLD_DIGEST}" 2>/dev/null || true
+                  docker tag "${API_OLD_DIGEST}" ghcr.io/codeupscale/trackflow-api:latest 2>/dev/null || true
+                  docker compose up -d --no-deps --force-recreate tf-app tf-horizon tf-scheduler tf-reverb
+                fi
+                exit 1
               fi
             fi
 
@@ -696,3 +704,19 @@ jobs:
 
             echo ""
             echo "==> Deploy complete (commit: ${COMMIT_SHA:0:8})"
+
+      - name: Notify Slack on failure
+        if: failure()
+        run: |
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H 'Content-type: application/json' \
+            --data "{\"text\":\"🚨 *TrackFlow deploy FAILED* on \`${{ github.ref_name }}\`\nCommit: \`${{ github.sha }}\`\nTriggered by: ${{ github.actor }}\nSee: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+            2>/dev/null || true
+
+      - name: Notify Slack on success
+        if: success()
+        run: |
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H 'Content-type: application/json' \
+            --data "{\"text\":\"✅ *TrackFlow deployed successfully* on \`${{ github.ref_name }}\`\nCommit: \`${{ github.sha }}\`\nTriggered by: ${{ github.actor }}\"}" \
+            2>/dev/null || true
