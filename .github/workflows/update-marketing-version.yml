@@ -1,0 +1,46 @@
+name: Update Marketing App Version
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-version:
+    name: Bump desktop version in marketing app
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Extract release tag
+        id: tag
+        run: echo "version=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Update version.ts
+        run: |
+          VERSION="${{ steps.tag.outputs.version }}"
+          cat > marketing/src/lib/version.ts <<EOF
+          export const DESKTOP_VERSION = '${VERSION}'
+          export const RELEASE_URL = \`https://github.com/codeupscale/trackflow/releases/tag/\${DESKTOP_VERSION}\`
+          EOF
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: chore/marketing-version-${{ steps.tag.outputs.version }}
+          base: main
+          commit-message: "chore: bump desktop version to ${{ steps.tag.outputs.version }} in marketing app"
+          title: "chore: bump desktop version to ${{ steps.tag.outputs.version }}"
+          body: |
+            Automated update triggered by release **${{ steps.tag.outputs.version }}**.
+
+            Updates `marketing/src/lib/version.ts` so the marketing site reflects the latest desktop agent version across all download links and badges.
+          labels: automated,chore

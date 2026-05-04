@@ -23,6 +23,11 @@ class ScreenshotTest extends TestCase
     {
         parent::setUp();
         Storage::fake('s3');
+        // Also fake the default disk (may be 'local' in CI rather than 's3')
+        $defaultDisk = config('filesystems.default', 'local');
+        if ($defaultDisk !== 's3') {
+            Storage::fake($defaultDisk);
+        }
 
         $this->org = $this->createOrganization();
         $this->owner = $this->createUser($this->org, 'owner');
@@ -35,31 +40,54 @@ class ScreenshotTest extends TestCase
         ]);
     }
 
+    // ── Helper: complete presign → fake-upload → confirm flow ─────────────────
+
+    private function presignAndConfirm(User $user, array $presignData = []): \Illuminate\Testing\TestResponse
+    {
+        $this->actingAs($user, 'sanctum');
+
+        $presignResponse = $this->postJson('/api/v1/screenshots/presign', array_merge([
+            'time_entry_id' => $this->timeEntry->id,
+            'captured_at'   => now()->toDateTimeString(),
+            'file_size'     => 500 * 1024,
+        ], $presignData));
+
+        if ($presignResponse->status() !== 200) {
+            return $presignResponse;
+        }
+
+        $screenshotId = $presignResponse->json('screenshot_id');
+        $screenshot = Screenshot::findOrFail($screenshotId);
+
+        // Simulate the S3 PUT — use whichever disk the controller checks (may be 'local' in CI)
+        $disk = config('filesystems.default', 'local');
+        Storage::disk($disk)->put("screenshots/{$screenshot->s3_key}", UploadedFile::fake()->image('screenshot.jpg', 1920, 1080)->get());
+
+        return $this->postJson('/api/v1/screenshots/confirm', ['screenshot_id' => $screenshotId]);
+    }
+
+    // ── Upload flow (presign → S3 PUT → confirm) ──────────────────────────────
+
     public function test_employee_can_upload_screenshot(): void
     {
-        $this->actingAs($this->employee, 'sanctum');
-
-        $response = $this->postJson('/api/v1/screenshots', [
-            'file' => UploadedFile::fake()->image('screenshot.jpg', 1920, 1080),
-            'time_entry_id' => $this->timeEntry->id,
-            'captured_at' => now()->toDateTimeString(),
-        ]);
+        $response = $this->presignAndConfirm($this->employee);
 
         $response->assertStatus(201)
             ->assertJsonStructure(['screenshot' => ['id', 'user_id', 'organization_id', 's3_key']]);
 
         $this->assertDatabaseHas('screenshots', [
-            'user_id' => $this->employee->id,
+            'user_id'         => $this->employee->id,
             'organization_id' => $this->org->id,
+            'status'          => 'confirmed',
         ]);
     }
 
     public function test_upload_requires_authentication(): void
     {
-        $response = $this->postJson('/api/v1/screenshots', [
-            'file' => UploadedFile::fake()->image('screenshot.jpg'),
+        $response = $this->postJson('/api/v1/screenshots/presign', [
             'time_entry_id' => $this->timeEntry->id,
-            'captured_at' => now()->toDateTimeString(),
+            'captured_at'   => now()->toDateTimeString(),
+            'file_size'     => 100 * 1024,
         ]);
 
         $response->assertStatus(401);
@@ -69,28 +97,34 @@ class ScreenshotTest extends TestCase
     {
         $this->actingAs($this->employee, 'sanctum');
 
-        $response = $this->postJson('/api/v1/screenshots', [
-            'file' => UploadedFile::fake()->image('screenshot.jpg')->size(10000), // > 5120KB
+        $response = $this->postJson('/api/v1/screenshots/presign', [
             'time_entry_id' => $this->timeEntry->id,
-            'captured_at' => now()->toDateTimeString(),
+            'captured_at'   => now()->toDateTimeString(),
+            'file_size'     => 11 * 1024 * 1024, // 11 MB > 10 MB cap
         ]);
 
         $response->assertStatus(422)
-            ->assertJsonValidationErrors(['file']);
+            ->assertJsonValidationErrors(['file_size']);
     }
 
-    public function test_upload_validation_wrong_format(): void
+    public function test_confirm_fails_when_file_not_uploaded(): void
     {
         $this->actingAs($this->employee, 'sanctum');
 
-        $response = $this->postJson('/api/v1/screenshots', [
-            'file' => UploadedFile::fake()->create('document.pdf', 100),
+        $presignResponse = $this->postJson('/api/v1/screenshots/presign', [
             'time_entry_id' => $this->timeEntry->id,
-            'captured_at' => now()->toDateTimeString(),
+            'captured_at'   => now()->toDateTimeString(),
+            'file_size'     => 100 * 1024,
         ]);
 
-        $response->assertStatus(422)
-            ->assertJsonValidationErrors(['file']);
+        $presignResponse->assertStatus(200);
+
+        // Skip the S3 PUT step — confirm should reject
+        $response = $this->postJson('/api/v1/screenshots/confirm', [
+            'screenshot_id' => $presignResponse->json('screenshot_id'),
+        ]);
+
+        $response->assertStatus(422);
     }
 
     public function test_employee_can_only_see_own_screenshots(): void
@@ -216,10 +250,10 @@ class ScreenshotTest extends TestCase
     {
         $this->actingAs($this->employee, 'sanctum');
 
-        $response = $this->postJson('/api/v1/screenshots', [
-            'file' => UploadedFile::fake()->image('screenshot.jpg'),
+        $response = $this->postJson('/api/v1/screenshots/presign', [
             'time_entry_id' => 'invalid-uuid',
-            'captured_at' => now()->toDateTimeString(),
+            'captured_at'   => now()->toDateTimeString(),
+            'file_size'     => 100 * 1024,
         ]);
 
         $response->assertStatus(422)
@@ -230,13 +264,26 @@ class ScreenshotTest extends TestCase
     {
         $this->actingAs($this->employee, 'sanctum');
 
-        $response = $this->postJson('/api/v1/screenshots', [
-            'file' => UploadedFile::fake()->image('screenshot.jpg'),
+        $response = $this->postJson('/api/v1/screenshots/presign', [
             'time_entry_id' => $this->timeEntry->id,
+            'file_size'     => 100 * 1024,
         ]);
 
         $response->assertStatus(422)
             ->assertJsonValidationErrors(['captured_at']);
+    }
+
+    public function test_presign_requires_file_size(): void
+    {
+        $this->actingAs($this->employee, 'sanctum');
+
+        $response = $this->postJson('/api/v1/screenshots/presign', [
+            'time_entry_id' => $this->timeEntry->id,
+            'captured_at'   => now()->toDateTimeString(),
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['file_size']);
     }
 
     public function test_screenshot_filters_by_date_range(): void

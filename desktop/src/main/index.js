@@ -449,6 +449,7 @@ let offlineQueue = null;
 let networkMonitor = null;
 let isTimerRunning = false;
 let currentEntry = null;
+let _lastScreenshotAt = null; // ISO timestamp of the most recent captured screenshot
 // Two totals for multi-project clarity
 let todayTotalGlobal = 0;       // All projects today (tray when stopped)
 let todayTotalCurrentProject = 0; // Current entry's project today, completed only (tray when running)
@@ -1406,6 +1407,54 @@ function _applyAlwaysOnTop(win, pinned) {
   }
 }
 
+/**
+ * Calculate the popup window x,y position anchored to the PRIMARY display.
+ * Uses tray bounds only to determine whether the taskbar is at the top or
+ * bottom, so the popup opens near the correct edge of the primary display.
+ */
+function _calcPopupPosition(trayBounds, windowWidth, windowHeight) {
+  try {
+    const primary = screen.getPrimaryDisplay();
+    const workArea = primary.workArea;
+
+    // Detect top vs bottom taskbar from tray position
+    const trayCenter = trayBounds.y + trayBounds.height / 2;
+    // Use the display nearest the tray to determine screen center for top/bottom test
+    const trayDisplay = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
+    const screenCenter = trayDisplay.workArea.y + trayDisplay.workArea.height / 2;
+    const trayIsAtTop = trayCenter < screenCenter;
+
+    // Right-align on primary display (mirrors macOS Menu Bar convention)
+    const x = workArea.x + workArea.width - windowWidth - 8;
+    let y;
+
+    if (trayIsAtTop) {
+      y = workArea.y + 4;
+    } else {
+      y = workArea.y + workArea.height - windowHeight - 4;
+    }
+
+    return { x, y };
+  } catch {
+    // Last-resort fallback: top-right corner of screen
+    return { x: 8, y: 8 };
+  }
+}
+
+/**
+ * Move an existing popup window back onto the primary display.
+ * Called when showing an already-created window that may have been
+ * left on an extended display from a previous session.
+ */
+function _repositionToPrimaryDisplay(win, windowWidth, windowHeight) {
+  try {
+    if (!win || win.isDestroyed()) return;
+    const trayBounds = tray ? tray.getBounds() : { x: 0, y: 0, width: 0, height: 0 };
+    const { x, y } = _calcPopupPosition(trayBounds, windowWidth, windowHeight);
+    win.setPosition(x, y, false);
+  } catch {}
+}
+
 function showPopup() {
   if (!isAuthenticated) {
     createLoginWindow();
@@ -1413,6 +1462,9 @@ function showPopup() {
   }
 
   if (popupWindow && !popupWindow.isDestroyed()) {
+    // Reposition to primary display before showing (handles cases where a
+    // previous show placed it on an extended monitor)
+    _repositionToPrimaryDisplay(popupWindow, 320, 400);
     if (typeof popupWindow.moveTop === 'function') {
       popupWindow.moveTop();
     }
@@ -1424,9 +1476,13 @@ function showPopup() {
     setImmediate(() => {
       if (popupWindow && !popupWindow.isDestroyed()) {
         popupWindow.webContents.send('sync-timer');
-        // Also signal the renderer to reload projects in case they were
-        // empty from a previous failed load (e.g. token refresh race on startup)
         popupWindow.webContents.send('projects-ready');
+        // Push fresh activity data every time the window becomes visible
+        popupWindow.webContents.send('activity-update', {
+          activityScore: activityMonitor ? activityMonitor.getCurrentScore() : 0,
+          lastScreenshotAt: _lastScreenshotAt,
+          isOnline: networkMonitor?.isOnline ?? true,
+        });
       }
     });
     return;
@@ -1436,37 +1492,10 @@ function showPopup() {
   const windowWidth = 320;
   const windowHeight = 400;
 
-  // Calculate position — platform-aware:
-  //   macOS: tray is at the top → popup below tray
-  //   Windows: taskbar is at bottom → popup above tray
-  //   Linux: taskbar can be anywhere → detect and adapt
-  let x = Math.round(trayBounds.x - windowWidth / 2 + trayBounds.width / 2);
-  let y;
-
-  try {
-    const display = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
-    const workArea = display.workArea;
-
-    // Determine if tray is in the top or bottom half of the screen
-    const trayCenter = trayBounds.y + trayBounds.height / 2;
-    const screenCenter = workArea.y + workArea.height / 2;
-    const trayIsAtTop = trayCenter < screenCenter;
-
-    if (trayIsAtTop) {
-      // macOS / Linux top panel: popup below tray
-      y = trayBounds.y + trayBounds.height + 4;
-    } else {
-      // Windows / Linux bottom panel: popup above tray
-      y = trayBounds.y - windowHeight - 4;
-    }
-
-    // Clamp to work area so popup never goes off-screen
-    x = Math.max(workArea.x, Math.min(x, workArea.x + workArea.width - windowWidth));
-    y = Math.max(workArea.y, Math.min(y, workArea.y + workArea.height - windowHeight));
-  } catch {
-    // Fallback: below tray
-    y = trayBounds.y + trayBounds.height + 4;
-  }
+  // MULTI-MONITOR FIX: Always position on the PRIMARY display regardless of
+  // which monitor the tray icon is on. Extended/secondary displays are excluded.
+  // We still use the tray position to detect top-vs-bottom taskbar placement.
+  const { x, y } = _calcPopupPosition(trayBounds, windowWidth, windowHeight);
 
   popupWindow = new BrowserWindow({
     width: windowWidth,
@@ -1711,6 +1740,14 @@ function setupIPC() {
     online: networkMonitor?.isOnline ?? true,
   }));
 
+  // Activity & screenshot info — renderer fetches on mount and on window show
+  ipcMain.removeHandler('get-activity-info');
+  ipcMain.handle('get-activity-info', () => ({
+    activityScore: activityMonitor ? activityMonitor.getCurrentScore() : 0,
+    lastScreenshotAt: _lastScreenshotAt,
+    isOnline: networkMonitor?.isOnline ?? true,
+  }));
+
   ipcMain.handle('install-update', () => {
     console.log('[updater] User clicked Restart Now — installing update');
     const { autoUpdater } = require('electron-updater');
@@ -1828,6 +1865,17 @@ function afterStartTimer(projectIdForTotal, todayTotalForPopup) {
     }
     try {
       console.log(`[afterStartTimer] Calling screenshotService.start(${currentEntry.id})`);
+      // Update _lastScreenshotAt and push live activity-update to renderer on each capture
+      screenshotService.setScreenshotCapturedCallback(() => {
+        _lastScreenshotAt = new Date().toISOString();
+        if (popupWindow && !popupWindow.isDestroyed()) {
+          popupWindow.webContents.send('activity-update', {
+            activityScore: activityMonitor ? activityMonitor.getCurrentScore() : 0,
+            lastScreenshotAt: _lastScreenshotAt,
+            isOnline: networkMonitor?.isOnline ?? true,
+          });
+        }
+      });
       screenshotService.start(currentEntry.id);
       console.log('[afterStartTimer] screenshotService started');
     } catch (e) {
@@ -2073,6 +2121,7 @@ async function stopTimer() {
   currentEntry = null;
   _cachedStartedAtMs = null;
   todayTotalCurrentProject = 0;
+  _lastScreenshotAt = null;
 
   activityMonitor?.stop();
   screenshotService?.stop();
@@ -2421,7 +2470,13 @@ function startTrayTimer() {
     setTrayText(formatted);
     // L12: Only send IPC to renderer when window is visible — avoids wasted work
     if (popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible()) {
-      popupWindow.webContents.send('timer-tick', { totalSeconds, formatted });
+      popupWindow.webContents.send('timer-tick', {
+        totalSeconds,
+        formatted,
+        activityScore: activityMonitor ? activityMonitor.getCurrentScore() : 0,
+        lastScreenshotAt: _lastScreenshotAt,
+        isOnline: networkMonitor?.isOnline ?? true,
+      });
     }
   }, 1000);
 }

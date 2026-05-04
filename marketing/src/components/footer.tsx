@@ -1,4 +1,5 @@
 import { TrackFlowLogo } from "./logo";
+import { DESKTOP_VERSION, RELEASE_URL } from "../lib/version";
 
 const footerLinks = {
   Product: [
@@ -10,11 +11,11 @@ const footerLinks = {
     { label: "Changelog", href: "#" },
   ],
   Downloads: [
-    { label: "Desktop App (v1.0.31)", href: "https://github.com/codeupscale/trackflow/releases/tag/v1.0.31" },
-    { label: "macOS", href: "https://github.com/codeupscale/trackflow/releases/tag/v1.0.31" },
-    { label: "Windows", href: "https://github.com/codeupscale/trackflow/releases/tag/v1.0.31" },
-    { label: "Linux", href: "https://github.com/codeupscale/trackflow/releases/tag/v1.0.31" },
-    { label: "Release Notes", href: "https://github.com/codeupscale/trackflow/releases/tag/v1.0.31" },
+    { label: `Desktop App (${DESKTOP_VERSION})`, href: RELEASE_URL },
+    { label: "macOS", href: RELEASE_URL },
+    { label: "Windows", href: RELEASE_URL },
+    { label: "Linux", href: RELEASE_URL },
+    { label: "Release Notes", href: RELEASE_URL },
   ],
   Company: [
     { label: "About", href: "#" },
