@@ -18,11 +18,9 @@ class TimeEntryFactory extends Factory
 
     public function definition(): array
     {
-        $startedAt = fake()->dateTimeBetween('-30 days', 'now');
+        $startedAt = fake()->dateTimeBetween('-30 days', '-1 hour');
         $durationSeconds = fake()->numberBetween(300, 28800); // 5 min to 8 hours
-        $endedAt = fake()->optional(0.8)->passthrough(
-            (clone $startedAt)->modify("+{$durationSeconds} seconds")
-        );
+        $endedAt = (clone $startedAt)->modify("+{$durationSeconds} seconds");
 
         return [
             'organization_id' => Organization::factory(),
@@ -31,7 +29,7 @@ class TimeEntryFactory extends Factory
             'task_id' => fake()->optional(0.5)->passthrough(Task::factory()),
             'started_at' => $startedAt,
             'ended_at' => $endedAt,
-            'duration_seconds' => $endedAt ? $durationSeconds : null,
+            'duration_seconds' => $durationSeconds,
             'type' => fake()->randomElement(['tracked', 'manual', 'idle']),
             'activity_score' => fake()->optional(0.7)->numberBetween(0, 100),
             'notes' => fake()->optional(0.3)->sentence(),
