@@ -282,18 +282,21 @@ class OfflineQueue {
               continue;
             }
 
-            const FormData = require('form-data');
-            const formData = new FormData();
-            formData.append('file', buffer, {
-              filename: `screenshot_${Date.now()}.jpg`,
-              contentType: 'image/jpeg',
-            });
-            formData.append('time_entry_id', data.time_entry_id);
-            formData.append('captured_at', data.captured_at);
-            if (data.app_name) formData.append('app_name', data.app_name);
-            if (data.window_title) formData.append('window_title', data.window_title);
+            const metadata = {
+              time_entry_id:   data.time_entry_id,
+              captured_at:     data.captured_at,
+              file_size:       buffer.length,
+              idempotency_key: data.idempotency_key,
+            };
+            if (data.app_name)       metadata.app_name       = data.app_name;
+            if (data.window_title)   metadata.window_title    = data.window_title;
+            if (data.activity_score != null) metadata.activity_score = data.activity_score;
+            if (data.display_index != null)  metadata.display_index  = data.display_index;
+            if (data.display_count != null)  metadata.display_count  = data.display_count;
 
-            await apiClient.uploadScreenshot(formData);
+            const { screenshot_id, upload_url } = await apiClient.presignScreenshot(metadata);
+            await apiClient.uploadToS3(upload_url, buffer);
+            await apiClient.confirmScreenshot(screenshot_id);
             console.log(`[OfflineQueue] Screenshot uploaded successfully (entry=${data.time_entry_id}, captured=${data.captured_at})`);
             deleteIds.push(item.id);
             // Track file for deletion after successful upload
