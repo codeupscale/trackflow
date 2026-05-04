@@ -57,15 +57,18 @@ class ScreenshotController extends Controller
                 ->first();
             if ($existing) {
                 try {
-                    $uploadUrl = Storage::disk($this->disk())->temporaryUploadUrl(
+                    $presign = Storage::disk($this->disk())->temporaryUploadUrl(
                         "screenshots/{$existing->s3_key}",
                         now()->addMinutes(15),
                         ['Content-Type' => 'image/jpeg']
                     );
+                    $uploadUrl     = $presign['url'];
+                    $uploadHeaders = $presign['headers'] ?? [];
                 } catch (\RuntimeException) {
-                    $uploadUrl = url("/api/v1/screenshots/{$existing->id}/upload-placeholder");
+                    $uploadUrl     = url("/api/v1/screenshots/{$existing->id}/upload-placeholder");
+                    $uploadHeaders = [];
                 }
-                return response()->json(['screenshot_id' => $existing->id, 'upload_url' => $uploadUrl]);
+                return response()->json(['screenshot_id' => $existing->id, 'upload_url' => $uploadUrl, 'upload_headers' => $uploadHeaders]);
             }
         }
 
@@ -94,19 +97,22 @@ class ScreenshotController extends Controller
         ]);
 
         try {
-            $uploadUrl = Storage::disk($this->disk())->temporaryUploadUrl(
+            $presign = Storage::disk($this->disk())->temporaryUploadUrl(
                 "screenshots/{$s3Key}",
                 now()->addMinutes(15),
                 ['Content-Type' => 'image/jpeg']
             );
+            $uploadUrl     = $presign['url'];
+            $uploadHeaders = $presign['headers'] ?? [];
         } catch (\RuntimeException) {
             // Non-S3 driver (local/fake disk in tests) — return a placeholder URL.
             // The confirm step validates the file exists, so tests must put the
             // file in the fake disk manually before calling /confirm.
-            $uploadUrl = url("/api/v1/screenshots/{$screenshot->id}/upload-placeholder");
+            $uploadUrl     = url("/api/v1/screenshots/{$screenshot->id}/upload-placeholder");
+            $uploadHeaders = [];
         }
 
-        return response()->json(['screenshot_id' => $screenshot->id, 'upload_url' => $uploadUrl]);
+        return response()->json(['screenshot_id' => $screenshot->id, 'upload_url' => $uploadUrl, 'upload_headers' => $uploadHeaders]);
     }
 
     // SS-01b: Confirm upload complete — verifies S3 object exists, dispatches processing job

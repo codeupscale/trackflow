@@ -294,8 +294,8 @@ class OfflineQueue {
             if (data.display_index != null)  metadata.display_index  = data.display_index;
             if (data.display_count != null)  metadata.display_count  = data.display_count;
 
-            const { screenshot_id, upload_url } = await apiClient.presignScreenshot(metadata);
-            await apiClient.uploadToS3(upload_url, buffer);
+            const { screenshot_id, upload_url, upload_headers } = await apiClient.presignScreenshot(metadata);
+            await apiClient.uploadToS3(upload_url, buffer, upload_headers || {});
             await apiClient.confirmScreenshot(screenshot_id);
             console.log(`[OfflineQueue] Screenshot uploaded successfully (entry=${data.time_entry_id}, captured=${data.captured_at})`);
             deleteIds.push(item.id);
