@@ -706,7 +706,7 @@ jobs:
             echo "==> Deploy complete (commit: ${COMMIT_SHA:0:8})"
 
       - name: Notify Slack on failure
-        if: failure() && secrets.SLACK_WEBHOOK_URL != ''
+        if: failure()
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
@@ -717,7 +717,7 @@ jobs:
             2>/dev/null || true
 
       - name: Notify Slack on success
-        if: success() && secrets.SLACK_WEBHOOK_URL != ''
+        if: success()
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
