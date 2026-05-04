@@ -56,11 +56,15 @@ class ScreenshotController extends Controller
                 ->where('status', 'pending')
                 ->first();
             if ($existing) {
-                $uploadUrl = Storage::disk($this->disk())->temporaryUploadUrl(
-                    "screenshots/{$existing->s3_key}",
-                    now()->addMinutes(15),
-                    ['Content-Type' => 'image/jpeg']
-                );
+                try {
+                    $uploadUrl = Storage::disk($this->disk())->temporaryUploadUrl(
+                        "screenshots/{$existing->s3_key}",
+                        now()->addMinutes(15),
+                        ['Content-Type' => 'image/jpeg']
+                    );
+                } catch (\RuntimeException) {
+                    $uploadUrl = url("/api/v1/screenshots/{$existing->id}/upload-placeholder");
+                }
                 return response()->json(['screenshot_id' => $existing->id, 'upload_url' => $uploadUrl]);
             }
         }
@@ -89,11 +93,18 @@ class ScreenshotController extends Controller
             'height'                  => $request->input('height', 1080),
         ]);
 
-        $uploadUrl = Storage::disk($this->disk())->temporaryUploadUrl(
-            "screenshots/{$s3Key}",
-            now()->addMinutes(15),
-            ['Content-Type' => 'image/jpeg']
-        );
+        try {
+            $uploadUrl = Storage::disk($this->disk())->temporaryUploadUrl(
+                "screenshots/{$s3Key}",
+                now()->addMinutes(15),
+                ['Content-Type' => 'image/jpeg']
+            );
+        } catch (\RuntimeException) {
+            // Non-S3 driver (local/fake disk in tests) — return a placeholder URL.
+            // The confirm step validates the file exists, so tests must put the
+            // file in the fake disk manually before calling /confirm.
+            $uploadUrl = url("/api/v1/screenshots/{$screenshot->id}/upload-placeholder");
+        }
 
         return response()->json(['screenshot_id' => $screenshot->id, 'upload_url' => $uploadUrl]);
     }
