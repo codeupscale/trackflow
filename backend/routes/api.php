@@ -137,9 +137,10 @@ Route::prefix('v1')->group(function () {
         Route::get('agent/my-shift', [\App\Http\Controllers\Api\V1\AgentController::class, 'myShift']);
         Route::post('agent/logs', [\App\Http\Controllers\Api\V1\AgentController::class, 'bulkLogs'])->middleware('throttle:30,1');
 
-        // Screenshots (store + signed-cookies are desktop safety — auth:sanctum only)
+        // Screenshots
         Route::get('screenshots/signed-cookies', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'signedCookies']);
-        Route::post('screenshots', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'store'])->middleware('throttle:30,1');
+        Route::post('screenshots/presign', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'presign'])->middleware('throttle:60,1');
+        Route::post('screenshots/confirm', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'confirm'])->middleware('throttle:60,1');
         Route::apiResource('screenshots', \App\Http\Controllers\Api\V1\ScreenshotController::class)->only(['index', 'destroy']);
 
         // Reports

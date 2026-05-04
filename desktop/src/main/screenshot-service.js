@@ -883,10 +883,17 @@ class ScreenshotService {
     }
   }
 
-  // ── Upload with retry ────────────────────────────────────────────
+  // ── Upload with retry (presign → direct S3 PUT → confirm) ────────
+  //
+  // Flow:
+  //   1. POST /screenshots/presign   → { screenshot_id, upload_url }
+  //   2. PUT upload_url              → buffer goes directly to S3 (no API transit)
+  //   3. POST /screenshots/confirm   → API verifies S3 object, dispatches processing
+  //
+  // Idempotency key (UUID v4) ensures a retry on step 1 returns the same
+  // screenshot_id and upload_url instead of creating a duplicate DB row.
 
   async upload(buffer, displayInfo = null) {
-    // Get current app context for this screenshot
     let appName = null;
     let windowTitle = null;
     try {
@@ -896,12 +903,40 @@ class ScreenshotService {
       }
     } catch {}
 
-    const displayLabel = displayInfo ? ` [display ${displayInfo.display_index}/${displayInfo.display_count}]` : '';
+    const displayLabel = displayInfo
+      ? ` [display ${displayInfo.display_index}/${displayInfo.display_count}]`
+      : '';
+    const capturedAt = new Date().toISOString();
+    const idempotencyKey = crypto.randomUUID();
+    const activityScore = this.activityMonitor
+      ? this.activityMonitor.getScoreForScreenshot()
+      : null;
 
-    let formData = this._buildFormData(buffer, appName, windowTitle, displayInfo);
+    const metadata = {
+      time_entry_id:   String(this.currentEntryId),
+      captured_at:     capturedAt,
+      file_size:       buffer.length,
+      idempotency_key: idempotencyKey,
+    };
+    if (appName)        metadata.app_name       = appName;
+    if (windowTitle)    metadata.window_title    = windowTitle;
+    if (activityScore != null) metadata.activity_score = activityScore;
+    if (displayInfo) {
+      metadata.display_index = displayInfo.display_index;
+      metadata.display_count = displayInfo.display_count;
+    }
+
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        await this.apiClient.uploadScreenshot(formData);
+        // Step 1: get presigned PUT URL
+        const { screenshot_id, upload_url } = await this.apiClient.presignScreenshot(metadata);
+
+        // Step 2: PUT buffer directly to S3 (no Authorization header, no API transit)
+        await this.apiClient.uploadToS3(upload_url, buffer);
+
+        // Step 3: tell API the upload is complete
+        await this.apiClient.confirmScreenshot(screenshot_id);
+
         console.log(`[SS] Uploaded successfully${displayLabel} on attempt ${attempt} (${Math.round(buffer.length / 1024)}KB)`);
         if (this._onScreenshotCaptured) try { this._onScreenshotCaptured(); } catch {}
         return;
@@ -909,50 +944,26 @@ class ScreenshotService {
         console.warn(`[SS] Upload attempt ${attempt}/3 failed${displayLabel}: ${e.message}`);
         if (attempt < 3) {
           await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
-          // Rebuild FormData for retry (streams are consumed)
-          formData = this._buildFormData(buffer, appName, windowTitle, displayInfo);
+          // idempotencyKey stays the same — retrying presign is safe
         }
       }
     }
-    // All retries failed — queue for offline
-    this._queueForOffline(buffer, appName, windowTitle, displayInfo);
+
+    // All retries failed — queue for offline sync
+    this._queueForOffline(buffer, appName, windowTitle, displayInfo, capturedAt, idempotencyKey, activityScore);
   }
 
-  _buildFormData(buffer, appName = null, windowTitle = null, displayInfo = null) {
-    const formData = new FormData();
-    formData.append('file', buffer, {
-      filename: `screenshot_${Date.now()}.jpg`,
-      contentType: 'image/jpeg',
-    });
-    formData.append('time_entry_id', String(this.currentEntryId));
-    formData.append('captured_at', new Date().toISOString());
-    if (appName) formData.append('app_name', appName);
-    if (windowTitle) formData.append('window_title', windowTitle);
-
-    // Attach point-in-time activity score (like Hubstaff)
-    if (this.activityMonitor) {
-      const score = this.activityMonitor.getScoreForScreenshot();
-      formData.append('activity_score', String(score));
-    }
-
-    // Multi-monitor metadata: display index (0-based) and total display count
-    if (displayInfo) {
-      formData.append('display_index', String(displayInfo.display_index));
-      formData.append('display_count', String(displayInfo.display_count));
-    }
-
-    return formData;
-  }
-
-  _queueForOffline(buffer, appName = null, windowTitle = null, displayInfo = null) {
+  _queueForOffline(buffer, appName, windowTitle, displayInfo, capturedAt, idempotencyKey, activityScore) {
     if (buffer.length < 1024 * 1024) {
       const data = {
-        buffer: buffer,
-        time_entry_id: String(this.currentEntryId),
-        captured_at: new Date().toISOString(),
+        buffer:          buffer,
+        time_entry_id:   String(this.currentEntryId),
+        captured_at:     capturedAt || new Date().toISOString(),
+        idempotency_key: idempotencyKey || crypto.randomUUID(),
       };
-      if (appName) data.app_name = appName;
-      if (windowTitle) data.window_title = windowTitle;
+      if (appName)           data.app_name       = appName;
+      if (windowTitle)       data.window_title    = windowTitle;
+      if (activityScore != null) data.activity_score = activityScore;
       if (displayInfo) {
         data.display_index = displayInfo.display_index;
         data.display_count = displayInfo.display_count;
