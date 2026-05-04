@@ -929,10 +929,10 @@ class ScreenshotService {
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         // Step 1: get presigned PUT URL
-        const { screenshot_id, upload_url } = await this.apiClient.presignScreenshot(metadata);
+        const { screenshot_id, upload_url, upload_headers } = await this.apiClient.presignScreenshot(metadata);
 
         // Step 2: PUT buffer directly to S3 (no Authorization header, no API transit)
-        await this.apiClient.uploadToS3(upload_url, buffer);
+        await this.apiClient.uploadToS3(upload_url, buffer, upload_headers || {});
 
         // Step 3: tell API the upload is complete
         await this.apiClient.confirmScreenshot(screenshot_id);
