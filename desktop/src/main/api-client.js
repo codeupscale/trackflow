@@ -227,10 +227,10 @@ class ApiClient {
     const res = await this.client.post('/screenshots/presign', metadata, {
       timeout: 10000,
     });
-    return res.data; // { screenshot_id, upload_url }
+    return res.data; // { screenshot_id, upload_url, upload_headers }
   }
 
-  async uploadToS3(uploadUrl, buffer) {
+  async uploadToS3(uploadUrl, buffer, uploadHeaders = {}) {
     // Direct PUT to S3 — bypasses the API server entirely (no Authorization header)
     const https = require('https');
     const http = require('http');
@@ -243,6 +243,7 @@ class ApiClient {
         headers: {
           'Content-Type': 'image/jpeg',
           'Content-Length': buffer.length,
+          ...uploadHeaders,
         },
       }, (res) => {
         let body = '';
