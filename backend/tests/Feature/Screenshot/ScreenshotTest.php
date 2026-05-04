@@ -23,6 +23,11 @@ class ScreenshotTest extends TestCase
     {
         parent::setUp();
         Storage::fake('s3');
+        // Also fake the default disk (may be 'local' in CI rather than 's3')
+        $defaultDisk = config('filesystems.default', 'local');
+        if ($defaultDisk !== 's3') {
+            Storage::fake($defaultDisk);
+        }
 
         $this->org = $this->createOrganization();
         $this->owner = $this->createUser($this->org, 'owner');
@@ -54,8 +59,9 @@ class ScreenshotTest extends TestCase
         $screenshotId = $presignResponse->json('screenshot_id');
         $screenshot = Screenshot::findOrFail($screenshotId);
 
-        // Simulate the S3 PUT that the desktop app would do after receiving the presigned URL
-        Storage::disk('s3')->put("screenshots/{$screenshot->s3_key}", UploadedFile::fake()->image('screenshot.jpg', 1920, 1080)->get());
+        // Simulate the S3 PUT — use whichever disk the controller checks (may be 'local' in CI)
+        $disk = config('filesystems.default', 'local');
+        Storage::disk($disk)->put("screenshots/{$screenshot->s3_key}", UploadedFile::fake()->image('screenshot.jpg', 1920, 1080)->get());
 
         return $this->postJson('/api/v1/screenshots/confirm', ['screenshot_id' => $screenshotId]);
     }
