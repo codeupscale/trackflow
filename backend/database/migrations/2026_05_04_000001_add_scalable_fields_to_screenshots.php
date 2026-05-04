@@ -35,7 +35,7 @@ return new class extends Migration
 
         Schema::table('screenshots', function (Blueprint $table) {
             $table->dropForeign(['project_id']);
-            $table->dropIndex(['idempotency_key']);
+            $table->dropUnique(['idempotency_key']); // index was created as _unique, not _index
             $table->dropColumn(['idempotency_key', 'project_id', 'status', 'display_index', 'display_count']);
         });
     }
