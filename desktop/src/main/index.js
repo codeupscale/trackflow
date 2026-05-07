@@ -462,12 +462,18 @@ let trayTimerInterval = null;
 let isQuitting = false;
 // Idle action mutex — prevents double-action from auto-stop + user click race
 let _idleActionInProgress = false;
+// Mutex between reconcileTimerState and handleIdleAction (FIX D4)
+let _isHandlingIdleAction = false;
+// Timestamp when the idle alert window was shown (FIX D1) — used to exclude dialog wait from idle_seconds
+let _idleAlertShownAt = null;
 // Tray click timestamp — used to suppress spurious blur events on macOS/Windows
 let _lastTrayClickAt = 0;
 // Cache parsed started_at timestamp to avoid re-parsing every second
 let _cachedStartedAtMs = null;
 // M8 FIX: Clock skew compensation — server time minus local time
 let _clockOffsetMs = 0;
+// Timer state version — incremented on key transitions to detect stale state (FIX D7)
+let _timerStateVersion = 0;
 // NOTE: _suspendedAt is declared inside initializeApp() as a closure variable
 // co-located with the powerMonitor handlers that use it. Do not re-declare here.
 
@@ -1078,6 +1084,11 @@ async function initializeApp() {
       const originalIdleStart = idleSnap.idleStartedAt;
       const totalIdleSec = Math.floor((Date.now() - originalIdleStart) / 1000);
       console.log(`[power] Already idle since ${new Date(originalIdleStart).toISOString()} — preserving original idle start, total idle: ${totalIdleSec}s`);
+      // FIX D2: Guard against double idle alert — if already showing, just update it
+      if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
+        idleAlertWindow.webContents.send('idle-data', { idleStartedAt: originalIdleStart, idleSeconds: totalIdleSec });
+        return;
+      }
       // Use setAlertState to properly transition to ALERTING with auto-stop checking
       const actionId = idleDetector?.setAlertState(originalIdleStart) || 0;
       showIdleAlert(totalIdleSec, originalIdleStart, actionId);
@@ -1111,6 +1122,11 @@ async function initializeApp() {
         return;
       }
       // Prompt user — show idle alert with sleep duration
+      // FIX D2: Guard against double idle alert — if already showing, just update it
+      if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
+        idleAlertWindow.webContents.send('idle-data', { idleStartedAt: sleepStartedAt, idleSeconds: sleepDurationSec });
+        return;
+      }
       const actionId = idleDetector?.setAlertState(sleepStartedAt) || 0;
       showIdleAlert(sleepDurationSec, sleepStartedAt, actionId);
       // Do NOT reconcile or flush while idle alert is showing — the user
@@ -1951,6 +1967,9 @@ async function startTimer(projectId = null) {
   if (_startTimerInProgress) return { error: 'Timer start already in progress' };
   _startTimerInProgress = true;
 
+  // FIX D7: Capture state version at start to detect concurrent state changes
+  const startVersion = _timerStateVersion;
+
   try {
     // ── Pre-start permission gate (macOS only) ──────────────────────────────
     // Check screen recording permission BEFORE starting the timer so the user
@@ -2013,6 +2032,8 @@ async function startTimer(projectId = null) {
       todayTotalCurrentProject = result.today_total ?? 0;
       markLocalTimerStartSynced(localId, result.entry.id);
       posthog.capture(currentEntry?.user_id || 'unknown', 'timer_started', { project_id: projectId });
+      // FIX D7: Increment state version on successful start
+      _timerStateVersion++;
 
       const todayTotalForPopup = todayTotalCurrentProject;
       notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalForPopup });
@@ -2122,6 +2143,8 @@ async function stopTimer() {
   _cachedStartedAtMs = null;
   todayTotalCurrentProject = 0;
   _lastScreenshotAt = null;
+  // FIX D7: Increment state version on successful stop
+  _timerStateVersion++;
 
   activityMonitor?.stop();
   screenshotService?.stop();
@@ -2165,8 +2188,21 @@ async function stopTimer() {
 // Preference: never lose time.
 async function reconcileTimerState() {
   if (!apiClient) return;
+  // FIX D4: Skip reconcile if idle action is in progress to prevent race conditions
+  if (_isHandlingIdleAction) {
+    console.log('[Reconcile] Skipping — idle action in progress');
+    return;
+  }
+  if (idleDetector?.isIdleActive()) {
+    console.log('[Reconcile] Skipping — idle alert active');
+    return;
+  }
   try {
     const serverStatus = await apiClient.getTimerStatus();
+    // FIX D8: Update clock offset for server time sync
+    if (serverStatus.server_time) {
+      _clockOffsetMs = new Date(serverStatus.server_time).getTime() - Date.now();
+    }
     const localActive = getActiveLocalTimer();
 
     // ── Phase 1: Sync completed (stopped) sessions FIRST ──────────────────
@@ -2575,6 +2611,8 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     if (shown) return;
     if (win.isDestroyed()) return;
     shown = true;
+    // FIX D1: Record when the alert was actually shown to exclude dialog wait time
+    _idleAlertShownAt = Date.now();
     win.show();
     win.focus();
     win.webContents.send('idle-data', {
@@ -2666,6 +2704,8 @@ async function handleIdleAction(action, actionId = null, idleDurationOverride = 
     return;
   }
   _idleActionInProgress = true;
+  // FIX D4: Mutex to block reconcileTimerState while handling idle action
+  _isHandlingIdleAction = true;
 
   try {
     // Read idle info BEFORE resolving (resolveIdle clears it)
@@ -2706,34 +2746,56 @@ async function handleIdleAction(action, actionId = null, idleDurationOverride = 
       case 'discard':
       case 'reassign':
         if (apiClient && currentEntry && effectiveIdleStartedAt) {
+          // FIX D1: Use _idleAlertShownAt for idle_ended_at to exclude dialog wait time
+          const idleEndedAt = _idleAlertShownAt || Date.now();
+          const idleSecondsFromAlert = Math.floor((idleEndedAt - effectiveIdleStartedAt) / 1000);
           try {
             const payload = {
               time_entry_id: currentEntry.id,
               idle_started_at: new Date(effectiveIdleStartedAt).toISOString(),
-              idle_ended_at: new Date().toISOString(),
-              idle_seconds: idleDuration,
+              idle_ended_at: new Date(idleEndedAt).toISOString(),
+              idle_seconds: Math.max(1, idleSecondsFromAlert),
               action: action === 'reassign' && reassignProjectId ? 'reassign' : 'discard',
             };
             if (payload.action === 'reassign') payload.project_id = reassignProjectId;
 
             const result = await apiClient.reportIdleTime(payload);
-            if (result?.new_entry) {
-              currentEntry = result.new_entry;
-              _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+
+            // FIX D10: Handle null new_entry — timer was stopped remotely during idle
+            if (!result?.new_entry) {
+              console.warn('[IdleAction] Server returned no new entry — timer was already stopped remotely');
+              dismissIdleAlert();
+              _idleAlertShownAt = null;
+              _isHandlingIdleAction = false;
+              setImmediate(() => reconcileTimerState());
+              return;
             }
+
+            // FIX D5: Update todayTotalCurrentProject immediately after discard
+            const preIdleSeconds = Math.floor(
+              (idleEndedAt - new Date(currentEntry.started_at).getTime()) / 1000
+            );
+            todayTotalCurrentProject = (todayTotalCurrentProject || 0) + Math.max(0, preIdleSeconds);
+
+            currentEntry = result.new_entry;
+            _cachedStartedAtMs = new Date(currentEntry.started_at).getTime();
+
           } catch (e) {
-            console.error('Failed to report idle time:', e.message);
-            // Queue for offline retry so idle time is eventually deducted
-            offlineQueue?.add('idle_discard', {
-              time_entry_id: currentEntry?.id,
-              idle_started_at: new Date(effectiveIdleStartedAt).toISOString(),
-              idle_ended_at: new Date().toISOString(),
-              idle_seconds: idleDuration,
-              action: action,
-              project_id: reassignProjectId || null,
-            });
+            // FIX D3: API failure — don't corrupt state, show error, don't start tray timer
+            console.error('[IdleAction] Failed to report idle time to server:', e.message);
+            if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
+              idleAlertWindow.webContents.send('idle-action-error', {
+                message: 'Network error — please try again.',
+              });
+            }
+            _idleAlertShownAt = null;
+            _idleActionInProgress = false;
+            _isHandlingIdleAction = false;
+            return; // CRITICAL: do not fall through to startTrayTimer()
           }
         }
+        // FIX D1: Reset _idleAlertShownAt after action handled
+        _idleAlertShownAt = null;
         // Resume activity monitor and screenshots — idle is over
         activityMonitor?.start();
         if (isTimerRunning && currentEntry) {
@@ -2743,6 +2805,12 @@ async function handleIdleAction(action, actionId = null, idleDurationOverride = 
         }
         idleDetector?.start();
         startTrayTimer();
+        // FIX D6: Notify popup immediately after split
+        notifyPopup('timer-started', {
+          ...currentEntry,
+          todayTotal: todayTotalCurrentProject,
+          _splitFromIdle: true,
+        });
         break;
 
       case 'stop':
@@ -2784,8 +2852,12 @@ async function handleIdleAction(action, actionId = null, idleDurationOverride = 
         reconcileTimerState().then(() => offlineQueue.flush(apiClient)).catch(() => {});
       });
     }
+    // FIX D7: Increment state version on successful idle action
+    _timerStateVersion++;
   } finally {
     _idleActionInProgress = false;
+    // FIX D4: Release reconcile mutex
+    _isHandlingIdleAction = false;
   }
 }
 
