@@ -587,6 +587,21 @@ window.trackflow.onUpdateReady((data) => {
   }
 });
 
+// If quitAndInstall fails (e.g. unsigned macOS app), reset the button and
+// show a message directing the user to download manually via the browser.
+window.trackflow.onUpdateInstallFailed?.(() => {
+  updateRestartBtn.disabled = false;
+  updateRestartBtn.textContent = 'Download Manually';
+  updateRestartBtn.onclick = () => {
+    window.trackflow.installUpdate(); // opens releases page (already handled in main)
+  };
+  // Update the subtitle to explain what happened
+  const desc = document.querySelector('.update-description');
+  if (desc) {
+    desc.textContent = 'Auto-install is not available on this system. The releases page has been opened — download and run the installer to update.';
+  }
+});
+
 // ── Shift Info ──────────────────────────────────────────
 function formatShiftTime(timeStr) {
   if (!timeStr) return '';

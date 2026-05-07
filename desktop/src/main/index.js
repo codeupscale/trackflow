@@ -1764,10 +1764,57 @@ function setupIPC() {
     isOnline: networkMonitor?.isOnline ?? true,
   }));
 
-  ipcMain.handle('install-update', () => {
+  ipcMain.handle('install-update', async () => {
     console.log('[updater] User clicked Restart Now — installing update');
-    const { autoUpdater } = require('electron-updater');
-    autoUpdater.quitAndInstall(false, true);
+
+    // FIX: Set isQuitting=true BEFORE calling quitAndInstall so the before-quit
+    // handler does not call e.preventDefault() and block the update install.
+    // Without this, an active timer causes before-quit to preventDefault(), then
+    // app.exit(0) is called instead — bypassing Squirrel's install hook entirely.
+    isQuitting = true;
+
+    // Best-effort: stop the timer quickly before quitting (max 3s)
+    if (isTimerRunning && apiClient) {
+      try {
+        const stopPayload = currentEntry?._localId
+          ? { started_at: currentEntry?.started_at, ended_at: new Date().toISOString() }
+          : {};
+        await Promise.race([
+          apiClient.stopTimer(stopPayload),
+          new Promise((resolve) => setTimeout(resolve, 3000)),
+        ]);
+      } catch {}
+    }
+
+    try {
+      const { autoUpdater } = require('electron-updater');
+      autoUpdater.quitAndInstall(false, true);
+
+      // FIX: On macOS without a code-signing cert, quitAndInstall() can fail
+      // silently — the app stays open and the renderer shows "Restarting…"
+      // forever. After 6 seconds, if we're still alive, open the releases page
+      // so the user can download and install manually.
+      setTimeout(() => {
+        console.warn('[updater] quitAndInstall did not quit within 6s — opening releases page');
+        const { shell } = require('electron');
+        shell.openExternal('https://github.com/codeupscale/trackflow/releases/latest');
+        // Notify the renderer so it can reset the button
+        try {
+          if (popupWindow && !popupWindow.isDestroyed()) {
+            popupWindow.webContents.send('update-install-failed');
+          }
+        } catch {}
+      }, 6000);
+    } catch (e) {
+      console.error('[updater] quitAndInstall threw:', e.message);
+      const { shell } = require('electron');
+      shell.openExternal('https://github.com/codeupscale/trackflow/releases/latest');
+      try {
+        if (popupWindow && !popupWindow.isDestroyed()) {
+          popupWindow.webContents.send('update-install-failed');
+        }
+      } catch {}
+    }
   });
 
   ipcMain.removeHandler('get-shift-info');
