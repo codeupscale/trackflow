@@ -135,9 +135,9 @@ class TimerController extends Controller
     {
         $rules = [
             'time_entry_id' => 'required|uuid',
-            'idle_started_at' => 'required|date',
-            'idle_ended_at' => 'required|date',
-            'idle_seconds' => 'required|integer|min:1',
+            'idle_started_at' => 'required|date|before_or_equal:now',
+            'idle_ended_at' => 'required|date|before_or_equal:now|after:idle_started_at',
+            'idle_seconds' => 'required|integer|min:1|max:43200',
             'action' => 'required|in:discard,keep,reassign',
         ];
         if ($request->action === 'reassign') {
@@ -153,7 +153,13 @@ class TimerController extends Controller
             return response()->json(['message' => 'Idle time kept.']);
         }
 
-        $result = $this->timerService->reportIdle($request->all());
+        try {
+            $result = $this->timerService->reportIdle($request->all());
+        } catch (\Illuminate\Auth\Access\AuthorizationException $e) {
+            return response()->json(['message' => $e->getMessage()], 403);
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 409);
+        }
 
         return response()->json([
             'message' => $request->action === 'reassign'

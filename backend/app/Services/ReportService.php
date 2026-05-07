@@ -130,7 +130,8 @@ class ReportService
                 ->where('organization_id', $orgId)
                 ->where('started_at', '>=', $prevFrom)
                 ->where('started_at', '<', $prevTo)
-                ->whereNotNull('ended_at');
+                ->whereNotNull('ended_at')
+                ->where('type', 'tracked');
 
             if ($userId) {
                 $prevQuery->where('user_id', $userId);
@@ -258,6 +259,7 @@ class ReportService
                 ->where('time_entries.started_at', '<', $dateTo)
                 ->whereNotNull('time_entries.ended_at')
                 ->whereNotNull('time_entries.project_id')
+                ->where('time_entries.type', 'tracked')
                 ->join('projects', 'time_entries.project_id', '=', 'projects.id')
                 ->selectRaw("
                     projects.id as project_id,
@@ -410,6 +412,7 @@ class ReportService
 
             $currentHoursRow = DB::table('time_entries as te')
                 ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
+                ->where('te.type', 'tracked')
                 ->selectRaw("COALESCE(SUM({$dur}), 0) as total_seconds")
                 ->first();
             $currentTotalSeconds = (int) ($currentHoursRow->total_seconds ?? 0);
@@ -420,6 +423,7 @@ class ReportService
                 ->where('te.started_at', '>=', $prevFrom)
                 ->where('te.started_at', '<', $prevTo)
                 ->whereNotNull('te.ended_at')
+                ->where('te.type', 'tracked')
                 ->when($userId, fn ($q) => $q->where('te.user_id', $userId))
                 ->selectRaw("COALESCE(SUM({$dur}), 0) as total_seconds")
                 ->first();
@@ -475,6 +479,7 @@ class ReportService
             $billableRow = DB::table('time_entries as te')
                 ->leftJoin('projects as p', 'te.project_id', '=', 'p.id')
                 ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
+                ->where('te.type', 'tracked')
                 ->selectRaw("
                     COALESCE(SUM(CASE WHEN p.billable = true THEN {$dur} ELSE 0 END), 0) as billable_seconds,
                     COALESCE(SUM(CASE WHEN p.billable IS NULL OR p.billable = false THEN {$dur} ELSE 0 END), 0) as non_billable_seconds

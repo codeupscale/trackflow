@@ -1,5 +1,6 @@
 <?php
 
+use App\Jobs\CloseStaleTimerEntriesJob;
 use App\Jobs\GenerateDailyAttendanceJob;
 use App\Jobs\PruneOldActivityLogsJob;
 use App\Jobs\SendDailyActivitySummaryJob;
@@ -83,6 +84,9 @@ Schedule::call(function () {
             }
         });
 })->dailyAt('00:30')->name('generate-daily-attendance');
+
+// FIX B11: Watchdog — close stale open entries (no heartbeat for 2+ hours)
+Schedule::job(new CloseStaleTimerEntriesJob)->everyThirtyMinutes()->name('close-stale-timer-entries');
 
 // Data retention enforcement — Daily 4am UTC
 Schedule::job(new \App\Jobs\EnforceDataRetentionJob)->dailyAt('04:00')->name('enforce-data-retention');

@@ -63,7 +63,18 @@ class IdleDetector {
   onAutoStop(callback) { this._onAutoStop = callback; }
 
   updateConfig(config) {
+    const wasEnabled = this.enabled;
+    const oldCheckIntervalMs = this.checkIntervalMs;
     this._applyConfig(config);
+
+    if (this._state !== IDLE_STATE.STOPPED) {
+      if (!this.enabled && wasEnabled) {
+        this.stop();
+      } else if (this.checkIntervalMs !== oldCheckIntervalMs && this.checkInterval) {
+        clearInterval(this.checkInterval);
+        this.checkInterval = setInterval(() => this._check(), this.checkIntervalMs);
+      }
+    }
   }
 
   /**

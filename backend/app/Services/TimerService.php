@@ -479,6 +479,7 @@ class TimerService
                 'today_total' => $todayTotal,
                 'project_today_total' => 0,
                 'current_day' => $currentDay,
+                'server_time' => now()->toISOString(),
             ];
         }
 
@@ -494,6 +495,7 @@ class TimerService
                 'today_total' => $todayTotal,
                 'project_today_total' => 0,
                 'current_day' => $currentDay,
+                'server_time' => now()->toISOString(),
             ];
         }
 
@@ -538,6 +540,7 @@ class TimerService
             'today_total' => $todayTotal,
             'project_today_total' => $projectTodayTotal,
             'current_day' => $currentDay,
+            'server_time' => now()->toISOString(),
         ];
     }
 
@@ -610,6 +613,12 @@ class TimerService
                 return ['idle_entry' => null, 'new_entry' => null];
             }
 
+            // FIX B6: Validate that the client's time_entry_id matches the Redis entry
+            $requestedEntryId = $data['time_entry_id'] ?? null;
+            if ($requestedEntryId && $requestedEntryId !== $entryId) {
+                throw new \RuntimeException('time_entry_id does not match current running timer.', 409);
+            }
+
             $currentEntry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
                 ->where('id', $entryId)
                 ->where('user_id', $user->id)
@@ -624,19 +633,38 @@ class TimerService
             $action = $data['action'] ?? 'discard';
             $reassignProjectId = $data['project_id'] ?? null;
 
+            // FIX B2: Check project assignment for reassign action
+            if ($action === 'reassign' && $reassignProjectId) {
+                $project = \App\Models\Project::where('organization_id', $user->organization_id)
+                    ->find($reassignProjectId);
+                if (!$project || !$project->isAssignedTo($user)) {
+                    throw new AuthorizationException('You are not assigned to this project.');
+                }
+            }
+
+            // FIX B4: Idempotency — detect already-applied split
+            // If the current entry's started_at >= idle_ended_at, the split already happened
+            if ($currentEntry->started_at && $idleEndedAt->lte($currentEntry->started_at)) {
+                return ['idle_entry' => null, 'new_entry' => $currentEntry];
+            }
+
             // Clamp idle_started_at to entry's started_at to prevent negative durations
             if ($idleStartedAt->lt($currentEntry->started_at)) {
                 $idleStartedAt = $currentEntry->started_at->copy();
             }
 
+            // FIX B5: Compute duration_seconds server-side from timestamps
+            $computedIdleSeconds = min(
+                (int) abs($idleEndedAt->diffInSeconds($idleStartedAt)),
+                self::MAX_ENTRY_DURATION
+            );
+
             $result = DB::transaction(function () use (
             $user,
             $currentEntry,
-            $redisKey,
-            $timerInfo,
             $idleStartedAt,
             $idleEndedAt,
-            $idleSeconds,
+            $computedIdleSeconds,
             $action,
             $reassignProjectId
         ) {
@@ -654,10 +682,15 @@ class TimerService
                 'task_id' => $currentEntry->task_id,
                 'started_at' => $idleStartedAt,
                 'ended_at' => $idleEndedAt,
-                'duration_seconds' => $idleSeconds,
+                'duration_seconds' => $computedIdleSeconds,
                 'type' => 'idle',
                 'notes' => $action === 'reassign' ? 'Idle time reassigned to another project' : 'Idle time discarded by user',
             ]);
+
+            // FIX B10: Re-associate idle-period screenshots to the idle entry
+            \App\Models\Screenshot::where('time_entry_id', $currentEntry->id)
+                ->where('captured_at', '>', $idleStartedAt)
+                ->update(['time_entry_id' => $idleEntry->id]);
 
             $newEntry = null;
 
@@ -670,13 +703,14 @@ class TimerService
                     'task_id' => null,
                     'started_at' => $idleStartedAt,
                     'ended_at' => $idleEndedAt,
-                    'duration_seconds' => $idleSeconds,
+                    'duration_seconds' => $computedIdleSeconds,
                     'type' => 'tracked',
                     'notes' => 'Idle time reassigned from timer',
                 ]);
             }
 
-            // 4. New running entry from idle_ended_at (same project as original) and set Redis
+            // 4. New running entry from idle_ended_at (same project as original)
+            // FIX B3: Redis::setex() is intentionally moved OUTSIDE this transaction
             $newEntry = TimeEntry::create([
                 'organization_id' => $user->organization_id,
                 'user_id' => $user->id,
@@ -686,15 +720,21 @@ class TimerService
                 'type' => 'tracked',
             ]);
 
-            Redis::setex($redisKey, 2592000, json_encode([
-                'entry_id' => $newEntry->id,
-                'started_at' => $newEntry->started_at->toISOString(),
-                'project_id' => $newEntry->project_id,
-                'task_id' => $newEntry->task_id,
-            ]));
-
             return ['idle_entry' => $idleEntry, 'new_entry' => $newEntry];
         });
+
+            // FIX B3: Update Redis AFTER DB transaction commits to prevent orphaned state
+            $newEntry = $result['new_entry'];
+            try {
+                Redis::setex($redisKey, 2592000, json_encode([
+                    'entry_id' => $newEntry->id,
+                    'started_at' => $newEntry->started_at->toISOString(),
+                    'project_id' => $newEntry->project_id,
+                    'task_id' => $newEntry->task_id,
+                ]));
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::error('Redis update failed after idle split', ['error' => $e->getMessage()]);
+            }
 
             return $result;
         } finally {
