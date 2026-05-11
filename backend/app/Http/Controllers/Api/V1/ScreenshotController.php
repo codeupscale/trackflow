@@ -63,7 +63,9 @@ class ScreenshotController extends Controller
                         ['Content-Type' => 'image/jpeg']
                     );
                     $uploadUrl     = $presign['url'];
-                    $uploadHeaders = $presign['headers'] ?? [];
+                    $uploadHeaders = collect($presign['headers'] ?? [])->map(
+                        fn($v) => is_array($v) ? implode(', ', $v) : $v
+                    )->all();
                 } catch (\RuntimeException) {
                     $uploadUrl     = url("/api/v1/screenshots/{$existing->id}/upload-placeholder");
                     $uploadHeaders = [];
@@ -103,7 +105,12 @@ class ScreenshotController extends Controller
                 ['Content-Type' => 'image/jpeg']
             );
             $uploadUrl     = $presign['url'];
-            $uploadHeaders = $presign['headers'] ?? [];
+            // Flatten any array header values to strings — Node.js v20+ requires
+            // headers.host to be a string, not an array, or https.request() throws
+            // ERR_INVALID_ARG_TYPE and the S3 upload silently fails on the desktop.
+            $uploadHeaders = collect($presign['headers'] ?? [])->map(
+                fn($v) => is_array($v) ? implode(', ', $v) : $v
+            )->all();
         } catch (\RuntimeException) {
             // Non-S3 driver (local/fake disk in tests) — return a placeholder URL.
             // The confirm step validates the file exists, so tests must put the

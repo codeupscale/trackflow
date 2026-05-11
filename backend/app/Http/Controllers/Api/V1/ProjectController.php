@@ -35,6 +35,11 @@ class ProjectController extends Controller
 
         $query->orderBy('name');
 
+        // Allow callers (e.g. desktop dropdown) to opt out of pagination.
+        if ($request->input('pagination') === 'false') {
+            return response()->json($query->get());
+        }
+
         $perPage = min((int) $request->input('per_page', 12), 100);
         $projects = $query->paginate($perPage);
 

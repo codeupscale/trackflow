@@ -183,10 +183,29 @@ class DashboardController extends Controller
         $timer = null;
         if ($timerData) {
             $data = json_decode($timerData, true);
-            $timer = [
-                'timer' => $data,
-                'elapsed_seconds' => (int) abs(now()->diffInSeconds(Carbon::parse($data['started_at']))),
-            ];
+
+            // Guard against stale Redis keys: verify the entry is still open in the DB.
+            // There is a small window after TimerService::stopTimer() commits to the DB
+            // but before Redis::del() fires where the key still exists. Without this check
+            // the stopped entry's duration_seconds would be counted twice — once from the
+            // completed-entries SUM query (whereNotNull('ended_at')) and again here as
+            // elapsed_seconds — inflating today's and the week's totals.
+            $entryStillOpen = !empty($data['entry_id']) && TimeEntry::withoutGlobalScope(
+                \App\Models\Scopes\GlobalOrganizationScope::class
+            )
+                ->where('id', $data['entry_id'])
+                ->whereNull('ended_at')
+                ->exists();
+
+            if ($entryStillOpen) {
+                $timer = [
+                    'timer'           => $data,
+                    'elapsed_seconds' => (int) abs(now()->diffInSeconds(Carbon::parse($data['started_at']))),
+                ];
+            } else {
+                // Entry already closed — clean up the stale key so this check isn't repeated.
+                Redis::del("timer:{$user->id}");
+            }
         }
 
         $tz = $user->getTimezoneForDates();
@@ -253,9 +272,14 @@ class DashboardController extends Controller
             ->where('type', 'tracked')
             ->sum('duration_seconds');
 
-        // Include current running timer in weekly total (if timer is running within this week)
+        // Include current running timer in weekly total only if it started within this week.
+        // Without the boundary check a timer that started in a previous week would add its
+        // full elapsed_seconds (potentially days) to the current week's total.
         if ($timer) {
-            $weekSeconds += (int) $timer['elapsed_seconds'];
+            $timerStartedAt = Carbon::parse($timer['timer']['started_at']);
+            if ($timerStartedAt >= Carbon::parse($weekStartUtc) && $timerStartedAt < Carbon::parse($weekEndUtc)) {
+                $weekSeconds += (int) $timer['elapsed_seconds'];
+            }
         }
 
         // Use weekly_limit_hours (set via Settings UI) — fall back to weekly_hours_target for backwards compat
