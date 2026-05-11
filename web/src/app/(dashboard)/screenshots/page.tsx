@@ -226,7 +226,7 @@ export default function ScreenshotsPage() {
     },
   });
 
-  const { data: screenshotsData, isLoading, isError: isScreenshotsError } = useQuery<ScreenshotResponse>({
+  const { data: screenshotsData, isLoading, isError: isScreenshotsError, refetch: refetchScreenshots } = useQuery<ScreenshotResponse>({
     queryKey: ['screenshots', dateRange.from, dateRange.to, userFilter, projectFilter, page],
     queryFn: async () => {
       const params: Record<string, string | number> = {
@@ -541,6 +541,14 @@ export default function ScreenshotsPage() {
               <p className="text-sm text-muted-foreground mt-1">
                 Please try again.
               </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-4"
+                onClick={() => refetchScreenshots()}
+              >
+                Try Again
+              </Button>
             </div>
           </CardContent>
         </Card>
