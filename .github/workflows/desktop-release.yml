@@ -25,6 +25,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   # ── Preflight: resolve version, skip if tag already exists ───────────────────
@@ -56,6 +57,53 @@ jobs:
             echo "No release found for v${VERSION} — proceeding with build."
             echo "should_release=true" >> "$GITHUB_OUTPUT"
           fi
+
+      # When version already exists, auto-open a PR bumping the patch so the
+      # next desktop push to main triggers a fresh build automatically.
+      # Uses a PR (not a direct push) to stay within branch-protection rules.
+      - name: Auto-bump patch version when release already published
+        if: steps.resolve.outputs.should_release == 'false' && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CUR_VER="${{ steps.resolve.outputs.version }}"
+          NEW_VER=$(node -e "const [ma,mi,pa]=process.argv[1].split('.'); console.log([ma,mi,parseInt(pa)+1].join('.'))" "$CUR_VER")
+          BRANCH="chore/desktop-auto-bump-v${NEW_VER}"
+
+          # Bail out silently if a bump PR already exists for this version
+          if gh pr list --base main --head "${BRANCH}" --state open --json number --jq '.[0].number' | grep -q '[0-9]'; then
+            echo "Bump PR for ${BRANCH} already open — nothing to do."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
+
+          # Bump version in package.json without touching package-lock.json
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('desktop/package.json', 'utf8'));
+            p.version = '${NEW_VER}';
+            fs.writeFileSync('desktop/package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+
+          git add desktop/package.json
+          git commit -m "chore(desktop): auto-bump version to ${NEW_VER}"
+          git push origin "${BRANCH}"
+
+          gh pr create \
+            --base main \
+            --head "${BRANCH}" \
+            --title "chore(desktop): auto-bump version to ${NEW_VER}" \
+            --body "$(cat <<EOF
+          **Auto-created by Desktop Release workflow.**
+
+          Version \`v${CUR_VER}\` already has a published GitHub Release, so the current build was skipped. Merging this PR bumps the desktop version to \`${NEW_VER}\` so that the next push to \`main\` with desktop changes will trigger a new release build automatically.
+
+          No code changes — version number only.
+          EOF
+          )"
 
   # ── macOS build ───────────────────────────────────────────────────────────────
   build-mac:
@@ -244,37 +292,21 @@ jobs:
             desktop/dist/latest-linux.yml
           retention-days: 5
 
-  # ── Update release notes + marketing version ─────────────────────────────────
+  # ── Update release notes ──────────────────────────────────────────────────────
+  # Marketing version is handled separately by update-marketing-version.yml
+  # which fires on `release: published` and opens a PR (no direct push to main).
   update-release-notes:
     needs: [preflight, build-mac, build-windows, build-linux]
     if: always() && (needs.build-mac.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update marketing version
-        run: |
-          VER="${{ needs.preflight.outputs.version }}"
-          cat > marketing/src/lib/version.ts <<EOF
-          export const DESKTOP_VERSION = 'v${VER}'
-          export const RELEASE_URL = \`https://github.com/codeupscale/trackflow/releases/tag/v\${VER}\`
-          EOF
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add marketing/src/lib/version.ts
-          git diff --staged --quiet || git commit -m "chore: bump marketing desktop version to v${VER}"
-          git push origin main
-
       - name: Update release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="v${{ needs.preflight.outputs.version }}"
           VER="${{ needs.preflight.outputs.version }}"
-          gh release edit "$VERSION" --notes "## TrackFlow Desktop ${VER}
+          gh release edit "$VERSION" --repo ${{ github.repository }} --notes "## TrackFlow Desktop ${VER}
 
           ### Downloads
 
