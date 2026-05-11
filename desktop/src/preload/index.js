@@ -69,6 +69,7 @@ contextBridge.exposeInMainWorld('trackflow', {
 
   // Auto-update
   onUpdateReady: (callback) => safeOn('update-ready', (_, data) => callback(data)),
+  onUpdateInstallFailed: (callback) => safeOn('update-install-failed', () => callback()),
   installUpdate: () => ipcRenderer.invoke('install-update'),
 
   // Shift info
