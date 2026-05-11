@@ -249,6 +249,19 @@ return [
             'timeout' => 600,
             'nice' => 0,
         ],
+        'supervisor-screenshots' => [
+            'connection' => 'redis',
+            'queue' => ['screenshots'],
+            'balance' => 'auto',
+            'autoScalingStrategy' => 'time',
+            'maxProcesses' => 2,
+            'maxTime' => 0,
+            'maxJobs' => 0,
+            'memory' => 256,
+            'tries' => 3,
+            'timeout' => 120,
+            'nice' => 0,
+        ],
     ],
 
     'environments' => [
@@ -275,6 +288,11 @@ return [
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
             ],
+            'supervisor-screenshots' => [
+                'maxProcesses' => 1,
+                'balanceMaxShift' => 1,
+                'balanceCooldown' => 3,
+            ],
         ],
 
         'local' => [
@@ -289,6 +307,9 @@ return [
             ],
             'supervisor-low' => [
                 'maxProcesses' => 1,
+            ],
+            'supervisor-screenshots' => [
+                'maxProcesses' => 2,
             ],
         ],
     ],

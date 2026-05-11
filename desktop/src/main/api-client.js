@@ -237,13 +237,22 @@ class ApiClient {
     const url = new URL(uploadUrl);
     const lib = url.protocol === 'https:' ? https : http;
 
+    // AWS SigV4 headers from Laravel's temporaryUploadUrl() are PHP arrays serialised
+    // as JSON arrays (e.g. "host": ["s3.amazonaws.com"]). Node.js https.request()
+    // requires header values to be strings — arrays throw a TypeError for 'host'.
+    // Flatten every array value to a comma-joined string before passing to Node.
+    const normalizedHeaders = {};
+    for (const [key, value] of Object.entries(uploadHeaders)) {
+      normalizedHeaders[key] = Array.isArray(value) ? value.join(', ') : value;
+    }
+
     return new Promise((resolve, reject) => {
       const req = lib.request(uploadUrl, {
         method: 'PUT',
         headers: {
           'Content-Type': 'image/jpeg',
           'Content-Length': buffer.length,
-          ...uploadHeaders,
+          ...normalizedHeaders,
         },
       }, (res) => {
         let body = '';
@@ -273,10 +282,9 @@ class ApiClient {
   }
 
   async getProjects() {
-    const res = await this.client.get('/projects');
-    // Backend returns paginated response: { data: [...], current_page, ... }
-    // or legacy format: { projects: [...] }
-    return res.data.data || res.data.projects || res.data || [];
+    const res = await this.client.get('/projects', { params: { pagination: 'false' } });
+    const body = res.data;
+    return Array.isArray(body) ? body : (body.data || body.projects || []);
   }
 
   async reportIdleTime(data) {
