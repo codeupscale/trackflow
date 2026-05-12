@@ -35,6 +35,9 @@ export const usePermissionStore = create<PermissionState>()(
       hasPermissionWithScope: (key, requiredScope) => {
         const granted = get().permissions[key];
         if (!granted) return false;
+        // 'none' means non-scoped (org-wide boolean toggle) — it does NOT
+        // satisfy hierarchical scope requirements (own / team / organization).
+        if (granted === 'none' && requiredScope !== 'none') return false;
         return (SCOPE_HIERARCHY[granted] ?? 0) >= (SCOPE_HIERARCHY[requiredScope] ?? 0);
       },
 

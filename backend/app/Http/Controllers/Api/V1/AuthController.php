@@ -9,12 +9,13 @@ use App\Http\Requests\Auth\RegisterRequest;
 use App\Models\Invitation;
 use App\Models\Organization;
 use App\Models\User;
+use App\Services\AuditService;
+use App\Services\RbacBootstrapService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
-use App\Services\AuditService;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -24,7 +25,9 @@ class AuthController extends Controller
     /** AUTH-01: Register new organization + owner */
     public function register(RegisterRequest $request): JsonResponse
     {
-        $user = DB::transaction(function () use ($request) {
+        $rbac = app(RbacBootstrapService::class);
+
+        $user = DB::transaction(function () use ($request, $rbac) {
             $org = Organization::create([
                 'name' => $request->company_name,
                 'slug' => Str::slug($request->company_name) . '-' . Str::random(6),
@@ -36,7 +39,7 @@ class AuthController extends Controller
                 ),
             ]);
 
-            return User::create([
+            $user = User::create([
                 'organization_id' => $org->id,
                 'name' => $request->name,
                 'email' => $request->email,
@@ -44,6 +47,11 @@ class AuthController extends Controller
                 'role' => 'owner',
                 'timezone' => $request->timezone ?? 'America/New_York',
             ]);
+
+            // Bootstrap system roles for the new org and assign the owner
+            $rbac->bootstrapOrgAndAssignUser($user, 'owner');
+
+            return $user;
         });
 
         $token = $user->createToken('access_token', ['*'], now()->addHours(24));
@@ -409,11 +417,13 @@ class AuthController extends Controller
             ->get();
 
         if ($pendingInvitations->isNotEmpty()) {
+            $rbac = app(RbacBootstrapService::class);
+
             // Auto-accept pending invitations: create User rows in each invited org
-            $createdUsers = DB::transaction(function () use ($pendingInvitations, $name, $email, $googleId, $avatarUrl) {
+            $createdUsers = DB::transaction(function () use ($pendingInvitations, $name, $email, $googleId, $avatarUrl, $rbac) {
                 $users = [];
                 foreach ($pendingInvitations as $invitation) {
-                    $users[] = User::create([
+                    $u = User::create([
                         'organization_id' => $invitation->organization_id,
                         'name' => $name,
                         'email' => $email,
@@ -426,12 +436,14 @@ class AuthController extends Controller
                     ]);
 
                     $invitation->update(['accepted_at' => now()]);
+                    $rbac->bootstrapOrgAndAssignUser($u, $invitation->role);
+                    $users[] = $u;
                 }
                 return collect($users);
             });
 
             // Also create a personal org so the user always has one
-            $personalUser = DB::transaction(function () use ($name, $email, $googleId, $avatarUrl) {
+            $personalUser = DB::transaction(function () use ($name, $email, $googleId, $avatarUrl, $rbac) {
                 $org = Organization::create([
                     'name' => $name . "'s Organization",
                     'slug' => Str::slug($name) . '-' . Str::random(6),
@@ -440,7 +452,7 @@ class AuthController extends Controller
                     'settings' => (new Organization)->getDefaultSettings(),
                 ]);
 
-                return User::create([
+                $u = User::create([
                     'organization_id' => $org->id,
                     'name' => $name,
                     'email' => $email,
@@ -451,6 +463,10 @@ class AuthController extends Controller
                     'avatar_url' => $avatarUrl,
                     'email_verified_at' => now(),
                 ]);
+
+                $rbac->bootstrapOrgAndAssignUser($u, 'owner');
+
+                return $u;
             });
 
             $allUsers = $createdUsers->push($personalUser);
@@ -478,7 +494,8 @@ class AuthController extends Controller
         }
 
         // Step 4: No invitations — auto-register as a new org owner
-        $user = DB::transaction(function () use ($name, $email, $googleId, $avatarUrl) {
+        $rbac = app(RbacBootstrapService::class);
+        $user = DB::transaction(function () use ($name, $email, $googleId, $avatarUrl, $rbac) {
             $org = Organization::create([
                 'name' => $name . "'s Organization",
                 'slug' => Str::slug($name) . '-' . Str::random(6),
@@ -487,7 +504,7 @@ class AuthController extends Controller
                 'settings' => (new Organization)->getDefaultSettings(),
             ]);
 
-            return User::create([
+            $u = User::create([
                 'organization_id' => $org->id,
                 'name' => $name,
                 'email' => $email,
@@ -498,6 +515,10 @@ class AuthController extends Controller
                 'avatar_url' => $avatarUrl,
                 'email_verified_at' => now(),
             ]);
+
+            $rbac->bootstrapOrgAndAssignUser($u, 'owner');
+
+            return $u;
         });
 
         AuditService::log('auth.register', $user, ['method' => 'google'], $user);
