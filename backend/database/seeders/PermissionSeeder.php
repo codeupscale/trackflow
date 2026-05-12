@@ -57,7 +57,7 @@ class PermissionSeeder extends Seeder
             ['positions.view_salary', 'positions', 'view_salary', 'View min/max salary encrypted fields',         false],
 
             // --- employees (6) ---
-            ['employees.view_directory',   'employees', 'view_directory',   'View employee directory',             false],
+            ['employees.view_directory',   'employees', 'view_directory',   'View employee directory',             true],
             ['employees.view_profile',     'employees', 'view_profile',     'View full employee profile',          true],
             ['employees.edit_profile',     'employees', 'edit_profile',     'Edit employee profile fields',        true],
             ['employees.view_financial',   'employees', 'view_financial',   'View bank details and tax ID',        true],
@@ -172,7 +172,7 @@ class PermissionSeeder extends Seeder
             'positions.view_salary' => 'none',
 
             // employees
-            'employees.view_directory'   => 'none',
+            'employees.view_directory'   => 'organization',
             'employees.view_profile'     => 'organization',
             'employees.edit_profile'     => 'organization',
             'employees.view_financial'   => 'organization',
@@ -265,7 +265,7 @@ class PermissionSeeder extends Seeder
             'positions.view'   => 'none',
 
             // employees
-            'employees.view_directory'   => 'none',
+            'employees.view_directory'   => 'team',
             'employees.view_profile'     => 'team',
             'employees.manage_documents' => 'team',
             // employees.manage_notes: admin/owner only — not granted to manager
@@ -325,7 +325,7 @@ class PermissionSeeder extends Seeder
             'positions.view'   => 'none',
 
             // employees — own profile
-            'employees.view_directory'   => 'none',
+            'employees.view_directory'   => 'own',
             'employees.view_profile'     => 'own',
             'employees.edit_profile'     => 'own',
             'employees.view_financial'   => 'own',

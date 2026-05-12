@@ -98,8 +98,8 @@ export const navigationConfig: NavGroup[] = [
   {
     label: 'Team',
     items: [
-      // Team page — managers/admins only
-      { name: 'Team', href: '/team', icon: Users, requiredPermission: 'team.view_members', requiredScope: 'team' },
+      // Team page — managers/admins only (team.view_members has_scope=false; employees have no such permission at all)
+      { name: 'Team', href: '/team', icon: Users, requiredPermission: 'team.view_members' },
       // Roles — admin only
       { name: 'Roles', href: '/settings/roles', icon: Shield, requiredPermission: 'roles.view' },
       // Settings — admin only

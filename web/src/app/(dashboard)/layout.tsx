@@ -49,8 +49,8 @@ import { useAuthGuard } from '@/hooks/use-auth-guard';
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const { isAuthenticated } = useAuthGuard();
-  const { user, logout } = useAuthStore();
-  const { hasPermission, hasPermissionWithScope } = usePermissionStore();
+  const { user, logout, fetchUser } = useAuthStore();
+  const { hasPermission, hasPermissionWithScope, permissions } = usePermissionStore();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -73,6 +73,15 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       queryClient.invalidateQueries({ queryKey: ['time-entries-dashboard'] });
     }
   }, [isTimerRunning, queryClient]);
+
+  // If the permission store is empty (e.g. stale localStorage hydration or first load),
+  // re-fetch the current user so setPermissions() is called with fresh data.
+  useEffect(() => {
+    if (isAuthenticated && Object.keys(permissions).length === 0) {
+      fetchUser();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
 
   const handleLogout = async () => {
     useTimerStore.getState().resetState();

@@ -8,6 +8,7 @@ use App\Models\Invitation;
 use App\Models\Organization;
 use App\Models\User;
 use App\Services\BillingService;
+use App\Services\RbacBootstrapService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -216,6 +217,9 @@ class InvitationController extends Controller
 
             $invitation->update(['accepted_at' => now()]);
 
+            // Ensure system roles exist for this org and assign the user to their role
+            app(RbacBootstrapService::class)->bootstrapOrgAndAssignUser($user, $invitation->role);
+
             return $user;
         });
 
@@ -229,6 +233,7 @@ class InvitationController extends Controller
                 'email' => $user->email,
                 'role' => $user->role,
                 'organization_id' => $user->organization_id,
+                'permissions' => $user->getPermissionMap(),
             ],
             'access_token' => $token->plainTextToken,
             'refresh_token' => $refreshToken->plainTextToken,
