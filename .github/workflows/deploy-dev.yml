@@ -12,10 +12,10 @@
 #   - Push to develop (paths: backend/**, web/**, marketing/**)
 #   - Manual dispatch (workflow_dispatch)
 #
-# Required secrets (GitHub environment: "development"):
-#   SSH_HOST             — Dev/prod server IP or hostname
-#   SSH_USER             — SSH user on server (e.g. ubuntu)
-#   SSH_KEY              — SSH private key for server access
+# Required secrets (GitHub environment: "production"):
+#   DEPLOY_HOST          — Dev/prod server IP or hostname
+#   DEPLOY_USER          — SSH user on server (e.g. ubuntu)
+#   DEPLOY_SSH_KEY       — SSH private key for server access
 #   GITHUB_TOKEN         — Auto-provided by GitHub Actions for GHCR auth
 #
 # Optional secrets:
@@ -165,7 +165,7 @@ jobs:
       (needs.build-api.result == 'success' || needs.build-api.result == 'skipped') &&
       (needs.build-web.result == 'success' || needs.build-web.result == 'skipped') &&
       !(needs.build-api.result == 'skipped' && needs.build-web.result == 'skipped')
-    environment: development
+    environment: production
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
@@ -176,9 +176,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMIT_SHA: ${{ github.sha }}
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
           envs: DEPLOY_API,DEPLOY_WEB,GH_ACTOR,GH_TOKEN,COMMIT_SHA
           command_timeout: 15m
           script: |
