@@ -42,6 +42,7 @@ import {
 } from '@/components/ui/dialog';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 
 interface BillingUsage {
   seats_used: number;
@@ -82,7 +83,17 @@ const plans = [
 
 export default function BillingPage() {
   const { user } = useAuthStore();
+  const { hasPermission } = usePermissionStore();
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+
+  if (!hasPermission('settings.manage_billing')) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-2">
+        <CreditCard className="size-10 text-muted-foreground" />
+        <p className="text-muted-foreground">You do not have access to billing settings.</p>
+      </div>
+    );
+  }
 
   const { data: usage, isLoading: usageLoading } = useQuery<BillingUsage>({
     queryKey: ['billing-usage'],

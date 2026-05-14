@@ -5,7 +5,6 @@ namespace Tests\Feature\Hr;
 use App\Models\LeaveBalance;
 use App\Models\LeaveRequest;
 use App\Models\LeaveType;
-use App\Models\Team;
 use Carbon\Carbon;
 use Tests\TestCase;
 
@@ -117,33 +116,26 @@ class LeaveRequestTest extends TestCase
         $this->assertEquals($employee->id, $data[0]['user_id']);
     }
 
-    public function test_manager_can_see_team_requests(): void
+    public function test_org_manager_can_see_all_requests(): void
     {
         $org = $this->createOrganization();
-        $manager = $this->createUser($org, 'manager');
-        $teamMember = $this->createUser($org, 'employee');
-        $outsider = $this->createUser($org, 'employee');
-
-        // Create team with manager and member
-        $team = Team::factory()->create([
-            'organization_id' => $org->id,
-            'manager_id' => $manager->id,
-        ]);
-        $team->members()->attach($teamMember->id);
+        $manager = $this->createUser($org, 'org_manager');
+        $emp1 = $this->createUser($org, 'employee');
+        $emp2 = $this->createUser($org, 'employee');
 
         $leaveType = LeaveType::factory()->create(['organization_id' => $org->id]);
 
-        // Team member's request
+        // First employee's request
         LeaveRequest::factory()->create([
             'organization_id' => $org->id,
-            'user_id' => $teamMember->id,
+            'user_id' => $emp1->id,
             'leave_type_id' => $leaveType->id,
         ]);
 
-        // Outsider's request
+        // Second employee's request
         LeaveRequest::factory()->create([
             'organization_id' => $org->id,
-            'user_id' => $outsider->id,
+            'user_id' => $emp2->id,
             'leave_type_id' => $leaveType->id,
         ]);
 
@@ -153,14 +145,14 @@ class LeaveRequestTest extends TestCase
 
         $response->assertOk();
         $userIds = collect($response->json('data'))->pluck('user_id')->toArray();
-        $this->assertContains($teamMember->id, $userIds);
-        $this->assertNotContains($outsider->id, $userIds);
+        $this->assertContains($emp1->id, $userIds);
+        $this->assertContains($emp2->id, $userIds);
     }
 
-    public function test_admin_can_see_all_requests(): void
+    public function test_org_manager_sees_full_org_leave_requests(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $emp1 = $this->createUser($org, 'employee');
         $emp2 = $this->createUser($org, 'employee');
 
@@ -190,7 +182,7 @@ class LeaveRequestTest extends TestCase
     public function test_manager_can_approve_leave(): void
     {
         $org = $this->createOrganization();
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $leaveType = LeaveType::factory()->create(['organization_id' => $org->id]);
@@ -252,7 +244,7 @@ class LeaveRequestTest extends TestCase
     public function test_manager_can_reject_leave(): void
     {
         $org = $this->createOrganization();
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $leaveType = LeaveType::factory()->create(['organization_id' => $org->id]);
@@ -340,7 +332,7 @@ class LeaveRequestTest extends TestCase
         $orgA = $this->createOrganization();
         $orgB = $this->createOrganization();
 
-        $adminA = $this->createUser($orgA, 'admin');
+        $adminA = $this->createUser($orgA, 'org_manager');
         $employeeB = $this->createUser($orgB, 'employee');
 
         $leaveType = LeaveType::factory()->create(['organization_id' => $orgB->id]);

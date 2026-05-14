@@ -37,7 +37,7 @@ class ShiftSwapRequestPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin', 'manager');
+        return $user->hasRole('owner', 'org_manager', 'hr_manager');
     }
 
     /**
@@ -50,7 +50,7 @@ class ShiftSwapRequestPolicy
         }
 
         // Owner/admin can delete any swap request
-        if ($user->hasRole('owner', 'admin')) {
+        if ($user->hasRole('owner', 'org_manager', 'hr_manager')) {
             return true;
         }
 

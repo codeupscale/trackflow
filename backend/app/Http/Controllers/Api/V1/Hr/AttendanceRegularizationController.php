@@ -28,7 +28,7 @@ class AttendanceRegularizationController extends Controller
                 'reviewedBy:id,name,email',
             ]);
 
-        if ($user->hasRole('owner', 'admin')) {
+        if ($user->hasRole('owner', 'org_manager', 'hr_manager')) {
             // See all
         } elseif ($user->isManager()) {
             $teamMemberIds = $user->managedTeams()

@@ -17,11 +17,11 @@ class AttendanceRecordPolicy
     }
 
     /**
-     * Users with attendance.view at team or org scope can view team attendance.
+     * Users with attendance.view at project or org scope can view team attendance.
      */
     public function viewTeam(User $user): bool
     {
-        return app(PermissionService::class)->hasPermission($user, 'attendance.view', 'team');
+        return app(PermissionService::class)->hasPermission($user, 'attendance.view', 'project');
     }
 
     /**

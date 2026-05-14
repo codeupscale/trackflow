@@ -2,9 +2,11 @@
 
 namespace Tests\Feature\Jobs;
 
+use App\Events\EmployeeIdle;
 use App\Jobs\SendEmailNotificationJob;
 use App\Jobs\SendTimerIdleAlertJob;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
 use Tests\TestCase;
 
@@ -13,6 +15,7 @@ class SendTimerIdleAlertJobTest extends TestCase
     public function test_disabled_does_not_dispatch_email_job(): void
     {
         Bus::fake([SendEmailNotificationJob::class]);
+        Event::fake([EmployeeIdle::class]);
 
         $org = $this->createOrganization([
             'settings' => [
@@ -42,6 +45,7 @@ class SendTimerIdleAlertJobTest extends TestCase
     public function test_enabled_throttles_per_employee_per_cooldown(): void
     {
         Bus::fake([SendEmailNotificationJob::class]);
+        Event::fake([EmployeeIdle::class]);
 
         $org = $this->createOrganization([
             'settings' => [
@@ -76,6 +80,7 @@ class SendTimerIdleAlertJobTest extends TestCase
     public function test_cooldown_keys_include_organization_id(): void
     {
         Bus::fake([SendEmailNotificationJob::class]);
+        Event::fake([EmployeeIdle::class]);
 
         $orgA = $this->createOrganization([
             'settings' => [

@@ -424,9 +424,9 @@ describe('IdleDetector', () => {
     jest.advanceTimersByTime(10000);
     expect(onIdle).toHaveBeenCalledTimes(1); // no second fire
 
-    // User provides input — cooldown clears
+    // User provides input — cooldown clears after 60s minimum window
     powerMonitor.getSystemIdleTime.mockReturnValue(5);
-    jest.advanceTimersByTime(10000);
+    jest.advanceTimersByTime(60000); // advance 60s so elapsed >= MIN_COOLDOWN_MS
 
     // User goes idle again — should fire
     powerMonitor.getSystemIdleTime.mockReturnValue(60);

@@ -184,7 +184,7 @@ export default function ScreenshotsPage() {
   const { user } = useAuthStore();
   const queryClient = useQueryClient();
   const { hasPermission, hasPermissionWithScope } = usePermissionStore();
-  const isManager = hasPermissionWithScope('screenshots.view', 'team');
+  const isManager = hasPermissionWithScope('screenshots.view', 'project');
   const canDelete = hasPermission('screenshots.delete');
 
   // Filter state

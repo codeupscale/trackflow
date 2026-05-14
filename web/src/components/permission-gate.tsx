@@ -28,7 +28,7 @@ export function PermissionGate({
 
 /**
  * Hook to check if the current user has a specific permission.
- * Optionally checks scope level (own, team, organization).
+ * Optionally checks scope level (own, project, organization).
  */
 export function useHasPermission(key: string, scope?: string): boolean {
   const { hasPermission, hasPermissionWithScope } = usePermissionStore();

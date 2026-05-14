@@ -93,7 +93,7 @@ class TimerServiceTest extends TestCase
 
     public function test_start_allows_admin_on_any_project(): void
     {
-        $admin = $this->createUser($this->org, 'admin');
+        $admin = $this->createUser($this->org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         $project = Project::factory()->create([

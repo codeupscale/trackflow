@@ -20,7 +20,7 @@ class LeaveBalanceController extends Controller
         $year = (int) $request->input('year', now()->year);
 
         // If user_id is provided and requester is manager/admin, show that user's balances
-        if ($request->filled('user_id') && $user->hasRole('owner', 'admin', 'manager')) {
+        if ($request->filled('user_id') && $user->hasRole('owner', 'org_manager', 'hr_manager', 'finance_manager')) {
             $targetUserId = $request->input('user_id');
             // Verify target user belongs to same org
             $targetUser = $user->organization->users()->findOrFail($targetUserId);

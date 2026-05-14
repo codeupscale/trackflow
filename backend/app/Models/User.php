@@ -172,14 +172,30 @@ class User extends Authenticatable
         return $this->role === 'owner';
     }
 
+    /** @deprecated Use isOrgManager(). Returns true for org_manager (was 'admin'). */
     public function isAdmin(): bool
     {
-        return $this->role === 'admin';
+        return $this->role === 'org_manager';
+    }
+
+    public function isOrgManager(): bool
+    {
+        return $this->role === 'org_manager';
+    }
+
+    public function isHrManager(): bool
+    {
+        return $this->role === 'hr_manager';
+    }
+
+    public function isFinanceManager(): bool
+    {
+        return $this->role === 'finance_manager';
     }
 
     public function isManager(): bool
     {
-        return $this->role === 'manager';
+        return $this->role === 'org_manager';
     }
 
     public function isEmployee(): bool

@@ -85,7 +85,7 @@ const MODULE_LABELS: Record<string, string> = {
 const SCOPE_OPTIONS = [
   { value: '', label: 'Disabled' },
   { value: 'own', label: 'Own' },
-  { value: 'team', label: 'Team' },
+  { value: 'project', label: 'Project' },
   { value: 'organization', label: 'Organization' },
 ];
 

@@ -73,7 +73,7 @@ class EmployeeController extends Controller
         $data['is_active'] = $employee->is_active;
 
         // Expose financial fields: masked for non-admin, full for admin/owner
-        $canViewFinancial = $request->user()->hasRole('owner', 'admin');
+        $canViewFinancial = $request->user()->hasRole('owner', 'org_manager', 'hr_manager', 'finance_manager');
         $data['bank_name'] = $canViewFinancial
             ? $profile->bank_name
             : $this->service->maskFinancialField($profile->bank_name);
@@ -114,7 +114,7 @@ class EmployeeController extends Controller
         $data = $updated->toArray();
 
         // Expose financial fields in response
-        $canViewFinancial = $request->user()->hasRole('owner', 'admin');
+        $canViewFinancial = $request->user()->hasRole('owner', 'org_manager', 'hr_manager', 'finance_manager');
         $data['bank_name'] = $canViewFinancial
             ? $updated->bank_name
             : $this->service->maskFinancialField($updated->bank_name);

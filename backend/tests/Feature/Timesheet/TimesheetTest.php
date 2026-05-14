@@ -22,7 +22,7 @@ class TimesheetTest extends TestCase
 
         $this->org = $this->createOrganization();
         $this->owner = $this->createUser($this->org, 'owner');
-        $this->manager = $this->createUser($this->org, 'manager');
+        $this->manager = $this->createUser($this->org, 'org_manager');
         $this->employee = $this->createUser($this->org, 'employee');
         $this->otherEmployee = $this->createUser($this->org, 'employee');
     }
@@ -165,7 +165,7 @@ class TimesheetTest extends TestCase
     public function test_manager_cannot_review_other_org_timesheet(): void
     {
         $otherOrg = $this->createOrganization();
-        $otherManager = $this->createUser($otherOrg, 'manager');
+        $otherManager = $this->createUser($otherOrg, 'org_manager');
 
         $timesheet = Timesheet::factory()->create([
             'organization_id' => $this->org->id,
