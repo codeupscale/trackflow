@@ -314,7 +314,7 @@ class RoleController extends Controller
             ->pluck('key');
 
         if ($violations->isNotEmpty()) {
-            abort(422, 'Invalid scope: the following permissions require a specific scope (own/team/organization) and cannot use \'none\': ' . $violations->implode(', '));
+            abort(422, 'Invalid scope: the following permissions require a specific scope (own/project/organization) and cannot use \'none\': ' . $violations->implode(', '));
         }
     }
 
@@ -327,7 +327,7 @@ class RoleController extends Controller
      */
     private function validatePermissionEscalation(array $requestedPermissions, array $userPermMap): void
     {
-        $scopeHierarchy = ['own' => 1, 'team' => 2, 'organization' => 3, 'none' => 3];
+        $scopeHierarchy = ['own' => 1, 'project' => 2, 'organization' => 3, 'none' => 3];
 
         foreach ($requestedPermissions as $key => $scope) {
             if (! array_key_exists($key, $userPermMap)) {

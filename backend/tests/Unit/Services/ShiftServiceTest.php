@@ -377,7 +377,7 @@ class ShiftServiceTest extends TestCase
         $org = $this->createOrganization();
         $requester = $this->createUser($org, 'employee');
         $target = $this->createUser($org, 'employee');
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
 
         $shiftA = Shift::factory()->weekdays()->create(['organization_id' => $org->id]);
         $shiftB = Shift::factory()->weekdays()->create(['organization_id' => $org->id]);
@@ -446,7 +446,7 @@ class ShiftServiceTest extends TestCase
         $org = $this->createOrganization();
         $requester = $this->createUser($org, 'employee');
         $target = $this->createUser($org, 'employee');
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
 
         $shiftA = Shift::factory()->create(['organization_id' => $org->id]);
         $shiftB = Shift::factory()->create(['organization_id' => $org->id]);

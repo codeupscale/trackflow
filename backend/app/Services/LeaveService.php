@@ -14,6 +14,8 @@ use Illuminate\Support\Facades\DB;
 
 class LeaveService
 {
+    public function __construct(private readonly PermissionService $permissionService) {}
+
     /**
      * Apply for leave. Validates balance, checks overlaps, deducts pending days.
      *
@@ -222,18 +224,12 @@ class LeaveService
 
         // Role-based scoping when viewer is provided
         if ($viewer !== null) {
-            if ($viewer->hasRole('owner', 'admin')) {
+            if ($viewer->hasRole('owner', 'org_manager', 'hr_manager', 'finance_manager')) {
                 // Owner/admin see all org leave requests
             } elseif ($viewer->isManager()) {
-                // Managers see their own + their managed team members' requests
-                $teamMemberIds = $viewer->managedTeams()
-                    ->with('members:id')
-                    ->get()
-                    ->flatMap(fn ($team) => $team->members->pluck('id'))
-                    ->push($viewer->id)
-                    ->unique()
-                    ->values();
-                $query->whereIn('user_id', $teamMemberIds);
+                // Managers see their own + their project members' requests
+                $projectMemberIds = $this->permissionService->getProjectUserIds($viewer);
+                $query->whereIn('user_id', $projectMemberIds);
             } else {
                 // Employees see only their own leave requests
                 $query->where('user_id', $viewer->id);

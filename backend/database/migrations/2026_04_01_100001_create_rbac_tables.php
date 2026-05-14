@@ -74,7 +74,7 @@ return new class extends Migration
 
             // Add check constraint for scope values (PostgreSQL only)
             if (Schema::getConnection()->getDriverName() === 'pgsql') {
-                DB::statement("ALTER TABLE role_permissions ADD CONSTRAINT chk_scope CHECK (scope IN ('own', 'team', 'organization', 'none'))");
+                DB::statement("ALTER TABLE role_permissions ADD CONSTRAINT chk_scope CHECK (scope IN ('own', 'project', 'organization', 'none'))");
             }
 
             // ---------------------------------------------------------------

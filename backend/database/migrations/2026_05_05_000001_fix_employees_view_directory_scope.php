@@ -25,7 +25,7 @@ return new class extends Migration
         // Map role name → correct scope
         $scopeMap = [
             'employee' => 'own',
-            'manager'  => 'team',
+            'manager'  => 'project',
             'admin'    => 'organization',
             'owner'    => 'organization',
         ];
@@ -64,7 +64,7 @@ return new class extends Migration
 
         DB::table('role_permissions')
             ->where('permission_id', $permissionId)
-            ->whereIn('scope', ['own', 'team', 'organization'])
+            ->whereIn('scope', ['own', 'project', 'organization'])
             ->update(['scope' => 'none']);
     }
 };

@@ -31,7 +31,7 @@ class ScreenshotTest extends TestCase
 
         $this->org = $this->createOrganization();
         $this->owner = $this->createUser($this->org, 'owner');
-        $this->manager = $this->createUser($this->org, 'manager');
+        $this->manager = $this->createUser($this->org, 'org_manager');
         $this->employee = $this->createUser($this->org, 'employee');
 
         $this->timeEntry = TimeEntry::factory()->running()->create([

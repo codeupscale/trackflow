@@ -121,7 +121,7 @@ export default function TimePage() {
   const { hasPermission, hasPermissionWithScope } = usePermissionStore();
   const canApprove = hasPermission('time_entries.approve');
 
-  const isManagerOrAbove = hasPermissionWithScope('time_entries.view', 'team');
+  const isManagerOrAbove = hasPermissionWithScope('time_entries.view', 'project');
 
   const [dateFrom, setDateFrom] = useState(() => searchParams.get('from') || format(new Date(), 'yyyy-MM-dd'));
   const [dateTo, setDateTo] = useState(() => searchParams.get('to') || format(new Date(), 'yyyy-MM-dd'));

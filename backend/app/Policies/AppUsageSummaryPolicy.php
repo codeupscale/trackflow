@@ -9,7 +9,7 @@ class AppUsageSummaryPolicy
 {
     /**
      * View daily app usage for a specific user.
-     * Own data is always visible. Viewing another user's data requires reports.view with team+ scope.
+     * Own data is always visible. Viewing another user's data requires reports.view with project+ scope.
      */
     public function viewDaily(User $authUser, ?string $targetUserId = null): bool
     {
@@ -18,16 +18,16 @@ class AppUsageSummaryPolicy
             return true;
         }
 
-        // Viewing another user's data requires team-level reports permission
-        return app(PermissionService::class)->hasPermission($authUser, 'reports.view', 'team');
+        // Viewing another user's data requires project-level reports permission
+        return app(PermissionService::class)->hasPermission($authUser, 'reports.view', 'project');
     }
 
     /**
-     * View team-wide app usage summary. Requires team+ scope on reports.view.
+     * View team-wide app usage summary. Requires project+ scope on reports.view.
      */
     public function viewTeam(User $user): bool
     {
-        return app(PermissionService::class)->hasPermission($user, 'reports.view', 'team');
+        return app(PermissionService::class)->hasPermission($user, 'reports.view', 'project');
     }
 
     /**

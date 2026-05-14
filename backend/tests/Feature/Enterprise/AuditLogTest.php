@@ -7,11 +7,20 @@ use App\Models\Organization;
 use App\Models\User;
 use App\Services\AuditService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Routing\Middleware\ThrottleRequests;
 use Tests\TestCase;
 
 class AuditLogTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // Bypass the auth rate limiter (10/min) so login-related tests in this
+        // class are not affected by rate limit counts from earlier test classes.
+        $this->withoutMiddleware(ThrottleRequests::class);
+    }
 
     public function test_login_creates_audit_log(): void
     {
@@ -65,7 +74,7 @@ class AuditLogTest extends TestCase
     public function test_admin_can_view_audit_logs(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
 
         AuditService::log('test.action', $admin, ['key' => 'value'], $admin);
 
@@ -77,8 +86,8 @@ class AuditLogTest extends TestCase
     {
         $orgA = $this->createOrganization();
         $orgB = $this->createOrganization();
-        $adminA = $this->createUser($orgA, 'admin');
-        $adminB = $this->createUser($orgB, 'admin');
+        $adminA = $this->createUser($orgA, 'org_manager');
+        $adminB = $this->createUser($orgB, 'org_manager');
 
         AuditService::log('action.a', $adminA, [], $adminA);
         AuditService::log('action.b', $adminB, [], $adminB);

@@ -58,7 +58,6 @@ class RbacBootstrapService
         $role = DB::table('roles')
             ->where('organization_id', $user->organization_id)
             ->where('name', $roleName)
-            ->where('is_system', true)
             ->first();
 
         // Fallback to employee if the requested role doesn't exist
@@ -66,7 +65,6 @@ class RbacBootstrapService
             $role = DB::table('roles')
                 ->where('organization_id', $user->organization_id)
                 ->where('name', 'employee')
-                ->where('is_system', true)
                 ->first();
         }
 

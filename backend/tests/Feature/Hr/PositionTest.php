@@ -62,7 +62,7 @@ class PositionTest extends TestCase
 
     public function test_store_creates_position(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $dept = Department::factory()->create([
             'organization_id' => $user->organization_id,
@@ -91,7 +91,7 @@ class PositionTest extends TestCase
 
     public function test_store_validates_max_salary_gte_min_salary(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $dept = Department::factory()->create([
             'organization_id' => $user->organization_id,
@@ -115,7 +115,7 @@ class PositionTest extends TestCase
 
     public function test_update_position(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $dept = Department::factory()->create(['organization_id' => $user->organization_id]);
         $position = Position::factory()->create([

@@ -25,7 +25,7 @@ class SettingsController extends Controller
 
     public function update(Request $request): JsonResponse
     {
-        if (!$request->user()->hasRole('owner', 'admin')) {
+        if (!$request->user()->hasRole('owner', 'org_manager')) {
             return response()->json(['message' => 'Unauthorized.'], 403);
         }
 

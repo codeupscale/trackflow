@@ -16,7 +16,7 @@ class LeaveTypeController extends Controller
             ->orderBy('name');
 
         // Employees and managers only see active types (for apply-leave dropdown)
-        if (! $request->user()->hasRole('owner', 'admin')) {
+        if (! $request->user()->hasRole('owner', 'org_manager', 'hr_manager')) {
             $query->where('is_active', true);
         }
 
@@ -46,7 +46,7 @@ class LeaveTypeController extends Controller
 
     public function update(Request $request, string $id): JsonResponse
     {
-        if (! $request->user()->hasRole('owner', 'admin')) {
+        if (! $request->user()->hasRole('owner', 'org_manager', 'hr_manager')) {
             return response()->json(['message' => 'Unauthorized.'], 403);
         }
 

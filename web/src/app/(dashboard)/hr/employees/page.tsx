@@ -77,7 +77,7 @@ export default function EmployeesPage() {
   // Employees without team+ scope on employees.view_directory should see only
   // their own profile. The API now enforces this on the backend too, but we
   // redirect to avoid showing a confusing "1 employee" directory.
-  const isManagerOrAdmin = hasPermissionWithScope('employees.view_directory', 'team');
+  const isManagerOrAdmin = hasPermissionWithScope('employees.view_directory', 'project');
 
   useEffect(() => {
     if (user && !isManagerOrAdmin) {

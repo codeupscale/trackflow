@@ -15,7 +15,7 @@ class PayrollTest extends TestCase
 
     public function test_admin_can_list_salary_structures(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         SalaryStructure::factory()->count(3)->create([
             'organization_id' => $user->organization_id,
@@ -31,7 +31,7 @@ class PayrollTest extends TestCase
 
     public function test_admin_can_create_salary_structure(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $response = $this->postJson('/api/v1/hr/salary-structures', [
             'name' => 'Senior Engineer',
@@ -52,7 +52,7 @@ class PayrollTest extends TestCase
 
     public function test_create_salary_structure_validates_required_fields(): void
     {
-        $this->actingAsUser('admin');
+        $this->actingAsUser('org_manager');
 
         $response = $this->postJson('/api/v1/hr/salary-structures', []);
 
@@ -62,7 +62,7 @@ class PayrollTest extends TestCase
 
     public function test_admin_can_update_salary_structure(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $structure = SalaryStructure::factory()->create([
             'organization_id' => $user->organization_id,
@@ -79,7 +79,7 @@ class PayrollTest extends TestCase
 
     public function test_admin_can_delete_salary_structure(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $structure = SalaryStructure::factory()->create([
             'organization_id' => $user->organization_id,
@@ -104,7 +104,7 @@ class PayrollTest extends TestCase
 
     public function test_admin_can_list_pay_components(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         PayComponent::factory()->count(2)->create([
             'organization_id' => $user->organization_id,
@@ -118,7 +118,7 @@ class PayrollTest extends TestCase
 
     public function test_admin_can_create_pay_component(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $response = $this->postJson('/api/v1/hr/pay-components', [
             'name' => 'Superannuation',
@@ -146,7 +146,7 @@ class PayrollTest extends TestCase
 
     public function test_admin_can_create_payroll_period(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $response = $this->postJson('/api/v1/hr/payroll-periods', [
             'name' => 'March 2026',
@@ -162,7 +162,7 @@ class PayrollTest extends TestCase
 
     public function test_admin_can_only_delete_draft_periods(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $period = PayrollPeriod::factory()->approved()->create([
             'organization_id' => $user->organization_id,
@@ -178,7 +178,7 @@ class PayrollTest extends TestCase
 
     public function test_admin_can_run_payroll(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $period = PayrollPeriod::factory()->create([
             'organization_id' => $user->organization_id,
@@ -210,7 +210,7 @@ class PayrollTest extends TestCase
 
     public function test_admin_can_approve_payroll_with_payslips(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $period = PayrollPeriod::factory()->create([
             'organization_id' => $user->organization_id,
@@ -231,7 +231,7 @@ class PayrollTest extends TestCase
 
     public function test_cannot_approve_payroll_without_payslips(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $period = PayrollPeriod::factory()->create([
             'organization_id' => $user->organization_id,
@@ -299,7 +299,7 @@ class PayrollTest extends TestCase
 
     public function test_admin_can_view_all_payslips(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $period = PayrollPeriod::factory()->create(['organization_id' => $user->organization_id]);
 
@@ -318,7 +318,7 @@ class PayrollTest extends TestCase
 
     public function test_admin_can_assign_salary_to_employee(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $employee = $this->createUser($user->organization, 'employee');
 
@@ -343,7 +343,7 @@ class PayrollTest extends TestCase
 
     public function test_cannot_access_other_org_salary_structures(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $otherOrg = $this->createOrganization();
         $otherStructure = SalaryStructure::factory()->create([
@@ -357,7 +357,7 @@ class PayrollTest extends TestCase
 
     public function test_cannot_access_other_org_payslips(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $otherOrg = $this->createOrganization();
         $otherPeriod = PayrollPeriod::factory()->create(['organization_id' => $otherOrg->id]);

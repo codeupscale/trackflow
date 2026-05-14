@@ -362,7 +362,7 @@ export default function AppUsagePage() {
   const [endDate, setEndDate] = useState(today);
 
   const isManagerOrAdmin =
-    hasPermissionWithScope('reports.view', 'team') ||
+    hasPermissionWithScope('reports.view', 'project') ||
     hasPermission('reports.view_all');
 
   const myUsage = useMyAppUsage(myDate);

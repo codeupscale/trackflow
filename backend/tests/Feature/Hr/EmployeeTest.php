@@ -125,7 +125,7 @@ class EmployeeTest extends TestCase
     public function test_admin_sees_full_financial_fields(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         EmployeeProfile::factory()->create([
@@ -208,7 +208,7 @@ class EmployeeTest extends TestCase
     public function test_admin_can_update_all_fields(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $dept = Department::factory()->create([
@@ -246,7 +246,7 @@ class EmployeeTest extends TestCase
     public function test_employee_id_auto_generated_on_profile_view(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
         $this->actingAs($admin, 'sanctum');
 

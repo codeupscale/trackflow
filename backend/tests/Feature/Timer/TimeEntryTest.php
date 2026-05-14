@@ -116,14 +116,26 @@ class TimeEntryTest extends TestCase
     {
         $entry = TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
+            'user_id' => $this->owner->id,
+        ]);
+
+        $this->actingAs($this->owner, 'sanctum');
+        $response = $this->deleteJson("/api/v1/time-entries/{$entry->id}");
+        $response->assertOk();
+
+        $this->assertSoftDeleted('time_entries', ['id' => $entry->id]);
+    }
+
+    public function test_employee_cannot_delete_own_entry(): void
+    {
+        $entry = TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
             'user_id' => $this->employee->id,
         ]);
 
         $this->actingAs($this->employee, 'sanctum');
         $response = $this->deleteJson("/api/v1/time-entries/{$entry->id}");
-        $response->assertOk();
-
-        $this->assertSoftDeleted('time_entries', ['id' => $entry->id]);
+        $response->assertStatus(403);
     }
 
     public function test_unauthenticated_cannot_access(): void

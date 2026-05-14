@@ -406,7 +406,7 @@ class AttendanceServiceTest extends TestCase
         $org = $this->createOrganization();
         $user1 = $this->createUser($org, 'employee');
         $user2 = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         AttendanceRecord::factory()->create([
@@ -432,7 +432,7 @@ class AttendanceServiceTest extends TestCase
         $org = $this->createOrganization();
         $user1 = $this->createUser($org, 'employee');
         $user2 = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         AttendanceRecord::factory()->create([
@@ -662,7 +662,7 @@ class AttendanceServiceTest extends TestCase
     {
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         $attendance = AttendanceRecord::factory()->absent()->create([
@@ -697,7 +697,7 @@ class AttendanceServiceTest extends TestCase
     {
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         $attendance = AttendanceRecord::factory()->absent()->create([

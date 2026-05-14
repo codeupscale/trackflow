@@ -273,7 +273,7 @@ Route::prefix('v1')->group(function () {
             Route::get('attendance', [AttendanceController::class, 'index'])
                 ->middleware('permission:attendance.view');
             Route::get('attendance/team', [AttendanceController::class, 'teamIndex'])
-                ->middleware('permission:attendance.view,team');
+                ->middleware('permission:attendance.view,project');
             Route::get('attendance/summary', [AttendanceController::class, 'summary'])
                 ->middleware('permission:attendance.view');
             Route::post('attendance/generate', [AttendanceController::class, 'store'])
