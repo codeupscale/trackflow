@@ -173,7 +173,7 @@ class ReportController extends Controller
     // REPT-07: Payroll
     public function payroll(Request $request): JsonResponse
     {
-        if (!$request->user()->hasRole('owner', 'admin')) {
+        if (!$request->user()->hasRole('owner', 'org_manager', 'hr_manager', 'finance_manager')) {
             return response()->json(['message' => 'Unauthorized.'], 403);
         }
 

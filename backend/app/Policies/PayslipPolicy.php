@@ -42,7 +42,7 @@ class PayslipPolicy
 
         // Manager: view team
         if ($service->hasPermission($user, 'payroll.view_team')) {
-            return in_array($payslip->user_id, $service->getTeamUserIds($user));
+            return in_array($payslip->user_id, $service->getProjectUserIds($user));
         }
 
         return false;

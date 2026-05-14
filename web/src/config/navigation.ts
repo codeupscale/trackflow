@@ -34,7 +34,7 @@ export interface NavItem {
   icon: LucideIcon;
   requiredPermission: string;
   /** When set, the item is shown only if the user's scope for the permission
-   *  meets or exceeds this level (e.g. 'team' means scope >= team). */
+   *  meets or exceeds this level (e.g. 'project' means scope >= project). */
   requiredScope?: string;
 }
 
@@ -63,11 +63,12 @@ export const navigationConfig: NavGroup[] = [
   {
     label: 'HR',
     items: [
-      // Admin/Manager only — employees have departments.view but NOT departments.create
-      { name: 'Departments', href: '/hr/departments', icon: Building2, requiredPermission: 'departments.create' },
-      { name: 'Positions', href: '/hr/positions', icon: Briefcase, requiredPermission: 'positions.create' },
+      // Employees with departments.view can see the org tree (read-only at API level)
+      { name: 'Departments', href: '/hr/departments', icon: Building2, requiredPermission: 'departments.view' },
+      // Positions — Owner, Org Manager, HR Manager only (Finance Manager and Employee do not have positions.view)
+      { name: 'Positions', href: '/hr/positions', icon: Briefcase, requiredPermission: 'positions.view' },
       // Employees see own profile only (scoped at API level); managers+ see directory
-      { name: 'Employees', href: '/hr/employees', icon: Users, requiredPermission: 'employees.view_directory', requiredScope: 'team' },
+      { name: 'Employees', href: '/hr/employees', icon: Users, requiredPermission: 'employees.view_directory', requiredScope: 'project' },
       { name: 'My Leave', href: '/hr/leave', icon: CalendarDays, requiredPermission: 'leave.apply' },
       // Leave Approvals — managers/admins only
       { name: 'Leave Approvals', href: '/hr/leave/approvals', icon: ClipboardCheck, requiredPermission: 'leave.approve' },
@@ -76,7 +77,7 @@ export const navigationConfig: NavGroup[] = [
       { name: 'Leave Types', href: '/hr/leave/types', icon: ListChecks, requiredPermission: 'leave.manage_types' },
       { name: 'Attendance', href: '/hr/attendance', icon: CalendarCheck, requiredPermission: 'attendance.view' },
       // Team Attendance — managers/admins only
-      { name: 'Team Attendance', href: '/hr/attendance/team', icon: UsersRound, requiredPermission: 'attendance.view', requiredScope: 'team' },
+      { name: 'Team Attendance', href: '/hr/attendance/team', icon: UsersRound, requiredPermission: 'attendance.view', requiredScope: 'project' },
       // Regularizations approvals — managers/admins only
       { name: 'Regularizations', href: '/hr/attendance/regularizations', icon: FileEdit, requiredPermission: 'attendance.approve_regularizations' },
       // Shifts management — managers/admins only (employees have shifts.view but NOT shifts.create)
@@ -98,8 +99,8 @@ export const navigationConfig: NavGroup[] = [
   {
     label: 'Team',
     items: [
-      // Team page — managers/admins only
-      { name: 'Team', href: '/team', icon: Users, requiredPermission: 'team.view_members', requiredScope: 'team' },
+      // Team page — managers/admins only (team.view_members has_scope=false; employees have no such permission at all)
+      { name: 'Team', href: '/team', icon: Users, requiredPermission: 'team.view_members' },
       // Roles — admin only
       { name: 'Roles', href: '/settings/roles', icon: Shield, requiredPermission: 'roles.view' },
       // Settings — admin only

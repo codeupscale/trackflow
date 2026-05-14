@@ -69,7 +69,7 @@ class AttendanceTest extends TestCase
     public function test_manager_can_view_team_attendance(): void
     {
         $org = $this->createOrganization();
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         AttendanceRecord::factory()->present()->create([
@@ -149,7 +149,7 @@ class AttendanceTest extends TestCase
     public function test_admin_can_trigger_attendance_generation(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
         $this->actingAs($admin, 'sanctum');
 
@@ -249,7 +249,7 @@ class AttendanceTest extends TestCase
     public function test_manager_can_approve_regularization(): void
     {
         $org = $this->createOrganization();
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $record = AttendanceRecord::factory()->absent()->create([
@@ -332,7 +332,7 @@ class AttendanceTest extends TestCase
     public function test_admin_can_update_overtime_rules(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         // Ensure the rule exists first
@@ -370,7 +370,7 @@ class AttendanceTest extends TestCase
         $orgA = $this->createOrganization();
         $orgB = $this->createOrganization();
 
-        $adminA = $this->createUser($orgA, 'admin');
+        $adminA = $this->createUser($orgA, 'org_manager');
         $employeeB = $this->createUser($orgB, 'employee');
 
         // Create attendance record in org B
@@ -401,7 +401,7 @@ class AttendanceTest extends TestCase
     public function test_manager_can_reject_regularization_with_review_note(): void
     {
         $org = $this->createOrganization();
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $record = AttendanceRecord::factory()->absent()->create([
@@ -445,7 +445,7 @@ class AttendanceTest extends TestCase
     public function test_reject_regularization_requires_review_note(): void
     {
         $org = $this->createOrganization();
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $record = AttendanceRecord::factory()->absent()->create([
@@ -559,7 +559,7 @@ class AttendanceTest extends TestCase
     public function test_team_attendance_filters_by_user_id(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $emp1 = $this->createUser($org, 'employee');
         $emp2 = $this->createUser($org, 'employee');
 
@@ -587,7 +587,7 @@ class AttendanceTest extends TestCase
     public function test_team_attendance_filters_by_department_id(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $emp1 = $this->createUser($org, 'employee');
         $emp2 = $this->createUser($org, 'employee');
 
@@ -632,7 +632,7 @@ class AttendanceTest extends TestCase
     public function test_generate_attendance_present_for_4_or_more_hours(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
         $this->actingAs($admin, 'sanctum');
 
@@ -662,7 +662,7 @@ class AttendanceTest extends TestCase
     public function test_generate_attendance_half_day_for_2_to_4_hours(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
         $this->actingAs($admin, 'sanctum');
 
@@ -692,7 +692,7 @@ class AttendanceTest extends TestCase
     public function test_generate_attendance_absent_for_less_than_2_hours(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
         $this->actingAs($admin, 'sanctum');
 

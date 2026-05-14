@@ -53,7 +53,7 @@ class RoleController extends Controller
         $validated = $request->validate([
             'display_name' => 'required|string|max:100',
             'description' => 'nullable|string|max:255',
-            'permissions' => 'required|array',
+            'permissions' => 'present|array',
             'permissions.*' => 'string|in:own,team,organization,none',
         ]);
 
@@ -63,6 +63,9 @@ class RoleController extends Controller
 
         // Escalation prevention: validate requested permissions
         $this->validatePermissionEscalation($validated['permissions'], $userPermMap);
+
+        // Scope integrity: 'none' is only valid for non-scoped (has_scope=false) permissions
+        $this->validateScopeIntegrity($validated['permissions']);
 
         $role = DB::transaction(function () use ($validated, $user, $userPriority) {
             $name = Str::slug($validated['display_name'], '_');
@@ -116,7 +119,7 @@ class RoleController extends Controller
         }
 
         $rules = [
-            'permissions' => 'required|array',
+            'permissions' => 'present|array',
             'permissions.*' => 'string|in:own,team,organization,none',
         ];
 
@@ -133,6 +136,9 @@ class RoleController extends Controller
 
         // Escalation prevention: validate requested permissions
         $this->validatePermissionEscalation($validated['permissions'], $userPermMap);
+
+        // Scope integrity: 'none' is only valid for non-scoped (has_scope=false) permissions
+        $this->validateScopeIntegrity($validated['permissions']);
 
         DB::transaction(function () use ($roleModel, $validated) {
             // Update name/description for custom roles only
@@ -289,6 +295,30 @@ class RoleController extends Controller
     }
 
     /**
+     * Validate that no scoped permission (has_scope=true) is being assigned scope='none'.
+     * scope='none' is only valid as a placeholder for has_scope=false (boolean) permissions.
+     *
+     * @param array<string, string> $requestedPermissions  permission_key => scope
+     */
+    private function validateScopeIntegrity(array $requestedPermissions): void
+    {
+        $noneKeys = array_keys(array_filter($requestedPermissions, fn ($scope) => $scope === 'none'));
+
+        if (empty($noneKeys)) {
+            return;
+        }
+
+        // Check if any of those keys belong to a has_scope=true permission
+        $violations = Permission::whereIn('key', $noneKeys)
+            ->where('has_scope', true)
+            ->pluck('key');
+
+        if ($violations->isNotEmpty()) {
+            abort(422, 'Invalid scope: the following permissions require a specific scope (own/project/organization) and cannot use \'none\': ' . $violations->implode(', '));
+        }
+    }
+
+    /**
      * Validate that the requesting user has all permissions they are trying to grant.
      * Throws a 403 if escalation is detected.
      *
@@ -297,7 +327,7 @@ class RoleController extends Controller
      */
     private function validatePermissionEscalation(array $requestedPermissions, array $userPermMap): void
     {
-        $scopeHierarchy = ['own' => 1, 'team' => 2, 'organization' => 3, 'none' => 3];
+        $scopeHierarchy = ['own' => 1, 'project' => 2, 'organization' => 3, 'none' => 3];
 
         foreach ($requestedPermissions as $key => $scope) {
             if (! array_key_exists($key, $userPermMap)) {

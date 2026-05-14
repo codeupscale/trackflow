@@ -333,7 +333,7 @@ class PayrollService
         if ($this->permissionService->hasPermission($viewer, 'payroll.view_all')) {
             // Admin/accountant: see all
         } elseif ($this->permissionService->hasPermission($viewer, 'payroll.view_team')) {
-            $teamUserIds = $this->permissionService->getTeamUserIds($viewer);
+            $teamUserIds = $this->permissionService->getProjectUserIds($viewer);
             $teamUserIds[] = $viewer->id;
             $query->whereIn('user_id', $teamUserIds);
         } else {
@@ -379,7 +379,7 @@ class PayrollService
         }
 
         if ($this->permissionService->hasPermission($viewer, 'payroll.view_team')) {
-            $teamUserIds = $this->permissionService->getTeamUserIds($viewer);
+            $teamUserIds = $this->permissionService->getProjectUserIds($viewer);
             if (in_array($payslip->user_id, $teamUserIds)) {
                 return $payslip;
             }

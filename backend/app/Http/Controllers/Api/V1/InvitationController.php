@@ -6,8 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Jobs\SendEmailNotificationJob;
 use App\Models\Invitation;
 use App\Models\Organization;
+use App\Models\Role;
 use App\Models\User;
 use App\Services\BillingService;
+use App\Services\RbacBootstrapService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -69,11 +71,31 @@ class InvitationController extends Controller
     {
         $request->validate([
             'email' => ['required', 'email', 'max:255'],
-            'role' => ['required', 'in:admin,manager,employee'],
+            'role' => ['required', 'string'],
         ]);
 
         $user = $request->user();
         $email = Str::lower(trim((string) $request->email));
+
+        // Validate that the role exists in this organization
+        $roleModel = Role::where('organization_id', $user->organization_id)
+            ->where('name', $request->role)
+            ->first();
+
+        if (! $roleModel) {
+            return response()->json([
+                'message' => 'The selected role does not exist.',
+                'errors' => ['role' => ['The selected role does not exist in your organization.']],
+            ], 422);
+        }
+
+        // Only owners can invite other owners
+        if ($roleModel->name === 'owner' && $user->role !== 'owner') {
+            return response()->json([
+                'message' => 'Only owners can assign the owner role.',
+                'errors' => ['role' => ['Only owners can invite another owner.']],
+            ], 403);
+        }
 
         // Enforce seat limit at invite time to avoid sending invites that can't be accepted.
         $usage = $this->billingService->getUsage($user->organization);
@@ -216,6 +238,9 @@ class InvitationController extends Controller
 
             $invitation->update(['accepted_at' => now()]);
 
+            // Ensure system roles exist for this org and assign the user to their role
+            app(RbacBootstrapService::class)->bootstrapOrgAndAssignUser($user, $invitation->role);
+
             return $user;
         });
 
@@ -229,6 +254,7 @@ class InvitationController extends Controller
                 'email' => $user->email,
                 'role' => $user->role,
                 'organization_id' => $user->organization_id,
+                'permissions' => $user->getPermissionMap(),
             ],
             'access_token' => $token->plainTextToken,
             'refresh_token' => $refreshToken->plainTextToken,

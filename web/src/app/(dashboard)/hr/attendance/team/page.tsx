@@ -30,7 +30,7 @@ export default function TeamAttendancePage() {
   const router = useRouter();
   const { user } = useAuthStore();
   const { hasPermissionWithScope } = usePermissionStore();
-  const isManager = hasPermissionWithScope('attendance.view', 'team');
+  const isManager = hasPermissionWithScope('attendance.view', 'project');
 
   useEffect(() => {
     if (user && !isManager) {

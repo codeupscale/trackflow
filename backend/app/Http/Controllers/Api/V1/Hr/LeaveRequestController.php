@@ -25,7 +25,7 @@ class LeaveRequestController extends Controller
             ->with(['user:id,name,email,avatar_url', 'leaveType:id,name,code']);
 
         // Role-based scoping: explicit check for every role — no unsafe fallthrough
-        if ($user->hasRole('owner', 'admin')) {
+        if ($user->hasRole('owner', 'org_manager', 'hr_manager', 'finance_manager')) {
             // Owner/admin see all org requests (no additional filter needed)
         } elseif ($user->isManager()) {
             // Managers see their own + their team members' requests

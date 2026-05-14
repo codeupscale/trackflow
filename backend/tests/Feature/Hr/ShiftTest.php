@@ -13,7 +13,7 @@ class ShiftTest extends TestCase
 
     public function test_admin_can_list_shifts(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         Shift::factory()->count(3)->create([
             'organization_id' => $user->organization_id,
@@ -36,7 +36,7 @@ class ShiftTest extends TestCase
 
     public function test_admin_can_create_shift(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $response = $this->postJson('/api/v1/hr/shifts', [
             'name' => 'Morning Shift',
@@ -59,7 +59,7 @@ class ShiftTest extends TestCase
 
     public function test_create_shift_validates_required_fields(): void
     {
-        $this->actingAsUser('admin');
+        $this->actingAsUser('org_manager');
 
         $response = $this->postJson('/api/v1/hr/shifts', []);
 
@@ -69,7 +69,7 @@ class ShiftTest extends TestCase
 
     public function test_create_shift_validates_unique_name_per_org(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         Shift::factory()->create([
             'organization_id' => $user->organization_id,
@@ -89,7 +89,7 @@ class ShiftTest extends TestCase
 
         // Same name different org -> OK
         $otherOrg = $this->createOrganization();
-        $otherAdmin = $this->createUser($otherOrg, 'admin');
+        $otherAdmin = $this->createUser($otherOrg, 'org_manager');
         $this->actingAs($otherAdmin, 'sanctum');
 
         $response = $this->postJson('/api/v1/hr/shifts', [
@@ -106,7 +106,7 @@ class ShiftTest extends TestCase
 
     public function test_admin_can_update_shift(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $shift = Shift::factory()->create([
             'organization_id' => $user->organization_id,
@@ -127,7 +127,7 @@ class ShiftTest extends TestCase
 
     public function test_admin_can_delete_shift(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $shift = Shift::factory()->create([
             'organization_id' => $user->organization_id,
@@ -173,7 +173,7 @@ class ShiftTest extends TestCase
 
     public function test_get_shift_roster(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
         $employee = $this->createUser(
             \App\Models\Organization::find($user->organization_id),
             'employee',
@@ -217,8 +217,8 @@ class ShiftTest extends TestCase
         $orgA = $this->createOrganization();
         $orgB = $this->createOrganization();
 
-        $adminA = $this->createUser($orgA, 'admin');
-        $this->createUser($orgB, 'admin');
+        $adminA = $this->createUser($orgA, 'org_manager');
+        $this->createUser($orgB, 'org_manager');
 
         $shiftB = Shift::factory()->create([
             'organization_id' => $orgB->id,

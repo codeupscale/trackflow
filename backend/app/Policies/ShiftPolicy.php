@@ -28,7 +28,7 @@ class ShiftPolicy
      */
     public function create(User $user): bool
     {
-        return $user->hasRole('owner', 'admin');
+        return $user->hasRole('owner', 'org_manager', 'hr_manager');
     }
 
     /**
@@ -40,7 +40,7 @@ class ShiftPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin');
+        return $user->hasRole('owner', 'org_manager', 'hr_manager');
     }
 
     /**
@@ -52,7 +52,7 @@ class ShiftPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin');
+        return $user->hasRole('owner', 'org_manager', 'hr_manager');
     }
 
     /**
@@ -64,6 +64,6 @@ class ShiftPolicy
             return false;
         }
 
-        return $user->hasRole('owner', 'admin', 'manager');
+        return $user->hasRole('owner', 'org_manager', 'hr_manager');
     }
 }

@@ -85,7 +85,7 @@ const MODULE_LABELS: Record<string, string> = {
 const SCOPE_OPTIONS = [
   { value: '', label: 'Disabled' },
   { value: 'own', label: 'Own' },
-  { value: 'team', label: 'Team' },
+  { value: 'project', label: 'Project' },
   { value: 'organization', label: 'Organization' },
 ];
 
@@ -194,10 +194,15 @@ export default function RolesPage() {
 
   const handleSave = () => {
     if (!selectedRoleId) return;
-    // Convert '' to 'none' for the API (disabled permissions)
+    // Only include granted permissions in the payload.
+    // Revoked permissions (empty scope) are omitted — the backend detaches all
+    // permissions first, so any key absent from the payload is effectively revoked.
     const permissions: Record<string, string> = {};
+    console.log("editedPermissions",editedPermissions)
     for (const [key, scope] of Object.entries(editedPermissions)) {
-      permissions[key] = scope || 'none';
+      if (scope) {
+        permissions[key] = scope;
+      }
     }
     updateMutation.mutate(
       { id: selectedRoleId, permissions },
@@ -217,20 +222,15 @@ export default function RolesPage() {
 
   const handleCreate = () => {
     if (!createName.trim()) return;
-    // Create with all permissions disabled by default
-    const permissions: Record<string, string> = {};
-    if (permissionsList) {
-      for (const perms of Object.values(permissionsList)) {
-        for (const p of perms) {
-          permissions[p.key] = 'none';
-        }
-      }
-    }
+    // Create with all permissions disabled by default.
+    // has_scope=false permissions are represented by 'none' when granted;
+    // has_scope=true permissions must never use 'none' — omit them (no row = disabled).
+
     createMutation.mutate(
       {
         display_name: createName.trim(),
         description: createDescription.trim() || undefined,
-        permissions,
+        permissions: {},
       },
       {
         onSuccess: (data) => {
@@ -245,15 +245,16 @@ export default function RolesPage() {
 
   const handleDelete = () => {
     if (!deleteTarget) return;
+    // Clear selection immediately so useRole doesn't refetch a deleted resource
+    if (selectedRoleId === deleteTarget.id) {
+      setSelectedRoleId(null);
+      setEditedPermissions({});
+      setHasChanges(false);
+    }
     deleteMutation.mutate(deleteTarget.id, {
       onSuccess: () => {
         setDeleteOpen(false);
         setDeleteTarget(null);
-        if (selectedRoleId === deleteTarget.id) {
-          setSelectedRoleId(null);
-          setEditedPermissions({});
-          setHasChanges(false);
-        }
       },
     });
   };
@@ -721,7 +722,7 @@ function PermissionRow({
           <p className="text-xs text-muted-foreground">{permission.key}</p>
         </div>
         <Select
-          value={value || 'disabled'}
+          value={(value === 'none' ? '' : value) || 'disabled'}
           onValueChange={(v) => onChange(!v || v === 'disabled' ? '' : v)}
           disabled={disabled}
         >

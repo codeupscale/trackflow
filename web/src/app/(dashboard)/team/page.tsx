@@ -667,15 +667,26 @@ export default function TeamPage() {
                                             <SelectValue placeholder="Select role" />
                                         </SelectTrigger>
                                         <SelectContent>
-                                            <SelectItem value="employee">
-                                                Employee
-                                            </SelectItem>
-                                            <SelectItem value="manager">
-                                                Manager
-                                            </SelectItem>
-                                            <SelectItem value="admin">
-                                                Admin
-                                            </SelectItem>
+                                            {orgRoles
+                                                ? orgRoles
+                                                    .filter((r) =>
+                                                        r.priority < 100 ||
+                                                        (r.priority >= 100 && user?.role === 'owner')
+                                                    )
+                                                    .sort((a, b) => b.priority - a.priority)
+                                                    .map((r) => (
+                                                        <SelectItem key={r.id} value={r.name}>
+                                                            {r.display_name}
+                                                        </SelectItem>
+                                                    ))
+                                                : (
+                                                    <>
+                                                        <SelectItem value="employee">Employee</SelectItem>
+                                                        <SelectItem value="manager">Manager</SelectItem>
+                                                        <SelectItem value="admin">Admin</SelectItem>
+                                                    </>
+                                                )
+                                            }
                                         </SelectContent>
                                     </Select>
                                     {inviteErrors.role && (
@@ -1180,7 +1191,10 @@ export default function TeamPage() {
                                                                         </DropdownMenuLabel>
                                                                         <DropdownMenuSeparator />
                                                                         {orgRoles
-                                                                            .filter((r) => r.priority < 100)
+                                                                            .filter((r) =>
+                                                                                r.priority < 100 ||
+                                                                                (r.priority >= 100 && user?.role === 'owner')
+                                                                            )
                                                                             .sort((a, b) => b.priority - a.priority)
                                                                             .map((r) => (
                                                                                 <DropdownMenuItem
