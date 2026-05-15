@@ -369,6 +369,7 @@ SELECT
         WHEN 'team.invite'                        THEN 'none'
         WHEN 'settings.view_org'                  THEN 'none'
         WHEN 'audit_logs.view'                    THEN 'none'
+        WHEN 'roles.view'                         THEN 'none'
     END,
     NOW()
 FROM roles r
@@ -392,7 +393,8 @@ JOIN permissions p ON p.key IN (
     'shifts.manage_assignments', 'shifts.manage_swaps',
     'team.view_members', 'team.invite',
     'settings.view_org',
-    'audit_logs.view'
+    'audit_logs.view',
+    'roles.view'
 )
 WHERE r.name = 'hr_manager' AND r.is_system = true;
 

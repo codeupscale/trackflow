@@ -315,6 +315,9 @@ class PermissionSeeder extends Seeder
 
             // audit_logs
             'audit_logs.view' => 'none',
+
+            // roles — view only (needed for invite dialog role picker)
+            'roles.view' => 'none',
         ];
     }
 
