@@ -3,13 +3,11 @@
 namespace App\Jobs;
 
 use App\Models\Organization;
-use App\Models\Screenshot;
 use App\Models\ActivityLog;
 use App\Models\AuditLog;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
 
 class EnforceDataRetentionJob implements ShouldQueue
 {
@@ -40,29 +38,10 @@ class EnforceDataRetentionJob implements ShouldQueue
     private function enforceForOrganization(Organization $org): void
     {
         $config = $org->data_retention_config ?? [];
-        $screenshotDays = $config['screenshot_retention_days'] ?? 180;
         $activityDays = $config['activity_log_retention_days'] ?? 90;
 
-        // Delete old screenshots
-        $oldScreenshots = Screenshot::where('organization_id', $org->id)
-            ->where('captured_at', '<', now()->subDays($screenshotDays))
-            ->get();
-
-        foreach ($oldScreenshots as $screenshot) {
-            Storage::disk('s3')->delete("screenshots/{$screenshot->s3_key}");
-            if ($screenshot->thumbnail_key) {
-                Storage::disk('s3')->delete("screenshots/{$screenshot->thumbnail_key}");
-            }
-            $screenshot->delete();
-        }
-
-        if ($oldScreenshots->count() > 0) {
-            Log::info('data_retention.screenshots_pruned', [
-                'org_id' => $org->id,
-                'count' => $oldScreenshots->count(),
-                'retention_days' => $screenshotDays,
-            ]);
-        }
+        // Screenshot deletion is disabled system-wide — screenshots are retained
+        // indefinitely and are intentionally never pruned by data retention.
 
         // Delete old activity logs
         $activityDeleted = ActivityLog::where('organization_id', $org->id)

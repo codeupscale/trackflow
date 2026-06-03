@@ -45,10 +45,8 @@ class ScreenshotPolicy
 
     public function delete(User $user, Screenshot $screenshot): bool
     {
-        if ($user->organization_id !== $screenshot->organization_id) {
-            return false;
-        }
-
-        return app(PermissionService::class)->hasPermission($user, 'screenshots.delete');
+        // Screenshot deletion is disabled system-wide. No user — regardless of
+        // role or the screenshots.delete permission — may delete a screenshot.
+        return false;
     }
 }
