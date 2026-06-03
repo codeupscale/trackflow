@@ -199,8 +199,9 @@ class ScreenshotTest extends TestCase
         $this->assertGreaterThanOrEqual(3, count($screenshots));
     }
 
-    public function test_owner_can_delete_screenshot(): void
+    public function test_owner_cannot_delete_screenshot(): void
     {
+        // Screenshot deletion is disabled system-wide — not even an owner may delete.
         $screenshot = Screenshot::factory()->create([
             'organization_id' => $this->org->id,
             'user_id' => $this->employee->id,
@@ -210,8 +211,8 @@ class ScreenshotTest extends TestCase
 
         $response = $this->deleteJson("/api/v1/screenshots/{$screenshot->id}");
 
-        $response->assertOk();
-        $this->assertSoftDeleted('screenshots', ['id' => $screenshot->id]);
+        $response->assertStatus(403);
+        $this->assertNotSoftDeleted('screenshots', ['id' => $screenshot->id]);
     }
 
     public function test_employee_cannot_delete_own_screenshot(): void
