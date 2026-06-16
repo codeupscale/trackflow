@@ -18,6 +18,26 @@ const MAX_QUEUE_ENTRIES = 1000;
 // Exponential backoff schedule: 5s, 15s, 30s, 60s, 120s (cap)
 const BACKOFF_SCHEDULE = [5000, 15000, 30000, 60000, 120000];
 
+// Pace screenshot uploads during a backlog flush. The server throttles
+// screenshots/presign and screenshots/confirm at 60/min (1/sec) each, so firing
+// a backlog as fast as possible trips HTTP 429. ~1.1s between screenshots keeps
+// us safely under the limit (≈54/min) while still draining the backlog promptly.
+const SCREENSHOT_FLUSH_INTERVAL_MS = 1100;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// A transient error means "retry later", NOT "this item is bad". Rate limiting
+// (429), server errors (5xx), and network failures (no response) must NOT count
+// toward the drop-after-5-attempts limit — otherwise a rate-limited backlog
+// silently loses valid screenshots. Genuine client errors (other 4xx) are permanent.
+function isTransientError(e) {
+  const status = e && e.response && e.response.status;
+  if (status === 429) return true;            // rate limited — slow down & retry
+  if (status >= 500 && status < 600) return true; // server error — retry
+  if (!status) return true;                   // network/timeout (no HTTP response) — retry
+  return false;                               // permanent client error (400/404/422…)
+}
+
 class OfflineQueue {
   constructor() {
     this.db = null;
@@ -248,6 +268,8 @@ class OfflineQueue {
       const heartbeatIds = [];  // Track separately — only delete after successful bulk upload
       const deleteIds = [];
       const screenshotFilesToDelete = []; // Track files to delete after successful upload
+      let transientStop = false; // Set when we hit rate-limit/server/network — pause & retry later
+      let screenshotsUploadedThisFlush = 0; // For pacing between screenshot uploads
 
       for (const item of items) {
         let data;
@@ -294,9 +316,15 @@ class OfflineQueue {
             if (data.display_index != null)  metadata.display_index  = data.display_index;
             if (data.display_count != null)  metadata.display_count  = data.display_count;
 
+            // Pace uploads to stay under the server's 60/min presign+confirm
+            // throttle. Skip the delay before the first screenshot of the flush.
+            if (screenshotsUploadedThisFlush > 0) {
+              await sleep(SCREENSHOT_FLUSH_INTERVAL_MS);
+            }
             const { screenshot_id, upload_url, upload_headers } = await apiClient.presignScreenshot(metadata);
             await apiClient.uploadToS3(upload_url, buffer, upload_headers || {});
             await apiClient.confirmScreenshot(screenshot_id);
+            screenshotsUploadedThisFlush++;
             console.log(`[OfflineQueue] Screenshot uploaded successfully (entry=${data.time_entry_id}, captured=${data.captured_at})`);
             deleteIds.push(item.id);
             // Track file for deletion after successful upload
@@ -311,11 +339,22 @@ class OfflineQueue {
           // Timer sync is handled exclusively by timer_sessions table + reconcileTimerState().
           // This eliminates the dual-replay bug that caused duplicate time entries.
         } catch (e) {
+          // Transient errors (429 rate-limit, 5xx, network) must NOT count toward
+          // the drop limit — pause the flush and let the backoff scheduler retry the
+          // whole queue later. This prevents a rate-limited backlog from silently
+          // dropping valid screenshots (the 429 data-loss bug).
+          if (isTransientError(e)) {
+            const status = (e && e.response && e.response.status) || 'network';
+            console.warn(`[OfflineQueue] Transient error (${status}) on ${item.type} — pausing flush, will retry: ${e.message}`);
+            transientStop = true;
+            break;
+          }
+
           console.warn(`[OfflineQueue] Flush item failed (type=${item.type}, attempt=${item.attempts + 1}): ${e.message}`);
-          // Update attempt count
+          // Permanent error — count the attempt
           this._stmtIncAttempt.run(item.id);
 
-          // Remove items that have failed too many times
+          // Remove items that have failed too many times (permanent errors only)
           if (item.attempts >= 4) { // Will be 5 after the update above
             console.warn(`[OfflineQueue] Dropping item after 5 failed attempts (type=${item.type}, id=${item.id})`);
             deleteIds.push(item.id);
@@ -358,9 +397,17 @@ class OfflineQueue {
         }
       }
 
-      // Reset backoff on success
-      this._backoffStep = 0;
-      this.retryDelay = BACKOFF_SCHEDULE[0];
+      if (transientStop) {
+        // Hit rate-limit/server/network — advance backoff so the scheduled retry
+        // waits longer (5→15→30→60→120s), letting the rate-limit window clear.
+        this._backoffStep = Math.min(this._backoffStep + 1, BACKOFF_SCHEDULE.length - 1);
+        this.retryDelay = BACKOFF_SCHEDULE[this._backoffStep];
+        console.log(`[OfflineQueue] Flush paused (transient) — retrying in ${this.retryDelay / 1000}s`);
+      } else {
+        // Reset backoff on a clean flush
+        this._backoffStep = 0;
+        this.retryDelay = BACKOFF_SCHEDULE[0];
+      }
 
       // L7: Clean up orphaned screenshot files after successful flush
       this.cleanupOrphanedFiles();
