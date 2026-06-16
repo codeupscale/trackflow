@@ -54,8 +54,8 @@ class AuthController extends Controller
             return $user;
         });
 
-        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+        $token = $user->createToken('access_token', ['*'], now()->addMinutes(config('security.tokens.access_ttl')));
+        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addMinutes(config('security.tokens.refresh_ttl')));
 
         AuditService::log('auth.register', $user, [], $user);
 
@@ -225,8 +225,8 @@ class AuthController extends Controller
         // Issue new tokens for the target org's user row
         $targetUser->tokens()->where('expires_at', '<', now())->delete();
 
-        $token = $targetUser->createToken('access_token', ['*'], now()->addHours(24));
-        $refreshToken = $targetUser->createToken('refresh_token', ['refresh'], now()->addDays(30));
+        $token = $targetUser->createToken('access_token', ['*'], now()->addMinutes(config('security.tokens.access_ttl')));
+        $refreshToken = $targetUser->createToken('refresh_token', ['refresh'], now()->addMinutes(config('security.tokens.refresh_ttl')));
 
         $targetUser->update(['last_active_at' => now()]);
         AuditService::log('auth.switch_org', $targetUser, [
@@ -258,8 +258,8 @@ class AuthController extends Controller
         // Clean up expired tokens
         $user->tokens()->where('expires_at', '<', now())->delete();
 
-        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+        $token = $user->createToken('access_token', ['*'], now()->addMinutes(config('security.tokens.access_ttl')));
+        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addMinutes(config('security.tokens.refresh_ttl')));
 
         return response()->json([
             'access_token' => $token->plainTextToken,
@@ -573,8 +573,8 @@ class AuthController extends Controller
         // Revoke all tokens (web + desktop) and return fresh tokens so current session stays logged in.
         $user->tokens()->delete();
 
-        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+        $token = $user->createToken('access_token', ['*'], now()->addMinutes(config('security.tokens.access_ttl')));
+        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addMinutes(config('security.tokens.refresh_ttl')));
 
         AuditService::log('auth.password_changed', $user, [], $user);
 
@@ -648,8 +648,8 @@ class AuthController extends Controller
     {
         $user->tokens()->where('expires_at', '<', now())->delete();
 
-        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+        $token = $user->createToken('access_token', ['*'], now()->addMinutes(config('security.tokens.access_ttl')));
+        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addMinutes(config('security.tokens.refresh_ttl')));
 
         $user->update(['last_active_at' => now()]);
         AuditService::log($isNewUser ? 'auth.register' : 'auth.login', $user, ['method' => $method], $user);
