@@ -963,12 +963,18 @@ async function initializeApp() {
 
   // Wire idle detection events
   idleDetector.onIdleDetected((idleSeconds, idleStartedAt, actionId) => {
-    // Pause both screenshot and activity capture during idle.
-    // This prevents zero-event heartbeats from dragging down the activity score.
+    // Pause activity capture during idle (prevents zero-event heartbeats from
+    // dragging down the activity score). Screenshots are handled per-policy below.
+    const policy = config.keep_idle_time || 'prompt';
+
+    // Hubstaff behavior: NEVER capture screenshots while the user is idle.
+    // Screenshots stop entirely the moment idle is detected, for every policy.
+    // (If the idle period later becomes billable via Keep/Reassign, no shots are
+    // backfilled — idle time shows no screenshots, exactly like Hubstaff.)
     screenshotService?.stop();
+
     activityMonitor?.stop();
     stopTrayTimer();
-    const policy = config.keep_idle_time || 'prompt';
     if (policy === 'always') {
       idleDetector.resolveIdle(actionId);
       idleDetector.start();
@@ -3017,6 +3023,9 @@ async function handleIdleAction(action, actionId = null, idleDurationOverride = 
 
     switch (action) {
       case 'keep':
+        // Idle period kept as billable work on the SAME entry. No screenshots
+        // were captured during idle (Hubstaff behavior), so there is nothing to
+        // backfill — just resume live capture from here.
         // Resume activity monitor and screenshots — idle is over
         activityMonitor?.start();
         if (isTimerRunning && currentEntry) {
@@ -3064,6 +3073,10 @@ async function handleIdleAction(action, actionId = null, idleDurationOverride = 
 
             currentEntry = result.new_entry;
             _cachedStartedAtMs = new Date(currentEntry.started_at).getTime();
+
+            // No screenshots are captured during idle (Hubstaff behavior), so
+            // there is nothing to attach to the post-split entry on reassign and
+            // nothing to drop on discard.
 
           } catch (e) {
             // FIX D3: API failure — don't corrupt state, show error, don't start tray timer

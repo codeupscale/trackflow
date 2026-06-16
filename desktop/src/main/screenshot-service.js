@@ -475,7 +475,7 @@ class ScreenshotService {
         // The _applyBlur() method is kept below for potential future use.
 
         if (this.currentEntryId) {
-          await this.upload(buffer);
+          await this.upload(buffer, null);
           this._showNotification();
           this._consecutiveFailures = 0;
         }
@@ -914,7 +914,9 @@ class ScreenshotService {
   // Idempotency key (UUID v4) ensures a retry on step 1 returns the same
   // screenshot_id and upload_url instead of creating a duplicate DB row.
 
-  async upload(buffer, displayInfo = null) {
+  // Gather the per-shot metadata that upload() needs (active app/window/score).
+  // Extracted so both the live upload path and the idle-buffer path stay DRY.
+  async _gatherShotMetadata() {
     let appName = null;
     let windowTitle = null;
     try {
@@ -923,18 +925,35 @@ class ScreenshotService {
         windowTitle = await this.activityMonitor.getActiveWindowTitle();
       }
     } catch {}
+    const activityScore = this.activityMonitor
+      ? this.activityMonitor.getScoreForScreenshot()
+      : null;
+    return {
+      appName,
+      windowTitle,
+      activityScore,
+      capturedAt: new Date().toISOString(),
+      idempotencyKey: crypto.randomUUID(),
+    };
+  }
+
+  // upload() — uploads a captured buffer via presign → PUT → confirm, falling
+  // back to the offline queue on failure.
+  async upload(buffer, displayInfo = null, options = {}) {
+    const meta = options.meta || await this._gatherShotMetadata();
+    const appName = meta.appName;
+    const windowTitle = meta.windowTitle;
+    const activityScore = meta.activityScore;
+    const targetEntryId = options.entryId != null ? options.entryId : this.currentEntryId;
 
     const displayLabel = displayInfo
       ? ` [display ${displayInfo.display_index}/${displayInfo.display_count}]`
       : '';
-    const capturedAt = new Date().toISOString();
-    const idempotencyKey = crypto.randomUUID();
-    const activityScore = this.activityMonitor
-      ? this.activityMonitor.getScoreForScreenshot()
-      : null;
+    const capturedAt = meta.capturedAt;
+    const idempotencyKey = meta.idempotencyKey;
 
     const metadata = {
-      time_entry_id:   String(this.currentEntryId),
+      time_entry_id:   String(targetEntryId),
       captured_at:     capturedAt,
       file_size:       buffer.length,
       idempotency_key: idempotencyKey,
@@ -970,15 +989,17 @@ class ScreenshotService {
       }
     }
 
-    // All retries failed — queue for offline sync
-    this._queueForOffline(buffer, appName, windowTitle, displayInfo, capturedAt, idempotencyKey, activityScore);
+    // All retries failed — queue for offline sync. Pass the resolved target
+    // entry id so flushed idle shots queue against the correct entry (which may
+    // differ from the live currentEntryId after a reassign split).
+    this._queueForOffline(buffer, appName, windowTitle, displayInfo, capturedAt, idempotencyKey, activityScore, targetEntryId);
   }
 
-  _queueForOffline(buffer, appName, windowTitle, displayInfo, capturedAt, idempotencyKey, activityScore) {
+  _queueForOffline(buffer, appName, windowTitle, displayInfo, capturedAt, idempotencyKey, activityScore, entryId = null) {
     if (buffer.length < 1024 * 1024) {
       const data = {
         buffer:          buffer,
-        time_entry_id:   String(this.currentEntryId),
+        time_entry_id:   String(entryId != null ? entryId : this.currentEntryId),
         captured_at:     capturedAt || new Date().toISOString(),
         idempotency_key: idempotencyKey || crypto.randomUUID(),
       };
