@@ -28,6 +28,84 @@ class TimerService
     private const MAX_ENTRY_DURATION = 43200;
 
     /**
+     * How far in the past an offline-supplied timestamp may legitimately be.
+     * 24 hours. A timer started offline should reconcile well within a day;
+     * anything older is treated as a bad/corrupt clock and rejected.
+     */
+    private const MAX_PAST_SKEW = 86400;
+
+    /**
+     * How far in the future a client timestamp may be and still be accepted,
+     * to tolerate small client/server clock skew. 5 minutes.
+     */
+    private const MAX_FUTURE_SKEW = 300;
+
+    /**
+     * TTL (seconds) for the per-user timer mutex lock.
+     *
+     * The old 5s TTL could silently expire mid-transaction under load because the
+     * critical section includes an unbounded computeFinalActivityScore() query plus
+     * a DB transaction. A dropped mutex allows a concurrent start/stop to interleave
+     * and create duplicate/clashing sessions (BUG 3). 15s comfortably covers the
+     * bounded work while still self-healing if a worker dies holding the lock.
+     */
+    private const LOCK_TTL = 15;
+
+    /**
+     * Parse and validate a client-supplied timestamp against the allowed skew window.
+     *
+     * - Rejects timestamps more than MAX_FUTURE_SKEW in the future (bad/forward clock).
+     * - Rejects timestamps more than MAX_PAST_SKEW in the past (corrupt/backward clock).
+     * - Normalises near-future-but-within-skew values back to now() so stored data
+     *   never claims a future start.
+     *
+     * @throws \InvalidArgumentException on an out-of-window timestamp.
+     */
+    private function parseClientTimestamp(string $raw, string $field): Carbon
+    {
+        try {
+            $ts = Carbon::parse($raw);
+        } catch (\Throwable $e) {
+            throw new \InvalidArgumentException("{$field} is not a valid timestamp.");
+        }
+
+        $now = now();
+
+        if ($ts->gt($now->copy()->addSeconds(self::MAX_FUTURE_SKEW))) {
+            throw new \InvalidArgumentException("{$field} cannot be in the future.");
+        }
+
+        // Within forward-skew tolerance but still ahead of server "now": clamp to now.
+        if ($ts->gt($now)) {
+            $ts = $now->copy();
+        }
+
+        if ($ts->lt($now->copy()->subSeconds(self::MAX_PAST_SKEW))) {
+            throw new \InvalidArgumentException("{$field} is too far in the past.");
+        }
+
+        return $ts;
+    }
+
+    /**
+     * Compute a duration in seconds from a start/end pair with explicit chronology
+     * validation. Unlike the old abs()-based math, a reversed interval (end before
+     * start) is REJECTED rather than silently turned into a positive bogus duration.
+     *
+     * @throws \InvalidArgumentException when $endedAt is before $startedAt.
+     */
+    private function computeDuration(Carbon $startedAt, Carbon $endedAt): int
+    {
+        $seconds = $startedAt->diffInSeconds($endedAt, false);
+
+        if ($seconds < 0) {
+            throw new \InvalidArgumentException('ended_at must be on or after started_at.');
+        }
+
+        return min((int) $seconds, self::MAX_ENTRY_DURATION);
+    }
+
+    /**
      * Start a timer. Returns the created (or existing idempotent) TimeEntry.
      *
      * Use startWithMeta() when you need to know whether the entry was existing (idempotent hit).
@@ -48,13 +126,26 @@ class TimerService
         $redisKey = "timer:{$user->id}";
         $lockKey = "timer:lock:{$user->id}";
 
+        // Validate optional offline start timestamp up front (rejects bad clocks).
+        $overrideStartedAt = null;
+        if (! empty($data['started_at'])) {
+            $overrideStartedAt = $this->parseClientTimestamp($data['started_at'], 'started_at');
+        }
+
         // Idempotency check — BEFORE lock acquisition (read-only, safe without lock).
         // If the desktop/client sends the same idempotency_key for a start that already
-        // succeeded, return the existing open entry instead of creating a duplicate.
+        // succeeded, return the existing OPEN entry instead of creating a duplicate.
+        //
+        // Scoped to whereNull('ended_at'): a key that maps only to an already-CLOSED
+        // entry must NOT be returned as a live session — otherwise the desktop would
+        // tick elapsed time against a dead server entry (BUG 3). When the key's only
+        // match is closed, we fall through and start a fresh timer.
         if (! empty($data['idempotency_key'])) {
             $idempotent = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
                 ->where('organization_id', $user->organization_id)
                 ->where('idempotency_key', $data['idempotency_key'])
+                ->whereNull('ended_at')
+                ->whereNull('deleted_at')
                 ->first();
 
             if ($idempotent) {
@@ -72,7 +163,7 @@ class TimerService
         }
 
         // Atomically acquire lock to prevent race condition
-        if (!Redis::set($lockKey, 1, 'EX', 5, 'NX')) {
+        if (!Redis::set($lockKey, 1, 'EX', self::LOCK_TTL, 'NX')) {
             throw new \RuntimeException('Timer operation in progress');
         }
 
@@ -93,12 +184,11 @@ class TimerService
 
                     if ($existingEntry) {
                         $now = now();
-                        // Clock skew guard: ended_at must never be before started_at
+                        // Clock skew guard: ended_at must never be before started_at.
+                        // computeDuration() then validates chronology (rejects reversed
+                        // intervals) instead of abs()-masking them into a bogus positive.
                         $endedAt = $now->lt($existingEntry->started_at) ? $existingEntry->started_at->copy() : $now;
-                        $duration = min(
-                            (int) abs($existingEntry->started_at->diffInSeconds($endedAt)),
-                            self::MAX_ENTRY_DURATION
-                        );
+                        $duration = $this->computeDuration($existingEntry->started_at, $endedAt);
                         $finalScore = $this->computeFinalActivityScore($existingEntry->id);
 
                         $existingEntry->update([
@@ -129,10 +219,7 @@ class TimerService
                 if ($orphan) {
                     $now = now();
                     $endedAt = $now->lt($orphan->started_at) ? $orphan->started_at->copy() : $now;
-                    $duration = min(
-                        (int) abs($orphan->started_at->diffInSeconds($endedAt)),
-                        self::MAX_ENTRY_DURATION
-                    );
+                    $duration = $this->computeDuration($orphan->started_at, $endedAt);
                     $finalScore = $this->computeFinalActivityScore($orphan->id);
                     $orphan->update([
                         'ended_at'         => $endedAt,
@@ -143,29 +230,61 @@ class TimerService
                 }
             }
 
-            // Use DB transaction and set Redis BEFORE committing
-            $entry = DB::transaction(function () use ($user, $data, $redisKey) {
-                $entry = TimeEntry::create([
-                    'organization_id' => $user->organization_id,
-                    'user_id' => $user->id,
-                    'project_id' => $data['project_id'] ?? null,
-                    'task_id' => $data['task_id'] ?? null,
-                    'notes' => $data['notes'] ?? null,
-                    'started_at' => now(),
-                    'type' => 'tracked',
-                    'idempotency_key' => $data['idempotency_key'] ?? null,
-                ]);
+            // Resolve the start timestamp:
+            //   - honor a validated offline `started_at` (BUG 1: offline timers must keep
+            //     their real local start, not be stamped at reconcile time);
+            //   - otherwise fall back to server now().
+            $startedAt = $overrideStartedAt ?? now();
 
-                // Set Redis before committing to maintain consistency
-                Redis::setex($redisKey, 2592000, json_encode([
-                    'entry_id' => $entry->id,
-                    'started_at' => $entry->started_at->toISOString(),
-                    'project_id' => $entry->project_id,
-                    'task_id' => $entry->task_id,
-                ]));
+            // Guard the compound (organization_id, idempotency_key) unique index: if this
+            // key is already attached to a CLOSED entry (we only fell through because it
+            // was not open), persist null instead of colliding on te_org_idempotency_unique.
+            $idempotencyKey = $data['idempotency_key'] ?? null;
+            if ($idempotencyKey) {
+                $keyInUse = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                    ->where('organization_id', $user->organization_id)
+                    ->where('idempotency_key', $idempotencyKey)
+                    ->exists();
+                if ($keyInUse) {
+                    $idempotencyKey = null;
+                }
+            }
 
-                return $entry;
-            });
+            try {
+                // Use DB transaction and set Redis BEFORE committing
+                $entry = DB::transaction(function () use ($user, $data, $redisKey, $startedAt, $idempotencyKey) {
+                    $entry = TimeEntry::create([
+                        'organization_id' => $user->organization_id,
+                        'user_id' => $user->id,
+                        'project_id' => $data['project_id'] ?? null,
+                        'task_id' => $data['task_id'] ?? null,
+                        'notes' => $data['notes'] ?? null,
+                        'started_at' => $startedAt,
+                        'type' => 'tracked',
+                        'idempotency_key' => $idempotencyKey,
+                    ]);
+
+                    // Set Redis before committing to maintain consistency
+                    Redis::setex($redisKey, 2592000, json_encode([
+                        'entry_id' => $entry->id,
+                        'started_at' => $entry->started_at->toISOString(),
+                        'project_id' => $entry->project_id,
+                        'task_id' => $entry->task_id,
+                    ]));
+
+                    return $entry;
+                });
+            } catch (\Illuminate\Database\QueryException $e) {
+                // BUG 3: the partial unique index idx_one_active_timer_per_user enforces
+                // at most one open timer per user. A concurrent/duplicate start trips
+                // SQLSTATE 23505. Resolve gracefully by returning the entry that already
+                // holds the open slot — never let it escape as an uncaught HTTP 500.
+                $existingOpen = $this->resolveOpenTimerConflict($e, $user, $redisKey);
+                if ($existingOpen !== null) {
+                    return ['entry' => $existingOpen, 'is_existing' => true];
+                }
+                throw $e;
+            }
 
             TimerStarted::dispatch($entry);
 
@@ -176,12 +295,54 @@ class TimerService
     }
 
     /**
+     * Resolve a unique-constraint violation raised while opening a timer.
+     *
+     * Returns the user's existing open TimeEntry when the violation is the
+     * one-open-timer-per-user index (SQLSTATE 23505), so the caller can hand that
+     * back as a 200 idempotent hit. Returns null for any other QueryException so
+     * the caller rethrows.
+     */
+    private function resolveOpenTimerConflict(\Illuminate\Database\QueryException $e, $user, string $redisKey): ?TimeEntry
+    {
+        $sqlState = $e->errorInfo[0] ?? null;
+        $message = $e->getMessage();
+
+        $isUniqueViolation = $sqlState === '23505';
+        $isOpenTimerIndex = str_contains($message, 'idx_one_active_timer_per_user');
+
+        if (! $isUniqueViolation || ! $isOpenTimerIndex) {
+            return null;
+        }
+
+        $existingOpen = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+            ->where('user_id', $user->id)
+            ->where('organization_id', $user->organization_id)
+            ->whereNull('ended_at')
+            ->whereNull('deleted_at')
+            ->latest('started_at')
+            ->first();
+
+        if ($existingOpen) {
+            // Repair Redis so the live session is discoverable by status()/stop().
+            Redis::setex($redisKey, 2592000, json_encode([
+                'entry_id' => $existingOpen->id,
+                'started_at' => $existingOpen->started_at->toISOString(),
+                'project_id' => $existingOpen->project_id,
+                'task_id' => $existingOpen->task_id,
+            ]));
+        }
+
+        return $existingOpen;
+    }
+
+    /**
      * Stop the running timer. Returns the stopped TimeEntry.
      *
      * Use stopWithMeta() when you need to know whether the entry was already stopped.
      *
-     * @param array $data Optional: 'started_at' and 'ended_at' for offline sync.
-     *                    Both must be in the past. ended_at must be after started_at.
+     * @param array $data Optional: 'time_entry_id' to target a specific entry,
+     *                    'started_at'/'ended_at' for offline sync (validated against
+     *                    that entry + a skew window), 'idempotency_key' (informational).
      */
     public function stop(array $data = []): TimeEntry
     {
@@ -192,8 +353,12 @@ class TimerService
     /**
      * Stop the running timer. Returns ['entry' => TimeEntry, 'already_stopped' => bool].
      *
-     * @param array $data Optional: 'started_at' and 'ended_at' for offline sync.
-     *                    Both must be in the past. ended_at must be after started_at.
+     * Targeting (BUG 3): when 'time_entry_id' is supplied, the stop is bound to THAT
+     * entry — never "the latest open entry". This prevents an old/offline stop whose
+     * response was lost from being replayed against a freshly-started session and
+     * rewriting its timestamps.
+     *
+     * @param array $data Optional: 'time_entry_id', 'started_at', 'ended_at', 'idempotency_key'.
      */
     public function stopWithMeta(array $data = []): array
     {
@@ -201,146 +366,153 @@ class TimerService
         $redisKey = "timer:{$user->id}";
         $lockKey = "timer:lock:{$user->id}";
 
-        // Parse and validate optional offline timestamps (never trust future times)
+        $targetEntryId = $data['time_entry_id'] ?? null;
+
+        // Parse and validate optional offline timestamps against the skew window
+        // (rejects future + far-past clocks). Chronology vs the entry is checked later.
         $overrideEndedAt = null;
         $overrideStartedAt = null;
 
         if (! empty($data['ended_at'])) {
-            $overrideEndedAt = Carbon::parse($data['ended_at']);
-            if ($overrideEndedAt->isFuture()) {
-                throw new \InvalidArgumentException('ended_at cannot be in the future.');
-            }
+            $overrideEndedAt = $this->parseClientTimestamp($data['ended_at'], 'ended_at');
         }
         if (! empty($data['started_at'])) {
-            $overrideStartedAt = Carbon::parse($data['started_at']);
-            if ($overrideStartedAt->isFuture()) {
-                throw new \InvalidArgumentException('started_at cannot be in the future.');
-            }
+            $overrideStartedAt = $this->parseClientTimestamp($data['started_at'], 'started_at');
         }
-        if ($overrideStartedAt && $overrideEndedAt && $overrideEndedAt->lte($overrideStartedAt)) {
-            throw new \InvalidArgumentException('ended_at must be after started_at.');
+        if ($overrideStartedAt && $overrideEndedAt && $overrideEndedAt->lt($overrideStartedAt)) {
+            throw new \InvalidArgumentException('ended_at must be on or after started_at.');
         }
 
+        // ── Resolve which entry this stop targets ───────────────────────────────
+        // Priority:
+        //   1. An explicit time_entry_id (offline reconcile binds to a specific entry).
+        //   2. The entry_id recorded in Redis (the currently live session).
+        //   3. DB fallback: the single open entry (orphan recovery when Redis is gone).
         $timerData = Redis::get($redisKey);
-        if (!$timerData) {
-            // Redis key is missing — the DB is source of truth.
-            // Root cause: Redis::del() inside a DB transaction fires immediately even if
-            // the transaction rolls back (Redis is not transactional). This leaves the entry
-            // with ended_at=NULL but no Redis key, making it invisible to subsequent stops.
-            // Fix: always check for an open entry in the DB before declaring "already stopped".
-            $openEntry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+        $redisEntryId = null;
+        if ($timerData) {
+            $decoded = json_decode($timerData, true);
+            $redisEntryId = $decoded['entry_id'] ?? null;
+        }
+
+        if ($targetEntryId !== null) {
+            $entry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                ->where('id', $targetEntryId)
                 ->where('user_id', $user->id)
                 ->where('organization_id', $user->organization_id)
-                ->whereNull('ended_at')
-                ->whereNull('deleted_at')
-                ->latest('started_at')
                 ->first();
 
-            if ($openEntry) {
-                // Orphaned open entry — close it now using the requested timestamps if provided
-                $stopTime = $overrideEndedAt ?? now();
-                // Clock skew guard
-                if ($stopTime->lt($openEntry->started_at)) {
-                    $stopTime = $openEntry->started_at->copy();
+            if (! $entry) {
+                throw new \RuntimeException('Target time entry not found.');
+            }
+
+            // Idempotent replay: the targeted entry is already closed. Return it as-is,
+            // and only clear Redis if it actually points at this same entry — so we
+            // never wipe the key for a different, still-running session (BUG 3).
+            if ($entry->ended_at !== null) {
+                if ($redisEntryId === $entry->id) {
+                    Redis::del($redisKey);
                 }
-                $duration = min(
-                    (int) abs($stopTime->diffInSeconds($openEntry->started_at)),
-                    self::MAX_ENTRY_DURATION
-                );
-                $finalScore = $this->computeFinalActivityScore($openEntry->id);
-                $openEntry->update([
-                    'started_at' => $overrideStartedAt ?? $openEntry->started_at,
-                    'ended_at'   => $stopTime,
-                    'duration_seconds' => $duration,
-                    'activity_score'   => $finalScore ?? $openEntry->activity_score ?? 0,
-                ]);
-                TimerStopped::dispatch($openEntry->fresh());
-                return ['entry' => $openEntry->fresh(), 'already_stopped' => false];
+                return ['entry' => $entry, 'already_stopped' => true];
+            }
+        } else {
+            // No explicit target — fall back to Redis, then to the DB open entry.
+            $entry = null;
+            if ($redisEntryId !== null) {
+                $entry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                    ->where('id', $redisEntryId)
+                    ->where('user_id', $user->id)
+                    ->first();
+
+                if ($entry && $entry->ended_at !== null) {
+                    Redis::del($redisKey);
+                    return ['entry' => $entry, 'already_stopped' => true];
+                }
             }
 
-            // No open entry — check if the most recent entry is already stopped (idempotent stop).
-            $lastEntry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
-                ->where('user_id', $user->id)
-                ->whereNotNull('ended_at')
-                ->latest('ended_at')
-                ->first();
-
-            if ($lastEntry) {
-                return ['entry' => $lastEntry, 'already_stopped' => true];
+            if (! $entry) {
+                // Redis missing/stale — the DB is source of truth. Close the lone open entry.
+                $entry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                    ->where('user_id', $user->id)
+                    ->where('organization_id', $user->organization_id)
+                    ->whereNull('ended_at')
+                    ->whereNull('deleted_at')
+                    ->latest('started_at')
+                    ->first();
             }
 
-            throw new \RuntimeException('No timer is currently running.');
-        }
+            if (! $entry) {
+                // No open entry anywhere — idempotent stop if a recent closed entry exists.
+                $lastEntry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                    ->where('user_id', $user->id)
+                    ->whereNotNull('ended_at')
+                    ->latest('ended_at')
+                    ->first();
 
-        $timerData = json_decode($timerData, true);
+                if ($lastEntry) {
+                    return ['entry' => $lastEntry, 'already_stopped' => true];
+                }
 
-        // Check if the entry is already stopped (race condition / duplicate stop)
-        $checkEntry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
-            ->where('id', $timerData['entry_id'])
-            ->where('user_id', $user->id)
-            ->first();
-
-        if ($checkEntry && $checkEntry->ended_at !== null) {
-            // Already stopped — clean up stale Redis key and return gracefully
-            Redis::del($redisKey);
-            return ['entry' => $checkEntry, 'already_stopped' => true];
+                throw new \RuntimeException('No timer is currently running.');
+            }
         }
 
         // Atomically acquire lock to prevent race condition (same pattern as start())
-        if (!Redis::set($lockKey, 1, 'EX', 5, 'NX')) {
+        if (!Redis::set($lockKey, 1, 'EX', self::LOCK_TTL, 'NX')) {
             throw new \RuntimeException('Timer operation in progress');
         }
 
         try {
-            $entry = DB::transaction(function () use ($user, $timerData, $redisKey, $overrideStartedAt, $overrideEndedAt) {
+            $entryId = $entry->id;
+            $stopped = DB::transaction(function () use ($user, $entryId, $redisEntryId, $redisKey, $overrideStartedAt, $overrideEndedAt) {
                 $entry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
-                    ->where('id', $timerData['entry_id'])
+                    ->where('id', $entryId)
                     ->where('user_id', $user->id)
+                    ->lockForUpdate()
                     ->firstOrFail();
 
-                // Double-check: if entry was stopped between our check and lock acquisition
+                // Double-check: entry stopped between resolution and lock acquisition.
                 if ($entry->ended_at !== null) {
-                    Redis::del($redisKey);
-                    return $entry;
+                    if ($redisEntryId === $entry->id) {
+                        Redis::del($redisKey);
+                    }
+                    return ['entry' => $entry->fresh(), 'already_stopped' => true];
                 }
 
-                // Apply offline overrides if provided
-                if ($overrideStartedAt) {
-                    $entry->started_at = $overrideStartedAt;
-                }
+                // Resolve final start: honor a validated offline override, else keep stored.
+                $startedAt = $overrideStartedAt ? $overrideStartedAt->copy() : $entry->started_at->copy();
+                $stopTime = $overrideEndedAt ? $overrideEndedAt->copy() : now();
 
-                $stopTime = $overrideEndedAt ?? now();
-                $duration = min(
-                    (int) abs($stopTime->diffInSeconds($entry->started_at)),
-                    self::MAX_ENTRY_DURATION
-                );
+                // Chronology is validated explicitly (rejects reversed intervals) rather
+                // than abs()-masked into a positive bogus duration (BUG 1).
+                $duration = $this->computeDuration($startedAt, $stopTime);
 
                 // Finalize activity_score from actual ActivityLog records (ground truth).
-                // This replaces the running EMA with a proper weighted calculation.
                 $finalScore = $this->computeFinalActivityScore($entry->id);
 
                 $entry->update([
-                    'started_at' => $entry->started_at, // Persist override if applied
+                    'started_at' => $startedAt,
                     'ended_at' => $stopTime,
                     'duration_seconds' => $duration,
                     'activity_score' => $finalScore ?? $entry->activity_score ?? 0,
                 ]);
 
-                return $entry->fresh();
-                // NOTE: Redis::del($redisKey) intentionally moved OUTSIDE this transaction.
-                // Redis is not transactional — deleting the key inside the callback fires
-                // immediately even if the DB transaction rolls back, leaving an orphaned
-                // open entry with no Redis key. The key is deleted after commit below.
+                return ['entry' => $entry->fresh(), 'already_stopped' => false];
+                // NOTE: Redis::del($redisKey) intentionally OUTSIDE this transaction —
+                // Redis is not transactional; deleting inside fires even on rollback.
             });
 
-            // Delete Redis key only after the DB transaction has committed successfully.
-            // If this delete fails (Redis down), the next stop will see ended_at != null
-            // and clean up the stale key gracefully — no data loss.
-            Redis::del($redisKey);
+            // Only clear Redis if it pointed at the entry we just closed — never wipe the
+            // key for a different live session (BUG 3, lost-response stop replay).
+            if ($redisEntryId === $stopped['entry']->id) {
+                Redis::del($redisKey);
+            }
 
-            TimerStopped::dispatch($entry);
+            if (! $stopped['already_stopped']) {
+                TimerStopped::dispatch($stopped['entry']);
+            }
 
-            return ['entry' => $entry, 'already_stopped' => false];
+            return $stopped;
         } finally {
             Redis::del($lockKey);
         }
@@ -377,26 +549,47 @@ class TimerService
             }
         }
 
+        // Optional idempotency key for the newly-started entry (lets the desktop
+        // safely retry a switch whose response was lost on weak network).
+        $idempotencyKey = $data['idempotency_key'] ?? null;
+        if ($idempotencyKey) {
+            // If the key already maps to an OPEN entry, the switch already happened —
+            // return it idempotently instead of creating a clashing second open entry.
+            $existing = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                ->where('organization_id', $user->organization_id)
+                ->where('idempotency_key', $idempotencyKey)
+                ->first();
+            if ($existing) {
+                if ($existing->ended_at === null) {
+                    $stoppedPrev = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                        ->where('id', $timerInfo['entry_id'])
+                        ->where('user_id', $user->id)
+                        ->first();
+                    return ['stopped' => $stoppedPrev, 'started' => $existing];
+                }
+                // Key already consumed by a closed entry — don't collide on the unique index.
+                $idempotencyKey = null;
+            }
+        }
+
         // Atomically acquire lock
-        if (!Redis::set($lockKey, 1, 'EX', 5, 'NX')) {
+        if (!Redis::set($lockKey, 1, 'EX', self::LOCK_TTL, 'NX')) {
             throw new \RuntimeException('Timer operation in progress');
         }
 
         try {
-            $result = DB::transaction(function () use ($user, $data, $timerInfo, $redisKey) {
+            $result = DB::transaction(function () use ($user, $data, $timerInfo, $redisKey, $idempotencyKey) {
                 // 1. Stop current entry
                 $currentEntry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
                     ->where('id', $timerInfo['entry_id'])
                     ->where('user_id', $user->id)
+                    ->lockForUpdate()
                     ->firstOrFail();
 
                 $now = now();
-                // Clock skew guard: ended_at must never be before started_at
+                // Clock skew guard: ended_at must never be before started_at.
                 $endedAt = $now->lt($currentEntry->started_at) ? $currentEntry->started_at->copy() : $now;
-                $duration = min(
-                    (int) abs($currentEntry->started_at->diffInSeconds($endedAt)),
-                    self::MAX_ENTRY_DURATION
-                );
+                $duration = $this->computeDuration($currentEntry->started_at, $endedAt);
                 $finalScore = $this->computeFinalActivityScore($currentEntry->id);
 
                 $currentEntry->update([
@@ -405,14 +598,16 @@ class TimerService
                     'activity_score' => $finalScore ?? $currentEntry->activity_score ?? 0,
                 ]);
 
-                // 2. Start new entry on target project
+                // 2. Start new entry on target project (begins exactly where the old one ended,
+                //    so there is no overlapping/double-counted interval).
                 $newEntry = TimeEntry::create([
                     'organization_id' => $user->organization_id,
                     'user_id' => $user->id,
                     'project_id' => $data['project_id'] ?? null,
                     'task_id' => $data['task_id'] ?? null,
-                    'started_at' => $now,
+                    'started_at' => $endedAt,
                     'type' => 'tracked',
+                    'idempotency_key' => $idempotencyKey,
                 ]);
 
                 // 3. Update Redis to point to new entry
@@ -430,6 +625,18 @@ class TimerService
             TimerStarted::dispatch($result['started']);
 
             return $result;
+        } catch (\Illuminate\Database\QueryException $e) {
+            // BUG 3: a concurrent start could already hold the one-open-timer slot. Resolve
+            // the new-entry conflict gracefully rather than escaping as an HTTP 500.
+            $existingOpen = $this->resolveOpenTimerConflict($e, $user, $redisKey);
+            if ($existingOpen !== null) {
+                $stoppedPrev = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                    ->where('id', $timerInfo['entry_id'])
+                    ->where('user_id', $user->id)
+                    ->first();
+                return ['stopped' => $stoppedPrev, 'started' => $existingOpen];
+            }
+            throw $e;
         } finally {
             Redis::del($lockKey);
         }
@@ -499,8 +706,13 @@ class TimerService
             ];
         }
 
+        // Live elapsed for the OPEN running entry only. Use signed diff and floor at 0:
+        // if started_at is (impossibly) in the future, do not let abs() invent positive
+        // elapsed that would make the displayed timer jump (BUG 2). Clamp to MAX so a
+        // corrupt started_at can't blow up today_total either.
         $now = Carbon::now();
-        $currentElapsed = (int) abs($now->diffInSeconds($entry->started_at));
+        $currentElapsed = max(0, (int) $entry->started_at->diffInSeconds($now, false));
+        $currentElapsed = min($currentElapsed, self::MAX_ENTRY_DURATION);
         $entryProjectId = $entry->project_id !== null ? (string) $entry->project_id : null;
         $requestedProjectId = $projectId !== null && $projectId !== '' ? (string) $projectId : null;
 
@@ -573,7 +785,9 @@ class TimerService
             $data = json_decode($timerData, true);
             $entry = TimeEntry::whereNull('ended_at')->find($data['entry_id'] ?? null);
             if ($entry && ($projectId === null || $projectId === '' || (string) $entry->project_id === (string) $projectId)) {
-                $total += (int) abs(now()->diffInSeconds($entry->started_at));
+                // Signed + floored elapsed (no abs() masking of a future started_at), clamped.
+                $elapsed = max(0, (int) $entry->started_at->diffInSeconds(now(), false));
+                $total += min($elapsed, self::MAX_ENTRY_DURATION);
             }
         }
 
@@ -597,7 +811,7 @@ class TimerService
         $lockKey = "timer:lock:{$user->id}";
 
         // Atomically acquire lock to prevent race condition (same pattern as start())
-        if (!Redis::set($lockKey, 1, 'EX', 5, 'NX')) {
+        if (!Redis::set($lockKey, 1, 'EX', self::LOCK_TTL, 'NX')) {
             throw new \RuntimeException('Timer operation in progress');
         }
 
@@ -653,11 +867,11 @@ class TimerService
                 $idleStartedAt = $currentEntry->started_at->copy();
             }
 
-            // FIX B5: Compute duration_seconds server-side from timestamps
-            $computedIdleSeconds = min(
-                (int) abs($idleEndedAt->diffInSeconds($idleStartedAt)),
-                self::MAX_ENTRY_DURATION
-            );
+            // FIX B5: Compute duration_seconds server-side from timestamps.
+            // Chronology is validated (idle_started_at <= idle_ended_at) rather than
+            // abs()-masked; the controller already guarantees idle_ended_at > idle_started_at,
+            // and idle_started_at was clamped to the entry start above.
+            $computedIdleSeconds = $this->computeDuration($idleStartedAt, $idleEndedAt);
 
             $result = DB::transaction(function () use (
             $user,
@@ -668,10 +882,11 @@ class TimerService
             $action,
             $reassignProjectId
         ) {
-            // 1. Close current entry at idle start (shorten it)
+            // 1. Close current entry at idle start (shorten it). idle_started_at was
+            //    clamped to be >= the entry start, so this interval is never reversed.
             $currentEntry->update([
                 'ended_at' => $idleStartedAt,
-                'duration_seconds' => (int) abs($idleStartedAt->diffInSeconds($currentEntry->started_at)),
+                'duration_seconds' => $this->computeDuration($currentEntry->started_at, $idleStartedAt),
             ]);
 
             // 2. Idle entry for audit (always created on discard/reassign)
