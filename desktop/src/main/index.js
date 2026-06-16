@@ -511,6 +511,28 @@ let _cachedStartedAtMs = null;
 let _clockOffsetMs = 0;
 // Timer state version — incremented on key transitions to detect stale state (FIX D7)
 let _timerStateVersion = 0;
+// BUG 3 FIX: Mutex to prevent concurrent stopTimer calls (user / auto-stop / idle / sync).
+let _stopTimerInProgress = false;
+// BUG 3 FIX: Shared guard so reconcileTimerState() and the startTimerSync loop can never
+// mutate timer state (currentEntry, _cachedStartedAtMs, isTimerRunning) concurrently.
+let _timerStateMutationInProgress = false;
+
+/**
+ * BUG 2 FIX: Adopt a server `started_at` into the display anchor ONLY when it does
+ * not move the anchor LATER than the local source of truth. The local SQLite
+ * `started_at` is immutable truth; the server must never push the visible start
+ * forward (which causes the timer to jump backward). We accept a server start
+ * only when there is no local cached start yet, or the server start is
+ * earlier-or-equal (never lose time, never jump).
+ */
+function adoptServerStartedAt(serverStartedAtIso) {
+  const serverMs = serverStartedAtIso ? new Date(serverStartedAtIso).getTime() : null;
+  if (serverMs == null || Number.isNaN(serverMs)) return;
+  if (_cachedStartedAtMs == null || serverMs <= _cachedStartedAtMs) {
+    _cachedStartedAtMs = serverMs;
+  }
+  // else: server start is LATER than local truth — keep local anchor (immutable).
+}
 // NOTE: _suspendedAt is declared inside initializeApp() as a closure variable
 // co-located with the powerMonitor handlers that use it. Do not re-declare here.
 
@@ -686,18 +708,32 @@ app.on('before-quit', async (e) => {
   if (isTimerRunning && apiClient) {
     e.preventDefault();
     isQuitting = true;
-    // LOCAL-FIRST: Record stop locally before attempting server stop
+    console.log('[Quit] Timer running — recording local stop, then exiting');
+    // HARD GUARANTEE: always exit within 3s no matter what hangs (slow server
+    // stop, or an unreachable PostHog flush). Without this the first Quit could
+    // appear to do nothing and the user had to click Quit twice.
+    const forceExit = setTimeout(() => {
+      console.warn('[Quit] Force-exit fallback fired (cleanup exceeded 3s)');
+      app.exit(0);
+    }, 3000);
+    forceExit.unref?.();
+    // LOCAL-FIRST: record the stop locally (synchronous, instant). The timer is
+    // stopped regardless of whether the server/posthog calls below succeed —
+    // reconcileTimerState() on next launch syncs if the server stop didn't land.
     const localId = currentEntry?._localId;
     if (localId) {
       saveLocalTimerStop(localId, new Date().toISOString(), 0);
     }
     try {
+      // BUG 3 FIX: target the specific server entry so we never close a newer one.
       const stopPayload = currentEntry?._localId
         ? { started_at: currentEntry?.started_at, ended_at: new Date().toISOString() }
         : {};
+      if (currentEntry?.id && !String(currentEntry.id).startsWith('local-')) stopPayload.time_entry_id = currentEntry.id;
+      if (currentEntry?.idempotency_key) stopPayload.idempotency_key = currentEntry.idempotency_key;
       await Promise.race([
         apiClient.stopTimer(stopPayload),
-        new Promise((resolve) => setTimeout(resolve, 3000)),
+        new Promise((resolve) => setTimeout(resolve, 2000)),
       ]);
       if (localId) markLocalTimerStopSynced(localId);
     } catch {}
@@ -706,12 +742,22 @@ app.on('before-quit', async (e) => {
     activityMonitor?.stop();
     screenshotService?.stop();
     idleDetector?.stop();
-    await posthog.shutdown();
+    // Bound the PostHog flush — it was unbounded and could hang the quit forever.
+    await Promise.race([
+      posthog.shutdown(),
+      new Promise((resolve) => setTimeout(resolve, 800)),
+    ]);
     cleanupOnExit();
+    clearTimeout(forceExit);
+    console.log('[Quit] Clean exit');
     app.exit(0);
   } else {
     idleDetector?.stop();
-    await posthog.shutdown();
+    // Bound the PostHog flush so a no-timer quit can't hang either.
+    await Promise.race([
+      posthog.shutdown(),
+      new Promise((resolve) => setTimeout(resolve, 800)),
+    ]);
     cleanupOnExit();
   }
 });
@@ -943,8 +989,15 @@ async function initializeApp() {
       dismissIdleAlert();
       return;
     }
-    // Update tray to reflect idle state
-    setTrayText(`Idle (${Math.floor(idleSeconds / 60)}m)`);
+    // Tray during idle: show the TRACKED TIME frozen at the moment idle began
+    // (e.g. "⏸ 02:26:40"), NOT "Idle (5m)" — the old text showed the idle
+    // *threshold*, which is meaningless to the user. The idle period is not
+    // counted yet (pending keep/discard), so we freeze at the idle-start elapsed:
+    // current elapsed minus how long we've been idle. The ⏸ marks it as paused.
+    const frozenSeconds = _cachedStartedAtMs
+      ? todayTotalCurrentProject + Math.max(0, Math.floor((Date.now() - _cachedStartedAtMs) / 1000) - idleSeconds)
+      : todayTotalCurrentProject;
+    setTrayText(`⏸ ${formatTimeShort(frozenSeconds)}`);
     showIdleAlert(idleSeconds, idleStartedAt, actionId);
   });
 
@@ -1048,6 +1101,17 @@ async function initializeApp() {
     }
   }
 
+  // BUG 3 FIX (#7): Reconcile local unsynced sessions BEFORE adopting server
+  // status. A local offline session that never synced (start and/or stop) must
+  // be flushed to the server first — otherwise it sits and collides later when
+  // a new session opens. reconcileTimerState() binds stops to specific entry ids
+  // and sends real local started_at, so this is safe and lossless.
+  try {
+    await reconcileTimerState();
+  } catch (e) {
+    console.warn('[Startup] reconcileTimerState failed:', e.message);
+  }
+
   // Check timer status on server
   try {
     const status = await apiClient.getTimerStatus();
@@ -1057,7 +1121,16 @@ async function initializeApp() {
       todayTotalGlobal = Math.max(0, globalTotal - elapsed);
       isTimerRunning = true;
       currentEntry = status.entry;
-      _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+      // BUG 2 FIX: if a local session is still the source of truth, keep its
+      // started_at as the immutable anchor; only adopt the server start when it
+      // is earlier-or-equal (never push the displayed start forward).
+      const localActive = getActiveLocalTimer();
+      if (localActive && !localActive.ended_at && localActive.started_at) {
+        _cachedStartedAtMs = new Date(localActive.started_at).getTime();
+        adoptServerStartedAt(currentEntry?.started_at);
+      } else {
+        _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+      }
       // BUG-1 FIX: Use project_today_total from the same atomic response to avoid race conditions
       const projectTotal = status.project_today_total ?? globalTotal;
       todayTotalCurrentProject = Math.max(0, projectTotal - elapsed);
@@ -1225,7 +1298,16 @@ async function initializeApp() {
         if (status.running && !isTimerRunning) {
           isTimerRunning = true;
           currentEntry = status.entry;
-          _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+          // BUG 2 FIX: keep a still-running local session's start as the immutable
+          // anchor; only adopt the server start when earlier-or-equal so the
+          // displayed timer never jumps forward on focus/unlock.
+          const localActive = getActiveLocalTimer();
+          if (localActive && !localActive.ended_at && localActive.started_at) {
+            _cachedStartedAtMs = new Date(localActive.started_at).getTime();
+            adoptServerStartedAt(currentEntry?.started_at);
+          } else {
+            _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+          }
           activityMonitor?.start();
           screenshotService?.start(currentEntry.id);
           idleDetector?.start();
@@ -1451,6 +1533,11 @@ function _applyAlwaysOnTop(win, pinned) {
         _pinKeepalive = null;
         return;
       }
+      // BUG FIX: do NOT re-assert on a hidden window. moveTop() raises (and
+      // effectively re-shows) the window, so when the user clicks the close/hide
+      // button this keepalive was bringing the popup right back every 300ms
+      // ("I click close but it keeps opening"). Only maintain on-top while visible.
+      if (!win.isVisible()) return;
       win.setAlwaysOnTop(true, 'floating', 1);
       win.moveTop();
     }, 300);
@@ -1470,12 +1557,25 @@ function _calcPopupPosition(trayBounds, windowWidth, windowHeight) {
     const primary = screen.getPrimaryDisplay();
     const workArea = primary.workArea;
 
-    // Detect top vs bottom taskbar from tray position
-    const trayCenter = trayBounds.y + trayBounds.height / 2;
-    // Use the display nearest the tray to determine screen center for top/bottom test
-    const trayDisplay = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
-    const screenCenter = trayDisplay.workArea.y + trayDisplay.workArea.height / 2;
-    const trayIsAtTop = trayCenter < screenCenter;
+    // Detect top vs bottom taskbar.
+    // macOS: the menu bar (and tray) is ALWAYS at the top — anchor top-right
+    // unconditionally. Relying on tray.getBounds() here is fragile: on first run
+    // the bounds can be {0,0,0,0} before the icon has rendered, and on multi-
+    // monitor setups getDisplayNearestPoint({0,0}) can resolve the wrong display,
+    // which flipped the test and opened the popup at the BOTTOM-right.
+    // Windows/Linux: the taskbar can be top or bottom, so detect from tray bounds
+    // when available; if bounds aren't ready, default to bottom (typical taskbar).
+    let trayIsAtTop;
+    if (process.platform === 'darwin') {
+      trayIsAtTop = true;
+    } else if (trayBounds.height > 0) {
+      const trayCenter = trayBounds.y + trayBounds.height / 2;
+      const trayDisplay = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y });
+      const screenCenter = trayDisplay.workArea.y + trayDisplay.workArea.height / 2;
+      trayIsAtTop = trayCenter < screenCenter;
+    } else {
+      trayIsAtTop = false;
+    }
 
     // Right-align on primary display (mirrors macOS Menu Bar convention)
     const x = workArea.x + workArea.width - windowWidth - 8;
@@ -1813,9 +1913,12 @@ function setupIPC() {
     // Best-effort: stop the timer quickly before quitting (max 3s)
     if (isTimerRunning && apiClient) {
       try {
+        // BUG 3 FIX: target the specific server entry so we never close a newer one.
         const stopPayload = currentEntry?._localId
           ? { started_at: currentEntry?.started_at, ended_at: new Date().toISOString() }
           : {};
+        if (currentEntry?.id && !String(currentEntry.id).startsWith('local-')) stopPayload.time_entry_id = currentEntry.id;
+        if (currentEntry?.idempotency_key) stopPayload.idempotency_key = currentEntry.idempotency_key;
         await Promise.race([
           apiClient.stopTimer(stopPayload),
           new Promise((resolve) => setTimeout(resolve, 3000)),
@@ -2109,10 +2212,13 @@ async function startTimer(projectId = null) {
 
     // Try to sync with server (non-blocking for the user)
     try {
-      const result = await apiClient.startTimer(projectId, idempotencyKey);
-      // Server confirmed — update local state with server entry
+      // BUG 1 FIX: send the REAL local started_at so the server records the true
+      // start (not now()). Critical for offline starts that sync minutes/hours later.
+      const result = await apiClient.startTimer(projectId, idempotencyKey, localStartedAt);
+      // Server confirmed — update local state with server entry, but keep the
+      // local started_at as the display anchor (BUG 2: never jump the start forward).
       currentEntry = { ...result.entry, _localId: localId, idempotency_key: idempotencyKey };
-      _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+      adoptServerStartedAt(currentEntry?.started_at);
       todayTotalCurrentProject = result.today_total ?? 0;
       markLocalTimerStartSynced(localId, result.entry.id);
       posthog.capture(currentEntry?.user_id || 'unknown', 'timer_started', { project_id: projectId });
@@ -2133,9 +2239,10 @@ async function startTimer(projectId = null) {
         } catch {}
 
         try {
-          const retryResult = await apiClient.startTimer(projectId, idempotencyKey);
+          // BUG 1 FIX: preserve the real local start on the retry too
+          const retryResult = await apiClient.startTimer(projectId, idempotencyKey, localStartedAt);
           currentEntry = { ...retryResult.entry, _localId: localId, idempotency_key: idempotencyKey };
-          _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+          adoptServerStartedAt(currentEntry?.started_at);
           isTimerRunning = true;
           todayTotalCurrentProject = retryResult.today_total ?? 0;
           markLocalTimerStartSynced(localId, retryResult.entry.id);
@@ -2165,6 +2272,13 @@ async function startTimer(projectId = null) {
 }
 
 async function stopTimer() {
+  // BUG 3 FIX: Mutex symmetric to _startTimerInProgress. Concurrent stops
+  // (user click, auto-stop, idle stop, sync-loop stop) must not interleave and
+  // double-close / cross-close entries. First caller wins; the rest no-op.
+  if (_stopTimerInProgress) return { error: 'Timer stop already in progress' };
+  if (!isTimerRunning && !currentEntry) return { success: true, entry: null, todayTotal: todayTotalGlobal };
+  _stopTimerInProgress = true;
+  try {
   const sessionElapsed = currentEntry && _cachedStartedAtMs
     ? Math.max(0, Math.floor((Date.now() - _cachedStartedAtMs) / 1000))
     : 0;
@@ -2199,7 +2313,18 @@ async function stopTimer() {
   let serverStopFailed = false;
   try {
     const stopPayload = {};
-    // Send local timestamps for offline sync accuracy
+    // BUG 3 FIX: Target the SPECIFIC server entry id so the server closes THIS
+    // session and never a newer/live one opened after it. Only send a REAL server
+    // id (a `local-…` placeholder means the start never synced — in that case the
+    // live stop may 404 (handled as success) and reconcileTimerState() will later
+    // sync the full start+stop against the real server id).
+    if (stoppedEntryId && !String(stoppedEntryId).startsWith('local-')) {
+      stopPayload.time_entry_id = stoppedEntryId;
+    }
+    // Idempotency: makes a replayed stop (lost response on weak network) safe —
+    // the server matches the key and won't re-close a different entry.
+    if (currentEntry?.idempotency_key) stopPayload.idempotency_key = currentEntry.idempotency_key;
+    // Send local timestamps for offline sync accuracy (local started_at is truth)
     if (currentEntry?._offline || currentEntry?._localId) {
       stopPayload.started_at = localStartedAtIso;
       stopPayload.ended_at = localEndedAt;
@@ -2209,7 +2334,13 @@ async function stopTimer() {
     if (localId) markLocalTimerStopSynced(localId);
   } catch (e) {
     serverStopFailed = true;
-    if (!e.response || e.code === 'ECONNABORTED') {
+    if (e.response?.status === 404) {
+      // BUG 3 FIX: 404 = entry already closed / not found on server. Treat as
+      // already-synced success — do NOT retry against whatever is now latest.
+      serverStopFailed = false;
+      if (localId) markLocalTimerStopSynced(localId);
+      console.log('[Timer] Server stop returned 404 (already synced) — treating as success');
+    } else if (!e.response || e.code === 'ECONNABORTED') {
       // Network error or timeout — stop is already saved in timer_sessions via saveLocalTimerStop().
       // reconcileTimerState() will sync it on reconnect. Do NOT also queue in offlineQueue
       // to avoid dual-replay causing duplicate time entries.
@@ -2248,7 +2379,14 @@ async function stopTimer() {
         await apiClient.deleteTimeEntry(stoppedEntryId);
         console.log(`[Timer] Deleted zero-duration entry ${stoppedEntryId} (${sessionElapsed}s)`);
       } catch (e) {
-        console.warn('[Timer] Failed to delete zero-duration entry:', e.message);
+        // Deletion is now forbidden system-wide (server policy returns 403).
+        // That's expected — don't log it as an error; just leave the tiny entry.
+        const status = e && e.response && e.response.status;
+        if (status === 403) {
+          console.log(`[Timer] Zero-duration entry ${stoppedEntryId} left in place (deletion disabled by policy)`);
+        } else {
+          console.warn('[Timer] Failed to delete zero-duration entry:', e.message);
+        }
       }
     }
     try {
@@ -2265,11 +2403,42 @@ async function stopTimer() {
   })().catch(() => {});
 
   return { success: true, entry: null, todayTotal: localStoppedProjectTotal };
+  } finally {
+    _stopTimerInProgress = false;
+  }
 }
 
 // ── Reconciliation on Reconnect ─────────────────────────────────────────────
 // When network comes back, compare local SQLite timer state vs server state.
 // Preference: never lose time.
+/**
+ * BUG 3 FIX: Sync a completed local session's stop to the server, ALWAYS binding
+ * to the specific server entry id (`time_entry_id`) so the server closes THIS
+ * entry and never a newer/live one. Sends local timestamps + idempotency key.
+ * Returns true if synced (or already-synced via 404), false to retry later.
+ */
+async function syncSessionStop(session) {
+  const payload = {
+    started_at: session.started_at,
+    ended_at: session.ended_at,
+  };
+  if (session.server_entry_id) payload.time_entry_id = session.server_entry_id;
+  if (session.idempotency_key) payload.idempotency_key = session.idempotency_key;
+  try {
+    await apiClient.stopTimer(payload);
+    markLocalTimerStopSynced(session.id);
+    return true;
+  } catch (e) {
+    if (e.response?.status === 404) {
+      // Entry already closed/gone on server — treat as already-synced success.
+      markLocalTimerStopSynced(session.id);
+      return true;
+    }
+    console.warn(`[Reconcile] Session ${session.id} stop sync failed:`, e.message);
+    return false;
+  }
+}
+
 async function reconcileTimerState() {
   if (!apiClient) return;
   // FIX D4: Skip reconcile if idle action is in progress to prevent race conditions
@@ -2281,9 +2450,18 @@ async function reconcileTimerState() {
     console.log('[Reconcile] Skipping — idle alert active');
     return;
   }
+  // BUG 3 FIX: Shared guard — reconcile and the startTimerSync loop must not
+  // mutate timer state (currentEntry / _cachedStartedAtMs / isTimerRunning)
+  // concurrently. Whichever runs first wins; the other defers to the next tick.
+  if (_timerStateMutationInProgress) {
+    console.log('[Reconcile] Skipping — timer state mutation already in progress');
+    return;
+  }
+  _timerStateMutationInProgress = true;
   try {
     const serverStatus = await apiClient.getTimerStatus();
-    // FIX D8: Update clock offset for server time sync
+    // FIX D8: Update clock offset for server time sync (telemetry only — NOT
+    // applied to stored or displayed timestamps; see adoptServerStartedAt / tray).
     if (serverStatus.server_time) {
       _clockOffsetMs = new Date(serverStatus.server_time).getTime() - Date.now();
     }
@@ -2299,15 +2477,8 @@ async function reconcileTimerState() {
     for (const session of unsynced) {
       if (session.id === currentEntry?._localId) continue; // Skip active session
       if (session.synced_start && session.ended_at && !session.synced_stop) {
-        try {
-          await apiClient.stopTimer({
-            started_at: session.started_at,
-            ended_at: session.ended_at,
-          });
-          markLocalTimerStopSynced(session.id);
-        } catch (e) {
-          console.warn(`[Reconcile] Session ${session.id} stop sync failed:`, e.message);
-        }
+        // BUG 3 FIX: bind stop to the specific server entry id (inside helper).
+        await syncSessionStop(session);
       }
     }
 
@@ -2316,14 +2487,17 @@ async function reconcileTimerState() {
       if (session.id === currentEntry?._localId) continue; // Skip active session
       if (!session.synced_start) {
         try {
-          const result = await apiClient.startTimer(session.project_id || null, session.idempotency_key);
+          // BUG 1 FIX: send the REAL local started_at so the server records the
+          // true offline start instead of defaulting to now() at reconcile time.
+          const result = await apiClient.startTimer(
+            session.project_id || null,
+            session.idempotency_key,
+            session.started_at
+          );
           markLocalTimerStartSynced(session.id, result.entry.id);
           if (session.ended_at) {
-            await apiClient.stopTimer({
-              started_at: session.started_at,
-              ended_at: session.ended_at,
-            });
-            markLocalTimerStopSynced(session.id);
+            // BUG 3 FIX: now that server_entry_id is known, bind the stop to it.
+            await syncSessionStop({ ...session, server_entry_id: result.entry.id });
           }
         } catch (e) {
           console.warn(`[Reconcile] Session ${session.id} sync failed:`, e.message);
@@ -2336,23 +2510,22 @@ async function reconcileTimerState() {
       // Local has an unsynced start — push it to server
       console.log('[Reconcile] Pushing unsynced local start to server');
       try {
+        // BUG 1 FIX: send the REAL local started_at (offline start time).
         const result = await apiClient.startTimer(
           localActive.project_id || null,
-          localActive.idempotency_key
+          localActive.idempotency_key,
+          localActive.started_at
         );
         markLocalTimerStartSynced(localActive.id, result.entry.id);
+        // If this is the active in-memory entry, capture the resolved server id
+        // so any subsequent stop binds to it (BUG 3).
+        if (localActive.id === currentEntry?._localId && currentEntry) {
+          currentEntry.id = result.entry.id;
+        }
 
-        // If local also has an unsynced stop, push that too
+        // If local also has an unsynced stop, push that too — bound to server id.
         if (localActive.ended_at && !localActive.synced_stop) {
-          try {
-            await apiClient.stopTimer({
-              started_at: localActive.started_at,
-              ended_at: localActive.ended_at,
-            });
-            markLocalTimerStopSynced(localActive.id);
-          } catch (stopErr) {
-            console.warn('[Reconcile] Stop sync failed, will retry:', stopErr.message);
-          }
+          await syncSessionStop({ ...localActive, server_entry_id: result.entry.id });
         }
       } catch (startErr) {
         if (startErr.response?.status === 409) {
@@ -2366,33 +2539,37 @@ async function reconcileTimerState() {
       // Server has no open entry but local does — push start with original timestamp
       console.log('[Reconcile] Server has no timer but local is running — pushing start');
       const key = currentEntry?.idempotency_key || generateIdempotencyKey();
+      // BUG 1 FIX: derive the REAL local start (from cached anchor or the entry)
+      // and send it so the server records the true start, not now().
+      const localStartIso = currentEntry?.started_at
+        || (_cachedStartedAtMs ? new Date(_cachedStartedAtMs).toISOString() : null);
       try {
-        const result = await apiClient.startTimer(currentEntry?.project_id || null, key);
+        const result = await apiClient.startTimer(currentEntry?.project_id || null, key, localStartIso);
         if (currentEntry?._localId) {
           markLocalTimerStartSynced(currentEntry._localId, result.entry.id);
         }
-        // Update local entry with server data
+        // Update local entry with server data, but keep the local start anchor
+        // immutable (BUG 2: never push the displayed start forward).
         currentEntry = { ...result.entry, _localId: currentEntry?._localId, idempotency_key: key };
+        adoptServerStartedAt(result.entry?.started_at);
       } catch (e) {
         console.warn('[Reconcile] Push start failed:', e.message);
       }
     } else if (serverStatus.running && isTimerRunning) {
-      // Both have open entries — use the one with earlier started_at (never lose time)
-      const serverStartMs = new Date(serverStatus.entry.started_at).getTime();
-      const localStartMs = _cachedStartedAtMs || Date.now();
-      if (serverStartMs <= localStartMs) {
-        // Server entry is older or same — adopt server state
-        currentEntry = { ...serverStatus.entry, _localId: currentEntry?._localId };
-        _cachedStartedAtMs = serverStartMs;
-        console.log('[Reconcile] Adopted server entry (earlier started_at)');
-      } else {
-        console.log('[Reconcile] Kept local entry (earlier started_at)');
-      }
+      // Both have open entries. BUG 2 FIX: the local started_at is immutable truth.
+      // Adopt the server ENTRY (id, project) so stops can target it, but only let
+      // the displayed start move EARLIER, never later — adoptServerStartedAt enforces
+      // "earlier-or-equal wins", so a skewed/wrong server now()-start can never make
+      // the visible timer jump backward.
+      currentEntry = { ...serverStatus.entry, _localId: currentEntry?._localId };
+      adoptServerStartedAt(serverStatus.entry?.started_at);
     }
 
     cleanOldLocalTimerSessions();
   } catch (e) {
     console.error('[Reconcile] Failed:', e.message);
+  } finally {
+    _timerStateMutationInProgress = false;
   }
 }
 
@@ -2460,6 +2637,14 @@ function startTimerSync() {
       return;
     }
 
+    // BUG 3 FIX: Shared guard — don't mutate timer state while reconcile (or
+    // another mutator) holds it. Defer this tick; the next 10s tick retries.
+    if (_timerStateMutationInProgress) {
+      _isSyncing = false;
+      return;
+    }
+    _timerStateMutationInProgress = true;
+
     try {
       const status = await apiClient.getTimerStatus();
       const globalTotal = status.today_total ?? 0;
@@ -2477,7 +2662,16 @@ function startTimerSync() {
       if (status.running && !isTimerRunning) {
         isTimerRunning = true;
         currentEntry = status.entry;
-        _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+        // BUG 2 FIX: prefer a still-running local session's start as the immutable
+        // anchor. Only adopt the server start when it is earlier-or-equal (or when
+        // there is no local session) so the displayed timer never jumps forward.
+        const localActive = getActiveLocalTimer();
+        if (localActive && !localActive.ended_at && localActive.started_at) {
+          _cachedStartedAtMs = new Date(localActive.started_at).getTime();
+          adoptServerStartedAt(currentEntry?.started_at);
+        } else {
+          _cachedStartedAtMs = currentEntry?.started_at ? new Date(currentEntry.started_at).getTime() : null;
+        }
         // BUG-1 FIX: project_today_total already set above from atomic response
         activityMonitor?.start();
         screenshotService?.start(currentEntry.id);
@@ -2492,6 +2686,7 @@ function startTimerSync() {
         if (idleDetector?.isIdleActive()) {
           console.log('[TimerSync] Server says stopped but idle alert is active — keeping local state');
           _isSyncing = false;
+          _timerStateMutationInProgress = false; // BUG 3 FIX: release shared guard on early return
           return;
         }
         isTimerRunning = false;
@@ -2525,6 +2720,7 @@ function startTimerSync() {
       // Do not re-throw — keep interval alive
     } finally {
       _isSyncing = false; // M6 FIX: Always release sync guard
+      _timerStateMutationInProgress = false; // BUG 3 FIX: always release shared mutation guard
     }
   }, 10000);
 }
@@ -2582,8 +2778,13 @@ function startTrayTimer() {
   updateTrayTitle();
   trayTimerInterval = setInterval(() => {
     if (!isTimerRunning || !_cachedStartedAtMs) return;
-    // M8 FIX: Use clock offset for accurate elapsed time display
-    const clientNowMs = Date.now() + _clockOffsetMs;
+    // BUG 2 FIX (clock-skew consistency): `_cachedStartedAtMs` is the LOCAL
+    // started_at (local source of truth, stored uncorrected). Elapsed time must
+    // therefore be measured against the LOCAL clock too — `Date.now()`. Adding
+    // `_clockOffsetMs` here while the anchor is uncorrected double-applies skew
+    // and makes the displayed time jump. We deliberately apply skew to NEITHER
+    // the stored anchor NOR the display, keeping both on the same (local) clock.
+    const clientNowMs = Date.now();
     const currentElapsed = Math.floor((clientNowMs - _cachedStartedAtMs) / 1000);
     const totalSeconds = todayTotalCurrentProject + currentElapsed;
     const formatted = formatTimeShort(totalSeconds);
