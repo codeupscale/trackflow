@@ -28,7 +28,9 @@
         <env name="DB_PORT" value="5432" force="true"/>
         <env name="DB_DATABASE" value="trackflow_test" force="true"/>
         <env name="DB_USERNAME" value="trackflow" force="true"/>
-        <env name="DB_PASSWORD" value="REDACTED-TEST-DB-PASSWORD" force="true"/>
+        <!-- DB_PASSWORD is intentionally NOT hardcoded here. It is read from the
+             environment: backend/.env.testing locally (git-ignored), or the
+             DB_PASSWORD env var in CI. Keeps real credentials out of git. -->
         <env name="MAIL_MAILER" value="array" force="true"/>
         <env name="QUEUE_CONNECTION" value="sync" force="true"/>
         <env name="SESSION_DRIVER" value="array" force="true"/>

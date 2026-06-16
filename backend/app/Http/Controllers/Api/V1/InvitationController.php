@@ -139,7 +139,7 @@ class InvitationController extends Controller
             'email' => $email,
             'role' => $request->role,
             'token' => Str::random(64),
-            'expires_at' => now()->addDays(7),
+            'expires_at' => now()->addDays(config('security.invitation_ttl_days')),
             'created_by' => $user->id,
         ]);
 
@@ -163,7 +163,7 @@ class InvitationController extends Controller
         }
 
         // Extend expiry on resend
-        $invitation->update(['expires_at' => now()->addDays(7)]);
+        $invitation->update(['expires_at' => now()->addDays(config('security.invitation_ttl_days'))]);
 
         $this->sendInvitationEmail($invitation->fresh(), $user->loadMissing('organization'));
 
@@ -244,8 +244,8 @@ class InvitationController extends Controller
             return $user;
         });
 
-        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+        $token = $user->createToken('access_token', ['*'], now()->addMinutes(config('security.tokens.access_ttl')));
+        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addMinutes(config('security.tokens.refresh_ttl')));
 
         return response()->json([
             'user' => [

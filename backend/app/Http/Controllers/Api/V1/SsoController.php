@@ -171,8 +171,8 @@ class SsoController extends Controller
 
         // Issue tokens
         $user->tokens()->delete();
-        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+        $token = $user->createToken('access_token', ['*'], now()->addMinutes(config('security.tokens.access_ttl')));
+        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addMinutes(config('security.tokens.refresh_ttl')));
 
         $user->update(['last_active_at' => now()]);
 
