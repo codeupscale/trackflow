@@ -116,7 +116,7 @@ class ScreenshotService {
   // This does NOT block uploads — it only emits a warning so the UI
   // can prompt the user to fix their permission.
 
-  _checkForStaticCapture(buffer) {
+  _checkForStaticCapture(buffer, mayBeWallpaper = false) {
     const hash = crypto.createHash('md5').update(buffer).digest('hex');
 
     if (hash === this._lastCaptureHash) {
@@ -133,6 +133,11 @@ class ScreenshotService {
     }
 
     this._lastCaptureHash = hash;
+
+    // Only flag wallpaper-only when the capture path could actually produce it
+    // (macOS screen-capture fallback). Identical frames from a real WINDOW capture
+    // just mean the user left a static window in front — not the wallpaper bug.
+    if (!mayBeWallpaper) return;
 
     if (this._staticCaptureCount >= STATIC_CAPTURE_THRESHOLD && !this._wallpaperWarningEmitted) {
       this._wallpaperWarningEmitted = true;
@@ -155,12 +160,21 @@ class ScreenshotService {
     this._staticCaptureCount = 0;
     this._wallpaperWarningEmitted = false;
     const immediateCapture = options.immediateCapture === true;
-    this._intervalMs = (this.config.screenshot_interval || 5) * 60 * 1000;
+
+    // DEV/TEST override: TRACKFLOW_SCREENSHOT_TEST_INTERVAL_SEC (seconds) forces a
+    // fast cadence for BOTH the first capture and the recurring interval, so you
+    // can verify capture quickly. Not set in production → normal timing.
+    const testIntervalSec = parseInt(process.env.TRACKFLOW_SCREENSHOT_TEST_INTERVAL_SEC, 10);
+    const useTestInterval = Number.isFinite(testIntervalSec) && testIntervalSec > 0;
+
+    this._intervalMs = useTestInterval
+      ? testIntervalSec * 1000
+      : (this.config.screenshot_interval || 5) * 60 * 1000;
     const firstDelayMin = this.config.screenshot_first_capture_delay_min != null
       ? this.config.screenshot_first_capture_delay_min : 1;
-    const firstDelayMs = firstDelayMin * 60 * 1000;
+    const firstDelayMs = useTestInterval ? testIntervalSec * 1000 : firstDelayMin * 60 * 1000;
 
-    console.log(`[SS] Started — entry=${entryId}, interval=${this.config.screenshot_interval}min, firstDelay=${firstDelayMin}min, immediate=${immediateCapture}`);
+    console.log(`[SS] Started — entry=${entryId}, interval=${useTestInterval ? testIntervalSec + 's (TEST)' : (this.config.screenshot_interval || 5) + 'min'}, firstDelay=${useTestInterval ? testIntervalSec + 's (TEST)' : firstDelayMin + 'min'}, immediate=${immediateCapture}`);
 
     if (immediateCapture || firstDelayMs === 0) {
       setImmediate(() => {
@@ -381,7 +395,8 @@ class ScreenshotService {
         // Check for wallpaper-only capture using the first valid display's buffer
         const firstValidBuffer = capturedDisplays.find(d => d !== null);
         if (firstValidBuffer) {
-          this._checkForStaticCapture(firstValidBuffer);
+          // Multi-monitor uses screen capture, which is wallpaper-prone on macOS ad-hoc.
+          this._checkForStaticCapture(firstValidBuffer, isMac);
         }
 
         // Upload each display's screenshot individually with display metadata
@@ -399,6 +414,10 @@ class ScreenshotService {
         // ── Single Monitor / Multi-Monitor Disabled Path ──
         // Original behavior: capture the active screen/window only
         let buffer = null;
+        // Only the SCREEN-capture fallback can return wallpaper-only content (on
+        // macOS ad-hoc builds). A successful WINDOW capture is always real content,
+        // so identical window frames just mean a static window — not a bug.
+        let viaScreenFallback = false;
 
         if (isMac) {
           // ── macOS Capture Strategy ──
@@ -423,6 +442,7 @@ class ScreenshotService {
           if (!buffer && screenSources.length > 0) {
             buffer = this._captureSingleMonitor(screenSources);
             if (buffer) {
+              viaScreenFallback = true;
               console.log(`[SS] macOS screen capture fallback (${Math.round(buffer.length / 1024)}KB)`);
             }
           }
@@ -445,8 +465,9 @@ class ScreenshotService {
 
         console.log(`[SS] Captured ${buffer.length} bytes (${Math.round(buffer.length / 1024)}KB)`);
 
-        // Check for wallpaper-only capture (static content detection)
-        this._checkForStaticCapture(buffer);
+        // Wallpaper-only detection only applies to the screen-capture fallback on
+        // macOS — a successful window capture is never wallpaper-only.
+        this._checkForStaticCapture(buffer, isMac && viaScreenFallback);
 
         // NOTE: Client-side blur removed (SS-11). The server's ProcessScreenshotJob
         // already applies blur when blur_screenshots is enabled. Having both client
