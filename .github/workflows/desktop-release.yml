@@ -113,12 +113,21 @@ jobs:
           POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
           POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
         run: |
-          echo "TRACKFLOW_API_URL=${TRACKFLOW_API_URL:-https://trackflow.codeupscale.com/api/v1}" > .env
-          echo "TRACKFLOW_WEB_URL=${TRACKFLOW_WEB_URL:-https://trackflow.codeupscale.com}" >> .env
+          # Pick the backend by channel so develop builds hit the DEV server, never production.
+          if [ "${{ needs.preflight.outputs.channel }}" = "dev" ]; then
+            API_URL="https://dev.trackflow.codeupscale.com/api/v1"
+            WEB_URL="https://dev.trackflow.codeupscale.com"
+          else
+            API_URL="${TRACKFLOW_API_URL:-https://trackflow.codeupscale.com/api/v1}"
+            WEB_URL="${TRACKFLOW_WEB_URL:-https://trackflow.codeupscale.com}"
+          fi
+          echo "TRACKFLOW_API_URL=${API_URL}" > .env
+          echo "TRACKFLOW_WEB_URL=${WEB_URL}" >> .env
           echo "TRACKFLOW_GOOGLE_CLIENT_ID=${TRACKFLOW_GOOGLE_CLIENT_ID}" >> .env
           echo "TRACKFLOW_GOOGLE_CLIENT_SECRET=${TRACKFLOW_GOOGLE_CLIENT_SECRET}" >> .env
           echo "POSTHOG_KEY=${POSTHOG_KEY}" >> .env
           echo "POSTHOG_HOST=${POSTHOG_HOST:-https://us.i.posthog.com}" >> .env
+          echo "Desktop build → channel=${{ needs.preflight.outputs.channel }} API=${API_URL}"
 
       - name: Build and publish macOS
         working-directory: desktop
@@ -180,12 +189,21 @@ jobs:
           POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
           POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
         run: |
-          echo "TRACKFLOW_API_URL=${TRACKFLOW_API_URL:-https://trackflow.codeupscale.com/api/v1}" > .env
-          echo "TRACKFLOW_WEB_URL=${TRACKFLOW_WEB_URL:-https://trackflow.codeupscale.com}" >> .env
+          # Pick the backend by channel so develop builds hit the DEV server, never production.
+          if [ "${{ needs.preflight.outputs.channel }}" = "dev" ]; then
+            API_URL="https://dev.trackflow.codeupscale.com/api/v1"
+            WEB_URL="https://dev.trackflow.codeupscale.com"
+          else
+            API_URL="${TRACKFLOW_API_URL:-https://trackflow.codeupscale.com/api/v1}"
+            WEB_URL="${TRACKFLOW_WEB_URL:-https://trackflow.codeupscale.com}"
+          fi
+          echo "TRACKFLOW_API_URL=${API_URL}" > .env
+          echo "TRACKFLOW_WEB_URL=${WEB_URL}" >> .env
           echo "TRACKFLOW_GOOGLE_CLIENT_ID=${TRACKFLOW_GOOGLE_CLIENT_ID}" >> .env
           echo "TRACKFLOW_GOOGLE_CLIENT_SECRET=${TRACKFLOW_GOOGLE_CLIENT_SECRET}" >> .env
           echo "POSTHOG_KEY=${POSTHOG_KEY}" >> .env
           echo "POSTHOG_HOST=${POSTHOG_HOST:-https://us.i.posthog.com}" >> .env
+          echo "Desktop build → channel=${{ needs.preflight.outputs.channel }} API=${API_URL}"
 
       - name: Build and publish Windows
         working-directory: desktop
@@ -242,12 +260,21 @@ jobs:
           POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
           POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
         run: |
-          echo "TRACKFLOW_API_URL=${TRACKFLOW_API_URL:-https://trackflow.codeupscale.com/api/v1}" > .env
-          echo "TRACKFLOW_WEB_URL=${TRACKFLOW_WEB_URL:-https://trackflow.codeupscale.com}" >> .env
+          # Pick the backend by channel so develop builds hit the DEV server, never production.
+          if [ "${{ needs.preflight.outputs.channel }}" = "dev" ]; then
+            API_URL="https://dev.trackflow.codeupscale.com/api/v1"
+            WEB_URL="https://dev.trackflow.codeupscale.com"
+          else
+            API_URL="${TRACKFLOW_API_URL:-https://trackflow.codeupscale.com/api/v1}"
+            WEB_URL="${TRACKFLOW_WEB_URL:-https://trackflow.codeupscale.com}"
+          fi
+          echo "TRACKFLOW_API_URL=${API_URL}" > .env
+          echo "TRACKFLOW_WEB_URL=${WEB_URL}" >> .env
           echo "TRACKFLOW_GOOGLE_CLIENT_ID=${TRACKFLOW_GOOGLE_CLIENT_ID}" >> .env
           echo "TRACKFLOW_GOOGLE_CLIENT_SECRET=${TRACKFLOW_GOOGLE_CLIENT_SECRET}" >> .env
           echo "POSTHOG_KEY=${POSTHOG_KEY}" >> .env
           echo "POSTHOG_HOST=${POSTHOG_HOST:-https://us.i.posthog.com}" >> .env
+          echo "Desktop build → channel=${{ needs.preflight.outputs.channel }} API=${API_URL}"
 
       - name: Build and publish Linux
         working-directory: desktop
