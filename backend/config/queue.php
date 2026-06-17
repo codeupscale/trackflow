@@ -13,7 +13,13 @@ return [
     |
     */
 
-    'default' => env('QUEUE_CONNECTION', 'database'),
+    // Default to redis: every TrackFlow environment runs Horizon, which only
+    // processes Redis queues. The framework's stock 'database' default silently
+    // breaks any env that doesn't set QUEUE_CONNECTION (jobs pile up in the DB
+    // jobs table, unprocessed — e.g. invitation emails never send). Envs that set
+    // QUEUE_CONNECTION explicitly (.env.example uses 'sync'; prod uses 'redis')
+    // are unaffected.
+    'default' => env('QUEUE_CONNECTION', 'redis'),
 
     /*
     |--------------------------------------------------------------------------
