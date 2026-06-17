@@ -15,7 +15,9 @@ root cause, evidence (file:line), and the recommended fix so future work can add
 | [tech-debt.md](tech-debt.md) | Stack versions (all 3 codebases) | P1–P3 | Electron 28 end-of-life (security); PHP 8.2 aging |
 | [electron-42-screen-permission-regression.md](electron-42-screen-permission-regression.md) | Desktop / macOS screen permission | P0 (blocks upgrade) | Electron 42 `desktopCapturer.getSources()` rejects → app never registers in Screen Recording list |
 | [auth-and-idle-bugs.md](auth-and-idle-bugs.md) | Desktop auth + idle | P1 | ✅ FIXED — re-login on every restart (volatile MAC-based key); idle popup intermittent (spurious detector restart) |
-| [timezone-midnight-rolls-to-previous-day.md](timezone-midnight-rolls-to-previous-day.md) | Backend timezone + screenshot date path | P1 | 🔴 OPEN — early-morning PKT (UTC+5) tracked time & screenshots attributed to the previous day (user tz defaults to `America/New_York`; screenshot S3 date folder hardcoded UTC) |
+| [timezone-midnight-rolls-to-previous-day.md](timezone-midnight-rolls-to-previous-day.md) | Backend timezone + screenshot date path | P1 | ✅ FIXED — default tz → `Asia/Karachi`, web detects device tz, existing rows backfilled, screenshot S3 date folder now timezone-aware |
+| [phantom-stop-local-first-desync.md](phantom-stop-local-first-desync.md) | Desktop main ↔ renderer timer state | P1 | ✅ FIXED — server-sync paths no longer discard an unsynced local-first session; sync-loop stop carries `_stateVersion`; Start re-broadcasts running state (desktop 437/437 green) |
+| [attendance-present-marked-absent-utc-bucketing.md](attendance-present-marked-absent-utc-bucketing.md) | Backend HR attendance generation | P1 | 🟡 PRIMARY FIXED — day window now uses the employee's timezone (no more present→absent); Causes B/C/D (overlap bucketing, open entries, threshold/heartbeat) tracked as follow-ups |
 
 ## How these were found
 

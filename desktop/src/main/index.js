@@ -1985,11 +1985,19 @@ function setupIPC() {
           const projectTotal = status.project_today_total ?? globalTotal;
           todayTotalCurrentProject = Math.max(0, projectTotal - elapsed);
         } else {
-          todayTotalGlobal = globalTotal;
-          todayTotalCurrentProject = 0;
-          isTimerRunning = false;
-          currentEntry = null;
-          _cachedStartedAtMs = null;
+          // BUG FIX (phantom-stop-local-first-desync): when a local-first start has not
+          // synced yet, the server legitimately reports "not running" because it has never
+          // seen the start. Clearing local state here is what made the popup show "Start"
+          // while the timer was actually still running. Keep local state; reconcile pushes it.
+          const localActive = getActiveLocalTimer();
+          const keepLocalFirst = isTimerRunning && localActive && !localActive.synced_start;
+          if (!keepLocalFirst) {
+            todayTotalGlobal = globalTotal;
+            todayTotalCurrentProject = 0;
+            isTimerRunning = false;
+            currentEntry = null;
+            _cachedStartedAtMs = null;
+          }
         }
         // BUG-1 FIX: Use the project_today_total already in the response instead of a separate call
         if (isTimerRunning && currentEntry?.project_id) {
@@ -2154,7 +2162,13 @@ async function startTimer(projectId = null) {
   if (isTimerRunning && projectId && currentEntry?.project_id !== projectId) {
     return await switchProject(projectId);
   }
-  if (isTimerRunning) return { error: 'Timer already running' };
+  if (isTimerRunning) {
+    // Self-heal (phantom-stop-local-first-desync): the renderer offered "Start" while we
+    // are already running, so its UI is out of sync (e.g. a transient phantom-stop). Re-
+    // broadcast the running state so the popup corrects itself instead of just erroring.
+    notifyPopup('timer-started', { ...currentEntry, todayTotal: todayTotalCurrentProject });
+    return { error: 'Timer already running' };
+  }
 
   // RACE-FIX: Prevent concurrent start calls from creating duplicate entries
   if (_startTimerInProgress) return { error: 'Timer start already in progress' };
@@ -2695,6 +2709,17 @@ function startTimerSync() {
           _timerStateMutationInProgress = false; // BUG 3 FIX: release shared guard on early return
           return;
         }
+        // BUG FIX (phantom-stop-local-first-desync): a local-first start that has not
+        // synced yet means the server has never seen it — its "not running" is stale.
+        // Killing the timer here is what produced the "Start shown while timer still runs"
+        // desync. Keep local state; reconcileTimerState() will push the start on reconnect.
+        const _localActive = getActiveLocalTimer();
+        if (_localActive && !_localActive.synced_start) {
+          console.log('[TimerSync] Server says stopped but local start is unsynced — keeping local state');
+          _isSyncing = false;
+          _timerStateMutationInProgress = false;
+          return;
+        }
         isTimerRunning = false;
         currentEntry = null;
         _cachedStartedAtMs = null;
@@ -2706,7 +2731,9 @@ function startTimerSync() {
         stopTrayTimer();
         updateTrayTitle();
         updateTrayIcon(false);
-        notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal });
+        // Carry the state version so the renderer's stale-notification guard can reject
+        // this stop if a newer start has already landed.
+        notifyPopup('timer-stopped', { entry: null, todayTotal: globalTotal, _stateVersion: _timerStateVersion });
       }
     } catch (err) {
       if (isTransientTimerSyncError(err)) {

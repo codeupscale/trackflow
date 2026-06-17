@@ -75,7 +75,11 @@ class ScreenshotController extends Controller
         }
 
         $org = $user->organization;
-        $date = \Carbon\Carbon::parse($request->captured_at)->format('Y-m-d');
+        // BUG FIX (timezone-midnight-rolls-to-previous-day, Contributor B): the desktop sends
+        // captured_at as a UTC ISO string. Derive the date-folder in the user's LOCAL timezone
+        // so an early-morning local screenshot is filed under the correct day, not the previous
+        // UTC day. captured_at itself stays UTC.
+        $date = \Carbon\Carbon::parse($request->captured_at)->setTimezone($user->getTimezoneForDates())->format('Y-m-d');
         $filename = time() . '_' . Str::random(8) . '.jpg';
         $s3Key = "{$org->id}/{$user->id}/{$date}/{$filename}";
 

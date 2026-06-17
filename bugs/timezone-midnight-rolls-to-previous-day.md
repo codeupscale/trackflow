@@ -1,6 +1,29 @@
 # Timezone — Midnight (PKT) Tracked Time & Screenshots Roll Into the Previous Day
 
-**Status:** 🔴 OPEN — not yet fixed
+**Status:** ✅ FIXED 2026-06-17 (branch `chore/desktop-electron-42-upgrade`, uncommitted at time of writing)
+
+## Resolution summary (2026-06-17)
+- **Contributor A (default timezone):** the hardcoded `America/New_York` default is now `Asia/Karachi`
+  for new orgs/users (`Organization::getDefaultSettings()`, `AuthController::register()`, the
+  `users.timezone` column default, factories/seeders — committed earlier in `803f75d0`). The web
+  register form now defaults to the **browser-detected** timezone and always offers it as a
+  selectable option instead of silently falling back to a US zone
+  (`web/src/app/(auth)/register/page.tsx`; `Asia/Karachi` also added to the curated list). Existing
+  rows still carrying the old `America/New_York` default are re-pointed to `Asia/Karachi` by data
+  migration `database/migrations/2026_06_17_000001_backfill_default_timezone_to_karachi.php`.
+- **Contributor B (screenshot date folder):** the S3 date folder is now derived in the user's local
+  timezone — `Carbon::parse($request->captured_at)->setTimezone($user->getTimezoneForDates())` —
+  so an early-morning local screenshot is filed under the correct day (`ScreenshotController.php:78`).
+  `captured_at` itself stays UTC.
+- Display/date-filter paths were already timezone-aware via `getTimezoneForDates()`, so they are
+  correct once the user's stored timezone is right (which the above ensures).
+
+_Remaining minor follow-up:_ the desktop client does not yet push its device timezone on signup; it
+relies on the existing user's stored zone (correct for this PKT workforce given the new default).
+
+---
+
+**Status (original):** 🔴 OPEN — not yet fixed
 **Reported:** 2026-06-17 (dev in Pakistan, PKT / UTC+5)
 **Investigated:** 2026-06-17 (read-only, on branch `chore/desktop-electron-42-upgrade`)
 **Scope:** Backend (timezone resolution + screenshot date path) — surfaces in Web dashboard
