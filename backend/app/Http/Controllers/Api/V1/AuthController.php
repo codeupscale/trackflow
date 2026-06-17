@@ -35,7 +35,7 @@ class AuthController extends Controller
                 'trial_ends_at' => now()->addDays(14),
                 'settings' => array_merge(
                     (new \App\Models\Organization)->getDefaultSettings(),
-                    ['timezone' => $request->timezone ?? 'America/New_York']
+                    ['timezone' => $request->timezone ?? 'Asia/Karachi']
                 ),
             ]);
 
@@ -45,7 +45,7 @@ class AuthController extends Controller
                 'email' => $request->email,
                 'password' => $request->password,
                 'role' => 'owner',
-                'timezone' => $request->timezone ?? 'America/New_York',
+                'timezone' => $request->timezone ?? 'Asia/Karachi',
             ]);
 
             // Bootstrap system roles for the new org and assign the owner

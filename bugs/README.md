@@ -15,6 +15,7 @@ root cause, evidence (file:line), and the recommended fix so future work can add
 | [tech-debt.md](tech-debt.md) | Stack versions (all 3 codebases) | P1–P3 | Electron 28 end-of-life (security); PHP 8.2 aging |
 | [electron-42-screen-permission-regression.md](electron-42-screen-permission-regression.md) | Desktop / macOS screen permission | P0 (blocks upgrade) | Electron 42 `desktopCapturer.getSources()` rejects → app never registers in Screen Recording list |
 | [auth-and-idle-bugs.md](auth-and-idle-bugs.md) | Desktop auth + idle | P1 | ✅ FIXED — re-login on every restart (volatile MAC-based key); idle popup intermittent (spurious detector restart) |
+| [timezone-midnight-rolls-to-previous-day.md](timezone-midnight-rolls-to-previous-day.md) | Backend timezone + screenshot date path | P1 | 🔴 OPEN — early-morning PKT (UTC+5) tracked time & screenshots attributed to the previous day (user tz defaults to `America/New_York`; screenshot S3 date folder hardcoded UTC) |
 
 ## How these were found
 

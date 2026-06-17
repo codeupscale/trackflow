@@ -38,3 +38,6 @@ web/out
 docs
 temp_auto_push.bat
 temp_interactive_push.bat
+
+# Local scratch / testing
+testing_dump/

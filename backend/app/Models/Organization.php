@@ -103,7 +103,7 @@ class Organization extends Model
             // Idle handling behavior: prompt | always | never
             // Production default: prompt user to keep/discard idle time (Hubstaff-like).
             'keep_idle_time' => 'prompt',
-            'timezone' => 'America/New_York',
+            'timezone' => 'Asia/Karachi',
             'can_add_manual_time' => true,
             'employees_see_all_projects' => false, // if false, employees see only projects they are assigned to
             // Idle alert auto-stop (only relevant in "prompt" mode).
