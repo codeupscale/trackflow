@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - develop
     paths:
       - 'desktop/**'
   workflow_dispatch:
@@ -27,35 +28,53 @@ permissions:
   contents: write
 
 jobs:
-  # ── Preflight: resolve version, skip if tag already exists ───────────────────
+  # ── Preflight: resolve version + channel ─────────────────────────────────────
+  # main    → production release  v<version>           (skipped if it already exists)
+  # develop → dev PRERELEASE      v<version>-dev.<run>  (unique per run, never collides)
   preflight:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.resolve.outputs.version }}
+      channel: ${{ steps.resolve.outputs.channel }}
       should_release: ${{ steps.resolve.outputs.should_release }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve version and check for existing release
+      - name: Resolve version and channel
         id: resolve
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Base version: explicit dispatch input wins, else desktop/package.json
           if [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
+            BASE="${{ inputs.version }}"
           else
-            VERSION=$(node -p 'require("./desktop/package.json").version')
+            BASE=$(node -p 'require("./desktop/package.json").version')
           fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-          # Skip the build if this version tag already has a published release
-          if gh release view "v${VERSION}" --repo ${{ github.repository }} > /dev/null 2>&1; then
-            echo "Release v${VERSION} already exists — skipping build."
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            # Production: tag v<base>. Skip if already released so we never silently
+            # republish a shipped version.
+            CHANNEL="production"
+            VERSION="${BASE}"
+            if gh release view "v${VERSION}" --repo ${{ github.repository }} > /dev/null 2>&1; then
+              echo "Release v${VERSION} already exists — skipping."
+              SHOULD=false
+            else
+              SHOULD=true
+            fi
           else
-            echo "No release found for v${VERSION} — proceeding with build."
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            # Non-main (develop, etc.): publish a PRERELEASE with a unique -dev.<run>
+            # suffix. Distinct tag = never collides with or replaces production v<base>.
+            CHANNEL="dev"
+            VERSION="${BASE}-dev.${{ github.run_number }}"
+            SHOULD=true
           fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
+          echo "should_release=${SHOULD}" >> "$GITHUB_OUTPUT"
+          echo "Resolved → channel=${CHANNEL} version=${VERSION} should_release=${SHOULD}"
 
   # ── macOS build ───────────────────────────────────────────────────────────────
   build-mac:
@@ -81,9 +100,8 @@ jobs:
         run: npm ci
 
       - name: Set version
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.version != '' }}
         working-directory: desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: npm version ${{ needs.preflight.outputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Create .env for desktop build
         working-directory: desktop
@@ -121,7 +139,7 @@ jobs:
           path: |
             desktop/dist/*.dmg
             desktop/dist/*.zip
-            desktop/dist/latest-mac.yml
+            desktop/dist/*.yml
           retention-days: 5
 
   # ── Windows build ─────────────────────────────────────────────────────────────
@@ -148,9 +166,8 @@ jobs:
         run: npm ci
 
       - name: Set version
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.version != '' }}
         working-directory: desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: npm version ${{ needs.preflight.outputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Create .env for desktop build
         working-directory: desktop
@@ -185,7 +202,7 @@ jobs:
           name: windows-builds
           path: |
             desktop/dist/*.exe
-            desktop/dist/latest.yml
+            desktop/dist/*.yml
           retention-days: 5
 
   # ── Linux build ───────────────────────────────────────────────────────────────
@@ -210,6 +227,10 @@ jobs:
       - name: Install dependencies
         working-directory: desktop
         run: npm ci
+
+      - name: Set version
+        working-directory: desktop
+        run: npm version ${{ needs.preflight.outputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Create .env for desktop build
         working-directory: desktop
@@ -241,13 +262,15 @@ jobs:
           path: |
             desktop/dist/*.AppImage
             desktop/dist/*.deb
-            desktop/dist/latest-linux.yml
+            desktop/dist/*.yml
           retention-days: 5
 
   # ── Update release notes + marketing version ─────────────────────────────────
   update-release-notes:
     needs: [preflight, build-mac, build-windows, build-linux]
-    if: always() && (needs.build-mac.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
+    # Production (main) only — this job pushes to main and edits the production
+    # release notes. Dev prereleases from develop must not touch main.
+    if: always() && needs.preflight.outputs.channel == 'production' && (needs.build-mac.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
