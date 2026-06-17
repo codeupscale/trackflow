@@ -105,6 +105,101 @@ describe('Timer sync invariants', () => {
     });
   });
 
+  describe('phantom-stop desync: unsynced local start drives a reconcile push', () => {
+    // Mirrors the branch in startTimerSync() (src/main/index.js) where the 10s
+    // loop sees server.running===false while isTimerRunning===true AND the active
+    // local session has synced_start===0. Previously this branch only bailed,
+    // leaving the start stranded until an offline→online transition (which never
+    // fires when the original POST /timer/start failed transiently while
+    // net.isOnline() stayed true). The fix: release both mutation guards, then
+    // schedule reconcileTimerState()+flush via setImmediate, gated on isOnline.
+    //
+    // This models the loop branch + reconcile's "push unsynced active start" step
+    // (reconcileTimerState Phase 2) to prove the start is pushed with the ORIGINAL
+    // idempotency_key and the REAL local started_at.
+
+    // Mirrors reconcileTimerState() Phase 2: push the unsynced active local start.
+    async function reconcileTimerState({ apiClient, getActiveLocalTimer, mutationInProgress }) {
+      if (mutationInProgress) return { skipped: 'guard-held' }; // early-return invariant
+      const localActive = getActiveLocalTimer();
+      if (localActive && !localActive.synced_start) {
+        await apiClient.startTimer(
+          localActive.project_id || null,
+          localActive.idempotency_key,
+          localActive.started_at
+        );
+        return { pushed: true };
+      }
+      return { pushed: false };
+    }
+
+    // Mirrors the startTimerSync() branch decision.
+    function syncLoopBranch({ serverRunning, isTimerRunning, localActive, isOnline }) {
+      const result = { releasedGuards: false, scheduledReconcile: false };
+      if (!serverRunning && isTimerRunning) {
+        if (localActive && !localActive.synced_start) {
+          // Release both guards BEFORE reconcile (reconcile early-returns if held).
+          result.releasedGuards = true;
+          if (isOnline) result.scheduledReconcile = true;
+          return result;
+        }
+      }
+      return result;
+    }
+
+    test('loop schedules reconcile (after releasing guards) when start is unsynced and online', () => {
+      const r = syncLoopBranch({
+        serverRunning: false,
+        isTimerRunning: true,
+        localActive: { synced_start: 0 },
+        isOnline: true,
+      });
+      expect(r.releasedGuards).toBe(true);
+      expect(r.scheduledReconcile).toBe(true);
+    });
+
+    test('loop does NOT schedule reconcile while genuinely offline (online handler owns that)', () => {
+      const r = syncLoopBranch({
+        serverRunning: false,
+        isTimerRunning: true,
+        localActive: { synced_start: 0 },
+        isOnline: false,
+      });
+      // Guards still release (local state preserved), but no push while offline.
+      expect(r.releasedGuards).toBe(true);
+      expect(r.scheduledReconcile).toBe(false);
+    });
+
+    test('reconcile pushes the start with the ORIGINAL idempotency_key and REAL local started_at', async () => {
+      const startTimer = jest.fn().mockResolvedValue({ entry: { id: 'srv-1' } });
+      const localActive = {
+        synced_start: 0,
+        project_id: 'proj-9',
+        idempotency_key: 'idem-original-abc',
+        started_at: '2026-06-15T09:00:00.000Z',
+      };
+      const res = await reconcileTimerState({
+        apiClient: { startTimer },
+        getActiveLocalTimer: () => localActive,
+        mutationInProgress: false, // guards were released by the loop first
+      });
+      expect(res.pushed).toBe(true);
+      expect(startTimer).toHaveBeenCalledTimes(1);
+      expect(startTimer).toHaveBeenCalledWith('proj-9', 'idem-original-abc', '2026-06-15T09:00:00.000Z');
+    });
+
+    test('reconcile is a no-op if invoked while the mutation guard is STILL held (proves release ordering matters)', async () => {
+      const startTimer = jest.fn();
+      const res = await reconcileTimerState({
+        apiClient: { startTimer },
+        getActiveLocalTimer: () => ({ synced_start: 0, idempotency_key: 'k', started_at: 'x' }),
+        mutationInProgress: true,
+      });
+      expect(res).toEqual({ skipped: 'guard-held' });
+      expect(startTimer).not.toHaveBeenCalled();
+    });
+  });
+
   describe('BUG 3: stop mutex serializes concurrent stops', () => {
     // Mirrors the _stopTimerInProgress guard in stopTimer().
     function makeStopper() {

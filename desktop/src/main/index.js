@@ -2712,12 +2712,23 @@ function startTimerSync() {
         // BUG FIX (phantom-stop-local-first-desync): a local-first start that has not
         // synced yet means the server has never seen it — its "not running" is stale.
         // Killing the timer here is what produced the "Start shown while timer still runs"
-        // desync. Keep local state; reconcileTimerState() will push the start on reconnect.
+        // desync. Keep local state, AND actively push the unsynced start so we don't wait
+        // for an offline→online transition (which never fires when the original POST failed
+        // transiently while net.isOnline() stayed true). reconcileTimerState() owns the
+        // correct push logic (real local started_at + idempotency_key), but it early-returns
+        // while _timerStateMutationInProgress is held — so we MUST release both guards first,
+        // then schedule reconcile via setImmediate (mirrors the pattern at the resume/idle
+        // paths). Gate on isOnline: when genuinely offline the 'online' handler will catch it.
         const _localActive = getActiveLocalTimer();
         if (_localActive && !_localActive.synced_start) {
-          console.log('[TimerSync] Server says stopped but local start is unsynced — keeping local state');
+          console.log('[TimerSync] Server says stopped but local start is unsynced — keeping local state and driving reconcile');
           _isSyncing = false;
           _timerStateMutationInProgress = false;
+          if (networkMonitor?.isOnline && offlineQueue && apiClient) {
+            setImmediate(() => {
+              reconcileTimerState().then(() => offlineQueue.flush(apiClient)).catch(() => {});
+            });
+          }
           return;
         }
         isTimerRunning = false;
