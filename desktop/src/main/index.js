@@ -1610,7 +1610,13 @@ function _repositionToPrimaryDisplay(win, windowWidth, windowHeight) {
     if (!win || win.isDestroyed()) return;
     const trayBounds = tray ? tray.getBounds() : { x: 0, y: 0, width: 0, height: 0 };
     const { x, y } = _calcPopupPosition(trayBounds, windowWidth, windowHeight);
-    win.setPosition(x, y, false);
+    // SHRINK FIX: re-assert BOTH position AND size on every show. On Windows
+    // fractional-DPI displays (125%/150%), Electron 42 rounds a frameless,
+    // non-resizable window's bounds down by the scale factor each time it is
+    // re-shown, so repeated taskbar/tray clicks shrank the popup a little more
+    // every click. Pinning the full bounds to the intended size here resets it
+    // to windowWidth x windowHeight each time instead of letting it drift.
+    win.setBounds({ x, y, width: windowWidth, height: windowHeight }, false);
   } catch {}
 }
 
@@ -1702,10 +1708,16 @@ function showPopup() {
   });
 
   // Hide on blur — debounced on all platforms to prevent show-then-immediately-hide
-  // race when the tray icon click steals focus before the popup can render
+  // race when the tray icon click steals focus before the popup can render.
   let blurTimeout = null;
   popupWindow.on('blur', () => {
     if (blurTimeout) { clearTimeout(blurTimeout); blurTimeout = null; }
+    // PIN FIX: when the window is pinned (always-on-top), the user explicitly
+    // wants it to stay visible while they work in other apps. Auto-hiding on
+    // blur here is what made "Pin" look broken — you'd click pin, click into
+    // another window, and the popup would vanish anyway. While pinned, never
+    // hide on blur; the user dismisses it via the tray click or close button.
+    if (isAlwaysOnTop) return;
     if (Date.now() - _lastTrayClickAt < 300) return;
     blurTimeout = setTimeout(() => {
       if (popupWindow && !popupWindow.isDestroyed() && !popupWindow.isFocused()) {
