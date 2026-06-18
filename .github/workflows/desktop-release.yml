@@ -242,6 +242,16 @@ jobs:
           cache: 'npm'
           cache-dependency-path: desktop/package-lock.json
 
+      # uiohook-napi is compiled from source against Electron 42 during
+      # install-app-deps and needs the X11 dev headers (X11/keysym.h, etc.).
+      # The ubuntu-latest runner ships without them, so install before npm ci.
+      - name: Install X11 build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev libxtst-dev libxt-dev libxinerama-dev \
+            libxkbcommon-dev libxkbfile-dev
+
       - name: Install dependencies
         working-directory: desktop
         run: npm ci
