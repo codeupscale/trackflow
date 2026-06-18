@@ -1004,6 +1004,22 @@ async function initializeApp() {
       ? todayTotalCurrentProject + Math.max(0, Math.floor((Date.now() - _cachedStartedAtMs) / 1000) - idleSeconds)
       : todayTotalCurrentProject;
     setTrayText(`⏸ ${formatTimeShort(frozenSeconds)}`);
+    // Freeze the MAIN WINDOW display at the same idle-start value as the tray.
+    // stopTrayTimer() above halted the per-second ticks, so without this the popup
+    // stays frozen at the LAST tick — which still includes the idle-threshold period
+    // (the ~5 min that triggered the prompt). Push one corrected tick so the popup
+    // matches the tray: frozen at the moment idle began, threshold excluded. The idle
+    // interval is not counted yet (pending keep/discard/reassign). On resolve,
+    // startTrayTimer() re-arms and the next live tick overwrites this value.
+    if (popupWindow && !popupWindow.isDestroyed()) {
+      popupWindow.webContents.send('timer-tick', {
+        totalSeconds: frozenSeconds,
+        formatted: formatTimeShort(frozenSeconds),
+        activityScore: 0,
+        lastScreenshotAt: _lastScreenshotAt,
+        isOnline: networkMonitor?.isOnline ?? true,
+      });
+    }
     showIdleAlert(idleSeconds, idleStartedAt, actionId);
   });
 
