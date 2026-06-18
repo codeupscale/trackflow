@@ -314,6 +314,71 @@ describe('ScreenshotService', () => {
   });
 
   // ═════════════════════════════════════════════════════════════════
+  // ── screenshot-captured callback ──
+  // Regression guard for bug "idle-keep-last-ss-indicator-stale": the
+  // _onScreenshotCaptured callback (which updates the main-side
+  // _lastScreenshotAt and pushes a live `activity-update` to the popup so the
+  // "Last SS …" indicator stays fresh) must fire on EVERY successful capture,
+  // and must persist across stop()/start() cycles (idle keep, sleep/wake, etc.)
+  // since it is registered once at service creation — not per start().
+  // ═════════════════════════════════════════════════════════════════
+
+  describe('setScreenshotCapturedCallback()', () => {
+    test('fires the callback when a screenshot is uploaded', async () => {
+      const onCaptured = jest.fn();
+      service.setScreenshotCapturedCallback(onCaptured);
+      service.currentEntryId = 'entry-1';
+      await service.capture();
+      expect(mockApiClient.confirmScreenshot).toHaveBeenCalled();
+      expect(onCaptured).toHaveBeenCalledTimes(1);
+    });
+
+    test('fires the callback when a screenshot is queued offline', async () => {
+      const onCaptured = jest.fn();
+      service.setScreenshotCapturedCallback(onCaptured);
+      service.currentEntryId = 'entry-1';
+      // Drive the offline-queue branch directly. The upload path retries 3x with
+      // real-time setTimeout backoff which doesn't play well with fake timers;
+      // _queueForOffline is the exact code that runs once those retries are
+      // exhausted, and it is what fires the captured callback on the offline path.
+      service._queueForOffline(
+        Buffer.alloc(50000, 0x42), 'VS Code', 'index.js', null,
+        new Date().toISOString(), 'idem-key', 75, 'entry-1'
+      );
+      expect(mockOfflineQueue.add).toHaveBeenCalledWith('screenshot', expect.any(Object));
+      expect(onCaptured).toHaveBeenCalledTimes(1);
+    });
+
+    test('callback survives stop()/start() — fires on captures after an idle→keep resume', async () => {
+      const onCaptured = jest.fn();
+      // Registered once (as initializeApp does), BEFORE any start()
+      service.setScreenshotCapturedCallback(onCaptured);
+
+      // First capture (normal tracking)
+      service.currentEntryId = 'entry-1';
+      await service.capture();
+      expect(onCaptured).toHaveBeenCalledTimes(1);
+
+      // Simulate idle: capture stops. stop() must NOT clear the callback.
+      service.stop();
+      expect(service._onScreenshotCaptured).toBe(onCaptured);
+
+      // Simulate "Keep idle time" resume: start() is called again WITHOUT
+      // re-registering the callback (the bug was that only afterStartTimer
+      // registered it, so resume paths lost it).
+      service.start('entry-1', { immediateCapture: false });
+      service.currentEntryId = 'entry-1';
+      await service.capture();
+      expect(onCaptured).toHaveBeenCalledTimes(2);
+    });
+
+    test('does not throw when no callback is registered', async () => {
+      service.currentEntryId = 'entry-1';
+      await expect(service.capture()).resolves.not.toThrow();
+    });
+  });
+
+  // ═════════════════════════════════════════════════════════════════
   // ── capture() — Screen Lock / Idle Detection ──
   // ═════════════════════════════════════════════════════════════════
 

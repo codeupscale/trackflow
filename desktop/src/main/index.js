@@ -935,6 +935,24 @@ async function initializeApp() {
   activityMonitor = new ActivityMonitor(apiClient, offlineQueue);
   const getIsAppVisible = () => popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible();
   screenshotService = new ScreenshotService(apiClient, config, offlineQueue, getIsAppVisible, activityMonitor);
+  // Register the screenshot-captured callback ONCE at service creation so that
+  // _lastScreenshotAt is updated and a live `activity-update` is pushed to the
+  // popup on EVERY capture — regardless of which path called screenshotService
+  // .start() (normal start, app-startup resume, idle keep/discard/reassign, or
+  // sleep/wake resume). Previously this was registered only inside
+  // afterStartTimer(), so any timer not started via that path (e.g. a timer
+  // resumed on app startup) never updated the "Last SS …" indicator, and after
+  // an idle → Keep cycle the indicator stayed empty/stale.
+  screenshotService.setScreenshotCapturedCallback(() => {
+    _lastScreenshotAt = new Date().toISOString();
+    if (popupWindow && !popupWindow.isDestroyed()) {
+      popupWindow.webContents.send('activity-update', {
+        activityScore: activityMonitor ? activityMonitor.getCurrentScore() : 0,
+        lastScreenshotAt: _lastScreenshotAt,
+        isOnline: networkMonitor?.isOnline ?? true,
+      });
+    }
+  });
   screenshotService.setRestartStateSaver(() => saveRestartState());
   screenshotService.setWallpaperDetectedCallback(() => {
     console.log('[Permission] Wallpaper-only capture detected — notifying renderer');
@@ -2110,17 +2128,10 @@ function afterStartTimer(projectIdForTotal, todayTotalForPopup) {
     }
     try {
       console.log(`[afterStartTimer] Calling screenshotService.start(${currentEntry.id})`);
-      // Update _lastScreenshotAt and push live activity-update to renderer on each capture
-      screenshotService.setScreenshotCapturedCallback(() => {
-        _lastScreenshotAt = new Date().toISOString();
-        if (popupWindow && !popupWindow.isDestroyed()) {
-          popupWindow.webContents.send('activity-update', {
-            activityScore: activityMonitor ? activityMonitor.getCurrentScore() : 0,
-            lastScreenshotAt: _lastScreenshotAt,
-            isOnline: networkMonitor?.isOnline ?? true,
-          });
-        }
-      });
+      // NOTE: the screenshot-captured callback (which updates _lastScreenshotAt
+      // and pushes a live `activity-update`) is registered once at service
+      // creation in initializeApp(), so it applies to every start() path —
+      // not just this one. Do not re-register it here.
       screenshotService.start(currentEntry.id);
       console.log('[afterStartTimer] screenshotService started');
     } catch (e) {
