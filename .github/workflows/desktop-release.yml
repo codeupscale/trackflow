@@ -76,6 +76,32 @@ jobs:
           echo "should_release=${SHOULD}" >> "$GITHUB_OUTPUT"
           echo "Resolved → channel=${CHANNEL} version=${VERSION} should_release=${SHOULD}"
 
+      # Pre-create the release ONCE here so the three parallel platform builds only
+      # ever UPLOAD assets to it — they never race to create the same release, which
+      # previously caused HTTP 422 "Published releases must have a valid tag" on the
+      # losing jobs. Dev channel is created as a prerelease.
+      - name: Create or reuse the GitHub release
+        if: steps.resolve.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.resolve.outputs.version }}"
+          if gh release view "$TAG" --repo ${{ github.repository }} >/dev/null 2>&1; then
+            echo "Release $TAG already exists — platform builds will upload to it."
+          else
+            PRERELEASE_FLAG=""
+            if [ "${{ steps.resolve.outputs.channel }}" = "dev" ]; then
+              PRERELEASE_FLAG="--prerelease"
+            fi
+            gh release create "$TAG" \
+              --repo ${{ github.repository }} \
+              --target "${{ github.sha }}" \
+              --title "TrackFlow Desktop ${{ steps.resolve.outputs.version }}" \
+              --notes "Automated ${{ steps.resolve.outputs.channel }} build of ${{ steps.resolve.outputs.version }}." \
+              $PRERELEASE_FLAG
+            echo "Created release $TAG (channel=${{ steps.resolve.outputs.channel }})."
+          fi
+
   # ── macOS build ───────────────────────────────────────────────────────────────
   build-mac:
     needs: preflight
@@ -248,9 +274,13 @@ jobs:
       - name: Install X11 build dependencies
         run: |
           sudo apt-get update
+          # Full set libuiohook needs to compile its X11 backend: Xtst, Xinerama,
+          # Xrandr, XInput2, Xkb, etc. Installed comprehensively so the native
+          # build doesn't fail one missing header at a time.
           sudo apt-get install -y \
             libx11-dev libxtst-dev libxt-dev libxinerama-dev \
-            libxkbcommon-dev libxkbfile-dev
+            libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev libxkbfile-dev \
+            libxrandr-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev
 
       - name: Install dependencies
         working-directory: desktop
@@ -453,3 +483,21 @@ jobs:
           - Windows: \`%APPDATA%/trackflow-agent/trackflow.log\`
           - Linux: \`~/.config/trackflow-agent/trackflow.log\`
           "
+
+  # ── Finalize dev prerelease ──────────────────────────────────────────────────
+  # Dev channel only. The release is pre-created as a prerelease in preflight, but
+  # electron-builder (releaseType=release) can flip the flag while uploading. This
+  # job re-asserts prerelease=true after the builds so dev releases never show up
+  # as "Latest". Runs if at least one platform produced artifacts.
+  finalize-dev-prerelease:
+    needs: [preflight, build-mac, build-windows, build-linux]
+    if: always() && needs.preflight.outputs.channel == 'dev' && (needs.build-mac.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce prerelease flag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "v${{ needs.preflight.outputs.version }}" \
+            --repo ${{ github.repository }} \
+            --prerelease --draft=false
