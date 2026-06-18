@@ -74,14 +74,17 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     }
   }, [isTimerRunning, queryClient]);
 
-  // If the permission store is empty (e.g. stale localStorage hydration or first load),
-  // re-fetch the current user so setPermissions() is called with fresh data.
+  // If the permission store is empty (e.g. stale localStorage hydration, first load, or a
+  // transient /auth/me failure that left the session intact), re-fetch the current user so
+  // setPermissions() repopulates the nav. Keyed on the empty condition too, so the sidebar
+  // self-heals whenever permissions go empty while still authenticated — not only on mount.
+  const permissionsEmpty = Object.keys(permissions).length === 0;
   useEffect(() => {
-    if (isAuthenticated && Object.keys(permissions).length === 0) {
+    if (isAuthenticated && permissionsEmpty) {
       fetchUser();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated]);
+  }, [isAuthenticated, permissionsEmpty]);
 
   const handleLogout = async () => {
     useTimerStore.getState().resetState();

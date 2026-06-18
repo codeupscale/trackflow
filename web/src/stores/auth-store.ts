@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import axios from 'axios';
 import api from '@/lib/api';
 import { identifyUser, resetUser } from '@/lib/posthog';
 import { usePermissionStore } from '@/stores/permission-store';
@@ -164,16 +165,36 @@ export const useAuthStore = create<AuthState>()(
           const res = await api.get('/auth/me');
           set({ user: res.data.user, isAuthenticated: true });
           identifyUser(res.data.user);
-          usePermissionStore.getState().setPermissions(res.data.user?.permissions ?? res.data.permissions ?? {});
-        } catch {
-          set({ user: null, isAuthenticated: false });
-          usePermissionStore.getState().clearPermissions();
+          // Only overwrite permissions when the response actually carries a non-empty map.
+          // Never clobber a previously-good map with {} (e.g. a 200 that omits permissions),
+          // which would blank the permission-gated sidebar.
+          const perms = res.data.user?.permissions ?? res.data.permissions;
+          if (perms && Object.keys(perms).length > 0) {
+            usePermissionStore.getState().setPermissions(perms);
+          }
+        } catch (err) {
+          // Only a genuine auth rejection clears the session. Transient failures —
+          // network/timeout, 5xx, or a cancelled/aborted request (axios ERR_CANCELED has
+          // no response.status) — must NOT wipe user/permissions, or any flaky /auth/me
+          // (the per-mount auth guard, the layout recovery effect, a post-save refresh)
+          // would empty the sidebar until re-login. Mirrors the desktop "don't logout on
+          // network error" rule in CLAUDE.md.
+          const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+          if (status === 401 || status === 403) {
+            set({ user: null, isAuthenticated: false });
+            usePermissionStore.getState().clearPermissions();
+          }
         }
       },
 
       setUser: (user: User) => {
         set({ user, isAuthenticated: true });
-        usePermissionStore.getState().setPermissions(user.permissions ?? {});
+        // Only set permissions when the user object actually carries a non-empty map.
+        // Profile/timezone update responses may omit permissions; blanking them here would
+        // empty the permission-gated sidebar (same failure mode as a destructive fetchUser).
+        if (user.permissions && Object.keys(user.permissions).length > 0) {
+          usePermissionStore.getState().setPermissions(user.permissions);
+        }
       },
 
       setTokens: (accessToken: string, refreshToken: string) => {
