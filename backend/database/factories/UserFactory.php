@@ -22,7 +22,7 @@ class UserFactory extends Factory
             'email_verified_at' => now(),
             'password' => static::$password ??= Hash::make('password'),
             'role' => 'employee',
-            'timezone' => 'America/New_York',
+            'timezone' => 'Asia/Karachi',
             'is_active' => true,
             'settings' => [],
             'remember_token' => Str::random(10),

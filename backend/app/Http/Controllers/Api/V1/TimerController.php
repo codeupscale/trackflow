@@ -11,7 +11,7 @@ class TimerController extends Controller
 {
     public function __construct(private TimerService $timerService) {}
 
-    // TIME-01: Start timer (with idempotency key support for offline sync)
+    // TIME-01: Start timer (with idempotency key + offline started_at support for sync)
     public function start(Request $request): JsonResponse
     {
         $request->validate([
@@ -19,11 +19,15 @@ class TimerController extends Controller
             'task_id' => 'nullable|uuid',
             'notes' => 'nullable|string|max:1000',
             'idempotency_key' => 'nullable|string|max:255',
+            // Offline-started timers send the REAL local start time so the server
+            // honors it instead of stamping now() at reconcile time (BUG 1).
+            // Skew bounds (future / far-past) are enforced in TimerService.
+            'started_at' => 'nullable|date',
         ]);
 
         try {
             $result = $this->timerService->startWithMeta(
-                $request->only('project_id', 'task_id', 'notes', 'idempotency_key')
+                $request->only('project_id', 'task_id', 'notes', 'idempotency_key', 'started_at')
             );
 
             $entry = $result['entry'];
@@ -34,29 +38,32 @@ class TimerController extends Controller
                 ['entry' => $entry, 'today_total' => $todayTotal],
                 $isExisting ? 200 : 201
             );
+        } catch (\InvalidArgumentException $e) {
+            // Bad offline timestamp (future / too far in the past).
+            return response()->json(['message' => $e->getMessage()], 422);
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 409);
         }
     }
 
-    // TIME-02: Stop timer (with offline timestamp support)
+    // TIME-02: Stop timer (with offline timestamp + specific-entry targeting support)
     public function stop(Request $request): JsonResponse
     {
         $request->validate([
-            'started_at' => 'nullable|date|before_or_equal:now',
-            'ended_at' => 'nullable|date|before_or_equal:now',
+            // Bind the stop to a SPECIFIC entry so an old/replayed offline stop can never
+            // close a freshly-started session (BUG 3). Optional for online stops.
+            'time_entry_id' => 'nullable|uuid',
+            // Allow a small clock-skew tolerance — the hard skew window is enforced in
+            // TimerService (so "now + 5min" is accepted but "now + 1h" is rejected 422).
+            'started_at' => 'nullable|date',
+            'ended_at' => 'nullable|date',
+            // Informational dedupe key the desktop may pass on reconcile.
+            'idempotency_key' => 'nullable|string|max:255',
         ]);
-
-        // Additional cross-field validation: ended_at must be after started_at
-        if ($request->filled('started_at') && $request->filled('ended_at')) {
-            $request->validate([
-                'ended_at' => 'after:started_at',
-            ]);
-        }
 
         try {
             $result = $this->timerService->stopWithMeta(
-                $request->only('started_at', 'ended_at')
+                $request->only('time_entry_id', 'started_at', 'ended_at', 'idempotency_key')
             );
 
             $entry = $result['entry'];
@@ -76,10 +83,11 @@ class TimerController extends Controller
         $request->validate([
             'project_id' => 'required|uuid',
             'task_id' => 'nullable|uuid',
+            'idempotency_key' => 'nullable|string|max:255',
         ]);
 
         try {
-            $result = $this->timerService->switchProject($request->only('project_id', 'task_id'));
+            $result = $this->timerService->switchProject($request->only('project_id', 'task_id', 'idempotency_key'));
             $todayTotal = $this->timerService->todayTotal($result['started']->project_id);
 
             return response()->json([

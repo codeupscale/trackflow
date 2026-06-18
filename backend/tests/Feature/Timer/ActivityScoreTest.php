@@ -98,7 +98,7 @@ class ActivityScoreTest extends TestCase
             ->with("timer:{$this->user->id}")
             ->andReturn($redisData);
         Redis::shouldReceive('set')
-            ->with("timer:lock:{$this->user->id}", 1, 'EX', 5, 'NX')
+            ->with("timer:lock:{$this->user->id}", 1, 'EX', 15, 'NX')
             ->andReturn(true);
         Redis::shouldReceive('del')
             ->with("timer:{$this->user->id}")
@@ -128,7 +128,7 @@ class ActivityScoreTest extends TestCase
             ->with("timer:{$this->user->id}")
             ->andReturn($redisData);
         Redis::shouldReceive('set')
-            ->with("timer:lock:{$this->user->id}", 1, 'EX', 5, 'NX')
+            ->with("timer:lock:{$this->user->id}", 1, 'EX', 15, 'NX')
             ->andReturn(true);
         Redis::shouldReceive('setex')
             ->withAnyArgs()

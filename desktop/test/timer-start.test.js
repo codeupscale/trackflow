@@ -116,6 +116,38 @@ describe('Timer Start', () => {
     await expect(client.startTimer('proj-1', 'key-1')).rejects.toThrow('timeout');
   });
 
+  test('BUG 1: startTimer sends started_at (real local start) when provided', async () => {
+    const startedAt = '2026-06-15T09:00:00.000Z';
+    const mockResponse = {
+      data: {
+        entry: { id: 'entry-ss', started_at: startedAt, project_id: 'proj-1' },
+        today_total: 0,
+      },
+    };
+    mockAxios.post.mockResolvedValueOnce(mockResponse);
+
+    await client.startTimer('proj-1', 'idem-key-ss', startedAt);
+
+    expect(mockAxios.post).toHaveBeenCalledWith(
+      '/timer/start',
+      { project_id: 'proj-1', idempotency_key: 'idem-key-ss', started_at: startedAt },
+      { timeout: 10000 }
+    );
+  });
+
+  test('BUG 1: startTimer omits started_at when not provided (no key, no start)', async () => {
+    const mockResponse = { data: { entry: { id: 'e' }, today_total: 0 } };
+    mockAxios.post.mockResolvedValueOnce(mockResponse);
+
+    await client.startTimer('proj-1');
+
+    expect(mockAxios.post).toHaveBeenCalledWith(
+      '/timer/start',
+      { project_id: 'proj-1' },
+      { timeout: 10000 }
+    );
+  });
+
   test('idempotency key returns existing entry on 200 (server has it)', async () => {
     // Server returns 200 (not 201) when idempotency key matches existing entry
     const mockResponse = {

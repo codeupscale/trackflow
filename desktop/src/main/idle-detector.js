@@ -84,6 +84,20 @@ class IdleDetector {
   start() {
     if (!this.enabled) return;
     const previousState = this._state;
+
+    // BUG B FIX: Never clobber an in-progress idle cycle. A spurious start()
+    // from the timer sync loop / reconcile (e.g. a transient `status.running &&
+    // !isTimerRunning` tick) used to reset idleStartedAt/alertShownAt to null and
+    // clear the auto-stop interval while the alert was DETECTED or ALERTING. If
+    // showIdleAlert() was mid-`await loadProjects()`, isIdleActive() then flipped
+    // to false and its guard swallowed the popup → the alert "sometimes doesn't
+    // appear". Treat start() as a no-op while an alert is live; the current cycle
+    // resolves through resolveIdle()/auto-stop and re-arms itself afterward.
+    if (previousState === IDLE_STATE.DETECTED || previousState === IDLE_STATE.ALERTING) {
+      console.warn(`[IdleDetector] start() called in active state ${previousState} — ignoring to preserve live alert`);
+      return;
+    }
+
     // Allow start from STOPPED or RESOLVED (re-arm after action)
     if (previousState !== IDLE_STATE.STOPPED && previousState !== IDLE_STATE.RESOLVED) {
       console.warn(`[IdleDetector] start() called in state ${previousState} — stopping first`);

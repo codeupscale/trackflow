@@ -9,6 +9,7 @@ use App\Models\OvertimeRule;
 use App\Models\PublicHoliday;
 use App\Models\TimeEntry;
 use App\Models\User;
+use App\Support\TimezoneAwareDateRange;
 use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
@@ -50,15 +51,21 @@ class AttendanceService
                 // Get the user's active shift for this date
                 $shift = $user->shifts->first();
 
-                // Query time entries for this user on this date
-                $dayStart = $carbonDate->copy()->startOfDay();
-                $dayEnd = $carbonDate->copy()->endOfDay();
+                // Query time entries for this user on this date.
+                // BUG FIX (attendance-present-marked-absent-utc-bucketing): the day
+                // boundary must be the user's LOCAL calendar day, converted to UTC bounds,
+                // not a raw UTC startOfDay()/endOfDay(). Otherwise early-morning local hours
+                // fall into the previous UTC day and a present employee is marked absent.
+                // started_at is stored in UTC; the bounds are [start, nextDayStart) — use <.
+                $userTz = $user->getTimezoneForDates();
+                $dayStart = TimezoneAwareDateRange::startOfDayUtc($date, $userTz);
+                $dayEnd = TimezoneAwareDateRange::endOfDayUtc($date, $userTz); // exclusive
 
                 $timeEntries = TimeEntry::withoutGlobalScopes()
                     ->where('organization_id', $orgId)
                     ->where('user_id', $user->id)
                     ->where('started_at', '>=', $dayStart)
-                    ->where('started_at', '<=', $dayEnd)
+                    ->where('started_at', '<', $dayEnd)
                     ->whereNotNull('ended_at')
                     ->orderBy('started_at')
                     ->get();
@@ -116,9 +123,11 @@ class AttendanceService
                     }
                 }
 
-                // Convert datetime to time strings for the time columns
-                $firstSeenTime = $firstSeen ? Carbon::parse($firstSeen)->format('H:i:s') : null;
-                $lastSeenTime = $lastSeen ? Carbon::parse($lastSeen)->format('H:i:s') : null;
+                // Convert datetime to time strings for the time columns.
+                // Render in the user's local timezone so a 09:00 local start shows as 09:00:00,
+                // not the UTC wall-clock (e.g. 04:00:00 for PKT).
+                $firstSeenTime = $firstSeen ? Carbon::parse($firstSeen)->setTimezone($userTz)->format('H:i:s') : null;
+                $lastSeenTime = $lastSeen ? Carbon::parse($lastSeen)->setTimezone($userTz)->format('H:i:s') : null;
 
                 AttendanceRecord::withoutGlobalScopes()->updateOrCreate(
                     [
