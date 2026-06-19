@@ -3762,7 +3762,10 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
         _idleAlertShownAt = Date.now();
         win.show();
         win.focus();
-        win.webContents.send("idle-data", buildIdleAlertPayload(_idleAlertShownAt));
+        win.webContents.send(
+            "idle-data",
+            buildIdleAlertPayload(_idleAlertShownAt),
+        );
     }
 
     // Primary: show as soon as first paint completes
@@ -4423,6 +4426,8 @@ function _friendlyLoginError(e) {
         return "Server is not responding. Please try again later.";
     if (e.code === "ETIMEDOUT" || e.code === "ECONNABORTED")
         return "Connection timed out. Please try again.";
+    if (e.response?.status === 409)
+        return "This account is already in use on another desktop.";
     if (e.response?.status === 404)
         return "Server endpoint not found. Please update the app.";
     return e.message || "Login failed. Please try again.";

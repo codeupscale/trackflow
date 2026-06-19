@@ -158,6 +158,11 @@ function writeTokensToDisk(tokens) {
   }
 }
 
+function getDeviceId() {
+  const secret = loadOrCreateDeviceSecret();
+  return crypto.createHash('sha256').update(secret).digest('hex');
+}
+
 async function getToken() {
   const tokens = readTokensFromDisk();
   return tokens.access_token || null;
@@ -192,4 +197,4 @@ async function deleteToken() {
   }
 }
 
-module.exports = { getToken, setToken, getRefreshToken, setRefreshToken, deleteToken };
+module.exports = { getToken, setToken, getRefreshToken, setRefreshToken, deleteToken, getDeviceId };

@@ -2,14 +2,26 @@
 
 namespace Tests\Feature\Auth;
 
+use App\Models\TimeEntry;
 use App\Models\User;
 use Tests\TestCase;
 
 class DesktopSingleSessionTest extends TestCase
 {
-    private const DESKTOP_HEADER = ['X-TrackFlow-Client' => 'desktop'];
+    private const DEVICE_A = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
-    public function test_second_desktop_login_revokes_first_desktop_session(): void
+    private const DEVICE_B = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+  /** @return array<string, string> */
+    private function desktopHeaders(string $deviceId = self::DEVICE_A): array
+    {
+        return [
+            'X-TrackFlow-Client' => 'desktop',
+            'X-Device-Id' => $deviceId,
+        ];
+    }
+
+    public function test_second_desktop_login_is_rejected_when_another_desktop_is_active(): void
     {
         $org = $this->createOrganization();
         User::factory()->create([
@@ -22,27 +34,76 @@ class DesktopSingleSessionTest extends TestCase
         $firstDesktop = $this->postJson('/api/v1/auth/login', [
             'email' => 'desktop@example.com',
             'password' => 'password123',
-        ], self::DESKTOP_HEADER)->assertOk();
-
-        $firstAccess = $firstDesktop->json('access_token');
-        $firstRefresh = $firstDesktop->json('refresh_token');
+        ], $this->desktopHeaders(self::DEVICE_A))->assertOk();
 
         $this->postJson('/api/v1/auth/login', [
             'email' => 'desktop@example.com',
             'password' => 'password123',
-        ], self::DESKTOP_HEADER)->assertOk();
+        ], $this->desktopHeaders(self::DEVICE_B))
+            ->assertStatus(409)
+            ->assertJsonFragment([
+                'message' => 'This account is already logged in on another desktop computer. Log out there first.',
+            ]);
 
-        $this->withHeader('Authorization', 'Bearer '.$firstAccess)
+        $this->withHeader('Authorization', 'Bearer '.$firstDesktop->json('access_token'))
             ->getJson('/api/v1/auth/me')
-            ->assertStatus(401);
-
-        $this->withHeader('Authorization', 'Bearer '.$firstRefresh)
-            ->withHeaders(self::DESKTOP_HEADER)
-            ->postJson('/api/v1/auth/refresh')
-            ->assertStatus(401);
+            ->assertOk();
     }
 
-    public function test_desktop_login_does_not_revoke_web_session(): void
+    public function test_same_desktop_device_can_relogin(): void
+    {
+        $org = $this->createOrganization();
+        User::factory()->create([
+            'organization_id' => $org->id,
+            'email' => 'relogin@example.com',
+            'password' => 'password123',
+            'role' => 'owner',
+        ]);
+
+        $this->postJson('/api/v1/auth/login', [
+            'email' => 'relogin@example.com',
+            'password' => 'password123',
+        ], $this->desktopHeaders())->assertOk();
+
+        $this->postJson('/api/v1/auth/login', [
+            'email' => 'relogin@example.com',
+            'password' => 'password123',
+        ], $this->desktopHeaders())->assertOk();
+    }
+
+    public function test_desktop_login_blocked_while_timer_is_running_on_another_desktop(): void
+    {
+        $org = $this->createOrganization();
+        $user = User::factory()->create([
+            'organization_id' => $org->id,
+            'email' => 'timer@example.com',
+            'password' => 'password123',
+            'role' => 'owner',
+        ]);
+
+        $this->postJson('/api/v1/auth/login', [
+            'email' => 'timer@example.com',
+            'password' => 'password123',
+        ], $this->desktopHeaders(self::DEVICE_A))->assertOk();
+
+        TimeEntry::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $user->id,
+            'started_at' => now()->subHour(),
+            'ended_at' => null,
+        ]);
+
+        $this->postJson('/api/v1/auth/login', [
+            'email' => 'timer@example.com',
+            'password' => 'password123',
+        ], $this->desktopHeaders(self::DEVICE_B))
+            ->assertStatus(409)
+            ->assertJsonFragment([
+                'message' => 'A timer is running on another desktop. Stop the timer and log out there before signing in here.',
+            ]);
+    }
+
+    public function test_desktop_login_does_not_block_web_session(): void
     {
         $org = $this->createOrganization();
         User::factory()->create([
@@ -57,20 +118,17 @@ class DesktopSingleSessionTest extends TestCase
             'password' => 'password123',
         ])->assertOk();
 
-        $webAccess = $web->json('access_token');
-
         $this->postJson('/api/v1/auth/login', [
             'email' => 'mixed@example.com',
             'password' => 'password123',
-        ], self::DESKTOP_HEADER)->assertOk();
+        ], $this->desktopHeaders())->assertOk();
 
-        $this->withHeader('Authorization', 'Bearer '.$webAccess)
+        $this->withHeader('Authorization', 'Bearer '.$web->json('access_token'))
             ->getJson('/api/v1/auth/me')
-            ->assertOk()
-            ->assertJsonPath('user.email', 'mixed@example.com');
+            ->assertOk();
     }
 
-    public function test_web_login_does_not_revoke_active_desktop_session(): void
+    public function test_web_login_does_not_block_active_desktop_session(): void
     {
         $org = $this->createOrganization();
         User::factory()->create([
@@ -83,18 +141,33 @@ class DesktopSingleSessionTest extends TestCase
         $desktop = $this->postJson('/api/v1/auth/login', [
             'email' => 'webfirst@example.com',
             'password' => 'password123',
-        ], self::DESKTOP_HEADER)->assertOk();
-
-        $desktopAccess = $desktop->json('access_token');
+        ], $this->desktopHeaders())->assertOk();
 
         $this->postJson('/api/v1/auth/login', [
             'email' => 'webfirst@example.com',
             'password' => 'password123',
         ])->assertOk();
 
-        $this->withHeader('Authorization', 'Bearer '.$desktopAccess)
+        $this->withHeader('Authorization', 'Bearer '.$desktop->json('access_token'))
             ->getJson('/api/v1/auth/me')
-            ->assertOk()
-            ->assertJsonPath('user.email', 'webfirst@example.com');
+            ->assertOk();
+    }
+
+    public function test_desktop_login_requires_device_id_header(): void
+    {
+        $org = $this->createOrganization();
+        User::factory()->create([
+            'organization_id' => $org->id,
+            'email' => 'nodevice@example.com',
+            'password' => 'password123',
+            'role' => 'owner',
+        ]);
+
+        $this->postJson('/api/v1/auth/login', [
+            'email' => 'nodevice@example.com',
+            'password' => 'password123',
+        ], ['X-TrackFlow-Client' => 'desktop'])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['device']);
     }
 }

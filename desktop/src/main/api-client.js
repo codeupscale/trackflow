@@ -3,6 +3,14 @@ const axios = require('axios');
 // Production API — change this when deploying to a new server
 const API_BASE = process.env.TRACKFLOW_API_URL || 'https://trackflow.codeupscale.com/api/v1';
 
+function getDesktopDeviceId() {
+  try {
+    return require('./keychain').getDeviceId();
+  } catch {
+    return null;
+  }
+}
+
 class ApiClient {
   constructor(token, refreshToken = null) {
     this.refreshToken = refreshToken;
@@ -30,6 +38,7 @@ class ApiClient {
         'Accept': 'application/json',
         'X-Agent-Version': agentVersion,
         'X-TrackFlow-Client': 'desktop',
+        ...(getDesktopDeviceId() ? { 'X-Device-Id': getDesktopDeviceId() } : {}),
       },
       timeout: 15000, // Default timeout; overridden per-call where needed
     });
@@ -101,6 +110,7 @@ class ApiClient {
         'Authorization': `Bearer ${this.refreshToken}`,
         'Accept': 'application/json',
         'X-TrackFlow-Client': 'desktop',
+        ...(getDesktopDeviceId() ? { 'X-Device-Id': getDesktopDeviceId() } : {}),
       },
       timeout: 15000,
     });

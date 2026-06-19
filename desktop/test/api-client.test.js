@@ -1,4 +1,9 @@
 const axios = require('axios');
+
+jest.mock('../src/main/keychain', () => ({
+  getDeviceId: jest.fn(() => 'a'.repeat(64)),
+}));
+
 const ApiClient = require('../src/main/api-client');
 
 // Mock axios
@@ -38,6 +43,7 @@ describe('ApiClient', () => {
           'Accept': 'application/json',
           'X-Agent-Version': require('../package.json').version,
           'X-TrackFlow-Client': 'desktop',
+          'X-Device-Id': 'a'.repeat(64),
         }),
       })
     );

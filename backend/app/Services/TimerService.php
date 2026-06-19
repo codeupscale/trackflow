@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Events\TimerStarted;
 use App\Events\TimerStopped;
 use App\Models\Project;
+use App\Models\User;
 use App\Models\TimeEntry;
 use App\Models\ActivityLog;
 use App\Services\AppUsageService;
@@ -745,6 +746,15 @@ class TimerService
         $elapsed = max(0, (int) $entry->started_at->diffInSeconds($end, false));
 
         return min($elapsed, self::MAX_ENTRY_DURATION);
+    }
+
+    public function userHasOpenTimer(User $user): bool
+    {
+        return TimeEntry::query()
+            ->where('user_id', $user->id)
+            ->where('organization_id', $user->organization_id)
+            ->whereNull('ended_at')
+            ->exists();
     }
 
     /**

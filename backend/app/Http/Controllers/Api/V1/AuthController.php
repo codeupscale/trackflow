@@ -223,12 +223,19 @@ class AuthController extends Controller
             return response()->json(['message' => 'No active account found in the selected organization.'], 404);
         }
 
-        // Delete only the current token (preserve other device sessions)
-        $request->user()->currentAccessToken()->delete();
+        $currentToken = $request->user()->currentAccessToken();
+        $client = AuthTokenService::clientFromRequest($request);
+        $deviceId = $client === AuthTokenService::CLIENT_DESKTOP
+            ? $this->authTokens->tokenDeviceId($currentToken)
+            : null;
+
+        $currentToken->delete();
 
         $tokens = $this->authTokens->issueTokenPair(
             $targetUser,
-            AuthTokenService::clientFromRequest($request)
+            $client,
+            replaceClientSessions: false,
+            deviceId: $deviceId,
         );
 
         $targetUser->update(['last_active_at' => now()]);
@@ -643,9 +650,19 @@ class AuthController extends Controller
     /** Issue access + refresh tokens and return a standard login response. */
     private function issueTokensAndRespond(User $user, bool $isNewUser = false, string $method = 'email'): JsonResponse
     {
+        $client = AuthTokenService::clientFromRequest();
+        $deviceId = null;
+
+        if ($client === AuthTokenService::CLIENT_DESKTOP) {
+            $deviceId = $this->authTokens->requireDeviceIdFromRequest();
+            $this->authTokens->assertDesktopLoginAllowed($user, $deviceId);
+        }
+
         $tokens = $this->authTokens->issueTokenPair(
             $user,
-            AuthTokenService::clientFromRequest()
+            $client,
+            replaceClientSessions: true,
+            deviceId: $deviceId,
         );
 
         $user->update(['last_active_at' => now()]);
