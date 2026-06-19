@@ -10,6 +10,7 @@ use App\Models\Invitation;
 use App\Models\Organization;
 use App\Models\User;
 use App\Services\AuditService;
+use App\Services\AuthTokenService;
 use App\Services\RbacBootstrapService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,6 +23,10 @@ use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
+    public function __construct(
+        private readonly AuthTokenService $authTokens,
+    ) {}
+
     /** AUTH-01: Register new organization + owner */
     public function register(RegisterRequest $request): JsonResponse
     {
@@ -54,15 +59,14 @@ class AuthController extends Controller
             return $user;
         });
 
-        $token = $user->createToken('access_token', ['*'], now()->addMinutes(config('security.tokens.access_ttl')));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addMinutes(config('security.tokens.refresh_ttl')));
+        $tokens = $this->authTokens->issueTokenPair($user);
 
         AuditService::log('auth.register', $user, [], $user);
 
         return response()->json([
             'user' => $this->userResponse($user),
-            'access_token' => $token->plainTextToken,
-            'refresh_token' => $refreshToken->plainTextToken,
+            'access_token' => $tokens['access_token'],
+            'refresh_token' => $tokens['refresh_token'],
             'token_type' => 'Bearer',
         ], 201);
     }
@@ -222,11 +226,10 @@ class AuthController extends Controller
         // Delete only the current token (preserve other device sessions)
         $request->user()->currentAccessToken()->delete();
 
-        // Issue new tokens for the target org's user row
-        $targetUser->tokens()->where('expires_at', '<', now())->delete();
-
-        $token = $targetUser->createToken('access_token', ['*'], now()->addMinutes(config('security.tokens.access_ttl')));
-        $refreshToken = $targetUser->createToken('refresh_token', ['refresh'], now()->addMinutes(config('security.tokens.refresh_ttl')));
+        $tokens = $this->authTokens->issueTokenPair(
+            $targetUser,
+            AuthTokenService::clientFromRequest($request)
+        );
 
         $targetUser->update(['last_active_at' => now()]);
         AuditService::log('auth.switch_org', $targetUser, [
@@ -236,8 +239,8 @@ class AuthController extends Controller
 
         return response()->json([
             'user' => $this->userResponse($targetUser),
-            'access_token' => $token->plainTextToken,
-            'refresh_token' => $refreshToken->plainTextToken,
+            'access_token' => $tokens['access_token'],
+            'refresh_token' => $tokens['refresh_token'],
             'token_type' => 'Bearer',
         ]);
     }
@@ -252,18 +255,11 @@ class AuthController extends Controller
             return response()->json(['message' => 'Invalid refresh token.'], 401);
         }
 
-        // Delete only the current refresh token (not all tokens — preserve other device sessions)
-        $user->currentAccessToken()->delete();
-
-        // Clean up expired tokens
-        $user->tokens()->where('expires_at', '<', now())->delete();
-
-        $token = $user->createToken('access_token', ['*'], now()->addMinutes(config('security.tokens.access_ttl')));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addMinutes(config('security.tokens.refresh_ttl')));
+        $tokens = $this->authTokens->rotateCurrentSession($user);
 
         return response()->json([
-            'access_token' => $token->plainTextToken,
-            'refresh_token' => $refreshToken->plainTextToken,
+            'access_token' => $tokens['access_token'],
+            'refresh_token' => $tokens['refresh_token'],
             'token_type' => 'Bearer',
         ]);
     }
@@ -571,17 +567,18 @@ class AuthController extends Controller
         ])->save();
 
         // Revoke all tokens (web + desktop) and return fresh tokens so current session stays logged in.
-        $user->tokens()->delete();
-
-        $token = $user->createToken('access_token', ['*'], now()->addMinutes(config('security.tokens.access_ttl')));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addMinutes(config('security.tokens.refresh_ttl')));
+        $this->authTokens->revokeAllTokens($user);
+        $tokens = $this->authTokens->issueTokenPair(
+            $user,
+            AuthTokenService::clientFromRequest($request)
+        );
 
         AuditService::log('auth.password_changed', $user, [], $user);
 
         return response()->json([
             'message' => 'Password updated successfully.',
-            'access_token' => $token->plainTextToken,
-            'refresh_token' => $refreshToken->plainTextToken,
+            'access_token' => $tokens['access_token'],
+            'refresh_token' => $tokens['refresh_token'],
             'token_type' => 'Bearer',
         ]);
     }
@@ -646,18 +643,21 @@ class AuthController extends Controller
     /** Issue access + refresh tokens and return a standard login response. */
     private function issueTokensAndRespond(User $user, bool $isNewUser = false, string $method = 'email'): JsonResponse
     {
-        $user->tokens()->where('expires_at', '<', now())->delete();
-
-        $token = $user->createToken('access_token', ['*'], now()->addMinutes(config('security.tokens.access_ttl')));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addMinutes(config('security.tokens.refresh_ttl')));
+        $tokens = $this->authTokens->issueTokenPair(
+            $user,
+            AuthTokenService::clientFromRequest()
+        );
 
         $user->update(['last_active_at' => now()]);
-        AuditService::log($isNewUser ? 'auth.register' : 'auth.login', $user, ['method' => $method], $user);
+        AuditService::log($isNewUser ? 'auth.register' : 'auth.login', $user, [
+            'method' => $method,
+            'client' => AuthTokenService::clientFromRequest(),
+        ], $user);
 
         return response()->json([
             'user' => $this->userResponse($user),
-            'access_token' => $token->plainTextToken,
-            'refresh_token' => $refreshToken->plainTextToken,
+            'access_token' => $tokens['access_token'],
+            'refresh_token' => $tokens['refresh_token'],
             'token_type' => 'Bearer',
         ], $isNewUser ? 201 : 200);
     }

@@ -37,6 +37,7 @@ describe('ApiClient', () => {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
           'X-Agent-Version': require('../package.json').version,
+          'X-TrackFlow-Client': 'desktop',
         }),
       })
     );

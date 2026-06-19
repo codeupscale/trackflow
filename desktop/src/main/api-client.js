@@ -29,6 +29,7 @@ class ApiClient {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         'X-Agent-Version': agentVersion,
+        'X-TrackFlow-Client': 'desktop',
       },
       timeout: 15000, // Default timeout; overridden per-call where needed
     });
@@ -99,6 +100,7 @@ class ApiClient {
       headers: {
         'Authorization': `Bearer ${this.refreshToken}`,
         'Accept': 'application/json',
+        'X-TrackFlow-Client': 'desktop',
       },
       timeout: 15000,
     });
