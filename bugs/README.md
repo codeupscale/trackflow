@@ -1,35 +1,53 @@
-# Known Bugs — Timer Sync Layer
+# Bug Reports — TrackFlow
 
-This folder tracks known, investigated bugs that are **not yet fixed**. Each file documents
-root cause, evidence (file:line), and the recommended fix so future work can address them.
+Investigated defects across the desktop agent, web dashboard, and Laravel backend. Each file
+documents symptom, scope, severity, root cause, evidence (`file:line`), and fix recommendation
+or resolution summary.
 
-> **Verdict on architecture:** The local-first timer design is _sound_ and does **not** need a
-> rewrite. The bugs below are implementation defects in the sync layer — targeted fixes, not a
-> redesign.
+> **Verdict on timer architecture:** The local-first timer design is _sound_ and does **not**
+> need a rewrite. Most timer bugs were implementation defects in the sync layer — targeted fixes,
+> not a redesign.
+
+## Status legend
+
+| Marker | Meaning |
+| ------ | ------- |
+| 🔴 OPEN | Not fixed — still actionable |
+| 🟡 | Partial fix or needs product decision / follow-up |
+| ✅ FIXED | Resolved on `develop` (unless the report notes otherwise) |
+
+Verify `file:line` references still match the codebase before implementing from an older report.
 
 ## Index
 
-| File                                                                                                   | Area                                      | Severity            | Symptom                                                                                                                                                                                                                                                                                                                         |
-| ------------------------------------------------------------------------------------------------------ | ----------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [timer-sync-bugs.md](timer-sync-bugs.md)                                                               | Desktop + Backend timer sync              | P0–P2               | Wrong durations on weak internet, incorrect displayed time, new session clashing with old                                                                                                                                                                                                                                       |
-| [tech-debt.md](tech-debt.md)                                                                           | Stack versions (all 3 codebases)          | P1–P3               | Electron 28 end-of-life (security); PHP 8.2 aging                                                                                                                                                                                                                                                                               |
-| [electron-42-screen-permission-regression.md](electron-42-screen-permission-regression.md)             | Desktop / macOS screen permission         | P0 (blocks upgrade) | Electron 42 `desktopCapturer.getSources()` rejects → app never registers in Screen Recording list                                                                                                                                                                                                                               |
-| [auth-and-idle-bugs.md](auth-and-idle-bugs.md)                                                         | Desktop auth + idle                       | P1                  | ✅ FIXED — re-login on every restart (volatile MAC-based key); idle popup intermittent (spurious detector restart)                                                                                                                                                                                                              |
-| [timezone-midnight-rolls-to-previous-day.md](timezone-midnight-rolls-to-previous-day.md)               | Backend timezone + screenshot date path   | P1                  | ✅ FIXED — default tz → `Asia/Karachi`, web detects device tz, existing rows backfilled, screenshot S3 date folder now timezone-aware                                                                                                                                                                                           |
-| [phantom-stop-local-first-desync.md](phantom-stop-local-first-desync.md)                               | Desktop main ↔ renderer timer state       | P1                  | ✅ FIXED — server-sync paths no longer discard an unsynced local-first session; sync-loop stop carries `_stateVersion`; Start re-broadcasts running state (desktop 437/437 green)                                                                                                                                               |
-| [unsynced-start-stuck-tracking-desync.md](unsynced-start-stuck-tracking-desync.md)                     | Desktop main ↔ Backend `/timer/status`    | P1                  | ✅ FIXED — sync loop now _pushes_ (not just keeps) an unsynced local start via reconcile when online, so a transiently-failed `POST /timer/start` with no network transition no longer leaves desktop "Tracking" while web shows "Not tracking" (desktop 441/441 green)                                                         |
-| [attendance-present-marked-absent-utc-bucketing.md](attendance-present-marked-absent-utc-bucketing.md) | Backend HR attendance generation          | P1                  | 🟡 PRIMARY FIXED — day window now uses the employee's timezone (no more present→absent); Causes B/C/D (overlap bucketing, open entries, threshold/heartbeat) tracked as follow-ups                                                                                                                                              |
-| [web-timezone-save-empties-sidebar.md](web-timezone-save-empties-sidebar.md)                           | Web auth/permission state ↔ sidebar       | P1                  | ✅ FIXED — `fetchUser()`/`setUser()` no longer wipe user+permissions except on real 401/403 (transient/5xx/cancelled requests now leave the session intact); success paths only set a non-empty permission map; timezone mutation merges locally instead of re-fetching; layout self-heals on empty permissions (web tsc clean) |
-| [timer-window-pin-blur-and-dpi-shrink.md](timer-window-pin-blur-and-dpi-shrink.md)                     | Desktop timer popup window (pin/blur/DPI) | P1                  | ✅ FIXED — pin now suppresses blur-to-hide (pinned window stays visible on click-away); popup re-asserts full bounds on every show so it no longer shrinks per click on Windows fractional-DPI displays                                                                                                                         |
-| [timer-reset-after-break-phantom-stop.md](timer-reset-after-break-phantom-stop.md)                     | Desktop + Backend `/timer/status`         | P0                  | ✅ FIXED — timer jumped to ~0 after long break on poor internet; Redis-missing status phantom-stopped desktop; get-timer-state bypassed local anchor                                                                                                                                                                            |
-| [timer-sleep-hard-auto-stop.md](timer-sleep-hard-auto-stop.md)                                         | Desktop power events                      | P0                  | ✅ FIXED — hard auto-stop on sleep/lock/shutdown; startup gap detection via `lastActiveAt`; no overnight counting                                                                                                                                                                                                               |
-| [idle-reassign-empty-projects.md](idle-reassign-empty-projects.md)                                     | Desktop idle reassign dropdown            | P1                  | ✅ FIXED — reassign project list empty on idle reappear; idle popup now uses 30 min cached projects, no blocking API call on slow internet                                                                                                                                                                                      |
-| [idle-autostop-countdown-wrong.md](idle-autostop-countdown-wrong.md)                                   | Desktop idle alert auto-stop countdown    | P1                  | ✅ FIXED — footer showed absurd values (e.g. 8584:14); countdown now matches detector (grace after popup shown, not idle start)                                                                                                                                                                                                 |
-| [idle-keep-time-not-added.md](idle-keep-time-not-added.md)                                             | Desktop idle "Keep" action                | P2                  | 🟡 PARTIAL — server-side pause/resume now freezes web elapsed during idle; keep still retains idle time in entry (by design); stale-action trap fixed with user-visible error                                                                                                                                                   |
-| [single-desktop-session.md](single-desktop-session.md)                                                 | Backend auth + desktop agent              | P1                  | ✅ FIXED — second desktop login blocked (409) while another desktop session or open timer exists; web + one desktop allowed; per-machine `X-Device-Id`                                                                                                                                                                          |
+| File | Area | Severity | Status / symptom |
+| ---- | ---- | -------- | ---------------- |
+| [attendance-present-marked-absent-utc-bucketing.md](attendance-present-marked-absent-utc-bucketing.md) | Backend HR attendance | P1 | 🟡 PRIMARY FIXED — employee timezone day window; overlap bucketing / open entries / heartbeat thresholds still tracked as follow-ups |
+| [auth-and-idle-bugs.md](auth-and-idle-bugs.md) | Desktop auth + idle | P1 | ✅ FIXED — volatile MAC-based token key forced re-login every restart; idle popup intermittent (spurious detector restart) |
+| [electron-42-screen-permission-regression.md](electron-42-screen-permission-regression.md) | Desktop / macOS screen permission | P0 | 🔴 OPEN — Electron 42 `desktopCapturer.getSources()` rejects; app may not register in Screen Recording list (blocks upgrade) |
+| [idle-autostop-countdown-wrong.md](idle-autostop-countdown-wrong.md) | Desktop idle alert countdown | P1 | ✅ FIXED — footer showed absurd values (e.g. 8584:14); countdown uses grace after popup shown, not idle start |
+| [idle-keep-last-ss-indicator-stale.md](idle-keep-last-ss-indicator-stale.md) | Desktop screenshot indicator | P2 | ✅ FIXED — "Last SS …" stale/empty after idle Keep or app-startup resume; callback now registered on all `screenshotService.start()` paths |
+| [idle-keep-time-not-added.md](idle-keep-time-not-added.md) | Desktop idle "Keep" action | P2 | 🟡 PARTIAL — pause/resume freezes web elapsed during idle; keep retains idle time by design; stale-action trap shows user-visible error |
+| [idle-popup-frozen-time-includes-threshold.md](idle-popup-frozen-time-includes-threshold.md) | Desktop main popup timer display | P2 | ✅ FIXED — timer froze including idle threshold minutes; now freezes at idle-start elapsed |
+| [idle-reassign-empty-projects.md](idle-reassign-empty-projects.md) | Desktop idle reassign dropdown | P1 | ✅ FIXED — empty project list on idle reappear; 30 min cached projects, no blocking API on slow internet |
+| [phantom-stop-local-first-desync.md](phantom-stop-local-first-desync.md) | Desktop main ↔ renderer timer | P1 | ✅ FIXED — server-sync paths no longer discard unsynced local-first session; sync-loop stop carries `_stateVersion` |
+| [single-desktop-session.md](single-desktop-session.md) | Backend auth + desktop agent | P1 | ✅ FIXED — second desktop login blocked (409) when another desktop session or open timer exists; web + one desktop allowed; `X-Device-Id` |
+| [tech-debt.md](tech-debt.md) | Stack versions (all codebases) | P1–P3 | 🔴 OPEN — Electron 28 EOL (security); PHP 8.2 aging |
+| [timer-reset-after-break-phantom-stop.md](timer-reset-after-break-phantom-stop.md) | Desktop + Backend `/timer/status` | P0 | ✅ FIXED — timer jumped to ~0 after long break; Redis-missing status phantom-stopped desktop; `get-timer-state` bypassed local anchor |
+| [timer-sleep-hard-auto-stop.md](timer-sleep-hard-auto-stop.md) | Desktop power events | P0 | ✅ FIXED — hard auto-stop on sleep/lock/shutdown; startup gap via `lastActiveAt`; no overnight counting |
+| [timer-sync-bugs.md](timer-sync-bugs.md) | Desktop + Backend timer sync | P0–P2 | ✅ FIXED — weak-internet wrong durations, session clashes, stop targeting; shared start/stop contract + idempotency |
+| [timer-window-pin-blur-and-dpi-shrink.md](timer-window-pin-blur-and-dpi-shrink.md) | Desktop timer popup (pin/blur/DPI) | P1 | ✅ FIXED — pin suppresses blur-to-hide; popup re-asserts bounds on show (Windows fractional DPI) |
+| [timezone-midnight-rolls-to-previous-day.md](timezone-midnight-rolls-to-previous-day.md) | Backend timezone + screenshots | P1 | ✅ FIXED — default `Asia/Karachi`, web device tz, backfill, timezone-aware S3 date folders |
+| [unsynced-start-stuck-tracking-desync.md](unsynced-start-stuck-tracking-desync.md) | Desktop ↔ `/timer/status` | P1 | ✅ FIXED — sync loop pushes unsynced local start via reconcile; desktop "Tracking" vs web "Not tracking" desync |
+| [web-timezone-save-empties-sidebar.md](web-timezone-save-empties-sidebar.md) | Web auth/permissions ↔ sidebar | P1 | ✅ FIXED — `fetchUser()` no longer wipes permissions on transient errors; timezone save merges locally |
+
+## Workflow
+
+1. **Before fixing** — read this index and the relevant `bugs/*.md` file for root cause and recommended fix.
+2. **When a new bug is found** — add or extend a report (one file per issue area).
+3. **After a fix is merged** — update the report status to `✅ FIXED` (or `🟡` for partial), add resolution summary with date/branch, and refresh this index table.
 
 ## How these were found
 
-Read-only investigation across the desktop agent (`desktop/src/main/`) and the Laravel backend
-(`backend/app/Services/TimerService.php`, `TimerController.php`) on 2026-06-15. All file:line
-references were accurate at that time — verify they still match before fixing.
+- **2026-06-15** — Read-only timer sync investigation (`desktop/src/main/`, `TimerService.php`, `TimerController.php`).
+- **2026-06-16 – 2026-06-19** — Auth, idle, timezone, HR attendance, web permission state, desktop session enforcement, and power/sleep fixes documented as they were investigated and merged to `develop`.
