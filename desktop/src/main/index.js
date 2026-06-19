@@ -3665,6 +3665,22 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     // Capture the actionId at call time; if not provided, read from detector
     const alertActionId = actionId ?? idleDetector?.getActionId() ?? 0;
 
+    function buildIdleAlertPayload(alertShownAtMs) {
+        const shownAt =
+            alertShownAtMs ??
+            _idleAlertShownAt ??
+            idleDetector?.alertShownAt ??
+            Date.now();
+        return {
+            idleStartedAt,
+            idleSeconds,
+            actionId: alertActionId,
+            alertShownAt: shownAt,
+            autoStopGraceSec: idleDetector?.alertAutoStopSec ?? 0,
+            projects: cachedProjects || [],
+        };
+    }
+
     if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
         // Alert already showing — bring it to front and update idle data
         idleAlertWindow.focus();
@@ -3673,15 +3689,10 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
         }
         // Update the action ID on the window so the close handler uses the latest
         idleAlertWindow._actionId = alertActionId;
-        idleAlertWindow.webContents.send("idle-data", {
-            idleStartedAt,
-            idleSeconds,
-            actionId: alertActionId,
-            autoStopTotalSec: idleDetector
-                ? idleDetector.idleTimeoutSec + idleDetector.alertAutoStopSec
-                : 0,
-            projects: cachedProjects || [],
-        });
+        idleAlertWindow.webContents.send(
+            "idle-data",
+            buildIdleAlertPayload(_idleAlertShownAt),
+        );
         return;
     }
     // BUG-2 FIX: Check idle detector state instead of isTimerRunning to avoid race condition
@@ -3751,15 +3762,7 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
         _idleAlertShownAt = Date.now();
         win.show();
         win.focus();
-        win.webContents.send("idle-data", {
-            idleStartedAt,
-            idleSeconds,
-            actionId: alertActionId,
-            autoStopTotalSec: idleDetector
-                ? idleDetector.idleTimeoutSec + idleDetector.alertAutoStopSec
-                : 0,
-            projects: cachedProjects || [],
-        });
+        win.webContents.send("idle-data", buildIdleAlertPayload(_idleAlertShownAt));
     }
 
     // Primary: show as soon as first paint completes

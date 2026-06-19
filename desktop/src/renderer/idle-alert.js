@@ -29,10 +29,40 @@ let currentActionId = null;
 // Guard against double-sends (e.g., keyboard shortcut + button click)
 let actionSent = false;
 
-// Auto-stop countdown state
-let autoStopTotalSec = 0; // total seconds from idle start to auto-stop
+// Auto-stop countdown: grace period after popup shown (matches IdleDetector._checkAutoStop)
+let alertShownAtMs = null;
+let autoStopGraceSec = 0;
 let autoStopBar = document.getElementById("autoStopBar");
 let autoStopCountdownEl = document.getElementById("autoStopCountdown");
+
+function toTimestampMs(value) {
+    if (value == null) return null;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+        const parsed = Date.parse(value);
+        return Number.isNaN(parsed) ? null : parsed;
+    }
+    return null;
+}
+
+function computeAutoStopRemainingSec(nowMs = Date.now()) {
+    if (!alertShownAtMs || !autoStopGraceSec || autoStopGraceSec <= 0) {
+        return null;
+    }
+    const deadlineMs = alertShownAtMs + autoStopGraceSec * 1000;
+    return Math.max(0, Math.floor((deadlineMs - nowMs) / 1000));
+}
+
+function updateAutoStopCountdownDisplay(nowMs = Date.now()) {
+    if (!autoStopBar || !autoStopCountdownEl) return;
+    const remaining = computeAutoStopRemainingSec(nowMs);
+    if (remaining == null) {
+        autoStopBar.style.display = "none";
+        return;
+    }
+    autoStopBar.style.display = "";
+    autoStopCountdownEl.textContent = formatCountdown(remaining);
+}
 
 function formatIdleTime(seconds) {
     // Guard against negative or absurdly large values (>99h would overflow display)
@@ -60,23 +90,15 @@ function startTicking() {
         const elapsed = Math.floor((Date.now() - idleStartMs) / 1000);
         idleTimeEl.textContent = formatIdleTime(elapsed);
 
-        // Update auto-stop countdown if configured
-        if (autoStopTotalSec > 0 && autoStopBar && autoStopCountdownEl) {
-            const remaining = autoStopTotalSec - elapsed;
-            if (remaining > 0) {
-                autoStopBar.style.display = "";
-                autoStopCountdownEl.textContent = formatCountdown(remaining);
-            } else {
-                autoStopCountdownEl.textContent = "0:00";
-            }
-        }
+        updateAutoStopCountdownDisplay();
     }, 1000);
 }
 
 let projects = [];
 
 window.trackflow.onIdleData((data) => {
-    if (data.idleStartedAt) idleStartMs = data.idleStartedAt;
+    const parsedIdleStart = toTimestampMs(data.idleStartedAt);
+    if (parsedIdleStart != null) idleStartMs = parsedIdleStart;
     if (data.actionId != null) currentActionId = data.actionId;
 
     // Reset actionSent when new idle data arrives (e.g., resume after suspend
@@ -87,16 +109,13 @@ window.trackflow.onIdleData((data) => {
     const elapsed = Math.floor((Date.now() - idleStartMs) / 1000);
     idleTimeEl.textContent = formatIdleTime(elapsed);
 
-    // Configure auto-stop countdown
-    // autoStopTotalSec = idleTimeoutSec + alertAutoStopSec (total from idle start)
-    if (data.autoStopTotalSec && data.autoStopTotalSec > 0) {
-        autoStopTotalSec = data.autoStopTotalSec;
-        const remaining = autoStopTotalSec - elapsed;
-        if (remaining > 0 && autoStopBar && autoStopCountdownEl) {
-            autoStopBar.style.display = "";
-            autoStopCountdownEl.textContent = formatCountdown(remaining);
-        }
+    // Auto-stop countdown: grace after popup shown (matches idle-detector.js)
+    const parsedAlertShown = toTimestampMs(data.alertShownAt);
+    if (parsedAlertShown != null) alertShownAtMs = parsedAlertShown;
+    if (data.autoStopGraceSec > 0) {
+        autoStopGraceSec = data.autoStopGraceSec;
     }
+    updateAutoStopCountdownDisplay();
 
     startTicking();
 

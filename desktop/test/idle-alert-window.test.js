@@ -44,7 +44,8 @@ describe('Idle alert window visibility', () => {
       idleStartedAt: Date.now() - 300000,
       idleSeconds: 300,
       actionId: 1,
-      autoStopTotalSec: 900,
+      alertShownAt: Date.now() - 60000,
+      autoStopGraceSec: 600,
       projects: [],
     };
 
@@ -137,7 +138,8 @@ describe('Idle alert window visibility', () => {
     const sentData = win.webContents.send.mock.calls[0][1];
     expect(sentData).toHaveProperty('idleStartedAt');
     expect(sentData).toHaveProperty('idleSeconds', 300);
-    expect(sentData).toHaveProperty('autoStopTotalSec', 900);
+    expect(sentData).toHaveProperty('alertShownAt');
+    expect(sentData).toHaveProperty('autoStopGraceSec', 600);
     expect(sentData).toHaveProperty('projects');
     expect(Array.isArray(sentData.projects)).toBe(true);
   });

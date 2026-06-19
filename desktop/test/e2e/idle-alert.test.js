@@ -295,9 +295,13 @@ describe('Idle Alert Popup', () => {
     const autoStopBar = document.getElementById('autoStopBar');
     const autoStopCountdownEl = document.getElementById('autoStopCountdown');
 
-    const autoStopTotalSec = 600; // 10 minutes
-    const elapsed = 300; // 5 minutes idle
-    const remaining = autoStopTotalSec - elapsed;
+    const alertShownAt = Date.now() - 300000; // popup shown 5 min ago
+    const autoStopGraceSec = 600; // 10 minutes after popup
+    const now = Date.now();
+    const remaining = Math.max(
+      0,
+      Math.floor((alertShownAt + autoStopGraceSec * 1000 - now) / 1000),
+    );
 
     if (remaining > 0) {
       autoStopBar.style.display = '';
