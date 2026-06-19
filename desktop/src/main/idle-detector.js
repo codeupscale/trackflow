@@ -23,7 +23,9 @@
 const { powerMonitor } = require('electron');
 
 const DEFAULT_IDLE_TIMEOUT_MIN = 5;
-const DEFAULT_IDLE_CHECK_INTERVAL_SEC = 10;
+const DEFAULT_IDLE_CHECK_INTERVAL_SEC = 2;
+/** Schedule a one-shot fire when within this many seconds of the threshold. */
+const BOUNDARY_LEAD_SEC = 20;
 
 const IDLE_STATE = Object.freeze({
   STOPPED: 'STOPPED',
@@ -53,6 +55,7 @@ class IdleDetector {
     // Callbacks — set by main process
     this._onIdleDetected = null;   // (idleSeconds, idleStartedAt, actionId) => void
     this._onAutoStop = null;       // (totalIdleSeconds, actionId) => void
+    this._boundaryTimer = null;
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -273,6 +276,19 @@ class IdleDetector {
       clearInterval(this.checkInterval);
       this.checkInterval = null;
     }
+    if (this._boundaryTimer) {
+      clearTimeout(this._boundaryTimer);
+      this._boundaryTimer = null;
+    }
+  }
+
+  _scheduleBoundaryFire(remainingSec) {
+    if (this._boundaryTimer) return;
+    const ms = Math.max(50, Math.floor(remainingSec * 1000));
+    this._boundaryTimer = setTimeout(() => {
+      this._boundaryTimer = null;
+      this._check();
+    }, ms);
   }
 
   /**
@@ -311,6 +327,7 @@ class IdleDetector {
     }
 
     if (systemIdleSec >= this.idleTimeoutSec) {
+      this._clearBoundaryOnly();
       // Idle threshold crossed — transition to DETECTED
       this._state = IDLE_STATE.DETECTED;
       this._actionId++;
@@ -331,6 +348,18 @@ class IdleDetector {
       if (this.alertAutoStopSec > 0) {
         this.checkInterval = setInterval(() => this._checkAutoStop(), this.checkIntervalMs);
       }
+    } else if (
+      systemIdleSec >= this.idleTimeoutSec - BOUNDARY_LEAD_SEC
+      && systemIdleSec < this.idleTimeoutSec
+    ) {
+      this._scheduleBoundaryFire(this.idleTimeoutSec - systemIdleSec);
+    }
+  }
+
+  _clearBoundaryOnly() {
+    if (this._boundaryTimer) {
+      clearTimeout(this._boundaryTimer);
+      this._boundaryTimer = null;
     }
   }
 

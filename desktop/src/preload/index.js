@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld('trackflow', {
   // Events from main process — each call replaces the previous listener to prevent leaks
   onTimerStarted: (callback) => safeOn('timer-started', (_, data) => callback(data)),
   onTimerStopped: (callback) => safeOn('timer-stopped', (_, data) => callback(data)),
+  onTimerPaused: (callback) => safeOn('timer-paused', (_, data) => callback(data)),
+  onTimerResumed: (callback) => safeOn('timer-resumed', (_, data) => callback(data)),
   onTimerTick: (callback) => safeOn('timer-tick', (_, data) => callback(data)),
   onSyncTimer: (callback) => safeOn('sync-timer', () => callback()),
   onProjectsReady: (callback) => safeOn('projects-ready', () => callback()),

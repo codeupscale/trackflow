@@ -208,6 +208,28 @@ class ApiClient {
   }
 
   /**
+   * Pause the running timer (freeze elapsed on server; entry stays open).
+   */
+  async pauseTimer({ pausedAt = null, reason = 'idle' } = {}) {
+    const payload = { pause_reason: reason };
+    if (pausedAt) payload.paused_at = pausedAt;
+    const res = await this.client.post('/timer/pause', payload, {
+      timeout: 10000,
+    });
+    return res.data;
+  }
+
+  /**
+   * Resume a paused timer.
+   */
+  async resumeTimer() {
+    const res = await this.client.post('/timer/resume', {}, {
+      timeout: 10000,
+    });
+    return res.data;
+  }
+
+  /**
    * Atomically switch the running timer to a different project.
    * Stops the current entry and starts a new one in a single server transaction.
    */

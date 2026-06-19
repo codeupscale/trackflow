@@ -265,12 +265,7 @@ class TimerService
                     ]);
 
                     // Set Redis before committing to maintain consistency
-                    Redis::setex($redisKey, 2592000, json_encode([
-                        'entry_id' => $entry->id,
-                        'started_at' => $entry->started_at->toISOString(),
-                        'project_id' => $entry->project_id,
-                        'task_id' => $entry->task_id,
-                    ]));
+                    Redis::setex($redisKey, 2592000, $this->encodeRedisTimerState($entry, 'running'));
 
                     return $entry;
                 });
@@ -324,12 +319,7 @@ class TimerService
 
         if ($existingOpen) {
             // Repair Redis so the live session is discoverable by status()/stop().
-            Redis::setex($redisKey, 2592000, json_encode([
-                'entry_id' => $existingOpen->id,
-                'started_at' => $existingOpen->started_at->toISOString(),
-                'project_id' => $existingOpen->project_id,
-                'task_id' => $existingOpen->task_id,
-            ]));
+            Redis::setex($redisKey, 2592000, $this->encodeRedisTimerState($existingOpen, 'running'));
         }
 
         return $existingOpen;
@@ -611,12 +601,7 @@ class TimerService
                 ]);
 
                 // 3. Update Redis to point to new entry
-                Redis::setex($redisKey, 2592000, json_encode([
-                    'entry_id' => $newEntry->id,
-                    'started_at' => $newEntry->started_at->toISOString(),
-                    'project_id' => $newEntry->project_id,
-                    'task_id' => $newEntry->task_id,
-                ]));
+                Redis::setex($redisKey, 2592000, $this->encodeRedisTimerState($newEntry, 'running'));
 
                 return ['stopped' => $currentEntry->fresh(), 'started' => $newEntry];
             });
@@ -642,9 +627,218 @@ class TimerService
         }
     }
 
-    public function pause(): TimeEntry
+    public function pause(array $data = []): TimeEntry
     {
-        return $this->stop();
+        $user = Auth::user();
+        $redisKey = "timer:{$user->id}";
+        $lockKey = "timer:lock:{$user->id}";
+
+        if (! Redis::set($lockKey, 1, 'EX', self::LOCK_TTL, 'NX')) {
+            throw new \RuntimeException('Timer operation in progress');
+        }
+
+        try {
+            $entry = $this->findOpenRunningEntry($user, $redisKey);
+            if (! $entry) {
+                throw new \RuntimeException('No timer running');
+            }
+
+            $meta = $this->getRedisTimerMeta($redisKey);
+            if (($meta['state'] ?? 'running') === 'paused') {
+                return $entry;
+            }
+
+            $pausedAt = ! empty($data['paused_at'])
+                ? $this->parseClientTimestamp($data['paused_at'], 'paused_at')
+                : now();
+            $reason = $data['pause_reason'] ?? $data['reason'] ?? 'idle';
+
+            Redis::setex(
+                $redisKey,
+                2592000,
+                $this->encodeRedisTimerState($entry, 'paused', $pausedAt, $reason)
+            );
+
+            return $entry;
+        } finally {
+            Redis::del($lockKey);
+        }
+    }
+
+    /**
+     * Resume a paused timer (clears Redis pause metadata; entry stays open).
+     */
+    public function resume(): TimeEntry
+    {
+        $user = Auth::user();
+        $redisKey = "timer:{$user->id}";
+        $lockKey = "timer:lock:{$user->id}";
+
+        if (! Redis::set($lockKey, 1, 'EX', self::LOCK_TTL, 'NX')) {
+            throw new \RuntimeException('Timer operation in progress');
+        }
+
+        try {
+            $entry = $this->findOpenRunningEntry($user, $redisKey);
+            if (! $entry) {
+                throw new \RuntimeException('No timer running');
+            }
+
+            $meta = $this->getRedisTimerMeta($redisKey);
+            if (($meta['state'] ?? 'running') === 'running') {
+                return $entry;
+            }
+
+            Redis::setex($redisKey, 2592000, $this->encodeRedisTimerState($entry, 'running'));
+
+            return $entry;
+        } finally {
+            Redis::del($lockKey);
+        }
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function getRedisTimerMeta(string $redisKey): ?array
+    {
+        $timerData = Redis::get($redisKey);
+        if (! $timerData) {
+            return null;
+        }
+        $data = json_decode($timerData, true);
+        if (! is_array($data)) {
+            return null;
+        }
+        $data['state'] = $data['state'] ?? 'running';
+
+        return $data;
+    }
+
+    private function encodeRedisTimerState(
+        TimeEntry $entry,
+        string $state = 'running',
+        ?\Carbon\Carbon $pausedAt = null,
+        ?string $pauseReason = null
+    ): string {
+        $payload = [
+            'entry_id' => $entry->id,
+            'started_at' => $entry->started_at->toISOString(),
+            'project_id' => $entry->project_id,
+            'task_id' => $entry->task_id,
+            'state' => $state,
+        ];
+        if ($state === 'paused' && $pausedAt) {
+            $payload['paused_at'] = $pausedAt->toISOString();
+            $payload['pause_reason'] = $pauseReason ?? 'idle';
+        }
+
+        return json_encode($payload);
+    }
+
+    /**
+     * Elapsed seconds for an open entry, optionally frozen at paused_at.
+     */
+    private function computeOpenEntryElapsed(TimeEntry $entry, ?\Carbon\Carbon $frozenAt = null): int
+    {
+        $end = $frozenAt ?? now();
+        $elapsed = max(0, (int) $entry->started_at->diffInSeconds($end, false));
+
+        return min($elapsed, self::MAX_ENTRY_DURATION);
+    }
+
+    /**
+     * Resolve the user's currently open timer entry from Redis, falling back to the DB
+     * when the cache is missing or stale. Repairs Redis when a DB open entry is found
+     * so status()/stop() stay consistent after Redis restarts or evictions.
+     */
+    private function findOpenRunningEntry($user, string $redisKey): ?TimeEntry
+    {
+        $timerData = Redis::get($redisKey);
+
+        if ($timerData) {
+            $data = json_decode($timerData, true);
+            $entry = TimeEntry::whereNull('ended_at')->find($data['entry_id'] ?? null);
+            if ($entry) {
+                return $entry;
+            }
+            Redis::del($redisKey);
+        }
+
+        $openEntry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+            ->where('user_id', $user->id)
+            ->where('organization_id', $user->organization_id)
+            ->whereNull('ended_at')
+            ->whereNull('deleted_at')
+            ->latest('started_at')
+            ->first();
+
+        if ($openEntry) {
+            Redis::setex($redisKey, 2592000, $this->encodeRedisTimerState($openEntry, 'running'));
+        }
+
+        return $openEntry;
+    }
+
+    /**
+     * Build status payload for an open entry (running or paused).
+     *
+     * @return array<string, mixed>
+     */
+    private function buildOpenEntryStatus(
+        TimeEntry $entry,
+        int $todayTotal,
+        ?string $requestedProjectId,
+        string $currentDay,
+        string $redisKey,
+        $todayStartUtc,
+        $todayEndUtc
+    ): array {
+        $meta = $this->getRedisTimerMeta($redisKey) ?? ['state' => 'running'];
+        $isPaused = ($meta['state'] ?? 'running') === 'paused';
+        $pausedAt = ! empty($meta['paused_at']) ? Carbon::parse($meta['paused_at']) : null;
+        $frozenAt = $isPaused && $pausedAt ? $pausedAt : null;
+        $currentElapsed = $this->computeOpenEntryElapsed($entry, $frozenAt);
+        $entryProjectId = $entry->project_id !== null ? (string) $entry->project_id : null;
+
+        if ($requestedProjectId !== null && $entryProjectId === $requestedProjectId) {
+            $todayTotal += $currentElapsed;
+        } elseif ($requestedProjectId === null) {
+            $todayTotal += $currentElapsed;
+        }
+
+        if ($entryProjectId !== null && $requestedProjectId === $entryProjectId) {
+            $projectTodayTotal = $todayTotal;
+        } elseif ($entryProjectId !== null) {
+            $projectTodayTotal = (int) TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                ->where('user_id', $entry->user_id)
+                ->where('started_at', '>=', $todayStartUtc)
+                ->where('started_at', '<', $todayEndUtc)
+                ->whereNotNull('ended_at')
+                ->where('type', 'tracked')
+                ->where('project_id', $entryProjectId)
+                ->sum('duration_seconds');
+            $projectTodayTotal += $currentElapsed;
+        } else {
+            $projectTodayTotal = $todayTotal;
+        }
+
+        $entry->loadMissing('project:id,name,color');
+        $timerState = $isPaused ? 'paused' : 'running';
+
+        return [
+            'state' => $timerState,
+            'running' => ! $isPaused,
+            'paused' => $isPaused,
+            'entry' => $entry,
+            'elapsed_seconds' => $currentElapsed,
+            'today_total' => $todayTotal,
+            'project_today_total' => $projectTodayTotal,
+            'current_day' => $currentDay,
+            'server_time' => now()->toISOString(),
+            'paused_at' => $pausedAt?->toISOString(),
+            'pause_reason' => $isPaused ? ($meta['pause_reason'] ?? null) : null,
+        ];
     }
 
     /**
@@ -677,10 +871,12 @@ class TimerService
 
         $todayTotal = (int) $todayQuery->sum('duration_seconds');
 
-        $timerData = Redis::get($redisKey);
-        if (!$timerData) {
+        $entry = $this->findOpenRunningEntry($user, $redisKey);
+        if (! $entry) {
             return [
+                'state' => 'stopped',
                 'running' => false,
+                'paused' => false,
                 'entry' => null,
                 'elapsed_seconds' => 0,
                 'today_total' => $todayTotal,
@@ -690,70 +886,17 @@ class TimerService
             ];
         }
 
-        $data = json_decode($timerData, true);
-        $entry = TimeEntry::whereNull('ended_at')->find($data['entry_id'] ?? null);
-        if (!$entry) {
-            // Stale Redis key — entry is already closed. Clean up and return not-running.
-            Redis::del($redisKey);
-            return [
-                'running' => false,
-                'entry' => null,
-                'elapsed_seconds' => 0,
-                'today_total' => $todayTotal,
-                'project_today_total' => 0,
-                'current_day' => $currentDay,
-                'server_time' => now()->toISOString(),
-            ];
-        }
-
-        // Live elapsed for the OPEN running entry only. Use signed diff and floor at 0:
-        // if started_at is (impossibly) in the future, do not let abs() invent positive
-        // elapsed that would make the displayed timer jump (BUG 2). Clamp to MAX so a
-        // corrupt started_at can't blow up today_total either.
-        $now = Carbon::now();
-        $currentElapsed = max(0, (int) $entry->started_at->diffInSeconds($now, false));
-        $currentElapsed = min($currentElapsed, self::MAX_ENTRY_DURATION);
-        $entryProjectId = $entry->project_id !== null ? (string) $entry->project_id : null;
         $requestedProjectId = $projectId !== null && $projectId !== '' ? (string) $projectId : null;
 
-        // Include current running time only if it's for the requested project
-        if ($requestedProjectId !== null && $entryProjectId === $requestedProjectId) {
-            $todayTotal += $currentElapsed;
-        } elseif ($requestedProjectId === null) {
-            $todayTotal += $currentElapsed;
-        }
-
-        // Per-project total for the running entry's project (for web header timer).
-        // If $projectId was already set to this project, reuse $todayTotal to avoid a second query.
-        if ($entryProjectId !== null && $requestedProjectId === $entryProjectId) {
-            $projectTodayTotal = $todayTotal;
-        } elseif ($entryProjectId !== null) {
-            $projectTodayTotal = (int) TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
-                ->where('user_id', $user->id)
-                ->where('started_at', '>=', $todayStartUtc)
-                ->where('started_at', '<', $todayEndUtc)
-                ->whereNotNull('ended_at')
-                ->where('type', 'tracked')
-                ->where('project_id', $entryProjectId)
-                ->sum('duration_seconds');
-            $projectTodayTotal += $currentElapsed;
-        } else {
-            // No project on the running entry — fall back to global total
-            $projectTodayTotal = $todayTotal;
-        }
-
-        // Eager-load project so the web dashboard can display the project name
-        $entry->loadMissing('project:id,name,color');
-
-        return [
-            'running' => true,
-            'entry' => $entry,
-            'elapsed_seconds' => $currentElapsed,
-            'today_total' => $todayTotal,
-            'project_today_total' => $projectTodayTotal,
-            'current_day' => $currentDay,
-            'server_time' => now()->toISOString(),
-        ];
+        return $this->buildOpenEntryStatus(
+            $entry,
+            $todayTotal,
+            $requestedProjectId,
+            $currentDay,
+            $redisKey,
+            $todayStartUtc,
+            $todayEndUtc
+        );
     }
 
     /**
@@ -780,15 +923,15 @@ class TimerService
 
         // If timer is running and entry is for this project, add current elapsed
         $redisKey = "timer:{$user->id}";
-        $timerData = Redis::get($redisKey);
-        if ($timerData) {
-            $data = json_decode($timerData, true);
-            $entry = TimeEntry::whereNull('ended_at')->find($data['entry_id'] ?? null);
-            if ($entry && ($projectId === null || $projectId === '' || (string) $entry->project_id === (string) $projectId)) {
-                // Signed + floored elapsed (no abs() masking of a future started_at), clamped.
-                $elapsed = max(0, (int) $entry->started_at->diffInSeconds(now(), false));
-                $total += min($elapsed, self::MAX_ENTRY_DURATION);
-            }
+        $entry = $this->findOpenRunningEntry($user, $redisKey);
+        if ($entry && ($projectId === null || $projectId === '' || (string) $entry->project_id === (string) $projectId)) {
+            $meta = $this->getRedisTimerMeta($redisKey);
+            $isPaused = ($meta['state'] ?? 'running') === 'paused';
+            $frozenAt = $isPaused && ! empty($meta['paused_at'])
+                ? Carbon::parse($meta['paused_at'])
+                : null;
+            $elapsed = $this->computeOpenEntryElapsed($entry, $frozenAt);
+            $total += $elapsed;
         }
 
         return $total;
@@ -941,12 +1084,7 @@ class TimerService
             // FIX B3: Update Redis AFTER DB transaction commits to prevent orphaned state
             $newEntry = $result['new_entry'];
             try {
-                Redis::setex($redisKey, 2592000, json_encode([
-                    'entry_id' => $newEntry->id,
-                    'started_at' => $newEntry->started_at->toISOString(),
-                    'project_id' => $newEntry->project_id,
-                    'task_id' => $newEntry->task_id,
-                ]));
+                Redis::setex($redisKey, 2592000, $this->encodeRedisTimerState($newEntry, 'running'));
             } catch (\Exception $e) {
                 \Illuminate\Support\Facades\Log::error('Redis update failed after idle split', ['error' => $e->getMessage()]);
             }

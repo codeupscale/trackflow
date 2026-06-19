@@ -40,6 +40,7 @@
       transition: color 0.2s;
     }
     .time.running { color: var(--accent-primary, var(--accent-blue)); }
+    .time.paused { color: var(--accent-amber); }
     .time.stopped { color: var(--text-muted); }
 
     .status {
@@ -59,6 +60,7 @@
       flex-shrink: 0;
     }
     .dot.green { background: var(--accent-primary, var(--accent-blue)); animation: pulse 2s infinite; }
+    .dot.amber { background: var(--accent-amber); }
     .dot.gray { background: var(--text-muted); }
 
     /* ── Project Select ─────────────────────────────────────── */

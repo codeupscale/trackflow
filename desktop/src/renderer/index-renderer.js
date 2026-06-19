@@ -19,6 +19,7 @@ document.getElementById('logoutBtn').title = `Sign out (${modKey}+Q)`;
 let elapsedSeconds = 0;
 let todayTotalBase = 0;
 let isRunning = false;
+let isPaused = false;
 let currentStartedAt = null;
 let _startedAtMs = null;
 // RACE-FIX: Track the latest state version from the main process.
@@ -157,17 +158,22 @@ function setStartedAt(isoOrMs) {
   }
 }
 
-function updateDisplay(running) {
+function updateDisplay(running, paused = false) {
   isRunning = running;
+  isPaused = paused;
   timerDisplay.textContent = formatTime(elapsedSeconds);
-  timerDisplay.className = `time ${running ? 'running' : 'stopped'}`;
-  statusDot.className = `dot ${running ? 'green' : 'gray'}`;
-  statusText.textContent = running ? 'Tracking' : (todayTotalBase > 0 ? 'Today\u2019s Total' : 'Stopped');
-  startBtn.style.display = running ? 'none' : 'flex';
-  stopBtn.style.display = running ? 'flex' : 'none';
-  projectSelect.disabled = running || projectSelect.options.length <= 1;
-  startBtn.disabled = isRunning;
-  showTrackingInfo(running);
+  timerDisplay.className = `time ${running ? 'running' : paused ? 'paused' : 'stopped'}`;
+  statusDot.className = `dot ${running ? 'green' : paused ? 'amber' : 'gray'}`;
+  statusText.textContent = running
+    ? 'Tracking'
+    : paused
+      ? 'Paused (idle)'
+      : (todayTotalBase > 0 ? 'Today\u2019s Total' : 'Stopped');
+  startBtn.style.display = running || paused ? 'none' : 'flex';
+  stopBtn.style.display = running || paused ? 'flex' : 'none';
+  projectSelect.disabled = running || paused || projectSelect.options.length <= 1;
+  startBtn.disabled = isRunning || isPaused;
+  showTrackingInfo(running || paused);
   if (!running) {
     updateActivityDisplay(0);
     _lastScreenshotAt = null;
@@ -212,8 +218,15 @@ async function syncTimerState() {
       const currentElapsed = state.elapsed || calcElapsedFromStartedAt();
       todayTotalBase = Math.max(0, todayTotalBase - currentElapsed);
       elapsedSeconds = todayTotalBase + currentElapsed;
-      updateDisplay(true);
+      updateDisplay(true, false);
       startTicking();
+    } else if (state.isPaused) {
+      setStartedAt(state.entry?.started_at || null);
+      const currentElapsed = state.elapsed || calcElapsedFromStartedAt();
+      todayTotalBase = Math.max(0, todayTotalBase - currentElapsed);
+      elapsedSeconds = todayTotalBase + currentElapsed;
+      stopTicking();
+      updateDisplay(false, true);
     } else {
       setStartedAt(null);
       stopTicking();
@@ -508,6 +521,27 @@ window.trackflow.onTimerStarted((data) => {
   updateDisplay(true);
   startTicking();
 });
+
+if (window.trackflow.onTimerPaused) {
+  window.trackflow.onTimerPaused((data) => {
+    stopTicking();
+    if (data?.entry?.started_at) setStartedAt(data.entry.started_at);
+    if (data?.todayTotal != null) todayTotalBase = data.todayTotal;
+    const currentElapsed = data?.elapsed ?? calcElapsedFromStartedAt();
+    elapsedSeconds = todayTotalBase + currentElapsed;
+    updateDisplay(false, true);
+  });
+}
+
+if (window.trackflow.onTimerResumed) {
+  window.trackflow.onTimerResumed((data) => {
+    if (data?.started_at) setStartedAt(data.started_at);
+    if (data?.todayTotal > 0) todayTotalBase = data.todayTotal;
+    elapsedSeconds = todayTotalBase + calcElapsedFromStartedAt();
+    updateDisplay(true, false);
+    startTicking();
+  });
+}
 
 window.trackflow.onTimerStopped((data) => {
   // RACE-FIX: Discard stale notifications that arrive out of order.

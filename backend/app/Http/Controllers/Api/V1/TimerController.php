@@ -100,12 +100,37 @@ class TimerController extends Controller
         }
     }
 
-    // TIME-03: Pause timer
-    public function pause(): JsonResponse
+    // TIME-03: Pause timer (freeze elapsed; entry stays open)
+    public function pause(Request $request): JsonResponse
+    {
+        $request->validate([
+            'paused_at' => 'nullable|date',
+            'pause_reason' => 'nullable|string|in:idle,manual',
+            'reason' => 'nullable|string|in:idle,manual',
+        ]);
+
+        try {
+            $entry = $this->timerService->pause(
+                $request->only('paused_at', 'pause_reason', 'reason')
+            );
+            $todayTotal = $this->timerService->todayTotal($entry->project_id);
+
+            return response()->json(['entry' => $entry, 'today_total' => $todayTotal]);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 404);
+        }
+    }
+
+    // TIME-03b: Resume a paused timer
+    public function resume(): JsonResponse
     {
         try {
-            $entry = $this->timerService->pause();
-            return response()->json(['entry' => $entry]);
+            $entry = $this->timerService->resume();
+            $todayTotal = $this->timerService->todayTotal($entry->project_id);
+
+            return response()->json(['entry' => $entry, 'today_total' => $todayTotal]);
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 404);
         }

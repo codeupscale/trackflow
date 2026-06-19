@@ -36,6 +36,7 @@ function resetStore() {
   if (store.pollId) clearInterval(store.pollId);
   useTimerStore.setState({
     isRunning: false,
+    isPaused: false,
     entryId: null,
     projectId: null,
     projectName: null,
@@ -98,6 +99,33 @@ describe('TimerStore', () => {
       expect(state.projectName).toBe('TrackFlow');
       expect(state.elapsedSeconds).toBe(3600);
       expect(state.todayTotalSeconds).toBe(7200);
+    });
+
+    it('sets paused state with frozen elapsed (no live tick)', async () => {
+      mockApiGet.mockResolvedValueOnce({
+        data: {
+          running: false,
+          paused: true,
+          state: 'paused',
+          entry: {
+            id: 'entry-1',
+            project_id: 'proj-1',
+            project: { name: 'TrackFlow' },
+            started_at: '2026-03-27T09:00:00Z',
+          },
+          elapsed_seconds: 3600,
+          today_total: 7200,
+          project_today_total: 3600,
+        },
+      });
+
+      await useTimerStore.getState().fetchStatus();
+
+      const state = useTimerStore.getState();
+      expect(state.isRunning).toBe(false);
+      expect(state.isPaused).toBe(true);
+      expect(state.elapsedSeconds).toBe(3600);
+      expect(state.intervalId).toBeNull();
     });
 
     it('sets stopped state when timer is not active', async () => {

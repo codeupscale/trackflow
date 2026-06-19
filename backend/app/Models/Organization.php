@@ -113,7 +113,7 @@ class Organization extends Model
             // Delay (minutes) before first screenshot when timer starts. 0 = immediate.
             'screenshot_first_capture_delay_min' => 1,
             // How often (seconds) desktop checks OS idle time.
-            'idle_check_interval_sec' => 10,
+            'idle_check_interval_sec' => 2,
             // Only capture screenshots when app window is visible (reduces permission prompts when hidden).
             'capture_only_when_visible' => false,
             // Capture all monitors and composite into one image.

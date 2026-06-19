@@ -17,9 +17,9 @@ import { formatDuration, cn } from '@/lib/utils';
 export function TimerWidget() {
   const {
     isRunning,
-    elapsedSeconds,
-    todayTotalSeconds,
+    isPaused,
     projectTodayTotalSeconds,
+    todayTotalSeconds,
     projectName,
     fetchStatus,
     startPolling,
@@ -35,16 +35,16 @@ export function TimerWidget() {
 
   return (
     <div className="flex items-center gap-2.5">
-      {/* Status indicator */}
       <div
         className={cn(
           'flex items-center gap-2.5 rounded-lg px-3 py-1.5 transition-colors',
           isRunning
             ? 'bg-emerald-500/10 border border-emerald-500/20'
-            : 'bg-muted/50 border border-border'
+            : isPaused
+              ? 'bg-amber-500/10 border border-amber-500/20'
+              : 'bg-muted/50 border border-border'
         )}
       >
-        {/* Icon */}
         {isRunning ? (
           <div className="flex items-center gap-2">
             <span className="relative flex h-2 w-2">
@@ -53,30 +53,45 @@ export function TimerWidget() {
             </span>
             <Monitor className="h-3.5 w-3.5 text-green-400" />
           </div>
+        ) : isPaused ? (
+          <div className="flex items-center gap-2">
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+            <Monitor className="h-3.5 w-3.5 text-amber-500" />
+          </div>
         ) : (
           <MonitorOff className="h-3.5 w-3.5 text-muted-foreground" />
         )}
 
-        {/* Project name when tracking */}
-        {isRunning && projectName && (
-          <span className="text-xs text-emerald-600 dark:text-emerald-300/90 font-medium truncate max-w-[140px]">
+        {(isRunning || isPaused) && projectName && (
+          <span
+            className={cn(
+              'text-xs font-medium truncate max-w-[140px]',
+              isRunning
+                ? 'text-emerald-600 dark:text-emerald-300/90'
+                : 'text-amber-700 dark:text-amber-300/90'
+            )}
+          >
             {projectName}
           </span>
         )}
 
-        {/* Timer display — when running, shows active project's today total (matching desktop tray behavior);
-            when stopped, shows global today total across all projects */}
         <span
           className={cn(
             'font-mono text-sm font-medium tabular-nums',
-            isRunning ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'
+            isRunning
+              ? 'text-emerald-600 dark:text-emerald-400'
+              : isPaused
+                ? 'text-amber-700 dark:text-amber-400'
+                : 'text-muted-foreground'
           )}
         >
-          {isRunning
-            ? formatDuration(projectTodayTotalSeconds)
-            : todayTotalSeconds > 0
-              ? formatDuration(todayTotalSeconds)
-              : 'Not tracking'}
+          {isPaused
+            ? `Paused · ${formatDuration(projectTodayTotalSeconds)}`
+            : isRunning
+              ? formatDuration(projectTodayTotalSeconds)
+              : todayTotalSeconds > 0
+                ? formatDuration(todayTotalSeconds)
+                : 'Not tracking'}
         </span>
       </div>
     </div>

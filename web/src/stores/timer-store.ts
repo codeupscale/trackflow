@@ -14,6 +14,7 @@ import { useAuthStore } from '@/stores/auth-store';
 
 interface TimerState {
   isRunning: boolean;
+  isPaused: boolean;
   entryId: string | null;
   projectId: string | null;
   projectName: string | null;
@@ -49,6 +50,7 @@ interface TimerState {
 
 export const useTimerStore = create<TimerState>()((set, get) => ({
   isRunning: false,
+  isPaused: false,
   entryId: null,
   projectId: null,
   projectName: null,
@@ -71,7 +73,40 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
       const todayTotal = res.data.today_total || 0;
       const projectTodayTotal = res.data.project_today_total || 0;
 
-      if (res.data.running) {
+      const isPaused = res.data.state === 'paused' || res.data.paused === true;
+
+      if (isPaused && res.data.entry) {
+        const currentElapsed = res.data.elapsed_seconds || 0;
+        const runningProjectId = res.data.entry?.project_id ?? null;
+        const runningProjectName = res.data.entry?.project?.name ?? null;
+        const base = Math.max(0, todayTotal - currentElapsed);
+        const projectBase = Math.max(0, projectTodayTotal - currentElapsed);
+
+        if (get().intervalId) {
+          get().stopTicking();
+        }
+
+        const newState = {
+          isRunning: false,
+          isPaused: true,
+          entryId: res.data.entry?.id,
+          projectId: runningProjectId,
+          projectName: runningProjectName,
+          startedAt: res.data.entry?.started_at,
+          elapsedSeconds: currentElapsed,
+          todayTotalSeconds: todayTotal,
+          todayTotalBase: base,
+          projectTodayTotalSeconds: projectTodayTotal,
+          projectTodayTotalBase: projectBase,
+        };
+
+        set(newState);
+        get()._broadcastChannel?.postMessage({
+          type: 'trackflow-timer-update',
+          nonce: 'trackflow-v1',
+          state: newState,
+        });
+      } else if (res.data.running) {
         const currentElapsed = res.data.elapsed_seconds || 0;
         const runningProjectId = res.data.entry?.project_id ?? null;
         const runningProjectName = res.data.entry?.project?.name ?? null;
@@ -81,6 +116,7 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
 
         const newState = {
           isRunning: true,
+          isPaused: false,
           entryId: res.data.entry?.id,
           projectId: runningProjectId,
           projectName: runningProjectName,
@@ -111,6 +147,7 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
 
         const newState = {
           isRunning: false,
+          isPaused: false,
           entryId: null,
           projectId: null,
           projectName: null,
@@ -302,6 +339,7 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
 
     set({
       isRunning: false,
+      isPaused: false,
       entryId: null,
       projectId: null,
       projectName: null,

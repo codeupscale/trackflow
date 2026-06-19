@@ -344,4 +344,54 @@ class TimerSyncTest extends TestCase
         $this->assertNotEquals($first->id, $meta['entry']->id);
         $this->assertNull($meta['entry']->ended_at);
     }
+
+    public function test_status_falls_back_to_db_when_redis_key_missing(): void
+    {
+        $entry = $this->service->start([]);
+        $startedAt = $entry->started_at->copy();
+
+        Redis::del("timer:{$this->user->id}");
+
+        $status = $this->service->status();
+
+        $this->assertTrue($status['running'], 'status() must report running when DB has an open entry.');
+        $this->assertEquals($entry->id, $status['entry']->id);
+        $this->assertGreaterThan(0, $status['elapsed_seconds']);
+        $this->assertEqualsWithDelta(
+            $startedAt->timestamp,
+            $status['entry']->started_at->timestamp,
+            2,
+            'Redis repair must preserve the real started_at.'
+        );
+
+        $this->assertNotNull(Redis::get("timer:{$this->user->id}"));
+    }
+
+    public function test_pause_freezes_elapsed_and_resume_restores_running(): void
+    {
+        $entry = $this->service->start([]);
+        $this->travel(120)->seconds();
+
+        $paused = $this->service->pause(['pause_reason' => 'idle']);
+        $this->assertEquals($entry->id, $paused->id);
+
+        $statusPaused = $this->service->status();
+        $this->assertSame('paused', $statusPaused['state']);
+        $this->assertFalse($statusPaused['running']);
+        $this->assertTrue($statusPaused['paused']);
+        $elapsedWhilePaused = $statusPaused['elapsed_seconds'];
+
+        $this->travel(300)->seconds();
+        $statusStillPaused = $this->service->status();
+        $this->assertSame($elapsedWhilePaused, $statusStillPaused['elapsed_seconds']);
+
+        $resumed = $this->service->resume();
+        $this->assertEquals($entry->id, $resumed->id);
+
+        $statusRunning = $this->service->status();
+        $this->assertSame('running', $statusRunning['state']);
+        $this->assertTrue($statusRunning['running']);
+        $this->assertFalse($statusRunning['paused']);
+        $this->assertGreaterThan($elapsedWhilePaused, $statusRunning['elapsed_seconds']);
+    }
 }

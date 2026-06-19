@@ -59,6 +59,9 @@ class ActivityMonitor {
     // instead of a partial point-in-time reading.
     this._lastCompletedIntervalScore = 0;
 
+    /** @type {(() => void)|null} */
+    this._onHeartbeatSuccess = null;
+
     // Bound handlers so we can add/remove them without leaking
     this._onKeydown = () => {
       this.keyboardCount++;
@@ -188,6 +191,10 @@ class ActivityMonitor {
     return this._computeIntervalScore();
   }
 
+  setOnHeartbeatSuccess(callback) {
+    this._onHeartbeatSuccess = typeof callback === 'function' ? callback : null;
+  }
+
   // Send final heartbeat before stopping — prevents losing the last 0-29s of data
   async sendFinalHeartbeat() {
     if (this.keyboardCount === 0 && this.mouseCount === 0 && this._activeSeconds.size === 0) return;
@@ -260,6 +267,7 @@ class ActivityMonitor {
 
     try {
       await this.apiClient.sendHeartbeat(data);
+      this._onHeartbeatSuccess?.();
     } catch (apiErr) {
       try {
         // M7 FIX: Guard offlineQueue access — it may be null after logout

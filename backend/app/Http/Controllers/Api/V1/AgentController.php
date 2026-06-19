@@ -31,7 +31,7 @@ class AgentController extends Controller
             'track_urls' => $org->getSetting('track_urls', true),
             'can_add_manual_time' => $org->getSetting('can_add_manual_time', true),
             'screenshot_first_capture_delay_min' => (int) $org->getSetting('screenshot_first_capture_delay_min', 1),
-            'idle_check_interval_sec' => (int) $org->getSetting('idle_check_interval_sec', 10),
+            'idle_check_interval_sec' => (int) $org->getSetting('idle_check_interval_sec', 2),
             'capture_only_when_visible' => (bool) $org->getSetting('capture_only_when_visible', false),
             'capture_multi_monitor' => (bool) $org->getSetting('capture_multi_monitor', false),
         ]);
