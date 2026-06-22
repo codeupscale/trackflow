@@ -45,6 +45,7 @@ Verify `file:line` references still match the codebase before implementing from 
 | [timezone-midnight-rolls-to-previous-day.md](timezone-midnight-rolls-to-previous-day.md) | Backend timezone + screenshots | P1 | ✅ FIXED — default `Asia/Karachi`, web device tz, backfill, timezone-aware S3 date folders |
 | [uninstall-stop-timer-cross-platform.md](uninstall-stop-timer-cross-platform.md) | Desktop uninstall (all OSes) + backend | P0 | ✅ FIXED (2026-06-22) — timer kept running after uninstall; runtime self-removal watcher (mac/Linux) + graceful Windows NSIS `--uninstall-stop` + backend reclaim. No OS has a universal uninstall hook; server cleanup is the backstop |
 | [unsynced-start-stuck-tracking-desync.md](unsynced-start-stuck-tracking-desync.md) | Desktop ↔ `/timer/status` | P1 | ✅ FIXED — sync loop pushes unsynced local start via reconcile; desktop "Tracking" vs web "Not tracking" desync |
+| [web-timer-stop-not-instant-queued-broadcast.md](web-timer-stop-not-instant-queued-broadcast.md) | Backend broadcast + web realtime | P2 | ✅ FIXED (2026-06-22) — web kept counting a few seconds after desktop Stop; TimerStarted/Stopped were queued (ShouldBroadcast) → now ShouldBroadcastNow; web freezes counter instantly on the stop event |
 | [web-timezone-save-empties-sidebar.md](web-timezone-save-empties-sidebar.md) | Web auth/permissions ↔ sidebar | P1 | ✅ FIXED — `fetchUser()` no longer wipes permissions on transient errors; timezone save merges locally |
 
 ## Workflow

@@ -265,7 +265,14 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
           // Immediately fetch fresh status instead of waiting for next poll
           get().fetchStatus();
         })
-        .listen('TimerStopped', () => {
+        .listen('TimerStopped', (e: { entry_id?: string } | undefined) => {
+          // If this stop is for the entry we're currently ticking, freeze the
+          // counter instantly (don't wait for the fetchStatus round-trip), then
+          // reconcile totals/state from the server.
+          if (e?.entry_id && e.entry_id === get().entryId) {
+            get().stopTicking();
+            set({ isRunning: false, isPaused: false });
+          }
           get().fetchStatus();
         });
 
