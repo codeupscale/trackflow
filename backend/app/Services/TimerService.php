@@ -397,10 +397,20 @@ class TimerService
                 throw new \RuntimeException('Target time entry not found.');
             }
 
-            // Idempotent replay: the targeted entry is already closed. Return it as-is,
-            // and only clear Redis if it actually points at this same entry — so we
-            // never wipe the key for a different, still-running session (BUG 3).
+            // The targeted entry is already closed. This happens when cleanup (or a
+            // crash-reclaim) force-closed it EARLY at the last server-received heartbeat,
+            // while the desktop kept tracking offline and is only now flushing the real
+            // stop. If the client supplies an ended_at that is LATER than the stored one
+            // (and within skew), EXTEND the entry rather than discarding the real work —
+            // this guarantees offline tracking is preserved even beyond the grace window.
             if ($entry->ended_at !== null) {
+                if ($overrideEndedAt && $overrideEndedAt->gt($entry->ended_at)) {
+                    return $this->extendClosedEntry($entry, $overrideStartedAt, $overrideEndedAt, $redisEntryId, $redisKey);
+                }
+
+                // Idempotent replay (no later ended_at): return it as-is, and only clear
+                // Redis if it actually points at this same entry — so we never wipe the
+                // key for a different, still-running session (BUG 3).
                 if ($redisEntryId === $entry->id) {
                     Redis::del($redisKey);
                 }
@@ -504,6 +514,72 @@ class TimerService
             }
 
             return $stopped;
+        } finally {
+            Redis::del($lockKey);
+        }
+    }
+
+    /**
+     * Extend an entry that cleanup (or crash-reclaim) force-closed EARLY, when the
+     * client later flushes the REAL stop with a more recent ended_at. The stored
+     * ended_at is moved forward to the offline timestamp and duration_seconds is
+     * recomputed, so no legitimate offline work is lost.
+     *
+     * @param Carbon|null $overrideStartedAt Optional offline start override; falls back to stored start.
+     * @param Carbon      $overrideEndedAt    The (validated, later) offline stop timestamp.
+     */
+    private function extendClosedEntry(
+        TimeEntry $entry,
+        ?Carbon $overrideStartedAt,
+        Carbon $overrideEndedAt,
+        ?string $redisEntryId,
+        string $redisKey
+    ): array {
+        $lockKey = "timer:lock:{$entry->user_id}";
+
+        if (! Redis::set($lockKey, 1, 'EX', self::LOCK_TTL, 'NX')) {
+            throw new \RuntimeException('Timer operation in progress');
+        }
+
+        try {
+            $entryId = $entry->id;
+            $extended = DB::transaction(function () use ($entryId, $overrideStartedAt, $overrideEndedAt) {
+                $locked = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                    ->where('id', $entryId)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                // Re-check under the lock: only extend forward, never shrink a stored stop.
+                if ($locked->ended_at !== null && $overrideEndedAt->lte($locked->ended_at)) {
+                    return ['entry' => $locked->fresh(), 'extended' => false];
+                }
+
+                $startedAt = $overrideStartedAt ? $overrideStartedAt->copy() : $locked->started_at->copy();
+                $duration = $this->computeDuration($startedAt, $overrideEndedAt);
+                $finalScore = $this->computeFinalActivityScore($locked->id);
+
+                $locked->update([
+                    'started_at' => $startedAt,
+                    'ended_at' => $overrideEndedAt->copy(),
+                    'duration_seconds' => $duration,
+                    'activity_score' => $finalScore ?? $locked->activity_score ?? 0,
+                ]);
+
+                return ['entry' => $locked->fresh(), 'extended' => true];
+            });
+
+            // Cleanup may have left a stale Redis key pointing at this now-extended entry.
+            if ($redisEntryId === $extended['entry']->id) {
+                Redis::del($redisKey);
+            }
+
+            if ($extended['extended']) {
+                TimerStopped::dispatch($extended['entry']);
+            }
+
+            // Surface as already_stopped: the session is closed; we merely corrected its
+            // end boundary to reflect real offline work.
+            return ['entry' => $extended['entry'], 'already_stopped' => true];
         } finally {
             Redis::del($lockKey);
         }
@@ -1041,8 +1117,22 @@ class TimerService
                 return ['idle_entry' => null, 'new_entry' => null];
             }
 
-            $idleStartedAt = \Carbon\Carbon::parse($data['idle_started_at']);
-            $idleEndedAt = \Carbon\Carbon::parse($data['idle_ended_at']);
+            // FIX B4: Idempotent no-op on an already-closed session. If the entry Redis
+            // points at is closed (e.g. cleanup/crash-reclaim closed it, or a duplicate
+            // idle report arrived after the session ended), NEVER re-open it, shrink its
+            // ended_at, or spawn a fresh running entry — that would resurrect/duplicate a
+            // dead timer. Return a clean no-op instead.
+            if ($currentEntry->ended_at !== null) {
+                return ['idle_entry' => null, 'new_entry' => null];
+            }
+
+            // FIX B3: Route idle timestamps through the skew-bounded parser instead of a
+            // raw Carbon::parse, so bad/forward clocks (offline replay) are rejected.
+            $idleStartedAt = $this->parseClientTimestamp((string) $data['idle_started_at'], 'idle_started_at');
+            $idleEndedAt = $this->parseClientTimestamp((string) $data['idle_ended_at'], 'idle_ended_at');
+            if ($idleEndedAt->lt($idleStartedAt)) {
+                throw new \InvalidArgumentException('idle_ended_at must be on or after idle_started_at.');
+            }
             $idleSeconds = (int) ($data['idle_seconds'] ?? 0);
             $action = $data['action'] ?? 'discard';
             $reassignProjectId = $data['project_id'] ?? null;
@@ -1073,11 +1163,24 @@ class TimerService
             // and idle_started_at was clamped to the entry start above.
             $computedIdleSeconds = $this->computeDuration($idleStartedAt, $idleEndedAt);
 
+            // FIX B3: The new post-idle running entry begins at idle_ended_at. On an
+            // OFFLINE replay, idle_ended_at can be well in the past, so anchoring the new
+            // live timer there would silently count the past-to-now dead gap as tracked
+            // time on the next status()/stop(). Clamp the new running entry's start to
+            // now() when idle_ended_at is older than a small bound — mirrors the
+            // last-activity reasoning in closeStaleOpenTimer(). The audit/idle/reassign
+            // entries still use the true idle_ended_at; only the LIVE anchor is clamped.
+            $newEntryStartedAt = $idleEndedAt->copy();
+            if ($idleEndedAt->lt(now()->subSeconds(self::MAX_FUTURE_SKEW))) {
+                $newEntryStartedAt = now();
+            }
+
             $result = DB::transaction(function () use (
             $user,
             $currentEntry,
             $idleStartedAt,
             $idleEndedAt,
+            $newEntryStartedAt,
             $computedIdleSeconds,
             $action,
             $reassignProjectId
@@ -1124,14 +1227,15 @@ class TimerService
                 ]);
             }
 
-            // 4. New running entry from idle_ended_at (same project as original)
-            // FIX B3: Redis::setex() is intentionally moved OUTSIDE this transaction
+            // 4. New running entry anchored at the clamped start (idle_ended_at, or now()
+            //    when idle_ended_at is in the past — FIX B3, prevents dead-tail inflation).
+            //    Redis::setex() is intentionally moved OUTSIDE this transaction.
             $newEntry = TimeEntry::create([
                 'organization_id' => $user->organization_id,
                 'user_id' => $user->id,
                 'project_id' => $currentEntry->project_id,
                 'task_id' => $currentEntry->task_id,
-                'started_at' => $idleEndedAt,
+                'started_at' => $newEntryStartedAt,
                 'type' => 'tracked',
             ]);
 
@@ -1163,12 +1267,33 @@ class TimerService
         }
 
         $timerInfo = json_decode($timerData, true);
+        $entryId = $timerInfo['entry_id'] ?? null;
+
+        // FIX B2: Resolve the entry as an OPEN session. A heartbeat (especially one
+        // flushed from the offline queue) must NEVER land on a CLOSED entry — doing so
+        // would create ActivityLog rows on a finalized session and mutate its
+        // activity_score after the fact. If the entry is closed or gone, reject with the
+        // same "No timer is currently running" signal the desktop already handles.
+        $entry = $entryId
+            ? TimeEntry::whereNull('ended_at')->find($entryId)
+            : null;
+        if (! $entry) {
+            throw new \RuntimeException('No timer is currently running.');
+        }
+
+        // FIX B2: Honor a client-supplied capture timestamp so offline-flushed
+        // heartbeats land at their TRUE capture time, not the flush moment. Validated
+        // against the skew window; falls back to now() when absent (backward compat).
+        $rawLoggedAt = $data['logged_at'] ?? $data['captured_at'] ?? null;
+        $loggedAt = $rawLoggedAt
+            ? $this->parseClientTimestamp((string) $rawLoggedAt, 'logged_at')
+            : now();
 
         $logData = [
             'organization_id' => $user->organization_id,
             'user_id' => $user->id,
-            'time_entry_id' => $timerInfo['entry_id'],
-            'logged_at' => now(),
+            'time_entry_id' => $entry->id,
+            'logged_at' => $loggedAt,
             'keyboard_events' => $data['keyboard_events'] ?? 0,
             'mouse_events' => $data['mouse_events'] ?? 0,
             'active_app' => $data['active_app'] ?? null,
@@ -1187,7 +1312,7 @@ class TimerService
         // If the desktop sends active_seconds (Hubstaff-standard active-seconds model),
         // compute score as percentage of seconds with input. Otherwise fall back to
         // event-count method for backward compatibility with older desktop versions.
-        $entry = TimeEntry::find($timerInfo['entry_id']);
+        // $entry is the OPEN entry resolved above (never a closed one — FIX B2).
         if ($entry) {
             if (isset($data['active_seconds'])) {
                 // Active-seconds model: score = active_seconds / interval_seconds * 100

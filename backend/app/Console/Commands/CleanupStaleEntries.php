@@ -13,7 +13,7 @@ class CleanupStaleEntries extends Command
 {
     protected $signature = 'timer:cleanup-stale';
 
-    protected $description = 'Auto-close stale time entries that have no heartbeat for 30+ minutes';
+    protected $description = 'Auto-close stale time entries with no heartbeat for the offline grace window';
 
     /**
      * Maximum duration (seconds) for any single time entry.
@@ -33,7 +33,13 @@ class CleanupStaleEntries extends Command
 
     public function handle(): int
     {
-        $threshold = Carbon::now()->subMinutes(30);
+        // Offline desktops queue heartbeats and flush them on reconnect, so the last
+        // SERVER-received heartbeat can legitimately lag by hours. Use the offline grace
+        // window (default 4h) as the staleness threshold instead of a 30-minute window
+        // that would truncate legitimate offline tracking. We still close AT the last
+        // heartbeat, so dead time after the last activity is never counted.
+        $graceMinutes = (int) config('timer.offline_grace_minutes', 240);
+        $threshold = Carbon::now()->subMinutes($graceMinutes);
         $closed = 0;
 
         // Find all running entries (ended_at IS NULL, type = tracked)

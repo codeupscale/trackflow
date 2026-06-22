@@ -61,6 +61,12 @@ class AgentController extends Controller
 
     public function bulkLogs(Request $request): JsonResponse
     {
+        // FIX B5: time_entry_id is now OPTIONAL. Offline-captured heartbeats are
+        // frequently flushed with a missing or stale time_entry_id (e.g. the entry was
+        // closed/renumbered before reconnect). Dropping the whole batch with a 422 loses
+        // legitimate activity. Instead we attribute each heartbeat to the user's entry
+        // that was open at the heartbeat's logged_at, and skip (never 403/422-drop) any
+        // log we cannot safely attribute.
         $request->validate([
             'logs' => 'required|array',
             'logs.*.keyboard_events' => 'required|integer|min:0',
@@ -69,26 +75,44 @@ class AgentController extends Controller
             'logs.*.active_app' => 'nullable|string',
             'logs.*.active_window_title' => 'nullable|string',
             'logs.*.active_url' => 'nullable|string',
-            'logs.*.time_entry_id' => 'required|uuid',
+            'logs.*.time_entry_id' => 'nullable|uuid',
         ]);
 
         $user = $request->user();
 
-        // Validate all time_entry_ids belong to the authenticated user
-        $validEntryIds = $user->timeEntries()->pluck('id')->toArray();
-        foreach ($request->logs as $log) {
-            if (!in_array($log['time_entry_id'], $validEntryIds)) {
-                return response()->json(['message' => 'Invalid time entry ID.'], 403);
-            }
-        }
+        // Org-scoped set of this user's entry ids — used to reject cross-user/cross-org ids.
+        $validEntryIds = $user->timeEntries()->pluck('id')->all();
+        $validEntryIdSet = array_flip($validEntryIds);
 
         $inserted = 0;
+        $skipped = 0;
+
         foreach ($request->logs as $log) {
+            $loggedAt = $log['logged_at'];
+            $entryId = $log['time_entry_id'] ?? null;
+
+            // Reject an explicit id that is not the user's own (strict org scoping).
+            if ($entryId !== null && ! isset($validEntryIdSet[$entryId])) {
+                $entryId = null;
+            }
+
+            // Missing/unknown id: attribute to the user's entry that was OPEN at logged_at
+            // (covers in-flight live sessions and historical entries that have since closed).
+            if ($entryId === null) {
+                $entryId = $this->resolveEntryIdForHeartbeat($user, $loggedAt);
+            }
+
+            // Could not safely attribute — skip this log rather than dropping the batch.
+            if ($entryId === null) {
+                $skipped++;
+                continue;
+            }
+
             \App\Models\ActivityLog::create([
                 'organization_id' => $user->organization_id,
                 'user_id' => $user->id,
-                'time_entry_id' => $log['time_entry_id'],
-                'logged_at' => $log['logged_at'],
+                'time_entry_id' => $entryId,
+                'logged_at' => $loggedAt,
                 'keyboard_events' => $log['keyboard_events'],
                 'mouse_events' => $log['mouse_events'],
                 'active_app' => $log['active_app'] ?? null,
@@ -98,6 +122,32 @@ class AgentController extends Controller
             $inserted++;
         }
 
-        return response()->json(['inserted' => $inserted]);
+        return response()->json(['inserted' => $inserted, 'skipped' => $skipped]);
+    }
+
+    /**
+     * Resolve which of the user's time entries a flushed heartbeat belongs to, based on
+     * the heartbeat's capture time. Strictly org-scoped to the authenticated user.
+     *
+     * Matches the entry whose [started_at, ended_at] window contains $loggedAt (still-open
+     * entries match when started_at <= logged_at). Returns null when nothing matches.
+     */
+    private function resolveEntryIdForHeartbeat($user, string $loggedAt): ?string
+    {
+        try {
+            $ts = \Carbon\Carbon::parse($loggedAt);
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        return \App\Models\TimeEntry::where('organization_id', $user->organization_id)
+            ->where('user_id', $user->id)
+            ->where('started_at', '<=', $ts)
+            ->where(function ($q) use ($ts) {
+                $q->whereNull('ended_at')
+                    ->orWhere('ended_at', '>=', $ts);
+            })
+            ->orderByDesc('started_at')
+            ->value('id');
     }
 }
