@@ -96,6 +96,10 @@ const { IDLE_STATE } = require("./idle-detector");
 const OfflineQueue = require("./offline-queue");
 const NetworkMonitor = require("./network-monitor");
 const {
+    resolveWatchTarget,
+    shouldStopForRemoval,
+} = require("./uninstall-watcher");
+const {
     getToken,
     setToken,
     getRefreshToken,
@@ -1057,16 +1061,41 @@ process.on("unhandledRejection", (reason) => {
 
 // ── Single Instance Lock ─────────────────────────────────────────────────────
 
+// Flag the Windows uninstaller passes (see build/installer.nsh) to ask a running
+// instance to stop its timer gracefully before the files are removed.
+const UNINSTALL_STOP_FLAG = "--uninstall-stop";
+
 const gotTheLock = app.requestSingleInstanceLock();
 console.log(
     `Single instance lock: ${gotTheLock ? "acquired" : "FAILED (another instance running)"}`,
 );
 if (!gotTheLock) {
+    // Another instance is primary. If the uninstaller launched us with the flag,
+    // our argv was forwarded to that primary via the second-instance event below;
+    // either way this secondary process just exits.
     console.log("Exiting — another instance holds the lock");
+    app.quit();
+} else if (process.argv.includes(UNINSTALL_STOP_FLAG)) {
+    // Uninstaller launched us but no app was running — there is no in-memory timer
+    // to stop (the backend reclaim / scheduled cleanup closes any orphaned entry).
+    // Exit immediately without initializing UI/tracking.
+    console.log(
+        "[Uninstall] --uninstall-stop with no running instance; exiting without init.",
+    );
     app.quit();
 }
 
-app.on("second-instance", () => {
+app.on("second-instance", (_event, argv) => {
+    // The Windows uninstaller relaunches us with --uninstall-stop; the lock forwards
+    // that argv here to the running app. app.quit() runs the before-quit graceful
+    // stop (local SQLite + best-effort server stop), then exits.
+    if (Array.isArray(argv) && argv.includes(UNINSTALL_STOP_FLAG)) {
+        console.log(
+            "[Uninstall] --uninstall-stop received — stopping timer and quitting.",
+        );
+        app.quit();
+        return;
+    }
     showPopup();
 });
 
@@ -1259,10 +1288,59 @@ async function forceLogout() {
     _forceLogoutInProgress = false;
 }
 
+let _selfRemovalWatcher = null;
+
+/**
+ * Cross-platform uninstall safety net: while the app is running, poll its own
+ * install path. If the binary/bundle disappears (uninstall in progress) we call
+ * app.quit(), whose before-quit handler performs the graceful local + best-effort
+ * server timer stop. Covers macOS Trash and Linux AppImage delete (no OS hook) and
+ * backstops Windows. Suppressed in dev and during auto-update (isQuitting), so an
+ * updater file-swap is never mistaken for an uninstall.
+ */
+function startSelfRemovalWatcher() {
+    if (_selfRemovalWatcher) return;
+
+    const watchTarget = resolveWatchTarget(process.env, app.getPath("exe"));
+    if (!app.isPackaged || !watchTarget) {
+        return; // dev tree / unknown path — nothing meaningful to watch
+    }
+
+    console.log(`[Uninstall] Watching install path for removal: ${watchTarget}`);
+    _selfRemovalWatcher = setInterval(() => {
+        let pathExists = true;
+        try {
+            pathExists = fs.existsSync(watchTarget);
+        } catch {
+            // Transient FS error — treat as present; don't quit on a hiccup.
+            pathExists = true;
+        }
+
+        if (
+            shouldStopForRemoval({
+                isPackaged: app.isPackaged,
+                isQuitting,
+                pathExists,
+            })
+        ) {
+            console.warn(
+                "[Uninstall] Install path removed — stopping timer and quitting.",
+            );
+            clearInterval(_selfRemovalWatcher);
+            _selfRemovalWatcher = null;
+            app.quit(); // before-quit performs the graceful timer stop
+        }
+    }, 5000);
+    _selfRemovalWatcher.unref?.();
+}
+
 async function initializeApp() {
     // Register theme handler early — needed by both login and main windows
     ipcMain.removeHandler("get-theme");
     ipcMain.handle("get-theme", () => getOSTheme());
+
+    // Stop the timer if the app is uninstalled while running (all OSes).
+    startSelfRemovalWatcher();
 
     // Load saved tokens
     const token = await getToken();

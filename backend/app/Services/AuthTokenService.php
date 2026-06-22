@@ -6,14 +6,13 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\PersonalAccessToken;
-use Symfony\Component\HttpKernel\Exception\HttpException;
 
 /**
  * Sanctum token lifecycle with client-aware sessions.
  *
  * - Web: multiple browser sessions allowed.
- * - Desktop: exactly one machine at a time — a second desktop login is rejected (409)
- *   while another desktop session or an open timer exists for the account.
+ * - Desktop: exactly one machine at a time (last-login-wins) — a new desktop login
+ *   terminates every previous desktop session and closes any orphaned open timer.
  */
 class AuthTokenService
 {
@@ -47,38 +46,36 @@ class AuthTokenService
     }
 
     /**
-     * Reject desktop login when another machine holds the session or a timer is running.
+     * On a desktop sign-in, take over the single desktop slot (last-login-wins):
+     *
+     *  - Close any timer left open by a crashed / uninstalled / force-killed agent.
+     *    The entry is ended at its last heartbeat, so phantom "non-tracked" time
+     *    after the agent stopped reporting is discarded, never counted.
+     *  - Revoke every previous DESKTOP token for the account, on any device. The
+     *    prior machine's next request 401s and it logs itself out.
+     *
+     * Web sessions are intentionally left untouched (web + one desktop coexist).
+     *
+     * This replaces the previous 409 "already logged in" rejection, which could
+     * permanently lock a user out when a prior session never cleanly logged out
+     * (uninstall / crash / force-kill leaves the token + open timer behind).
      */
-    public function assertDesktopLoginAllowed(User $user, string $deviceId): void
+    public function terminatePreviousDesktopSessions(User $user): void
     {
         if ($this->timerService->userHasOpenTimer($user)) {
-            $timerDeviceId = $this->primaryDesktopDeviceId($user);
-
-            if ($timerDeviceId !== null && $timerDeviceId !== $deviceId) {
-                throw new HttpException(
-                    409,
-                    'A timer is running on another desktop. Stop the timer and log out there before signing in here.'
-                );
-            }
-
-            if ($timerDeviceId === null) {
-                throw new HttpException(
-                    409,
-                    'A timer is already running for this account on another desktop.'
-                );
-            }
+            $this->timerService->closeStaleOpenTimer($user);
         }
 
-        foreach ($this->getActiveDesktopTokens($user) as $token) {
-            $tokenDeviceId = $this->tokenDeviceId($token);
+        $this->revokeAllDesktopTokens($user);
+    }
 
-            if ($tokenDeviceId === null || $tokenDeviceId !== $deviceId) {
-                throw new HttpException(
-                    409,
-                    'This account is already logged in on another desktop computer. Log out there first.'
-                );
+    private function revokeAllDesktopTokens(User $user): void
+    {
+        $user->tokens()->get()->each(function (PersonalAccessToken $token) {
+            if ($this->isDesktopToken($token)) {
+                $token->delete();
             }
-        }
+        });
     }
 
     public function pruneExpiredTokens(User $user): void
@@ -170,44 +167,22 @@ class AuthTokenService
 
     private function isDesktopToken(PersonalAccessToken $token): bool
     {
-        if ($token->can('client:web')) {
-            return false;
+        // Match abilities LITERALLY — never via can(), because the access token
+        // carries the '*' wildcard and can('client:web') would be true for it,
+        // misclassifying every desktop access token as web (and so leaving it
+        // un-revoked on session takeover).
+        $abilities = $token->abilities ?? [];
+
+        if (in_array('client:desktop', $abilities, true) || str_starts_with($token->name, 'desktop_')) {
+            return true;
         }
 
-        if ($token->can('client:desktop') || str_starts_with($token->name, 'desktop_')) {
-            return true;
+        if (in_array('client:web', $abilities, true)) {
+            return false;
         }
 
         // Legacy desktop agent tokens (pre client-tag) used access_token / refresh_token names.
         return in_array($token->name, ['access_token', 'refresh_token'], true);
-    }
-
-    /**
-     * @return list<PersonalAccessToken>
-     */
-    private function getActiveDesktopTokens(User $user): array
-    {
-        return $user->tokens()
-            ->where(function ($query) {
-                $query->whereNull('expires_at')
-                    ->orWhere('expires_at', '>', now());
-            })
-            ->get()
-            ->filter(fn (PersonalAccessToken $token) => $this->isDesktopToken($token))
-            ->values()
-            ->all();
-    }
-
-    private function primaryDesktopDeviceId(User $user): ?string
-    {
-        foreach ($this->getActiveDesktopTokens($user) as $token) {
-            $deviceId = $this->tokenDeviceId($token);
-            if ($deviceId !== null) {
-                return $deviceId;
-            }
-        }
-
-        return null;
     }
 
     private function revokeDesktopTokensForDevice(User $user, string $deviceId): void

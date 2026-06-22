@@ -758,6 +758,53 @@ class TimerService
     }
 
     /**
+     * Close the user's open timer at its last known activity (last heartbeat, or
+     * started_at when none). Used to reclaim a timer orphaned by an uninstall /
+     * crash / force-kill so it neither counts dead time nor blocks a fresh login.
+     * The dead gap between the last heartbeat and now is intentionally excluded.
+     */
+    public function closeStaleOpenTimer(User $user): ?TimeEntry
+    {
+        $entry = $this->openEntryForUser($user);
+
+        if ($entry === null) {
+            return null;
+        }
+
+        $lastHeartbeat = ActivityLog::where('time_entry_id', $entry->id)->max('logged_at');
+        $endedAt = $lastHeartbeat ? Carbon::parse($lastHeartbeat) : $entry->started_at;
+
+        $duration = (int) abs($endedAt->diffInSeconds($entry->started_at));
+        if ($duration > self::MAX_ENTRY_DURATION) {
+            $duration = self::MAX_ENTRY_DURATION;
+            $endedAt = $entry->started_at->copy()->addSeconds(self::MAX_ENTRY_DURATION);
+        }
+
+        $entry->update([
+            'ended_at' => $endedAt,
+            'duration_seconds' => $duration,
+        ]);
+
+        Redis::del("timer:{$entry->user_id}");
+
+        return $entry;
+    }
+
+    /**
+     * Resolve the user's open timer entry without relying on the org global scope.
+     */
+    private function openEntryForUser(User $user): ?TimeEntry
+    {
+        return TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+            ->where('user_id', $user->id)
+            ->where('organization_id', $user->organization_id)
+            ->whereNull('ended_at')
+            ->whereNull('deleted_at')
+            ->latest('started_at')
+            ->first();
+    }
+
+    /**
      * Resolve the user's currently open timer entry from Redis, falling back to the DB
      * when the cache is missing or stale. Repairs Redis when a DB open entry is found
      * so status()/stop() stay consistent after Redis restarts or evictions.

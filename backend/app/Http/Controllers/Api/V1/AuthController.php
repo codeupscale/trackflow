@@ -655,7 +655,9 @@ class AuthController extends Controller
 
         if ($client === AuthTokenService::CLIENT_DESKTOP) {
             $deviceId = $this->authTokens->requireDeviceIdFromRequest();
-            $this->authTokens->assertDesktopLoginAllowed($user, $deviceId);
+            // Last-login-wins: terminate previous desktop sessions and close any
+            // timer orphaned by a crash / uninstall (its phantom tail is discarded).
+            $this->authTokens->terminatePreviousDesktopSessions($user);
         }
 
         $tokens = $this->authTokens->issueTokenPair(
