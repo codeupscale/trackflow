@@ -120,15 +120,30 @@ window.trackflow.onIdleData((data) => {
     startTicking();
 
     if (Array.isArray(data.projects) && data.projects.length > 0) {
-        projects = data.projects;
         const sel = document.getElementById("reassignProject");
-        sel.innerHTML = '<option value="">Reassign to project\u2026</option>';
-        projects.forEach((p) => {
-            const opt = document.createElement("option");
-            opt.value = p.id;
-            opt.textContent = p.name || p.id;
-            sel.appendChild(opt);
-        });
+        // idle-data is re-sent while the popup is open (project refresh on show,
+        // the 30-min refresh interval, resume-after-sleep). Rebuilding the <select>
+        // unconditionally wiped the project the user had just picked back to the
+        // placeholder. Only rebuild when the list actually changed, and preserve
+        // the current selection across the rebuild.
+        const sameList =
+            projects.length === data.projects.length &&
+            projects.every((p, i) => p.id === data.projects[i].id);
+        projects = data.projects;
+        if (!sameList || sel.options.length <= 1) {
+            const prevValue = sel.value;
+            sel.innerHTML = '<option value="">Reassign to project\u2026</option>';
+            projects.forEach((p) => {
+                const opt = document.createElement("option");
+                opt.value = p.id;
+                opt.textContent = p.name || p.id;
+                sel.appendChild(opt);
+            });
+            if (prevValue && projects.some((p) => String(p.id) === prevValue)) {
+                sel.value = prevValue;
+            }
+        }
+        document.getElementById("reassignBtn").disabled = !sel.value;
     }
 });
 
