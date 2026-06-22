@@ -172,7 +172,15 @@ function updateDisplay(running, paused = false) {
   startBtn.style.display = running || paused ? 'none' : 'flex';
   stopBtn.style.display = running || paused ? 'flex' : 'none';
   projectSelect.disabled = running || paused || projectSelect.options.length <= 1;
-  startBtn.disabled = isRunning || isPaused;
+  // When stopped, Start must stay disabled until a project is selected — defer to
+  // updateStartBtnState() instead of unconditionally enabling it. (The old
+  // `startBtn.disabled = isRunning || isPaused` re-enabled Start with no project,
+  // letting the timer start unassigned.)
+  if (running || paused) {
+    startBtn.disabled = true;
+  } else {
+    updateStartBtnState();
+  }
   showTrackingInfo(running || paused);
   if (!running) {
     updateActivityDisplay(0);
@@ -265,6 +273,7 @@ async function loadProjects(retryCount = 0) {
     // OFFLINE FIX: Don't clear the dropdown if we got empty and already have options
     if (list.length === 0 && projectSelect.options.length > 1) {
       console.log('[loadProjects] Empty list but dropdown has options — keeping current');
+      syncProjectSelectEnabled();
       _loadProjectsInFlight = false;
       return;
     }
@@ -281,6 +290,10 @@ async function loadProjects(retryCount = 0) {
     if (currentValue && list.some(p => String(p.id) === currentValue)) {
       projectSelect.value = currentValue;
     }
+    // Re-enable the dropdown now that options exist. An earlier updateDisplay()
+    // may have disabled it while the list was still loading, leaving it stuck
+    // disabled/empty-looking even after projects arrived (the "doesn't load" bug).
+    syncProjectSelectEnabled();
     updateStartBtnState();
   } catch (e) {
     console.error('[loadProjects] Failed:', e);
@@ -293,6 +306,13 @@ async function loadProjects(retryCount = 0) {
       _loadProjectsInFlight = false;
     }
   }
+}
+
+// Keep the project dropdown enabled whenever the timer is stopped and the list
+// has real options. Called after async project loads so a dropdown disabled by an
+// earlier updateDisplay() (while the list was empty) gets re-enabled.
+function syncProjectSelectEnabled() {
+  projectSelect.disabled = isRunning || isPaused || projectSelect.options.length <= 1;
 }
 
 // Disable Start button when no project selected

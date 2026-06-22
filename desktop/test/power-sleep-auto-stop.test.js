@@ -1,5 +1,6 @@
 // Unit tests for power-manager sleep auto-stop and startup gap detection.
 
+const { powerMonitor } = require('electron');
 const PowerManager = require('../src/main/power-manager');
 
 describe('PowerManager', () => {
@@ -46,6 +47,55 @@ describe('PowerManager', () => {
       const d = new Date();
       d.setHours(14, 5, 30, 0);
       expect(PowerManager.formatTimeShortLocal(d)).toBe('14:05');
+    });
+  });
+
+  // ── FIX D5: idle teardown on suspend ──
+  describe('onSuspendCleanup on suspend', () => {
+    // Grab the handler registered for a given powerMonitor event.
+    function getRegisteredHandler(eventName) {
+      const call = powerMonitor.on.mock.calls.find((c) => c[0] === eventName);
+      return call ? call[1] : null;
+    }
+
+    afterEach(() => {
+      PowerManager.unregisterPowerHandlers();
+    });
+
+    test('fires onSuspendCleanup even when the timer is not running', async () => {
+      powerMonitor.on.mockClear();
+      const onSuspendCleanup = jest.fn();
+      const autoStopForPowerEvent = jest.fn().mockResolvedValue(undefined);
+      PowerManager.registerPowerHandlers({
+        isTimerRunning: () => false,
+        autoStopForPowerEvent,
+        onSuspendCleanup,
+      });
+
+      const suspendHandler = getRegisteredHandler('suspend');
+      expect(typeof suspendHandler).toBe('function');
+      await suspendHandler();
+
+      // Idle teardown runs regardless; auto-stop is skipped (no running timer)
+      expect(onSuspendCleanup).toHaveBeenCalledTimes(1);
+      expect(autoStopForPowerEvent).not.toHaveBeenCalled();
+    });
+
+    test('fires onSuspendCleanup AND auto-stops when the timer is running', async () => {
+      powerMonitor.on.mockClear();
+      const onSuspendCleanup = jest.fn();
+      const autoStopForPowerEvent = jest.fn().mockResolvedValue(undefined);
+      PowerManager.registerPowerHandlers({
+        isTimerRunning: () => true,
+        autoStopForPowerEvent,
+        onSuspendCleanup,
+      });
+
+      const suspendHandler = getRegisteredHandler('suspend');
+      await suspendHandler();
+
+      expect(onSuspendCleanup).toHaveBeenCalledTimes(1);
+      expect(autoStopForPowerEvent).toHaveBeenCalledTimes(1);
     });
   });
 });
