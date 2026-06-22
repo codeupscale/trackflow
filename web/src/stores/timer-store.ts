@@ -34,6 +34,8 @@ interface TimerState {
   echoOrgId: string | null;
   /** Handler reference for visibilitychange cleanup. */
   _visibilityHandler: (() => void) | null;
+  /** Handler reference for the window 'online' resync listener. */
+  _onlineHandler: (() => void) | null;
   /** BroadcastChannel for multi-tab sync. */
   _broadcastChannel: BroadcastChannel | null;
 
@@ -64,6 +66,7 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   pollId: null,
   echoOrgId: null,
   _visibilityHandler: null,
+  _onlineHandler: null,
   _broadcastChannel: null,
 
   fetchStatus: async () => {
@@ -182,6 +185,16 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
     // Also subscribe to real-time WebSocket events for instant updates
     get().setupWebSocket();
 
+    // Resync immediately when connectivity returns (don't wait up to 10s for the
+    // next poll) so the frozen-while-offline counter jumps straight to the server
+    // truth — which reflects whatever the desktop did offline (idle kept/discarded,
+    // stopped, or still running).
+    if (typeof window !== 'undefined' && !get()._onlineHandler) {
+      const onlineHandler = () => { get().fetchStatus(); };
+      window.addEventListener('online', onlineHandler);
+      set({ _onlineHandler: onlineHandler });
+    }
+
     // Set up BroadcastChannel for multi-tab sync
     if (typeof window !== 'undefined' && !get()._broadcastChannel) {
       try {
@@ -224,6 +237,13 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
     if (id) {
       clearInterval(id);
       set({ pollId: null });
+    }
+    if (typeof window !== 'undefined') {
+      const onlineHandler = get()._onlineHandler;
+      if (onlineHandler) {
+        window.removeEventListener('online', onlineHandler);
+        set({ _onlineHandler: null });
+      }
     }
     get().teardownWebSocket();
   },
@@ -271,6 +291,14 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   },
 
   tick: () => {
+    // Freeze the live counter while the browser is offline. The web portal is a
+    // read-only viewer — it cannot confirm the desktop is still tracking (the user
+    // may have gone idle or stopped), so ticking up blind would show unverified
+    // time. The next fetchStatus (poll or the 'online' resync) corrects it on
+    // reconnect from the server's authoritative elapsed.
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return;
+    }
     const { startedAt, todayTotalBase, projectTodayTotalBase } = get();
     if (startedAt) {
       const currentElapsed = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
@@ -351,6 +379,7 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
       projectTodayTotalBase: 0,
       echoOrgId: null,
       _visibilityHandler: null,
+      _onlineHandler: null,
       _broadcastChannel: null,
     });
   },
