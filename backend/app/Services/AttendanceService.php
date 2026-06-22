@@ -61,12 +61,18 @@ class AttendanceService
                 $dayStart = TimezoneAwareDateRange::startOfDayUtc($date, $userTz);
                 $dayEnd = TimezoneAwareDateRange::endOfDayUtc($date, $userTz); // exclusive
 
+                // Exclude `idle` entries from attendance hours and the clock-in/out
+                // span. They are audit markers (discarded idle, or a duplicate
+                // alongside a reassigned tracked entry); counting them inflates worked
+                // hours and can flip the Present/Half-Day/Absent status. `tracked` and
+                // `manual` entries are real worked time and count.
                 $timeEntries = TimeEntry::withoutGlobalScopes()
                     ->where('organization_id', $orgId)
                     ->where('user_id', $user->id)
                     ->where('started_at', '>=', $dayStart)
                     ->where('started_at', '<', $dayEnd)
                     ->whereNotNull('ended_at')
+                    ->where('type', '!=', 'idle')
                     ->orderBy('started_at')
                     ->get();
 
