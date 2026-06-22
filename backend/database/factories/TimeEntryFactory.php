@@ -30,7 +30,10 @@ class TimeEntryFactory extends Factory
             'started_at' => $startedAt,
             'ended_at' => $endedAt,
             'duration_seconds' => $durationSeconds,
-            'type' => fake()->randomElement(['tracked', 'manual', 'idle']),
+            // Default to a real tracked entry (deterministic). `idle` is an audit-only
+            // type excluded from worked-time totals — create it explicitly via ->idle()
+            // / ['type' => 'idle']. A random default made time-sum tests flaky.
+            'type' => 'tracked',
             'activity_score' => fake()->optional(0.7)->numberBetween(0, 100),
             'notes' => fake()->optional(0.3)->sentence(),
             'is_approved' => fake()->boolean(60),
