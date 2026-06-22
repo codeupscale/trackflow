@@ -2691,7 +2691,16 @@ function setupIPC() {
 
     ipcMain.handle("get-timer-state", async (_, projectId) => {
         const validProjectId = validateProjectId(projectId);
-        let todayTotalForDisplay = 0;
+        // Local fallback FIRST so an offline/failed server call never wipes the
+        // displayed total to 0 (the "saved time not showing after sleep auto-stop"
+        // bug). On a successful fetch below this is overwritten with server values.
+        const localSessionElapsed =
+            isTimerRunning && _cachedStartedAtMs
+                ? Math.floor((Date.now() - _cachedStartedAtMs) / 1000)
+                : 0;
+        let todayTotalForDisplay = isTimerRunning
+            ? todayTotalCurrentProject + localSessionElapsed
+            : todayTotalGlobal;
         if (apiClient) {
             try {
                 const status = await apiClient.getTimerStatus(validProjectId);
@@ -3341,8 +3350,15 @@ async function stopTimer(options = {}) {
             try {
                 todayTotalGlobal = await apiClient.getTodayTotal(null);
             } catch {
-                if (result?.today_total != null)
+                if (result?.today_total != null) {
                     todayTotalGlobal = result.today_total;
+                } else {
+                    // Offline: the server total is unreachable. todayTotalGlobal is the
+                    // base (excludes the running session), so add the just-stopped
+                    // session locally — otherwise the stopped display / get-timer-state
+                    // would show 00:00:00 even though the time was saved (sleep auto-stop).
+                    todayTotalGlobal = (todayTotalGlobal || 0) + sessionElapsed;
+                }
             }
             updateTrayTitle();
             let todayTotalForPopup = result?.today_total ?? 0;
