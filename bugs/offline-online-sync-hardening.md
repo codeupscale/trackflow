@@ -75,6 +75,24 @@ fixed as one batch. Product decisions: **preserve up to ~3–4h of offline work*
    `onSuspendCleanup` hook (stop detector + dismiss alert) that runs even on the timer-not-running
    path. Files: `index.js`, `power-manager.js`.
 
+## Follow-up fix — stale tray (menu-bar) time after an out-of-band stop
+
+**Symptom:** after the timer stopped out-of-band (server entry deleted/removed, or stop synced
+from the web) the popup correctly showed `00:00:00`, but the macOS **menu-bar tray** stayed
+frozen at the old running time (e.g. `01:01:01`).
+
+**Root cause:** the tray-timer interval (`startTrayTimer`, `index.js`) did
+`if (!isTimerRunning || !_cachedStartedAtMs) return;` — so once `isTimerRunning` flipped false
+out-of-band, the interval kept firing but only `return`ed, leaving the **last-rendered
+`setTrayText` value frozen** in the menu bar. `stopTrayTimer()` also only clears the interval,
+never the text.
+
+**Fix:** when the interval detects `!isTimerRunning`, it now refreshes the tray to the stopped
+state (`updateTrayTitle()`) and stops ticking — so the menu bar can never be left showing a
+frozen running clock, regardless of which teardown path (or data removal) stopped the timer.
+Self-heals within ~1s on the next tick. (Requires a new desktop build; an already-running stuck
+instance clears on restart.)
+
 ## Deferred (P2/P3, tracked — not in this batch)
 
 Out-of-order offline stop-before-start ordering; idempotency key burned after entry close

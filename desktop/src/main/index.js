@@ -3884,7 +3884,16 @@ function startTrayTimer() {
     stopTrayTimer();
     updateTrayTitle();
     trayTimerInterval = setInterval(() => {
-        if (!isTimerRunning || !_cachedStartedAtMs) return;
+        // If the timer stopped out-of-band (stop synced from the server/web, or the
+        // entry was removed) the interval used to just `return`, leaving the LAST
+        // rendered "HH:MM:SS" frozen in the menu bar forever while the popup showed
+        // 00:00:00. Refresh the tray to the stopped state and stop ticking instead.
+        if (!isTimerRunning) {
+            stopTrayTimer();
+            updateTrayTitle();
+            return;
+        }
+        if (!_cachedStartedAtMs) return;
         // BUG 2 FIX (clock-skew consistency): `_cachedStartedAtMs` is the LOCAL
         // started_at (local source of truth, stored uncorrected). Elapsed time must
         // therefore be measured against the LOCAL clock too — `Date.now()`. Adding
