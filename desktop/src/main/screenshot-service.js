@@ -96,6 +96,21 @@ class ScreenshotService {
     this._onPermissionDialogSave = typeof fn === 'function' ? fn : null;
   }
 
+  // FIX D2: Rebind the live capture to a different (resolved) entry id WITHOUT
+  // restarting the cadence/interval. Used by reconcileTimerState() after an
+  // offline `local-…` start syncs and its real server entry id becomes known —
+  // otherwise every live screenshot for the rest of the session keeps the stale
+  // `local-…` id and 422s on presign. No-ops if the service isn't running or the
+  // id is unchanged/empty.
+  rebindEntryId(serverId) {
+    if (!serverId) return;
+    if (!this.currentEntryId) return; // not capturing — start() will use the right id
+    if (this.currentEntryId === serverId) return;
+    const previous = this.currentEntryId;
+    this.currentEntryId = serverId;
+    console.log(`[SS] Rebound live entry id ${previous} -> ${serverId} (cadence preserved)`);
+  }
+
   // Set a callback that fires when wallpaper-only capture is detected
   setWallpaperDetectedCallback(fn) {
     this._onWallpaperDetected = typeof fn === 'function' ? fn : null;

@@ -241,6 +241,42 @@ describe('ScreenshotService', () => {
   });
 
   // ═════════════════════════════════════════════════════════════════
+  // ── rebindEntryId() — FIX D2 ──
+  // ═════════════════════════════════════════════════════════════════
+
+  describe('rebindEntryId()', () => {
+    test('swaps currentEntryId without touching the interval timer', () => {
+      service.start('local-123');
+      const intervalBefore = service._intervalTimer;
+      const initialBefore = service.initialTimeout;
+      service.rebindEntryId('server-uuid-9');
+      expect(service.currentEntryId).toBe('server-uuid-9');
+      // Cadence preserved — timers are the SAME references (not restarted)
+      expect(service._intervalTimer).toBe(intervalBefore);
+      expect(service.initialTimeout).toBe(initialBefore);
+    });
+
+    test('no-op when not capturing (currentEntryId is null)', () => {
+      service.stop();
+      service.rebindEntryId('server-uuid-9');
+      expect(service.currentEntryId).toBeNull();
+    });
+
+    test('no-op when id is unchanged', () => {
+      service.currentEntryId = 'server-uuid-9';
+      service.rebindEntryId('server-uuid-9');
+      expect(service.currentEntryId).toBe('server-uuid-9');
+    });
+
+    test('no-op when serverId is empty/null', () => {
+      service.currentEntryId = 'local-123';
+      service.rebindEntryId(null);
+      service.rebindEntryId('');
+      expect(service.currentEntryId).toBe('local-123');
+    });
+  });
+
+  // ═════════════════════════════════════════════════════════════════
   // ── capture() — Core ──
   // ═════════════════════════════════════════════════════════════════
 

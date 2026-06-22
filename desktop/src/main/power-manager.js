@@ -47,6 +47,16 @@ function unregisterPowerHandlers() {
 }
 
 async function handleSuspend(reason) {
+  // FIX D5: Always tear down idle state on suspend, even if the timer isn't running
+  // (defensive — a detached/armed idle detector must never survive a power event and
+  // fire a spurious auto-stop / bogus idle_discard on wake). Runs before the
+  // isTimerRunning short-circuit below.
+  try {
+    _callbacks?.onSuspendCleanup?.();
+  } catch (e) {
+    console.error('[power] onSuspendCleanup failed:', e.message);
+  }
+
   if (!_callbacks?.isTimerRunning?.()) return;
   const endedAtMs = Date.now();
   _suspendedAt = endedAtMs;

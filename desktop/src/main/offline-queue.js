@@ -47,7 +47,55 @@ class OfflineQueue {
     this._flushTimer = null;
     this._screenshotDir = null;
 
+    // FIX D1/D2: Resolver injected by index.js. Given a queued item's
+    // { time_entry_id, idempotency_key }, returns the REAL server entry id by
+    // reading the timer_sessions table (server_entry_id). Lets us replace a
+    // `local-…` placeholder id with the synced server id before sending —
+    // heartbeats and screenshots that carried a local id used to 422 and drop.
+    // Returns null when the originating session hasn't synced its start yet.
+    /** @type {((meta: {time_entry_id?: string, idempotency_key?: string}) => (string|null))|null} */
+    this.resolveServerEntryId = null;
+
+    // FIX D3: Re-anchor callback injected by index.js. Invoked when a queued
+    // idle_discard/idle_reassign flushes and the server returns a NEW (post-split)
+    // entry — the desktop must re-anchor its local timer to that new entry exactly
+    // like the online idle path, or it stays bound to the now-closed entry and the
+    // server leaves a new entry open forever (elapsed inflates / stopped timers
+    // resurrect). Signature: (payload, newEntry) => void.
+    /** @type {((payload: object, newEntry: object) => void)|null} */
+    this.onIdleReanchor = null;
+
+    // FIX D3: Predicate injected by index.js — returns true when a local timer
+    // session is currently active. A queued idle_discard must be SKIPPED when the
+    // user already stopped the timer before it flushed, otherwise replaying it
+    // resurrects a running timer on the server. Defaults to "assume active" when
+    // not wired so behavior is unchanged in contexts that don't set it.
+    /** @type {(() => boolean)|null} */
+    this.isLocalTimerActive = null;
+
     this.init();
+  }
+
+  // FIX D1/D2: Resolve a queued item's time_entry_id to the real server entry id.
+  // - If the id is already a real server id (not `local-…`), return it as-is.
+  // - If it's a `local-…` placeholder, ask the resolver for the synced server id.
+  // - Return null when unresolved (start not synced yet) so the caller HOLDS the
+  //   item for a later flush instead of sending an id the server will reject.
+  _resolveEntryId(meta) {
+    const raw = meta && meta.time_entry_id != null ? String(meta.time_entry_id) : null;
+    if (raw && !raw.startsWith('local-')) return raw;
+    if (typeof this.resolveServerEntryId === 'function') {
+      try {
+        const resolved = this.resolveServerEntryId({
+          time_entry_id: raw,
+          idempotency_key: meta && meta.idempotency_key,
+        });
+        if (resolved && !String(resolved).startsWith('local-')) return String(resolved);
+      } catch (e) {
+        console.warn('[OfflineQueue] resolveServerEntryId threw:', e.message);
+      }
+    }
+    return null; // unresolved — hold for later
   }
 
   init() {
@@ -282,7 +330,18 @@ class OfflineQueue {
 
         try {
           if (item.type === 'heartbeat') {
-            heartbeats.push(data);
+            // FIX D1: The /agent/logs replay endpoint requires a real time_entry_id.
+            // A heartbeat queued during an offline start carries a `local-…` id (or
+            // none) until its session syncs. Resolve it to the server entry id via
+            // timer_sessions; if still unresolved, HOLD this heartbeat (don't add it
+            // to the batch) so a single unresolvable id can't 422 the whole batch and
+            // drop all offline activity. It flushes on a later cycle once the start syncs.
+            const resolvedId = this._resolveEntryId(data);
+            if (!resolvedId) {
+              console.log(`[OfflineQueue] Holding heartbeat — entry not synced yet (entry=${data.time_entry_id})`);
+              continue; // leave in queue; do NOT count an attempt
+            }
+            heartbeats.push({ ...data, time_entry_id: resolvedId });
             heartbeatIds.push(item.id);
           } else if (item.type === 'screenshot') {
             // SS-4: Read screenshot from file, not from base64 in SQLite
@@ -304,8 +363,18 @@ class OfflineQueue {
               continue;
             }
 
+            // FIX D2: A screenshot queued during an offline start carries a
+            // `local-…` time_entry_id; presign 422s on it. Resolve to the synced
+            // server entry id via timer_sessions. If unresolved, HOLD the item
+            // (its buffer file stays on disk) until the start syncs.
+            const resolvedScreenshotEntryId = this._resolveEntryId(data);
+            if (!resolvedScreenshotEntryId) {
+              console.log(`[OfflineQueue] Holding screenshot — entry not synced yet (entry=${data.time_entry_id})`);
+              continue; // leave in queue + keep file; do NOT count an attempt
+            }
+
             const metadata = {
-              time_entry_id:   data.time_entry_id,
+              time_entry_id:   resolvedScreenshotEntryId,
               captured_at:     data.captured_at,
               file_size:       buffer.length,
               idempotency_key: data.idempotency_key,
@@ -332,7 +401,28 @@ class OfflineQueue {
               screenshotFilesToDelete.push(data.file_path);
             }
           } else if (item.type === 'idle_discard') {
-            await apiClient.reportIdleTime(data);
+            // FIX D3: If the user STOPPED the timer before this queued idle_discard
+            // flushed, replaying it would resurrect a running timer (the server
+            // splits the entry and opens a NEW one). Skip/drop it when no local
+            // session is active — the stop already closed everything.
+            if (typeof this.isLocalTimerActive === 'function' && !this.isLocalTimerActive()) {
+              console.log('[OfflineQueue] Dropping queued idle_discard — no active local timer (timer was stopped)');
+              deleteIds.push(item.id);
+              continue;
+            }
+            // FIX D3: Capture the result and re-anchor. The online idle path closes
+            // the stale entry at idle_started_at and opens a new local session at
+            // new_entry.started_at; the offline replay used to IGNORE new_entry,
+            // leaving the desktop bound to the now-split/closed entry → server keeps
+            // a new entry open forever and elapsed inflates. Drive the SAME re-anchor.
+            const res = await apiClient.reportIdleTime(data);
+            if (res?.new_entry && typeof this.onIdleReanchor === 'function') {
+              try {
+                this.onIdleReanchor(data, res.new_entry);
+              } catch (cbErr) {
+                console.warn('[OfflineQueue] onIdleReanchor threw:', cbErr.message);
+              }
+            }
             deleteIds.push(item.id);
           }
           // NOTE: timer_start and timer_stop are no longer queued here.

@@ -1042,6 +1042,140 @@ function cleanOldLocalTimerSessions() {
     }
 }
 
+/**
+ * FIX D1/D2: Resolve a queued item's time_entry_id to the REAL server entry id.
+ * A heartbeat/screenshot queued during an offline start carries a `local-…` id
+ * (the timer_sessions row id) until reconcile syncs the start. Look the session
+ * up by its local id OR idempotency_key and return its server_entry_id once known.
+ * Returns null while the start is still unsynced, so the offline queue HOLDS the
+ * item instead of sending an unresolvable id (which the server 422s and drops).
+ */
+function resolveServerEntryIdForQueue(meta) {
+    const db = _getLocalTimerDb();
+    if (!db) return null;
+    const localId =
+        meta && meta.time_entry_id != null ? String(meta.time_entry_id) : null;
+    const idemKey = meta && meta.idempotency_key ? String(meta.idempotency_key) : null;
+    try {
+        let row = null;
+        if (localId) {
+            row = db
+                .prepare(
+                    "SELECT server_entry_id FROM timer_sessions WHERE id = ? AND synced_start = 1 AND server_entry_id IS NOT NULL LIMIT 1",
+                )
+                .get(localId);
+        }
+        if (!row && idemKey) {
+            row = db
+                .prepare(
+                    "SELECT server_entry_id FROM timer_sessions WHERE idempotency_key = ? AND synced_start = 1 AND server_entry_id IS NOT NULL LIMIT 1",
+                )
+                .get(idemKey);
+        }
+        if (row && row.server_entry_id && !String(row.server_entry_id).startsWith("local-")) {
+            return String(row.server_entry_id);
+        }
+    } catch (e) {
+        console.warn("[LocalTimerDb] resolveServerEntryIdForQueue failed:", e.message);
+    }
+    return null;
+}
+
+/**
+ * FIX D3: Re-anchor local timer state to the post-split entry returned by a
+ * queued idle_discard/idle_reassign that flushed after reconnect. Mirrors the
+ * ONLINE re-anchor in handleIdleAction so the desktop never stays bound to the
+ * now-closed entry. Guarded by the same mutexes so it can't race reconcile or a
+ * live idle action.
+ */
+function reanchorFromOfflineIdle(payload, newEntry) {
+    if (!newEntry || !newEntry.started_at) return;
+    if (_timerStateMutationInProgress || _isHandlingIdleAction) {
+        console.log(
+            "[OfflineIdle] Skipping re-anchor — timer state mutation/idle action in progress",
+        );
+        return;
+    }
+    // Only re-anchor when we still have a running local timer to move. If the timer
+    // was stopped meanwhile, the queue's isLocalTimerActive() guard already dropped
+    // the item; this is a defensive second check.
+    const localActive = getActiveLocalTimer();
+    if (!isTimerRunning && !(localActive && !localActive.ended_at)) {
+        console.log("[OfflineIdle] No active local timer — skipping re-anchor");
+        return;
+    }
+
+    _timerStateMutationInProgress = true;
+    try {
+        const idleStartedAtMs = payload?.idle_started_at
+            ? new Date(payload.idle_started_at).getTime()
+            : null;
+        const prevLocalId = currentEntry?._localId || localActive?.id || null;
+        const prevStartIso =
+            currentEntry?.started_at || localActive?.started_at || null;
+
+        // Close the stale local session at idle-start (server already split it).
+        if (prevLocalId && idleStartedAtMs && prevStartIso) {
+            const preIdleDuration = Math.max(
+                0,
+                Math.floor(
+                    (idleStartedAtMs - new Date(prevStartIso).getTime()) / 1000,
+                ),
+            );
+            saveLocalTimerStop(
+                prevLocalId,
+                new Date(idleStartedAtMs).toISOString(),
+                preIdleDuration,
+            );
+            markLocalTimerStopSynced(prevLocalId);
+        }
+
+        // Adopt the new (post-idle) server entry as the source of truth.
+        currentEntry = { ...newEntry };
+        _cachedStartedAtMs = new Date(newEntry.started_at).getTime();
+        isTimerRunning = true;
+        isTimerPaused = false;
+
+        // Open a fresh local session anchored at the new entry's start.
+        const newLocalId = `local-${Date.now()}-${Math.random()
+            .toString(36)
+            .slice(2, 6)}`;
+        const newIdempotencyKey =
+            newEntry.idempotency_key || generateIdempotencyKey();
+        saveLocalTimerStart(
+            newLocalId,
+            newIdempotencyKey,
+            newEntry.project_id || null,
+            newEntry.started_at,
+        );
+        if (newEntry.id && !String(newEntry.id).startsWith("local-")) {
+            markLocalTimerStartSynced(newLocalId, newEntry.id);
+        }
+        currentEntry._localId = newLocalId;
+        currentEntry.idempotency_key = newIdempotencyKey;
+
+        // FIX D2: rebind the live screenshot service to the new server entry id
+        // so post-reanchor captures don't keep the stale id.
+        if (newEntry.id && !String(newEntry.id).startsWith("local-")) {
+            screenshotService?.rebindEntryId(newEntry.id);
+        }
+
+        _timerStateVersion++;
+        console.log(
+            `[OfflineIdle] Re-anchored to post-idle entry ${newEntry.id} (start=${newEntry.started_at})`,
+        );
+        notifyPopup("timer-started", {
+            ...currentEntry,
+            todayTotal: todayTotalCurrentProject,
+            _splitFromIdle: true,
+        });
+    } catch (e) {
+        console.error("[OfflineIdle] Re-anchor failed:", e.message);
+    } finally {
+        _timerStateMutationInProgress = false;
+    }
+}
+
 // ── Global Error Handlers ────────────────────────────────────────────────────
 
 process.on("uncaughtException", (error) => {
@@ -1432,6 +1566,19 @@ async function initializeApp() {
 
     // Initialize services
     offlineQueue = new OfflineQueue();
+    // FIX D1/D2: Let the offline queue resolve a `local-…` time_entry_id to the
+    // real server entry id via timer_sessions before sending heartbeats/screenshots.
+    offlineQueue.resolveServerEntryId = resolveServerEntryIdForQueue;
+    // FIX D3: When a queued idle_discard flushes and the server splits the entry,
+    // re-anchor local timer state to the new (post-idle) entry — same as online.
+    offlineQueue.onIdleReanchor = reanchorFromOfflineIdle;
+    // FIX D3: A queued idle_discard must be dropped if the timer was stopped before
+    // it flushed (no active local session) — replaying it would resurrect the timer.
+    offlineQueue.isLocalTimerActive = () => {
+        if (isTimerRunning) return true;
+        const la = getActiveLocalTimer();
+        return !!(la && !la.ended_at);
+    };
     activityMonitor = new ActivityMonitor(apiClient, offlineQueue);
     activityMonitor.setOnHeartbeatSuccess(() => touchLastActiveAt());
     const getIsAppVisible = () =>
@@ -1730,6 +1877,15 @@ async function initializeApp() {
     PowerManager.registerPowerHandlers({
         isTimerRunning: () => isTimerRunning,
         autoStopForPowerEvent: autoStopTimerForPowerEvent,
+        // FIX D5: Deterministically tear down idle state on every suspend/lock so an
+        // armed idle detector (DETECTED/ALERTING with its _checkAutoStop interval) can
+        // never survive sleep and fire a spurious auto-stop / bogus idle_discard on wake.
+        // stopTimer() also stops the detector, but this covers the timer-not-running and
+        // mid-alert paths too. dismissIdleAlert() closes any visible alert window.
+        onSuspendCleanup: () => {
+            idleDetector?.stop();
+            dismissIdleAlert();
+        },
         onResumeAfterSleep: () => {
             if (networkMonitor?.isOnline && offlineQueue && apiClient) {
                 setImmediate(() => {
@@ -1908,18 +2064,22 @@ function buildTrayContextMenu() {
         }));
 
         if (projectItems.length > 0) {
+            // Project is required (matches the popup) — pick one from the submenu.
+            // The old "No Project" item started an unassigned tracked entry.
             template.push({
                 label: "Start Timer",
-                submenu: [
-                    { label: "No Project", click: () => startTimer() },
-                    { type: "separator" },
-                    ...projectItems,
-                ],
+                submenu: projectItems,
             });
         } else {
+            // No projects cached yet (still loading, or none assigned). Don't start
+            // an unassigned timer from the tray — open the app so the user can pick
+            // a project (and trigger a refresh), matching the popup's requirement.
             template.push({
-                label: "Start Timer",
-                click: () => startTimer(),
+                label: "Start Timer…",
+                click: () => {
+                    refreshProjectsIfStale();
+                    showPopup();
+                },
             });
         }
     }
@@ -3337,6 +3497,10 @@ async function reconcileTimerState() {
                 // so any subsequent stop binds to it (BUG 3).
                 if (localActive.id === currentEntry?._localId && currentEntry) {
                     currentEntry.id = result.entry.id;
+                    // FIX D2: rebind the live screenshot service off the stale `local-…`
+                    // id so subsequent live captures presign against the real entry id
+                    // (without restarting the capture cadence).
+                    screenshotService?.rebindEntryId(result.entry.id);
                 }
 
                 // If local also has an unsynced stop, push that too — bound to server id.
@@ -3395,6 +3559,8 @@ async function reconcileTimerState() {
                     idempotency_key: key,
                 };
                 adoptServerStartedAt(result.entry?.started_at);
+                // FIX D2: rebind live screenshot capture to the resolved server id.
+                screenshotService?.rebindEntryId(result.entry?.id);
             } catch (e) {
                 console.warn("[Reconcile] Push start failed:", e.message);
             }
@@ -3409,6 +3575,33 @@ async function reconcileTimerState() {
                 _localId: currentEntry?._localId,
             };
             adoptServerStartedAt(serverStatus.entry?.started_at);
+        }
+
+        // FIX D4: Self-heal a stuck server-side pause. Idle pause calls
+        // apiClient.pauseTimer() server-side; on an offline 'keep' the matching
+        // resumeTimer() throws and is swallowed with no durable retry, so the server
+        // stays paused → the next sync re-pauses the UI (frozen timer) and totals are
+        // computed off the frozen elapsed. If the server still reports paused while we
+        // are locally running and NOT paused, replay the resume (idempotent). This runs
+        // every reconcile (online handler + scheduleReconcileAndFlush), so it converges.
+        if (
+            isServerTimerPaused(serverStatus) &&
+            isTimerRunning &&
+            !isTimerPaused &&
+            currentEntry?.id &&
+            !String(currentEntry.id).startsWith("local-")
+        ) {
+            try {
+                console.log(
+                    "[Reconcile] Server paused but local is running — replaying resume (self-heal)",
+                );
+                await apiClient.resumeTimer();
+            } catch (e) {
+                console.warn(
+                    "[Reconcile] Resume replay failed (will retry next reconcile):",
+                    e.message,
+                );
+            }
         }
 
         cleanOldLocalTimerSessions();
@@ -4044,10 +4237,67 @@ async function handleIdleAction(
                             (todayTotalCurrentProject || 0) +
                             Math.max(0, preIdleSeconds);
 
+                        // Re-anchor the LOCAL source of truth to the resumed
+                        // (post-idle) entry. The server split the session at the idle
+                        // boundary and opened a NEW entry at idle-end; the local
+                        // timer_sessions row MUST follow. Otherwise the next reconcile
+                        // / phantom-stop recovery re-reads the OLD row's pre-idle
+                        // started_at and — via the never-move-forward guard in
+                        // adoptServerStartedAt() — re-anchors elapsed back to the
+                        // original start, inflating the displayed time by the excluded
+                        // idle (+ pre-idle) duration. This is the root cause of the
+                        // "desktop shows ~25m while web shows ~14m" report.
+                        const prevLocalId = currentEntry._localId || null;
+                        const prevStartIso = currentEntry.started_at;
+
                         currentEntry = result.new_entry;
                         _cachedStartedAtMs = new Date(
                             currentEntry.started_at,
                         ).getTime();
+
+                        // Close the stale local session at idle-start (already synced
+                        // server-side by the split) and open a fresh local session
+                        // anchored at the new entry's start, so getActiveLocalTimer()
+                        // returns the post-idle start everywhere downstream.
+                        const newLocalId = `local-${Date.now()}-${Math.random()
+                            .toString(36)
+                            .slice(2, 6)}`;
+                        const newIdempotencyKey =
+                            currentEntry.idempotency_key ||
+                            generateIdempotencyKey();
+                        if (prevLocalId) {
+                            const preIdleDuration = Math.max(
+                                0,
+                                Math.floor(
+                                    (effectiveIdleStartedAt -
+                                        new Date(prevStartIso).getTime()) /
+                                        1000,
+                                ),
+                            );
+                            saveLocalTimerStop(
+                                prevLocalId,
+                                new Date(effectiveIdleStartedAt).toISOString(),
+                                preIdleDuration,
+                            );
+                            markLocalTimerStopSynced(prevLocalId);
+                        }
+                        saveLocalTimerStart(
+                            newLocalId,
+                            newIdempotencyKey,
+                            currentEntry.project_id || null,
+                            currentEntry.started_at,
+                        );
+                        if (
+                            currentEntry.id &&
+                            !String(currentEntry.id).startsWith("local-")
+                        ) {
+                            markLocalTimerStartSynced(
+                                newLocalId,
+                                currentEntry.id,
+                            );
+                        }
+                        currentEntry._localId = newLocalId;
+                        currentEntry.idempotency_key = newIdempotencyKey;
 
                         // No screenshots are captured during idle (Hubstaff behavior), so
                         // there is nothing to attach to the post-split entry on reassign and

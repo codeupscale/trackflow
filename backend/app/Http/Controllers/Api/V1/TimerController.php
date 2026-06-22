@@ -190,7 +190,11 @@ class TimerController extends Controller
             $result = $this->timerService->reportIdle($request->all());
         } catch (\Illuminate\Auth\Access\AuthorizationException $e) {
             return response()->json(['message' => $e->getMessage()], 403);
+        } catch (\InvalidArgumentException $e) {
+            // Out-of-skew idle timestamp (future / too far in the past) — FIX B3.
+            return response()->json(['message' => $e->getMessage()], 422);
         } catch (\RuntimeException $e) {
+            // 409 is terminal for the desktop on Redis-mismatch (it drops the report).
             return response()->json(['message' => $e->getMessage()], 409);
         }
 
@@ -213,11 +217,18 @@ class TimerController extends Controller
             'active_app' => 'nullable|string|max:255',
             'active_window_title' => 'nullable|string|max:512',
             'active_url' => 'nullable|string|max:1024',
+            // Offline-flushed heartbeats carry their TRUE capture time so the activity
+            // log lands at the right moment (FIX B2). Skew bounds enforced in the service.
+            'logged_at' => 'nullable|date',
+            'captured_at' => 'nullable|date',
         ]);
 
         try {
             $log = $this->timerService->processHeartbeat($request->all());
             return response()->json(['activity_log' => $log]);
+        } catch (\InvalidArgumentException $e) {
+            // Bad capture timestamp (future / too far in the past).
+            return response()->json(['message' => $e->getMessage()], 422);
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 404);
         }
