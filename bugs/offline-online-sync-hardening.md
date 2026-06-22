@@ -93,6 +93,24 @@ frozen running clock, regardless of which teardown path (or data removal) stoppe
 Self-heals within ~1s on the next tick. (Requires a new desktop build; an already-running stuck
 instance clears on restart.)
 
+## Follow-up fix — web dashboard kept counting while offline
+
+**Symptom:** disconnect the network and the **web** dashboard's live timer ("Today's Hours" /
+header project timer) keeps counting up, even though the browser shows the "You are offline"
+banner and the desktop user may have gone idle/stopped.
+
+**Root cause:** `web/src/stores/timer-store.ts` `tick()` runs every second and recomputes elapsed
+purely client-side (`Date.now() - startedAt`), independent of the network. When offline, the 10s
+`fetchStatus` poll fails silently but the tick interval keeps running → the counter advances
+against a `startedAt` it can no longer verify (the web is a read-only viewer; the desktop may be
+idle/stopped).
+
+**Fix:** `tick()` now freezes (no-op) when `navigator.onLine === false`, so the web stops
+fabricating progress it can't confirm. A window `online` listener (registered in `startPolling`,
+cleaned up in `stopPolling`/`resetState`) triggers an immediate `fetchStatus` on reconnect, so the
+counter jumps straight to the server's authoritative elapsed (reflecting whatever the desktop did
+offline — idle kept/discarded, stopped, or still running). Test added (18/18 in `timer-store.test.ts`).
+
 ## Deferred (P2/P3, tracked — not in this batch)
 
 Out-of-order offline stop-before-start ordering; idempotency key burned after entry close

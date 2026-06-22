@@ -271,6 +271,34 @@ describe('TimerStore', () => {
       expect(useTimerStore.getState().todayTotalSeconds).toBe(100);
     });
 
+    it('freezes (does not advance) while the browser is offline', () => {
+      const startedAt = new Date('2026-03-27T09:00:00Z');
+      vi.setSystemTime(new Date('2026-03-27T09:05:00Z'));
+
+      useTimerStore.setState({
+        isRunning: true,
+        startedAt: startedAt.toISOString(),
+        elapsedSeconds: 120,
+        todayTotalBase: 1000,
+        todayTotalSeconds: 1120,
+        projectTodayTotalBase: 500,
+        projectTodayTotalSeconds: 620,
+      });
+
+      const onLineSpy = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+      try {
+        useTimerStore.getState().tick();
+      } finally {
+        onLineSpy.mockRestore();
+      }
+
+      // Offline → counter stays frozen at its last value, not recomputed from startedAt.
+      const state = useTimerStore.getState();
+      expect(state.elapsedSeconds).toBe(120);
+      expect(state.todayTotalSeconds).toBe(1120);
+      expect(state.projectTodayTotalSeconds).toBe(620);
+    });
+
     it('todayTotalSeconds accumulates correctly across sessions', () => {
       vi.setSystemTime(new Date('2026-03-27T10:00:00Z'));
 
