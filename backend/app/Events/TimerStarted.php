@@ -6,11 +6,13 @@ use App\Models\TimeEntry;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-class TimerStarted implements ShouldBroadcast
+// ShouldBroadcastNow (not ShouldBroadcast): publish to Reverb synchronously so the
+// web dashboard reflects start/stop in real time instead of waiting for its 10s poll.
+class TimerStarted implements ShouldBroadcastNow
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 

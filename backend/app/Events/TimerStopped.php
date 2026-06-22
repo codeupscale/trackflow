@@ -6,11 +6,15 @@ use App\Models\TimeEntry;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-class TimerStopped implements ShouldBroadcast
+// ShouldBroadcastNow (not ShouldBroadcast): publish to Reverb synchronously during
+// the stop request instead of queuing the broadcast through Horizon. The queue hop
+// delayed the web dashboard's real-time stop, forcing it to wait for the 10s status
+// poll ("web keeps counting after I click Stop").
+class TimerStopped implements ShouldBroadcastNow
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
