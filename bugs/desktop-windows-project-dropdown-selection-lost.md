@@ -2,7 +2,7 @@
 
 **Area:** Desktop agent renderer (main popup) — `projectSelect` in `index-renderer.js`  
 **Severity:** P1 on Windows (cannot pick a project → cannot start timer); P2 on macOS/Linux (same code path, not reported)  
-**Status:** 🟡 FIX CANDIDATE — skip unchanged-list rebuild in `loadProjects()` (mirrors idle reassign fix); **needs Windows QA to confirm**
+**Status:** ✅ FIXED (2026-06-23) — two causes: (1) `loadProjects()` innerHTML rebuild on unchanged list; (2) pin keepalive `moveTop()` every 300ms on Windows dismissed native `<select>` popup (pin defaults on at install)
 
 ## Symptom (Windows, QA)
 
@@ -24,7 +24,15 @@ macOS/Linux: same unconditional-rebuild code existed but this symptom has not be
 | `syncTimerState()` overwriting `projectSelect.value` from `state.entry.project_id` | When stopped, main sets `currentEntry = null` (`index.js` ~2881), so no overwrite. While running, dropdown is disabled.                                                      |
 | Empty API response                                                                 | Handled: keeps existing options when `list.length === 0 && options.length > 1` (~273–278).                                                                                   |
 
-### Confirmed mechanism (high confidence, Windows-specific behaviour)
+### Root cause B — pin keepalive `moveTop()` on Windows (confirmed by QA)
+
+Fresh installs default to **pinned** (`loadAlwaysOnTop()` returns `true`). `_applyAlwaysOnTop()` started a **300ms interval** on **all platforms** that called `setAlwaysOnTop` + `moveTop()` to work around macOS Sequoia z-order loss.
+
+On Windows, opening a native `<select>` creates a separate listbox HWND. Polling `moveTop()` on the parent `BrowserWindow` steals z-order from that popup and **closes the dropdown within ~1s** (every 300ms tick). Unpinning (middle titlebar icon) stops the symptom — matches QA observation.
+
+**Fix:** restrict the 300ms keepalive to `process.platform === 'darwin'` only; Windows/Linux get one-shot `setAlwaysOnTop(true)`. Also skip `moveTop()` in `showPopup()` on Windows.
+
+### Root cause A — unconditional `loadProjects()` rebuild (renderer)
 
 `loadProjects()` **always** did `projectSelect.innerHTML = …` on every call, recreating all `<option>` nodes even when the project list was identical.
 
@@ -52,15 +60,19 @@ This is the same class of bug fixed for idle reassign in [idle-reassign-dropdown
 - **Renamed projects** with same ids skip rebuild — display name stale until ids change; acceptable.
 - **Empty option text** on Windows may be DPI/CSS/Chromium, not `innerHTML` — needs separate investigation.
 
-## Fix (candidate — in working tree)
+## Fix
 
-In `loadProjects()`, before `innerHTML` rebuild:
+### A. Renderer — skip rebuild when list unchanged (`index-renderer.js`)
 
 1. Compare existing option ids (excluding placeholder) to incoming list ids.
 2. If identical and options already exist, **return early** (still call `syncProjectSelectEnabled()` / `updateStartBtnState()`).
 3. On actual rebuild, preserve `currentValue` and restore if still valid (existing behaviour).
 
-Pattern matches `idle-alert.js:129–145`.
+### B. Main — macOS-only pin keepalive (`index.js` `_applyAlwaysOnTop`)
+
+- 300ms `moveTop()` interval runs **only on darwin** (macOS Sequoia z-order workaround).
+- Windows/Linux: one-shot `setAlwaysOnTop(true)` — no polling.
+- `showPopup()` calls `moveTop()` only on macOS.
 
 ```281:298:desktop/src/renderer/index-renderer.js
     // Skip the rebuild when the project list is unchanged. loadProjects() runs on

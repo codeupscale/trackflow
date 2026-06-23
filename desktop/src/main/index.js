@@ -2253,12 +2253,14 @@ function buildTrayContextMenu() {
 /**
  * Apply always-on-top state to a BrowserWindow.
  * On macOS, uses 'floating' level (NSFloatingWindowLevel) so the window
- * stays above normal app windows. moveTop() is called every 300ms to keep
- * the window at the front of its level — this is needed because Electron 28
- * on macOS Sequoia loses z-order after another app gains focus even when
- * isAlwaysOnTop() still returns true.
+ * stays above normal app windows. A 300ms keepalive re-asserts z-order on
+ * macOS Sequoia where Electron can lose floating level after focus changes.
+ *
+ * On Windows/Linux, set always-on-top ONCE only. The keepalive called
+ * moveTop() every 300ms on all platforms and dismissed the native <select>
+ * dropdown (~1s after open while pinned — default on fresh install).
  */
-// Interval reference for the pin keepalive (macOS workaround)
+// Interval reference for the pin keepalive (macOS-only workaround)
 let _pinKeepalive = null;
 
 function _applyAlwaysOnTop(win, pinned) {
@@ -2271,33 +2273,42 @@ function _applyAlwaysOnTop(win, pinned) {
     }
 
     if (pinned) {
-        // 'floating' = NSFloatingWindowLevel — sits above all normal app windows.
-        // relativeLevel 1 puts it one layer above other floating windows.
-        win.setAlwaysOnTop(true, "floating", 1);
-        win.moveTop();
-        console.log(
-            `[Pin] setAlwaysOnTop(true,'floating',1) + moveTop(). isAlwaysOnTop()=${win.isAlwaysOnTop()}`,
-        );
-
-        // macOS Sequoia + Electron 28 regression: the window visually slips
-        // behind other apps after focus changes even though isAlwaysOnTop()
-        // returns true. Re-assert the level and call moveTop() every 300ms.
-        // NOTE: we do NOT toggle off→on here — that creates a gap where another
-        // window can jump in. We only re-assert the true state.
-        _pinKeepalive = setInterval(() => {
-            if (!win || win.isDestroyed() || !isAlwaysOnTop) {
-                clearInterval(_pinKeepalive);
-                _pinKeepalive = null;
-                return;
-            }
-            // BUG FIX: do NOT re-assert on a hidden window. moveTop() raises (and
-            // effectively re-shows) the window, so when the user clicks the close/hide
-            // button this keepalive was bringing the popup right back every 300ms
-            // ("I click close but it keeps opening"). Only maintain on-top while visible.
-            if (!win.isVisible()) return;
+        if (process.platform === "darwin") {
+            // 'floating' = NSFloatingWindowLevel — sits above all normal app windows.
             win.setAlwaysOnTop(true, "floating", 1);
             win.moveTop();
-        }, 300);
+            console.log(
+                `[Pin] setAlwaysOnTop(true,'floating',1) + moveTop(). isAlwaysOnTop()=${win.isAlwaysOnTop()}`,
+            );
+
+            // macOS Sequoia + Electron 28 regression: the window visually slips
+            // behind other apps after focus changes even though isAlwaysOnTop()
+            // returns true. Re-assert the level and call moveTop() every 300ms.
+            // Windows: NEVER poll moveTop() — it steals z-order from the native
+            // <select> listbox HWND and closes the project dropdown mid-pick.
+            _pinKeepalive = setInterval(() => {
+                if (!win || win.isDestroyed() || !isAlwaysOnTop) {
+                    clearInterval(_pinKeepalive);
+                    _pinKeepalive = null;
+                    return;
+                }
+                // Do NOT re-assert on a hidden window — moveTop() would re-show it.
+                if (!win.isVisible()) return;
+                win.setAlwaysOnTop(true, "floating", 1);
+                win.moveTop();
+            }, 300);
+        } else if (process.platform === "win32") {
+            // One-shot only; no moveTop() polling (closes native dropdown popups).
+            win.setAlwaysOnTop(true);
+            console.log(
+                `[Pin] setAlwaysOnTop(true). isAlwaysOnTop()=${win.isAlwaysOnTop()}`,
+            );
+        } else {
+            win.setAlwaysOnTop(true);
+            console.log(
+                `[Pin] setAlwaysOnTop(true). isAlwaysOnTop()=${win.isAlwaysOnTop()}`,
+            );
+        }
     } else {
         win.setAlwaysOnTop(false);
         console.log(
@@ -2397,7 +2408,12 @@ function showPopup() {
         // previous show placed it on an extended monitor)
         _repositionToPrimaryDisplay(popupWindow, 320, 400);
         if (typeof popupWindow.moveTop === "function") {
-            popupWindow.moveTop();
+            // Windows: moveTop() while a native <select> is open dismisses the
+            // dropdown; only re-assert z-order on macOS where the tray popup
+            // can slip behind other windows without it.
+            if (process.platform === "darwin") {
+                popupWindow.moveTop();
+            }
         }
         if (process.platform === "linux") {
             popupWindow.setVisibleOnAllWorkspaces(true, {
