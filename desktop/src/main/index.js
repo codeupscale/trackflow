@@ -618,6 +618,13 @@ let _projectsFetchedAt = 0;
 let _projectsRefreshInterval = null;
 /** Refresh project list from API at most once per 30 minutes; idle popup uses cache. */
 const PROJECTS_CACHE_TTL_MS = 30 * 60 * 1000;
+/**
+ * When a project-picking surface OPENS (popup / idle reassign dropdown), force a
+ * fresh fetch if the cache is older than this so a newly assigned project appears
+ * without waiting out the 30-min TTL or restarting. Short enough to feel live,
+ * long enough that rapid re-opens don't hammer the API.
+ */
+const PROJECTS_OPEN_REFRESH_MS = 60 * 1000;
 
 function isProjectsCacheFresh() {
     return (
@@ -653,6 +660,26 @@ function refreshProjectsIfStale() {
     if (isProjectsCacheFresh()) return;
     loadProjects({ force: true })
         .then((projects) => pushProjectsToIdleAlert(projects))
+        .catch(() => {});
+}
+
+/**
+ * Force a project refresh when a project-picking surface opens, so a newly assigned
+ * project shows up without waiting out the 30-min cache or restarting the app.
+ * Throttled (PROJECTS_OPEN_REFRESH_MS) so rapid re-opens don't hammer the API; the
+ * cached list is shown immediately so the surface is never empty while in flight.
+ * The long TTL cache remains the offline/slow-network fallback.
+ */
+function refreshProjectsOnOpen(onUpdated) {
+    if (!apiClient) return;
+    const recentlyFetched =
+        _projectsFetchedAt > 0 &&
+        Date.now() - _projectsFetchedAt < PROJECTS_OPEN_REFRESH_MS;
+    if (recentlyFetched) return;
+    loadProjects({ force: true })
+        .then((projects) => {
+            if (typeof onUpdated === "function") onUpdated(projects);
+        })
         .catch(() => {});
 }
 
@@ -1581,6 +1608,16 @@ async function initializeApp() {
     };
     activityMonitor = new ActivityMonitor(apiClient, offlineQueue);
     activityMonitor.setOnHeartbeatSuccess(() => touchLastActiveAt());
+    // Anchor offline-queued heartbeats to the live entry (local id + idempotency_key)
+    // so resolveServerEntryIdForQueue() can map them to the server entry on replay
+    // instead of the queue dropping them as unanchored orphans (offline activity loss).
+    activityMonitor.getCurrentEntryMeta = () =>
+        currentEntry
+            ? {
+                  time_entry_id: currentEntry._localId || currentEntry.id || null,
+                  idempotency_key: currentEntry.idempotency_key || null,
+              }
+            : null;
     const getIsAppVisible = () =>
         popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible();
     screenshotService = new ScreenshotService(
@@ -2286,6 +2323,14 @@ function showPopup() {
             if (popupWindow && !popupWindow.isDestroyed()) {
                 popupWindow.webContents.send("sync-timer");
                 popupWindow.webContents.send("projects-ready");
+                // Force a throttled refresh on open so a newly assigned project shows
+                // up; re-signal projects-ready when the fresh list lands so the
+                // renderer re-fetches it (cached list already rendered immediately).
+                refreshProjectsOnOpen(() => {
+                    if (popupWindow && !popupWindow.isDestroyed()) {
+                        popupWindow.webContents.send("projects-ready");
+                    }
+                });
                 // Push fresh activity data every time the window becomes visible
                 popupWindow.webContents.send("activity-update", {
                     activityScore: activityMonitor
@@ -4022,8 +4067,10 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     } catch {}
 
     // Use cached project list — do not block the idle popup on a network call.
-    // Stale cache refreshes in the background (30 min TTL).
-    refreshProjectsIfStale();
+    // Force a background refresh on open (throttled) so a newly assigned project
+    // shows in the reassign dropdown; the cached list renders immediately, and the
+    // fresh list is pushed via idle-data when it arrives.
+    refreshProjectsOnOpen(pushProjectsToIdleAlert);
 
     idleAlertWindow = new BrowserWindow({
         width: 380,
