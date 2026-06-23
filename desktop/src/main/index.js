@@ -3472,11 +3472,22 @@ async function stopTimer(options = {}) {
                 }
             }
             updateTrayTitle();
-            let todayTotalForPopup = result?.today_total ?? 0;
+            // Fall back to the LOCAL accumulated total, never 0. This async block
+            // re-emits timer-stopped after the sync stop already showed the correct
+            // local total; if the server stop returned nothing AND getTodayTotal fails
+            // (flaky network), `?? 0` here would overwrite the correct stopped total
+            // with 00:00:00 in the popup. Keep the local total instead.
+            let todayTotalForPopup = result?.today_total ?? localStoppedProjectTotal;
             try {
-                todayTotalForPopup =
+                const serverTotal =
                     await apiClient.getTodayTotal(stoppedProjectId);
-            } catch {}
+                if (serverTotal != null && serverTotal >= 0) {
+                    todayTotalForPopup = serverTotal;
+                }
+            } catch {
+                // Network failed — keep the local accumulated total (not 0).
+                todayTotalForPopup = localStoppedProjectTotal;
+            }
             notifyPopup("timer-stopped", {
                 entry: result?.entry ?? null,
                 todayTotal: todayTotalForPopup,
