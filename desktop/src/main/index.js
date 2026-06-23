@@ -1075,17 +1075,36 @@ function hasUnsyncedLocalStopForEntry(serverEntryId) {
     }
 }
 
+// An open local session older than this is implausible (sleep/lock auto-stop and
+// the startup-gap close cap real sessions well under a day) — it's a stale row left
+// by a killed/old session (possibly a different account, since timer_sessions has no
+// user_id). Never restore it as a live timer; close it so it can't show up as a
+// phantom "Tracking 149:47:48".
+const MAX_PLAUSIBLE_OPEN_SESSION_MS = 24 * 60 * 60 * 1000;
+
 function getActiveLocalTimer() {
     const db = _getLocalTimerDb();
     if (!db) return null;
     try {
-        return (
+        const row =
             db
                 .prepare(
                     "SELECT * FROM timer_sessions WHERE ended_at IS NULL ORDER BY created_at DESC LIMIT 1",
                 )
-                .get() || null
-        );
+                .get() || null;
+        if (row && row.started_at) {
+            const ageMs = Date.now() - new Date(row.started_at).getTime();
+            if (!Number.isFinite(ageMs) || ageMs > MAX_PLAUSIBLE_OPEN_SESSION_MS) {
+                // Stale/garbage open session — close it instead of restoring it live.
+                console.warn(
+                    `[LocalTimerDb] Discarding stale open session ${row.id} (age ${Math.round(ageMs / 3600000)}h) — not restoring as a live timer`,
+                );
+                const endedAt = row.started_at; // zero-duration close; never counts time
+                saveLocalTimerStop(row.id, endedAt, 0);
+                return null;
+            }
+        }
+        return row;
     } catch (e) {
         console.error("[LocalTimerDb] getActive failed:", e.message);
         return null;
@@ -1102,6 +1121,23 @@ function cleanOldLocalTimerSessions() {
         ).run();
     } catch (e) {
         console.error("[LocalTimerDb] cleanup failed:", e.message);
+    }
+}
+
+/**
+ * Wipe ALL local timer_sessions rows. `timer_sessions` has no user_id, so a stale
+ * row left by a previous account (e.g. an open session from a killed app) is
+ * otherwise restored on the NEXT login as a live "Tracking HH:MM:SS" timer with a
+ * started_at hours/days in the past — even on a brand-new account with zero server
+ * entries. Called on logout so the next account starts with clean local timer state.
+ */
+function clearLocalTimerSessions() {
+    const db = _getLocalTimerDb();
+    if (!db) return;
+    try {
+        db.prepare("DELETE FROM timer_sessions").run();
+    } catch (e) {
+        console.error("[LocalTimerDb] clearLocalTimerSessions failed:", e.message);
     }
 }
 
@@ -1454,6 +1490,10 @@ async function forceLogout() {
         timerSyncInterval = null;
     }
     stopTrayTimer();
+
+    // Wipe local timer_sessions on forced logout too — the next account must not
+    // inherit a stale row (no user_id on the table). See clearLocalTimerSessions().
+    clearLocalTimerSessions();
 
     if (offlineQueue) {
         offlineQueue.close();
@@ -2392,8 +2432,11 @@ function showPopup() {
     }
 
     const trayBounds = tray.getBounds();
-    const windowWidth = 320;
-    const windowHeight = 400;
+    // Bumped from 320x400 — too cramped, and on Windows (fractional DPI) the content
+    // could clip / the project dropdown render empty. Larger gives the dropdown,
+    // activity bar and Stop button comfortable room across platforms.
+    const windowWidth = 380;
+    const windowHeight = 520;
 
     // MULTI-MONITOR FIX: Always position on the PRIMARY display regardless of
     // which monitor the tray icon is on. Extended/secondary displays are excluded.
@@ -2532,6 +2575,11 @@ async function performLogout() {
             await apiClient.stopTimer();
         } catch {}
     }
+    // Wipe local timer_sessions so the NEXT account can't inherit this one's rows
+    // (the table has no user_id; a stale open row would restore as a phantom
+    // "Tracking HH:MM:SS" timer on the next login). The current timer was just
+    // stopped above; the offline queue is closed below — both consistent with this.
+    clearLocalTimerSessions();
     isAuthenticated = false;
     activityMonitor?.stop();
     screenshotService?.stop();
