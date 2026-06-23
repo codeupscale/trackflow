@@ -904,11 +904,20 @@ async function pauseTimerForIdle(idleStartedAtIso) {
             );
         }
     }
+    // Freeze the popup at the IDLE-START elapsed (active time when the user stopped
+    // interacting), NOT at pause time. Pause fires ~5 min later (after the idle
+    // threshold), so `now - startedAt` bakes the threshold minutes into the frozen
+    // value (e.g. 10:43) and OVERWRITES the corrected idle-start tick (e.g. 05:42) the
+    // idle handler just pushed — leaving the popup disagreeing with the tray. Anchor to
+    // idleStartedAtIso so both show the same idle-start elapsed.
+    const pauseAnchorMs = idleStartedAtIso
+        ? new Date(idleStartedAtIso).getTime()
+        : Date.now();
     notifyPopup("timer-paused", {
         entry: currentEntry,
         todayTotal: todayTotalCurrentProject,
         elapsed: _cachedStartedAtMs
-            ? Math.floor((Date.now() - _cachedStartedAtMs) / 1000)
+            ? Math.max(0, Math.floor((pauseAnchorMs - _cachedStartedAtMs) / 1000))
             : 0,
     });
 }
@@ -2843,14 +2852,27 @@ function setupIPC() {
                 }
             } catch {}
         }
+        // While idle-paused, freeze elapsed at the idle-start (active time), matching
+        // the tray + the timer-paused event — otherwise reopening the window mid-idle
+        // shows the threshold-inclusive climbing value again.
+        let elapsedForState = 0;
+        if (currentEntry && _cachedStartedAtMs) {
+            const idleStartIso = isTimerPaused
+                ? idleDetector?.idleStartedAt
+                : null;
+            const anchorMs = idleStartIso
+                ? new Date(idleStartIso).getTime()
+                : Date.now();
+            elapsedForState = Math.max(
+                0,
+                Math.floor((anchorMs - _cachedStartedAtMs) / 1000),
+            );
+        }
         return {
             isRunning: isTimerRunning,
             isPaused: isTimerPaused,
             entry: currentEntry,
-            elapsed:
-                currentEntry && _cachedStartedAtMs
-                    ? Math.floor((Date.now() - _cachedStartedAtMs) / 1000)
-                    : 0,
+            elapsed: elapsedForState,
             todayTotal: todayTotalForDisplay,
         };
     });

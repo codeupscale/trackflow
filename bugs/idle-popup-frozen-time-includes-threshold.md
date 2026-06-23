@@ -1,8 +1,8 @@
 # Desktop — Main window timer freezes at inflated value (includes idle threshold) when idle prompt appears
 
-**Status:** 🟢 FIXED
-**Reported:** 2026-06-18 (user)
-**Investigated / Fixed:** 2026-06-18
+**Status:** 🟢 FIXED (initial 2026-06-18) — **🟡 re-fixed 2026-06-23** (the corrected tick was being overwritten; see "Follow-up" below)
+**Reported:** 2026-06-18 (user); recurrence reported 2026-06-23 (user: "right window showing 10:43, should be 05:42")
+**Investigated / Fixed:** 2026-06-18; 2026-06-23
 **Scope:** Desktop agent (Electron) — idle detection ↔ main popup timer display
 **Severity:** P2 — display/UX defect, no data loss (the kept/discarded duration is computed elsewhere). The frozen number the user sees during the idle prompt is wrong by the idle-threshold amount.
 
@@ -56,6 +56,20 @@ Notes:
 - The renderer's `onTimerTick` guards `if (!isRunning) return;` — at idle-detection time the timer is still running (only paused for the prompt), so the corrected tick is applied. ✅
 - `formatTimeShort` and the renderer's own `formatTime` both produce `HH:MM:SS`, so the frozen text is consistent. ✅
 - On resolve (keep/discard/reassign/auto-stop) `startTrayTimer()` re-arms and recomputes from `_cachedStartedAtMs`, so the frozen value is naturally replaced — no stale state. ✅
+
+## Follow-up (2026-06-23) — corrected tick overwritten; popup showed threshold-inclusive value again
+
+The 2026-06-18 fix pushes one corrected `timer-tick` (`frozenSeconds`, idle-start). But **immediately after**, `onIdleDetected` calls `pauseTimerForIdle(idleStartedAtIso)` (`index.js:1771`), which sends a `timer-paused` event whose `elapsed` was computed as `Date.now() - _cachedStartedAtMs` — i.e. **pause time, threshold included**. The renderer's `onTimerPaused` (`index-renderer.js:545-553`) then does `elapsedSeconds = todayTotalBase + currentElapsed` and **overwrites** the corrected tick → popup shows e.g. **10:43** while the tray correctly shows **05:42**. The same threshold-inclusive `elapsed` was also returned by the `get-timer-state` IPC, so reopening the window mid-idle re-showed the wrong value.
+
+**Re-fix (`index.js`):**
+- `pauseTimerForIdle`: anchor `elapsed` to `idleStartedAtIso` (idle-start), not `Date.now()`:
+  ```js
+  const pauseAnchorMs = idleStartedAtIso ? new Date(idleStartedAtIso).getTime() : Date.now();
+  elapsed: _cachedStartedAtMs ? Math.max(0, Math.floor((pauseAnchorMs - _cachedStartedAtMs)/1000)) : 0
+  ```
+- `get-timer-state`: while `isTimerPaused`, anchor `elapsed` to `idleDetector.idleStartedAt` instead of `Date.now()`, so a window reopened mid-idle stays frozen at idle-start.
+
+Result: popup + tray agree at the idle-start active time (05:42) for the whole idle prompt, threshold excluded. Tracked totals were always correct — display only.
 
 ## Files cited (verified on branch `develop`, 2026-06-18)
 
