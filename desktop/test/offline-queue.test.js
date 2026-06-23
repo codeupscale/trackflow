@@ -194,6 +194,34 @@ describe('OfflineQueue flush — local-id resolution & idle re-anchor', () => {
     ]);
   });
 
+  // ── Orphan drop: heartbeat with no entry id AND no idempotency_key can never
+  //    resolve, so it must be DELETED (not held forever in an infinite flush loop) ──
+  test('drops orphaned heartbeat (no entry id, no idempotency_key) instead of holding forever', async () => {
+    const runArgs = [];
+    primeQueue([{ id: 7, type: 'heartbeat', data: JSON.stringify({ keyboard_events: 5 }), attempts: 0 }]);
+    queue.db = { prepare: jest.fn(() => ({ run: (...args) => runArgs.push(args) })) };
+    queue.resolveServerEntryId = jest.fn(() => null);
+    const apiClient = { bulkUploadLogs: jest.fn().mockResolvedValue({}) };
+
+    await queue.flush(apiClient);
+
+    expect(apiClient.bulkUploadLogs).not.toHaveBeenCalled(); // nothing replayable
+    expect(runArgs.flat()).toContain(7);                     // orphan was DELETED
+  });
+
+  test('does NOT drop a local- heartbeat (still resolvable once its start syncs)', async () => {
+    const runArgs = [];
+    primeQueue([{ id: 8, type: 'heartbeat', data: JSON.stringify({ time_entry_id: 'local-abc', keyboard_events: 5 }), attempts: 0 }]);
+    queue.db = { prepare: jest.fn(() => ({ run: (...args) => runArgs.push(args) })) };
+    queue.resolveServerEntryId = jest.fn(() => null); // not synced yet
+    const apiClient = { bulkUploadLogs: jest.fn().mockResolvedValue({}) };
+
+    await queue.flush(apiClient);
+
+    expect(apiClient.bulkUploadLogs).not.toHaveBeenCalled(); // held
+    expect(runArgs.flat()).not.toContain(8);                 // NOT deleted — kept for later
+  });
+
   // ── D2: screenshot id resolution ──
   test('D2: holds screenshot (no presign) when entry id is unresolved local-', async () => {
     primeQueue([{ id: 1, type: 'screenshot', data: JSON.stringify({ file_path: '/tmp/x.jpg', time_entry_id: 'local-abc', captured_at: 'now', idempotency_key: 'k1' }), attempts: 0 }]);
