@@ -278,6 +278,25 @@ async function loadProjects(retryCount = 0) {
       return;
     }
 
+    // Skip the rebuild when the project list is unchanged. loadProjects() runs on
+    // init, every syncTimerState() (incl. the one fired right after a `change`),
+    // polls and the projects-ready signal — rebuilding the <select> each time
+    // destroys/recreates its <option>s. On Windows that disrupts an in-progress
+    // selection (closes the native dropdown), so the user can never complete a
+    // pick. Only rebuild when the set of project ids actually changed.
+    const existingIds = Array.from(projectSelect.options)
+      .map(o => o.value)
+      .filter(v => v !== '');
+    const newIds = list.map(p => String(p.id));
+    const sameList = existingIds.length === newIds.length
+      && existingIds.every((id, i) => id === newIds[i]);
+    if (sameList && projectSelect.options.length > 1) {
+      _loadProjectsInFlight = false;
+      syncProjectSelectEnabled();
+      updateStartBtnState();
+      return;
+    }
+
     const currentValue = projectSelect.value || '';
     projectSelect.innerHTML = '<option value="">Select a project</option>';
     _loadProjectsInFlight = false;
