@@ -1039,6 +1039,33 @@ function getUnsyncedTimerSessions() {
     }
 }
 
+/**
+ * True when the local DB has a STOP for `serverEntryId` that hasn't synced yet
+ * (ended_at set, synced_stop = 0). A server status that still reports this entry as
+ * "open" is then STALE — the user stopped it locally but the stop didn't reach the
+ * server (slow/failed network). The sync loop must NOT re-adopt it as running (that
+ * is the self-restart-after-stop bug); reconcile pushes the pending stop instead.
+ */
+function hasUnsyncedLocalStopForEntry(serverEntryId) {
+    if (!serverEntryId) return false;
+    const db = _getLocalTimerDb();
+    if (!db) return false;
+    try {
+        const row = db
+            .prepare(
+                "SELECT 1 FROM timer_sessions WHERE server_entry_id = ? AND ended_at IS NOT NULL AND synced_stop = 0 LIMIT 1",
+            )
+            .get(String(serverEntryId));
+        return !!row;
+    } catch (e) {
+        console.warn(
+            "[LocalTimerDb] hasUnsyncedLocalStopForEntry failed:",
+            e.message,
+        );
+        return false;
+    }
+}
+
 function getActiveLocalTimer() {
     const db = _getLocalTimerDb();
     if (!db) return null;
@@ -1960,7 +1987,18 @@ async function initializeApp() {
                 }
 
                 if (isServerTimerOpen(status) && !isTimerRunning) {
-                    syncOpenTimerFromServerStatus(status);
+                    if (hasUnsyncedLocalStopForEntry(status.entry?.id)) {
+                        // User stopped this entry locally but the stop hasn't reached the
+                        // server (slow/failed network), so the server still reports it open.
+                        // Do NOT re-adopt it as running — that is the self-restart-after-stop
+                        // bug. Push the pending stop via reconcile; keep the UI stopped.
+                        console.log(
+                            "[ImmediateSync] Server shows entry open but a local stop is pending — pushing stop, not re-opening",
+                        );
+                        scheduleReconcileAndFlush();
+                    } else {
+                        syncOpenTimerFromServerStatus(status);
+                    }
                 } else if (
                     isServerTimerOpen(status) &&
                     isTimerRunning &&
@@ -3765,7 +3803,16 @@ function startTimerSync() {
             }
 
             if (isServerTimerOpen(status) && !isTimerRunning) {
-                syncOpenTimerFromServerStatus(status, { notify: "none" });
+                if (hasUnsyncedLocalStopForEntry(status.entry?.id)) {
+                    // Local stop pending (server status is stale) — push the stop instead
+                    // of re-adopting the timer as running (self-restart-after-stop bug).
+                    console.log(
+                        "[TimerSync] Server shows entry open but a local stop is pending — pushing stop, not re-opening",
+                    );
+                    scheduleReconcileAndFlush();
+                } else {
+                    syncOpenTimerFromServerStatus(status, { notify: "none" });
+                }
             } else if (
                 isServerTimerOpen(status) &&
                 isTimerRunning &&
