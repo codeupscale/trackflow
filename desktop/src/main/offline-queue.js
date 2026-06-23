@@ -98,6 +98,21 @@ class OfflineQueue {
     return null; // unresolved — hold for later
   }
 
+  // An item can only ever resolve to a real server entry id if it carries either a
+  // `local-…` placeholder (resolvable once its start syncs) or an idempotency_key.
+  // An item with NEITHER — e.g. a heartbeat captured during a timer-state transition
+  // when there was no entry to anchor it to (time_entry_id null/undefined) — can never
+  // resolve. Holding it loops forever: it is re-read and "held" every flush cycle,
+  // spamming the log and blocking the queue. Such orphans must be DROPPED, not held.
+  _isUnresolvableOrphan(meta) {
+    const hasIdem = !!(meta && meta.idempotency_key != null && meta.idempotency_key !== '');
+    if (hasIdem) return false;
+    const raw = meta && meta.time_entry_id != null ? String(meta.time_entry_id) : null;
+    // In the unresolved branch a real id would already have resolved, so raw here is
+    // either a `local-…` placeholder (keep — may sync later) or null (orphan).
+    return raw == null;
+  }
+
   init() {
     try {
       const Database = require('better-sqlite3');
@@ -338,6 +353,11 @@ class OfflineQueue {
             // drop all offline activity. It flushes on a later cycle once the start syncs.
             const resolvedId = this._resolveEntryId(data);
             if (!resolvedId) {
+              if (this._isUnresolvableOrphan(data)) {
+                console.warn('[OfflineQueue] Dropping orphaned heartbeat — no entry id or idempotency_key to resolve (can never sync)');
+                deleteIds.push(item.id);
+                continue;
+              }
               console.log(`[OfflineQueue] Holding heartbeat — entry not synced yet (entry=${data.time_entry_id})`);
               continue; // leave in queue; do NOT count an attempt
             }
@@ -369,6 +389,11 @@ class OfflineQueue {
             // (its buffer file stays on disk) until the start syncs.
             const resolvedScreenshotEntryId = this._resolveEntryId(data);
             if (!resolvedScreenshotEntryId) {
+              if (this._isUnresolvableOrphan(data)) {
+                console.warn('[OfflineQueue] Dropping orphaned screenshot — no entry id or idempotency_key to resolve (can never sync)');
+                deleteIds.push(item.id);
+                continue;
+              }
               console.log(`[OfflineQueue] Holding screenshot — entry not synced yet (entry=${data.time_entry_id})`);
               continue; // leave in queue + keep file; do NOT count an attempt
             }
