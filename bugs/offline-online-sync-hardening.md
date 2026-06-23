@@ -44,6 +44,14 @@ fixed as one batch. Product decisions: **preserve up to ~3–4h of offline work*
    nullable, attributed to the user's entry open at `logged_at` (org-scoped), unattributable logs
    skipped not 422'd. Files: `offline-queue.js`, `index.js`, `AgentController.php`.
 
+   > **🟡 Follow-up (2026-06-23):** this fix was **incomplete**. (a) Changing 422-drop → *hold*
+   > meant a heartbeat with **no** id at all (not even a `local-…` placeholder) was held
+   > **forever** — re-read every 5s in an infinite flush loop (`entry=undefined` spam). (b) The
+   > upstream cause was never addressed: heartbeats are still *queued without any* `time_entry_id`
+   > because `ActivityMonitor` had no handle to the running entry. Both completed in
+   > [desktop-offline-heartbeat-orphan-queue-loop.md](desktop-offline-heartbeat-orphan-queue-loop.md)
+   > — drop truly-unresolvable orphans + attach the live entry's id/idempotency_key at enqueue.
+
 4. **Screenshots bound to `local-…` id.** Offline-start screenshots used the placeholder id →
    422 → dropped; reconcile never rebound the screenshot service, so even post-reconnect live
    captures kept the stale id all session.
