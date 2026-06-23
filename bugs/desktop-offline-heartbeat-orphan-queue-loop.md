@@ -4,6 +4,11 @@
 **Severity:** P1 (infinite retry loop / log spam / CPU + battery; offline activity lost)
 **Status:** ✅ FIXED (2026-06-23) — drain-side: branch `fix/desktop-orphaned-heartbeat-queue-loop` (merged to `develop`); upstream replay + project refresh: branch `fix/desktop-offline-heartbeat-replay-and-project-refresh`
 
+> **Follow-up to** [offline-online-sync-hardening.md](offline-online-sync-hardening.md) **item 3.**
+> That fix changed the offline-heartbeat 422-drop to a *hold*, but (a) holding a heartbeat with
+> no id at all loops forever, and (b) it never fixed the upstream cause (heartbeats queued with no
+> `time_entry_id`). This report completes both.
+
 ## Symptom
 After an offline timer transition (e.g. disconnect → idle → reassign → reconnect), the desktop log spammed every 5 seconds, indefinitely:
 ```
