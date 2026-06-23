@@ -3141,13 +3141,19 @@ async function autoStopTimerForPowerEvent(reason, endedAtMs) {
         `[TIMER_SLEEP_STOP] reason=${reason} endedAt=${new Date(endedAtMs).toISOString()}`,
     );
     saveAutoStopReason(reason);
-    await stopTimer({ endedAtMs, autoStopReason: reason });
+    const result = await stopTimer({ endedAtMs, autoStopReason: reason });
+    // Only notify if THIS call actually performed the stop. A lid-close fires
+    // 'lock-screen' + 'suspend' back-to-back; the stopTimer mutex blocks the second
+    // one and returns { error }, so without this check the user gets two toasts for
+    // a single stop. (PowerManager also coalesces the paired events; this is the
+    // data-layer backstop.)
+    if (result && result.error) return;
     const label = PowerManager.formatTimeShortLocal(new Date(endedAtMs));
-    const reasonLabel =
-        reason === "lock-screen" ? "screen lock" : "system sleep";
+    const reasonVerb =
+        reason === "lock-screen" ? "was locked" : "went to sleep";
     PowerManager.showAutoStopNotification(
         "TrackFlow — Timer auto-stopped",
-        `Timer stopped due to ${reasonLabel}. Your time up to ${label} was saved.`,
+        `Timer stopped at ${label} because your computer ${reasonVerb}. All time tracked before then was saved.`,
     );
 }
 

@@ -97,5 +97,49 @@ describe('PowerManager', () => {
       expect(onSuspendCleanup).toHaveBeenCalledTimes(1);
       expect(autoStopForPowerEvent).toHaveBeenCalledTimes(1);
     });
+
+    // ── Paired-event coalescing: one lid-close emits lock-screen + suspend ──
+    test('coalesces lock-screen + suspend into a single auto-stop (no duplicate toast)', async () => {
+      powerMonitor.on.mockClear();
+      // isTimerRunning stays true across both events — mirrors production, where the
+      // flag only flips deep inside the async stopTimer after the second event fires.
+      const autoStopForPowerEvent = jest.fn().mockResolvedValue(undefined);
+      PowerManager.registerPowerHandlers({
+        isTimerRunning: () => true,
+        autoStopForPowerEvent,
+        onSuspendCleanup: jest.fn(),
+      });
+
+      const lockHandler = getRegisteredHandler('lock-screen');
+      const suspendHandler = getRegisteredHandler('suspend');
+
+      // Lid close: both fire back-to-back before any resume.
+      await lockHandler();
+      await suspendHandler();
+
+      // Only the first event performs the stop; the trailing one is ignored.
+      expect(autoStopForPowerEvent).toHaveBeenCalledTimes(1);
+      expect(autoStopForPowerEvent).toHaveBeenCalledWith('lock-screen', expect.any(Number));
+    });
+
+    test('a new sleep cycle after resume auto-stops again', async () => {
+      powerMonitor.on.mockClear();
+      const autoStopForPowerEvent = jest.fn().mockResolvedValue(undefined);
+      PowerManager.registerPowerHandlers({
+        isTimerRunning: () => true,
+        autoStopForPowerEvent,
+        onSuspendCleanup: jest.fn(),
+        onResumeAfterSleep: jest.fn(),
+      });
+
+      const suspendHandler = getRegisteredHandler('suspend');
+      const resumeHandler = getRegisteredHandler('resume');
+
+      await suspendHandler();        // first cycle stops
+      await resumeHandler();         // wake — clears the coalescing guard
+      await suspendHandler();        // second, independent sleep stops again
+
+      expect(autoStopForPowerEvent).toHaveBeenCalledTimes(2);
+    });
   });
 });
