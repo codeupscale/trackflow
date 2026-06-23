@@ -8,6 +8,14 @@ const DEFAULT_GAP_THRESHOLD_SEC = 180; // 3 minutes
 let _registered = false;
 let _suspendedAt = null;
 let _callbacks = null;
+// Coalesce the back-to-back power events a single lid-close emits. macOS (and
+// Windows) fire BOTH 'lock-screen' and 'suspend' for one lid-close, a tick apart.
+// Without this guard each event runs autoStopForPowerEvent and shows its own
+// "auto-stopped" toast, so the user sees two notifications for one real stop
+// (the timer itself is protected by the stopTimer mutex, but the toast is not).
+// Reset on resume (next sleep cycle) and via a short fallback timeout.
+let _autoStopInFlight = false;
+let _autoStopResetTimer = null;
 
 /**
  * @param {object} callbacks
@@ -44,6 +52,11 @@ function unregisterPowerHandlers() {
   _registered = false;
   _suspendedAt = null;
   _callbacks = null;
+  _autoStopInFlight = false;
+  if (_autoStopResetTimer) {
+    clearTimeout(_autoStopResetTimer);
+    _autoStopResetTimer = null;
+  }
 }
 
 async function handleSuspend(reason) {
@@ -58,6 +71,20 @@ async function handleSuspend(reason) {
   }
 
   if (!_callbacks?.isTimerRunning?.()) return;
+
+  // A lid-close fires 'lock-screen' + 'suspend' back-to-back. isTimerRunning() is
+  // still true when the second event arrives (it only flips deep inside the async
+  // stopTimer), so without this guard both events auto-stop and both toast. Let the
+  // first event own the stop + notification; ignore the trailing one.
+  if (_autoStopInFlight) {
+    console.log(`[power] ${reason} ignored — auto-stop already in progress from a paired power event`);
+    return;
+  }
+  _autoStopInFlight = true;
+  // Fallback reset in case 'resume'/'unlock-screen' never fires (defensive).
+  if (_autoStopResetTimer) clearTimeout(_autoStopResetTimer);
+  _autoStopResetTimer = setTimeout(() => { _autoStopInFlight = false; }, 10_000);
+
   const endedAtMs = Date.now();
   _suspendedAt = endedAtMs;
   console.log(`[power] ${reason} — auto-stopping timer at ${new Date(endedAtMs).toISOString()}`);
@@ -69,6 +96,12 @@ async function handleSuspend(reason) {
 }
 
 function handleResume() {
+  // New sleep/lock cycle begins — clear the paired-event coalescing guard.
+  _autoStopInFlight = false;
+  if (_autoStopResetTimer) {
+    clearTimeout(_autoStopResetTimer);
+    _autoStopResetTimer = null;
+  }
   if (_suspendedAt) {
     const sleepSec = Math.floor((Date.now() - _suspendedAt) / 1000);
     console.log(`[power] Resumed after ${sleepSec}s — timer remains stopped (hard auto-stop policy)`);
