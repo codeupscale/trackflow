@@ -39,6 +39,13 @@ class ActivityMonitor {
   constructor(apiClient, offlineQueue) {
     this.apiClient = apiClient;
     this.offlineQueue = offlineQueue;
+    // Injected by index.js. Returns { time_entry_id, idempotency_key } for the
+    // CURRENTLY running entry (local id + idempotency_key), or null when no timer
+    // is active. A heartbeat that fails to send is queued offline; without this
+    // anchor it carries no entry id and the offline-queue drops it as an
+    // unresolvable orphan, losing the offline activity. With it, the queue resolves
+    // it to the server entry once the start syncs and replays it.
+    this.getCurrentEntryMeta = null;
     this.interval = null;
     this.keyboardCount = 0;
     this.mouseCount = 0;
@@ -272,8 +279,17 @@ class ActivityMonitor {
       try {
         // M7 FIX: Guard offlineQueue access — it may be null after logout
         if (this.offlineQueue) {
+          // Anchor the queued heartbeat to the current entry (local id +
+          // idempotency_key) so the offline-queue resolver can map it to the
+          // server entry on replay. Without this it's an unanchored orphan and
+          // gets dropped — losing offline-captured activity.
+          const entryMeta =
+            typeof this.getCurrentEntryMeta === 'function'
+              ? this.getCurrentEntryMeta()
+              : null;
           await this.offlineQueue.add('heartbeat', {
             ...data,
+            ...(entryMeta || {}),
             logged_at: new Date().toISOString(),
           });
         } else {
