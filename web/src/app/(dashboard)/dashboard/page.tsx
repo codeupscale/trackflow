@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subDays, subWeeks, subMonths, isToday, isSameDay, addDays } from 'date-fns';
 import {
   Clock,
@@ -54,6 +54,7 @@ import api from '@/lib/api';
 import { formatDuration } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
+import { useTimerStore } from '@/stores/timer-store';
 import { DateFilter } from '@/components/date-filter';
 
 // ─── Types ────────────────────────────────────────────────────────
@@ -306,6 +307,19 @@ export default function DashboardPage() {
     },
     refetchInterval: 30000,
   });
+
+  // Refresh "Today's Hours" + timesheet the instant the timer starts/stops, instead
+  // of waiting up to 30s for the next poll. Without this the card lags the live
+  // timer chip after a stop (the "card shows 12m while the timer reads 6m" gap).
+  const queryClient = useQueryClient();
+  const isTimerRunning = useTimerStore((s) => s.isRunning);
+  const prevTimerRunningRef = useRef(isTimerRunning);
+  useEffect(() => {
+    if (prevTimerRunningRef.current === isTimerRunning) return;
+    prevTimerRunningRef.current = isTimerRunning;
+    queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    queryClient.invalidateQueries({ queryKey: ['time-entries-dashboard'] });
+  }, [isTimerRunning, queryClient]);
 
   const stats = data?.stats;
   const team = data?.team || [];

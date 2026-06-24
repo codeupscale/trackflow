@@ -481,6 +481,13 @@ stopBtn.addEventListener('click', () => {
     }
   }).catch(() => {}).finally(() => {
     _stopInFlight = false;
+    // Converge the stopped display onto the server-authoritative total. The
+    // synchronous paint above shows the last *live* tick (floored from the local
+    // clock), which can sit 1s above the server's stored duration (the server
+    // floors from its own received timestamps) — the "desktop 06:03 vs web 06:02"
+    // remainder. get-timer-state does a fresh status fetch and, when stopped,
+    // returns the server total; offline it falls back to the local total (never 0).
+    syncTimerState();
   });
 });
 
