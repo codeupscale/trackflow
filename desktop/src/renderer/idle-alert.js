@@ -154,13 +154,13 @@ document
     });
 
 function disableAllButtons() {
-    ["keepBtn", "discardBtn", "reassignBtn", "stopBtn"].forEach((id) => {
+    ["keepBtn", "discardBtn", "reassignBtn"].forEach((id) => {
         document.getElementById(id).disabled = true;
     });
 }
 
 function enableAllButtons() {
-    ["keepBtn", "discardBtn", "stopBtn"].forEach((id) => {
+    ["keepBtn", "discardBtn"].forEach((id) => {
         document.getElementById(id).disabled = false;
     });
     // Reassign stays disabled unless a project is selected
@@ -178,16 +178,17 @@ function sendAction(action, projectId) {
 document
     .getElementById("keepBtn")
     .addEventListener("click", () => sendAction("keep"));
+// "Discard Idle Time" removes the idle period AND stops tracking. This maps to
+// the "stop" action (discard idle, then stop the timer) — NOT the internal
+// "discard" action, which is reserved for the `keep_idle_time: "never"` policy
+// that silently discards idle while CONTINUING to track.
 document
     .getElementById("discardBtn")
-    .addEventListener("click", () => sendAction("discard"));
+    .addEventListener("click", () => sendAction("stop"));
 document.getElementById("reassignBtn").addEventListener("click", () => {
     const projectId = document.getElementById("reassignProject").value;
     if (projectId) sendAction("reassign", projectId);
 });
-document
-    .getElementById("stopBtn")
-    .addEventListener("click", () => sendAction("stop"));
 
 // Keyboard shortcuts
 document.addEventListener("keydown", (e) => {
@@ -203,9 +204,6 @@ document.addEventListener("keydown", (e) => {
             break;
         case "d":
             document.getElementById("discardBtn").click();
-            break;
-        case "s":
-            document.getElementById("stopBtn").click();
             break;
         case "r":
             const sel = document.getElementById("reassignProject");

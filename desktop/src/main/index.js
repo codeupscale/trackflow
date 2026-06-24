@@ -4449,9 +4449,16 @@ async function handleIdleAction(
                             return;
                         }
 
-                        // FIX D5: Update todayTotalCurrentProject immediately after discard
+                        // FIX D5: Update todayTotalCurrentProject immediately after discard.
+                        // Measure pre-idle work to idle-START (not idle-end): the server
+                        // closes the original tracked entry at idle_started_at and the idle
+                        // gap [idle_started_at, idle_ended_at] is excluded (audit-only `idle`
+                        // entry). Using idleEndedAt here double-counts the discarded idle gap
+                        // — the new live entry already counts from idle_ended_at, so the
+                        // display total would inflate to the full elapsed (the "desktop ~20m
+                        // while portal ~16m after discard" bug).
                         const preIdleSeconds = Math.floor(
-                            (idleEndedAt -
+                            (effectiveIdleStartedAt -
                                 new Date(currentEntry.started_at).getTime()) /
                                 1000,
                         );

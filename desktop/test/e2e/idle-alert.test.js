@@ -23,7 +23,6 @@ describe('Idle Alert Popup', () => {
         <option value="">Reassign to project...</option>
       </select>
       <button class="action-btn btn-reassign" id="reassignBtn" disabled>Reassign</button>
-      <button class="action-btn btn-stop" id="stopBtn">Stop Timer</button>
       <div id="autoStopBar" style="display: none;">
         <span id="autoStopCountdown">--:--</span>
       </div>
@@ -91,20 +90,14 @@ describe('Idle Alert Popup', () => {
     expect(mockTrackflow.resolveIdle).toHaveBeenCalledWith('keep');
   });
 
-  // TC-072: Discard button calls resolveIdle('discard')
-  test('TC-072: discard button calls resolveIdle with discard action', () => {
+  // TC-072: Discard button removes idle AND stops tracking -> resolveIdle('stop').
+  // The "Discard Idle Time" button maps to the "stop" action (discard idle, then
+  // stop the timer). The internal "discard" action (resume tracking) is reserved
+  // for the keep_idle_time:"never" policy and is not reachable from this button.
+  test('TC-072: discard button calls resolveIdle with stop action', () => {
     const discardBtn = document.getElementById('discardBtn');
-    discardBtn.addEventListener('click', () => mockTrackflow.resolveIdle('discard'));
+    discardBtn.addEventListener('click', () => mockTrackflow.resolveIdle('stop'));
     discardBtn.click();
-
-    expect(mockTrackflow.resolveIdle).toHaveBeenCalledWith('discard');
-  });
-
-  // TC-073: Stop button calls resolveIdle('stop')
-  test('TC-073: stop button calls resolveIdle with stop action', () => {
-    const stopBtn = document.getElementById('stopBtn');
-    stopBtn.addEventListener('click', () => mockTrackflow.resolveIdle('stop'));
-    stopBtn.click();
 
     expect(mockTrackflow.resolveIdle).toHaveBeenCalledWith('stop');
   });
@@ -215,24 +208,6 @@ describe('Idle Alert Popup', () => {
     }
 
     handleKeydown({ key: 'd', repeat: false });
-    expect(clickSpy).toHaveBeenCalledTimes(1);
-  });
-
-  // TC-079: Keyboard shortcut S triggers Stop
-  test('TC-079: S key triggers stop button click', () => {
-    const stopBtn = document.getElementById('stopBtn');
-    const clickSpy = jest.fn();
-    stopBtn.addEventListener('click', clickSpy);
-
-    function handleKeydown(e) {
-      if (e.repeat) return;
-      if (document.activeElement && document.activeElement.tagName === 'SELECT') return;
-      switch (e.key.toLowerCase()) {
-        case 's': document.getElementById('stopBtn').click(); break;
-      }
-    }
-
-    handleKeydown({ key: 's', repeat: false });
     expect(clickSpy).toHaveBeenCalledTimes(1);
   });
 
