@@ -426,22 +426,22 @@ class OfflineQueue {
               screenshotFilesToDelete.push(data.file_path);
             }
           } else if (item.type === 'idle_discard') {
-            // FIX D3: If the user STOPPED the timer before this queued idle_discard
-            // flushed, replaying it would resurrect a running timer (the server
-            // splits the entry and opens a NEW one). Skip/drop it when no local
-            // session is active — the stop already closed everything.
-            if (typeof this.isLocalTimerActive === 'function' && !this.isLocalTimerActive()) {
-              console.log('[OfflineQueue] Dropping queued idle_discard — no active local timer (timer was stopped)');
-              deleteIds.push(item.id);
-              continue;
-            }
-            // FIX D3: Capture the result and re-anchor. The online idle path closes
-            // the stale entry at idle_started_at and opens a new local session at
-            // new_entry.started_at; the offline replay used to IGNORE new_entry,
-            // leaving the desktop bound to the now-split/closed entry → server keeps
-            // a new entry open forever and elapsed inflates. Drive the SAME re-anchor.
+            // Send the queued reassign/discard regardless of whether a local timer
+            // is still active.
+            //
+            // - Timer still RUNNING: the server splits the open entry and opens a NEW
+            //   one; re-anchor the local session to it (the running path).
+            // - Timer already STOPPED before this flushed (e.g. offline reassign, then
+            //   Stop): the server now splits the CLOSED entry in place and returns
+            //   new_entry=null, so the reassignment is applied historically WITHOUT
+            //   resurrecting a timer. Previously we DROPPED the item here, which lost
+            //   the reassignment entirely (idle time stuck on the original project).
+            //   See bugs/idle-reassign-offline-stop-lost.md.
             const res = await apiClient.reportIdleTime(data);
             if (res?.new_entry && typeof this.onIdleReanchor === 'function') {
+              // Only re-anchor when the server reopened a running entry (timer still
+              // live). A null new_entry means the closed-entry split path ran — leave
+              // the stopped timer stopped.
               try {
                 this.onIdleReanchor(data, res.new_entry);
               } catch (cbErr) {

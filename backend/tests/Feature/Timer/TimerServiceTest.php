@@ -563,6 +563,78 @@ class TimerServiceTest extends TestCase
         $this->assertNull($result['new_entry']);
     }
 
+    public function test_report_idle_reassign_on_stopped_timer_splits_closed_entry(): void
+    {
+        // Scenario: user reassigned idle time while offline, then stopped the timer
+        // before the offline queue flushed. By flush time the timer is stopped (no
+        // Redis) and the entry is closed. The reassign must still split the CLOSED
+        // entry historically — WITHOUT resurrecting a running timer.
+        $target = Project::factory()->create(['organization_id' => $this->org->id]);
+        $target->members()->attach($this->user->id);
+
+        $start = now()->subMinutes(10);
+        $end = now();
+        $closed = TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'project_id' => null, // original (default) project
+            'started_at' => $start,
+            'ended_at' => $end,
+            'duration_seconds' => 600,
+            'type' => 'tracked',
+        ]);
+
+        $idleStart = (clone $start)->addMinutes(1); // 1 min of work, then idle
+        $idleEnd = (clone $start)->addMinutes(8);   // 7 min idle window
+
+        // No Redis timer set — timer is stopped.
+        $result = $this->service->reportIdle([
+            'time_entry_id' => $closed->id,
+            'idle_started_at' => $idleStart->toISOString(),
+            'idle_ended_at' => $idleEnd->toISOString(),
+            'idle_seconds' => 420,
+            'action' => 'reassign',
+            'project_id' => $target->id,
+        ]);
+
+        // No running timer reopened.
+        $this->assertNull($result['new_entry']);
+        $this->assertNotNull($result['idle_entry']);
+        $this->assertNull(Redis::get("timer:{$this->user->id}"));
+
+        // Original entry shortened to idle-start.
+        $orig = TimeEntry::withoutGlobalScopes()->find($closed->id);
+        $this->assertEqualsWithDelta($idleStart->timestamp, $orig->ended_at->timestamp, 1);
+
+        // Reassigned tracked entry on the target project for the full idle window.
+        $reassigned = TimeEntry::withoutGlobalScopes()
+            ->where('project_id', $target->id)->where('type', 'tracked')->first();
+        $this->assertNotNull($reassigned);
+        $this->assertEqualsWithDelta(420, $reassigned->duration_seconds, 1);
+
+        // Post-idle remainder on the original project — CLOSED (not running).
+        $remainder = TimeEntry::withoutGlobalScopes()
+            ->where('id', '!=', $closed->id)
+            ->where('type', 'tracked')
+            ->whereNull('project_id')
+            ->first();
+        $this->assertNotNull($remainder);
+        $this->assertNotNull($remainder->ended_at);
+        $this->assertEqualsWithDelta($end->timestamp, $remainder->ended_at->timestamp, 1);
+
+        // Idempotent: a replay finds the entry already shortened and no-ops.
+        $again = $this->service->reportIdle([
+            'time_entry_id' => $closed->id,
+            'idle_started_at' => $idleStart->toISOString(),
+            'idle_ended_at' => $idleEnd->toISOString(),
+            'idle_seconds' => 420,
+            'action' => 'reassign',
+            'project_id' => $target->id,
+        ]);
+        $this->assertNull($again['idle_entry']);
+        $this->assertNull($again['new_entry']);
+    }
+
     // ─── Edge cases ──────────────────────────────────────────────────
 
     public function test_start_stop_start_cycle_works(): void
