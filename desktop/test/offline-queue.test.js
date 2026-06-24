@@ -269,15 +269,22 @@ describe('OfflineQueue flush — local-id resolution & idle re-anchor', () => {
     expect(queue.onIdleReanchor).toHaveBeenCalledWith(payload, newEntry);
   });
 
-  test('D3: drops queued idle_discard without calling API when no local timer is active', async () => {
-    primeQueue([{ id: 1, type: 'idle_discard', data: JSON.stringify({ time_entry_id: 'srv-1', action: 'discard' }), attempts: 0 }]);
-    const apiClient = { reportIdleTime: jest.fn() };
+  test('D3: timer stopped before flush — STILL sends reassign for closed-entry split, no re-anchor', async () => {
+    // Regression for bugs/idle-reassign-offline-stop-lost.md: a reassign queued
+    // offline must NOT be dropped when the timer was stopped before it flushed.
+    // The backend splits the now-closed entry historically and returns new_entry=null,
+    // so we send it but do NOT re-anchor/resurrect the stopped timer.
+    const payload = { time_entry_id: 'srv-1', idle_started_at: '2026-06-22T10:00:00.000Z', action: 'reassign', project_id: 'p9' };
+    primeQueue([{ id: 1, type: 'idle_discard', data: JSON.stringify(payload), attempts: 0 }]);
+    const apiClient = { reportIdleTime: jest.fn().mockResolvedValue({ idle_entry: { id: 'idle-1' }, new_entry: null }) };
     queue.onIdleReanchor = jest.fn();
     queue.isLocalTimerActive = () => false; // timer was stopped before this flushed
 
     await queue.flush(apiClient);
 
-    expect(apiClient.reportIdleTime).not.toHaveBeenCalled();
+    expect(apiClient.reportIdleTime).toHaveBeenCalledWith(
+      expect.objectContaining({ time_entry_id: 'srv-1', action: 'reassign', project_id: 'p9' }),
+    );
     expect(queue.onIdleReanchor).not.toHaveBeenCalled();
   });
 

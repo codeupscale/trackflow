@@ -1094,7 +1094,12 @@ class TimerService
         try {
             $timerData = Redis::get($redisKey);
             if (!$timerData) {
-                return ['idle_entry' => null, 'new_entry' => null];
+                // Timer is stopped. A queued idle reassign/discard may still need to
+                // apply to the (now closed) entry it referenced — e.g. the user
+                // reassigned while offline, then stopped before the offline queue
+                // flushed. Apply the split historically to the closed entry WITHOUT
+                // resurrecting a running timer. (bugs/idle-reassign-offline-stop-lost.md)
+                return $this->reportIdleOnStoppedTimer($data, $user);
             }
 
             $timerInfo = json_decode($timerData, true);
@@ -1254,6 +1259,148 @@ class TimerService
         } finally {
             Redis::del($lockKey);
         }
+    }
+
+    /**
+     * Apply a queued idle reassign/discard to a CLOSED entry after the timer has
+     * already stopped.
+     *
+     * Scenario: the user reassigned/discarded idle time while offline, then stopped
+     * the timer before the offline queue flushed. By flush time the timer is stopped
+     * (Redis empty) and the entry is closed, so the normal running-timer split path
+     * no-ops and the reassignment is lost. Here we split the closed entry in place —
+     * shorten it to idle-start, record the idle audit, create the reassigned entry on
+     * the target project, and re-close the post-idle remainder on the original
+     * project — WITHOUT opening a new running timer (new_entry is null so the desktop
+     * does not re-anchor/resurrect). Idempotent: a replay finds the entry already
+     * shortened past the idle window and no-ops.
+     */
+    private function reportIdleOnStoppedTimer(array $data, $user): array
+    {
+        $noop = ['idle_entry' => null, 'new_entry' => null];
+
+        $requestedEntryId = $data['time_entry_id'] ?? null;
+        if (!$requestedEntryId || str_starts_with((string) $requestedEntryId, 'local-')) {
+            return $noop;
+        }
+
+        $entry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+            ->where('id', $requestedEntryId)
+            ->where('user_id', $user->id)
+            ->first();
+        // Only handle a CLOSED entry here; an open entry means a timer is somehow
+        // still live and should go through the running path, not this one.
+        if (!$entry || $entry->ended_at === null) {
+            return $noop;
+        }
+
+        $idleStartedAt = $this->parseClientTimestamp((string) $data['idle_started_at'], 'idle_started_at');
+        $idleEndedAt = $this->parseClientTimestamp((string) $data['idle_ended_at'], 'idle_ended_at');
+        if ($idleEndedAt->lt($idleStartedAt)) {
+            throw new \InvalidArgumentException('idle_ended_at must be on or after idle_started_at.');
+        }
+        $action = $data['action'] ?? 'discard';
+        $reassignProjectId = $data['project_id'] ?? null;
+
+        // Clamp the idle window to the closed entry's bounds.
+        if ($idleStartedAt->lt($entry->started_at)) {
+            $idleStartedAt = $entry->started_at->copy();
+        }
+        if ($idleEndedAt->gt($entry->ended_at)) {
+            $idleEndedAt = $entry->ended_at->copy();
+        }
+
+        // Idempotency: already split (entry shortened to/under idle-start), or the
+        // window collapsed after clamping — nothing to do.
+        if ($entry->ended_at->lte($idleStartedAt) || $idleEndedAt->lte($idleStartedAt)) {
+            return $noop;
+        }
+
+        if ($action === 'reassign' && $reassignProjectId) {
+            $project = \App\Models\Project::where('organization_id', $user->organization_id)
+                ->find($reassignProjectId);
+            if (!$project || !$project->isAssignedTo($user)) {
+                throw new AuthorizationException('You are not assigned to this project.');
+            }
+        }
+
+        $originalEndedAt = $entry->ended_at->copy();
+        $computedIdleSeconds = $this->computeDuration($idleStartedAt, $idleEndedAt);
+
+        return DB::transaction(function () use (
+            $user,
+            $entry,
+            $idleStartedAt,
+            $idleEndedAt,
+            $originalEndedAt,
+            $computedIdleSeconds,
+            $action,
+            $reassignProjectId
+        ) {
+            // 1. Shorten the original (closed) entry to idle-start.
+            $entry->update([
+                'ended_at' => $idleStartedAt,
+                'duration_seconds' => $this->computeDuration($entry->started_at, $idleStartedAt),
+            ]);
+
+            // 2. Idle audit entry.
+            $idleEntry = TimeEntry::create([
+                'organization_id' => $user->organization_id,
+                'user_id' => $user->id,
+                'project_id' => $entry->project_id,
+                'task_id' => $entry->task_id,
+                'started_at' => $idleStartedAt,
+                'ended_at' => $idleEndedAt,
+                'duration_seconds' => $computedIdleSeconds,
+                'type' => 'idle',
+                'notes' => $action === 'reassign' ? 'Idle time reassigned to another project' : 'Idle time discarded by user',
+            ]);
+
+            // 3. Reassigned tracked entry on the target project (reassign only).
+            if ($action === 'reassign' && $reassignProjectId) {
+                TimeEntry::create([
+                    'organization_id' => $user->organization_id,
+                    'user_id' => $user->id,
+                    'project_id' => $reassignProjectId,
+                    'task_id' => null,
+                    'started_at' => $idleStartedAt,
+                    'ended_at' => $idleEndedAt,
+                    'duration_seconds' => $computedIdleSeconds,
+                    'type' => 'tracked',
+                    'notes' => 'Idle time reassigned from timer',
+                ]);
+            }
+
+            // 4. Re-close the post-idle remainder on the ORIGINAL project (if any).
+            //    CLOSED — the timer is stopped; never reopen a running entry here.
+            $remainder = null;
+            if ($originalEndedAt->gt($idleEndedAt)) {
+                $remainder = TimeEntry::create([
+                    'organization_id' => $user->organization_id,
+                    'user_id' => $user->id,
+                    'project_id' => $entry->project_id,
+                    'task_id' => $entry->task_id,
+                    'started_at' => $idleEndedAt,
+                    'ended_at' => $originalEndedAt,
+                    'duration_seconds' => $this->computeDuration($idleEndedAt, $originalEndedAt),
+                    'type' => 'tracked',
+                ]);
+            }
+
+            // Re-home screenshots that fell outside the shortened original entry:
+            // idle-window shots → idle entry (normally none), post-idle shots → remainder.
+            \App\Models\Screenshot::where('time_entry_id', $entry->id)
+                ->whereBetween('captured_at', [$idleStartedAt, $idleEndedAt])
+                ->update(['time_entry_id' => $idleEntry->id]);
+            if ($remainder) {
+                \App\Models\Screenshot::where('time_entry_id', $entry->id)
+                    ->where('captured_at', '>', $idleEndedAt)
+                    ->update(['time_entry_id' => $remainder->id]);
+            }
+
+            // new_entry = null: timer stays stopped; the desktop must NOT re-anchor.
+            return ['idle_entry' => $idleEntry, 'new_entry' => null];
+        });
     }
 
     public function processHeartbeat(array $data): ActivityLog
