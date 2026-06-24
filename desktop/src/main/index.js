@@ -597,6 +597,12 @@ async function showScreenPermissionOnboarding(options = {}) {
 let tray = null;
 let popupWindow = null;
 let loginWindow = null;
+
+// Popup window size. Defined ONCE and shared by BOTH the initial creation and the
+// re-show reposition, so the two can never drift apart (the bug where the window
+// launched at one size and then resized itself on the next tray click).
+const POPUP_WIDTH = 320;
+const POPUP_HEIGHT = 400;
 let idleAlertWindow = null;
 let apiClient = null;
 let activityMonitor = null;
@@ -2406,7 +2412,7 @@ function showPopup() {
     if (popupWindow && !popupWindow.isDestroyed()) {
         // Reposition to primary display before showing (handles cases where a
         // previous show placed it on an extended monitor)
-        _repositionToPrimaryDisplay(popupWindow, 320, 400);
+        _repositionToPrimaryDisplay(popupWindow, POPUP_WIDTH, POPUP_HEIGHT);
         if (typeof popupWindow.moveTop === "function") {
             // Windows: moveTop() while a native <select> is open dismisses the
             // dropdown; only re-assert z-order on macOS where the tray popup
@@ -2448,11 +2454,12 @@ function showPopup() {
     }
 
     const trayBounds = tray.getBounds();
-    // Bumped from 320x400 — too cramped, and on Windows (fractional DPI) the content
-    // could clip / the project dropdown render empty. Larger gives the dropdown,
-    // activity bar and Stop button comfortable room across platforms.
-    const windowWidth = 380;
-    const windowHeight = 520;
+    // Use the shared POPUP_WIDTH/POPUP_HEIGHT so the initial size matches the
+    // re-show reposition exactly (no launch-large / reshow-small jump). The earlier
+    // bump to 380x520 was a workaround for a Windows dropdown clip that has since
+    // been fixed separately (dropdown rebuild + pin-keepalive fixes).
+    const windowWidth = POPUP_WIDTH;
+    const windowHeight = POPUP_HEIGHT;
 
     // MULTI-MONITOR FIX: Always position on the PRIMARY display regardless of
     // which monitor the tray icon is on. Extended/secondary displays are excluded.
