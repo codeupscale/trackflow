@@ -312,4 +312,71 @@ describe("Timer sync invariants", () => {
             );
         });
     });
+
+    // Mirrors the "FIX D5" today-total update + display formula in
+    // handleIdleAction()/buildTimerTickPayload() in src/main/index.js.
+    // After a discard/reassign split, the server closes the original tracked
+    // entry at idle_START and the idle gap is excluded (audit-only `idle` entry);
+    // the new live entry counts from idle_END. The displayed total is
+    // todayTotalCurrentProject + liveElapsed, so todayTotal MUST advance by the
+    // pre-idle work measured to idle-START — never to idle-END (that double-counts
+    // the discarded gap and inflates the display to the full wall-clock elapsed).
+    describe("BUG D5: discard excludes the idle gap from the today total", () => {
+        // delta added to todayTotalCurrentProject for the closed pre-idle entry
+        function preIdleDelta(startedAtMs, idleStartedAtMs) {
+            return Math.max(
+                0,
+                Math.floor((idleStartedAtMs - startedAtMs) / 1000),
+            );
+        }
+        // what the running widget shows after the split
+        function displayTotalAfterDiscard(
+            startedAtMs,
+            idleStartedAtMs,
+            idleEndedAtMs,
+            nowMs,
+            priorTodayTotal = 0,
+        ) {
+            const todayTotal =
+                priorTodayTotal + preIdleDelta(startedAtMs, idleStartedAtMs);
+            const liveElapsed = Math.max(
+                0,
+                Math.floor((nowMs - idleEndedAtMs) / 1000),
+            );
+            return todayTotal + liveElapsed;
+        }
+
+        const started = new Date("2026-06-15T09:00:00.000Z").getTime();
+        const idleStart = started + 16 * 60 * 1000; // 16m pre-idle work
+        const idleEnd = idleStart + 4 * 60 * 1000; // 4m idle gap (discarded)
+        const now = idleEnd + 30 * 1000; // 30s post-idle work
+
+        test("today total advances by pre-idle work measured to idle-START", () => {
+            expect(preIdleDelta(started, idleStart)).toBe(16 * 60);
+        });
+
+        test("displayed total excludes the discarded idle gap", () => {
+            // 16m pre-idle + 30s post-idle = 990s. NOT 16m + 4m + 30s (wall clock).
+            expect(
+                displayTotalAfterDiscard(started, idleStart, idleEnd, now),
+            ).toBe(16 * 60 + 30);
+        });
+
+        test("regression: measuring to idle-END would inflate by the whole gap", () => {
+            // The old buggy formula used idleEnd as the pre-idle boundary.
+            const buggyTodayTotal = Math.floor((idleEnd - started) / 1000);
+            const buggyDisplay =
+                buggyTodayTotal + Math.floor((now - idleEnd) / 1000);
+            const correctDisplay = displayTotalAfterDiscard(
+                started,
+                idleStart,
+                idleEnd,
+                now,
+            );
+            // The bug inflated the display by exactly the 4-minute idle gap.
+            expect(buggyDisplay - correctDisplay).toBe(4 * 60);
+            // ...and made the display equal the full wall-clock elapsed.
+            expect(buggyDisplay).toBe(Math.floor((now - started) / 1000));
+        });
+    });
 });
