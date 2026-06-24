@@ -4441,9 +4441,15 @@ async function handleIdleAction(
             case "discard":
             case "reassign":
                 if (apiClient && currentEntry && effectiveIdleStartedAt) {
-                    // FIX D1: Use _idleAlertShownAt for idle_ended_at to exclude dialog wait time
-                    const idleEndedAt = _idleAlertShownAt || Date.now();
-                    const idleSecondsFromAlert = Math.floor(
+                    // REASSIGN counts the FULL time the user was away — idle-start
+                    // → now (the reassign click) — toward the chosen project,
+                    // INCLUDING the time the idle dialog stayed open. The user was
+                    // away doing that other work, so capping at the idle threshold
+                    // (_idleAlertShownAt) under-counted it (e.g. showed the 5-min
+                    // threshold when the user was away 9–12 min). The "never"-policy
+                    // auto-discard has no dialog, so now() matches its old value.
+                    const idleEndedAt = Date.now();
+                    const idleSeconds = Math.floor(
                         (idleEndedAt - effectiveIdleStartedAt) / 1000,
                     );
                     const payload = {
@@ -4452,7 +4458,7 @@ async function handleIdleAction(
                             effectiveIdleStartedAt,
                         ).toISOString(),
                         idle_ended_at: new Date(idleEndedAt).toISOString(),
-                        idle_seconds: Math.max(1, idleSecondsFromAlert),
+                        idle_seconds: Math.max(1, idleSeconds),
                         action:
                             action === "reassign" && reassignProjectId
                                 ? "reassign"

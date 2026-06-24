@@ -417,4 +417,32 @@ describe("Timer sync invariants", () => {
             expect(keptSecondsOnIdleStop(started, null)).toBeGreaterThanOrEqual(0);
         });
     });
+
+    // Mirrors the reassign payload in handleIdleAction(): idle_seconds spans
+    // idle_start -> NOW (reassign click), so the FULL time the user was away —
+    // including the time the idle dialog stayed open — is reassigned to the chosen
+    // project. The same payload is reused for the offline queue, so the offline
+    // reconnect replay reassigns the same full duration.
+    describe("Reassign covers the full away duration (idle-start -> reassign click)", () => {
+        function reassignSeconds(idleStartedAtMs, reassignClickMs) {
+            return Math.max(1, Math.floor((reassignClickMs - idleStartedAtMs) / 1000));
+        }
+
+        const idleStart = new Date("2026-06-15T09:01:00.000Z").getTime();
+        const alertShown = idleStart + 5 * 60 * 1000; // 5-min idle threshold
+        const reassignClick = alertShown + 4 * 60 * 1000; // waited 4 more min at dialog
+
+        test("includes the dialog wait — not just the idle threshold", () => {
+            // 5m threshold + 4m dialog = 9m reassigned to the target project.
+            expect(reassignSeconds(idleStart, reassignClick)).toBe(9 * 60);
+        });
+
+        test("regression: capping at the alert-shown time under-counted to the threshold", () => {
+            // The old idle_ended_at = _idleAlertShownAt reassigned only the 5-min
+            // threshold, losing the 4 min the user waited at the dialog.
+            const oldReassigned = reassignSeconds(idleStart, alertShown);
+            expect(oldReassigned).toBe(5 * 60);
+            expect(reassignSeconds(idleStart, reassignClick) - oldReassigned).toBe(4 * 60);
+        });
+    });
 });
