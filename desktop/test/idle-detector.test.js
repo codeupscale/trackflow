@@ -35,6 +35,18 @@ describe('IdleDetector', () => {
     expect(detector.checkIntervalMs).toBe(30000);
   });
 
+  test('caps idle auto-stop at 4 hours regardless of a misconfigured org setting', () => {
+    // Regression: an org setting of 8600 min (~6 days) produced an absurd
+    // "auto-stop in 8597:40" countdown and a never-auto-stopping timer.
+    detector = new IdleDetector({ idle_alert_auto_stop_min: 8600 });
+    expect(detector.alertAutoStopSec).toBe(240 * 60); // clamped to 4h
+  });
+
+  test('does not raise a small auto-stop value to the cap', () => {
+    detector = new IdleDetector({ idle_alert_auto_stop_min: 2 });
+    expect(detector.alertAutoStopSec).toBe(120);
+  });
+
   test('should not start if disabled', () => {
     detector = new IdleDetector({ idle_detection: false });
     expect(detector.enabled).toBe(false);
