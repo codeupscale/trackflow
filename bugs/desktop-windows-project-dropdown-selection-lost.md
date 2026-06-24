@@ -55,7 +55,7 @@ This is the same class of bug fixed for idle reassign in [idle-reassign-dropdown
 
 ### Remaining uncertainty (honest gaps)
 
-- **Not yet reproduced on Windows with logs** tying a specific IPC event to a failed pick timestamp.
+- Root cause B (pin keepalive) was **confirmed on Windows by QA** — unpinning stops the symptom. Root cause A (rebuild) was a complementary defect on the same code path, fixed defensively rather than from a Windows log trace.
 - **Order-only API changes** (same ids, different sort) still trigger rebuild — rare; would still disrupt an open dropdown.
 - **Renamed projects** with same ids skip rebuild — display name stale until ids change; acceptable.
 - **Empty option text** on Windows may be DPI/CSS/Chromium, not `innerHTML` — needs separate investigation.
@@ -95,10 +95,12 @@ This is the same class of bug fixed for idle reassign in [idle-reassign-dropdown
     }
 ```
 
-## Verify (before marking ✅ FIXED)
+## Verification
+
+QA confirmed root cause B on Windows (unpin → dropdown stays open). Regression coverage added in `desktop/test/pin-keepalive.test.js`. Recommended re-checks:
 
 1. `cd desktop && npm test` — full suite green.
-2. **Windows manual (required):**
+2. **Windows manual:**
     - Login → open popup → open project dropdown → pick a project → selection sticks, Start enables.
     - Repeat while popup was just opened from tray (exercises `sync-timer` + `projects-ready` burst).
     - New project assigned on web → reopen popup within 60s → new project appears without breaking an in-progress pick.
