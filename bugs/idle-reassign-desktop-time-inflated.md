@@ -67,11 +67,28 @@ appear after the queue flushes. The reported bug is the online path (reconnected
 reassigned), which is fixed. The offline variant should mirror this fix — re-anchor the local
 session locally at idle-end on the offline-resume, or re-anchor on idle_discard flush.
 
+## Round 2 (2026-06-24) — reassign UNDER-counted (only the idle threshold)
+
+QA: worked, went idle, **waited extra minutes at the dialog**, then Reassigned — expected ~9–12
+min reassigned but only **5 min** (the idle threshold) landed on the target project.
+
+**Root cause:** the reassign payload used `idle_ended_at = _idleAlertShownAt` ("FIX D1", to
+exclude dialog wait), capping the reassigned span at `idle_start → alert_shown` = the idle
+threshold. The minutes waited at the dialog resumed onto the ORIGINAL project instead.
+
+**Fix:** reassign now uses `idle_ended_at = Date.now()` (the reassign click), so the FULL away
+duration (idle-start → click, incl. dialog wait) is reassigned to the chosen project; the new
+running entry resumes at `now`. The `never`-policy auto-discard has no dialog, so `now()` matches
+its prior value. The SAME payload is queued offline, so the reconnect (online-handler) replay
+reassigns the same full duration and `reanchorFromOfflineIdle()` re-anchors to the post-split
+entry — online and offline behave identically.
+
 ## Verify
 
-- `cd desktop && npm test` — full suite still green (466/466).
-- Manual: timer running → force idle → Reassign → desktop elapsed matches the web running
-  entry (counts from idle-end, not original start), and stays correct across a reconcile tick.
+- `cd desktop && npm test` — full suite green (496/496; added reassign-duration invariants).
+- Manual: timer running → force idle → wait extra at the dialog → Reassign → the reassigned
+  project gets the FULL away duration (idle-start → click), and desktop elapsed matches the web
+  running entry (counts from idle-end, not original start) across a reconcile tick.
 
 ## Key files
 
