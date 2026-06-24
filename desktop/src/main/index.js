@@ -1751,6 +1751,26 @@ async function initializeApp() {
         await offlineQueue?.flush(apiClient);
         // Notify renderer of status change
         notifyPopup("network-status", { online: true });
+        // CONVERGENCE: after an offline stop/discard syncs, the tray title still
+        // shows the offline-local total (the live whole-second counter's floored
+        // value, which can sit 1s above the server's stored duration). Refresh the
+        // stopped total from the server so the tray, popup, and web all agree on the
+        // authoritative value instead of leaving the tray 1s ahead.
+        if (!isTimerRunning && apiClient) {
+            try {
+                const serverTotal = await apiClient.getTodayTotal(null);
+                if (serverTotal != null && serverTotal >= 0) {
+                    todayTotalGlobal = serverTotal;
+                    updateTrayTitle();
+                    notifyPopup("timer-stopped", {
+                        entry: null,
+                        todayTotal: serverTotal,
+                    });
+                }
+            } catch {
+                // Still offline / server unreachable — keep the local total (never 0).
+            }
+        }
     });
     networkMonitor.on("offline", () => {
         console.log("[Network] Gone offline");

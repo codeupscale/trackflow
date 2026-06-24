@@ -39,6 +39,25 @@
    refresh immediately instead of waiting up to 30s.
    (`web/src/app/(dashboard)/dashboard/page.tsx`)
 
+## Round 2 — tray stuck +1s after an OFFLINE discard/stop + reconnect
+
+QA: idle window at 05:27 → disconnect internet → Discard (stops offline) → tray + desktop
+showed 05:27 → reconnect → web showed 05:26, and reopening the app showed 05:26 while the **tray
+stayed 05:27**.
+
+**Root cause:** the discard correctly stops at idle-START; the kept duration floors to 326s
+(05:26) server-side, while the popup had optimistically shown 327s (the live whole-second
+counter at the instant idle was detected). During the offline stop, `todayTotalGlobal` fell back
+to the local total (327) and the tray rendered it. On reconnect, the
+`networkMonitor.on("online")` handler reconciled + flushed the stop (server stored 326) but
+**never refreshed the tray/total from the server**, so the tray kept the stale offline 327. The
+window converged only because reopening it runs `syncTimerState()`.
+
+**Fix:** the reconnect handler now, when the timer is stopped, refetches the server today-total
+and updates both the tray (`updateTrayTitle()`) and the popup (`timer-stopped` re-emit) — so the
+tray, popup, and web all converge to the server-authoritative value. Offline fallback preserved.
+(`desktop/src/main/index.js` — `networkMonitor.on("online")`)
+
 ## Note on the running-while-tracking case
 
 When a timer is actively running, the desktop and web are two **independent live counters** on
