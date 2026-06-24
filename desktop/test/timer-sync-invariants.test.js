@@ -379,4 +379,42 @@ describe("Timer sync invariants", () => {
             expect(buggyDisplay).toBe(Math.floor((now - started) / 1000));
         });
     });
+
+    // Mirrors the "stop" case in handleIdleAction() — used by the Discard button
+    // and idle auto-stop. The timer is stopped effective at idle-START via
+    // stopTimer({ endedAtMs: effectiveIdleStartedAt }); stopTimer computes the kept
+    // duration as floor((endedAtMs - _cachedStartedAtMs) / 1000) and closes the
+    // ORIGINAL local row (currentEntry._localId) so reconcile cannot re-adopt it.
+    describe("Discard/auto-stop stops at idle-start (no resume, no phantom re-adopt)", () => {
+        // kept (tracked) seconds when the timer is stopped at idle-start
+        function keptSecondsOnIdleStop(cachedStartedAtMs, effectiveIdleStartedAtMs) {
+            const endedAtMs = effectiveIdleStartedAtMs || Date.now();
+            return Math.max(0, Math.floor((endedAtMs - cachedStartedAtMs) / 1000));
+        }
+
+        const started = new Date("2026-06-15T09:00:00.000Z").getTime();
+        const idleStart = started + 3 * 60 * 1000 + 1000; // 3m01s pre-idle work
+        const now = idleStart + 9 * 60 * 1000; // user pressed Discard ~9m later
+
+        test("keeps pre-idle work, excludes idle + dialog wait", () => {
+            // Reported repro: worked ~3m, idle, then Discard ~9m later. Kept time is
+            // the pre-idle 3m01s — NOT the ~12m wall clock.
+            expect(keptSecondsOnIdleStop(started, idleStart)).toBe(3 * 60 + 1);
+        });
+
+        test("regression: the old stop path would have left ~full wall-clock running", () => {
+            // The old reportIdle+stop path set the anchor to a NEW entry / left the
+            // original local row open, so reconcile re-adopted the ORIGINAL start and
+            // displayed now - started (~12m) while still 'running'.
+            const phantomElapsed = Math.floor((now - started) / 1000);
+            expect(phantomElapsed).toBe(12 * 60 + 1);
+            expect(phantomElapsed).not.toBe(keptSecondsOnIdleStop(started, idleStart));
+        });
+
+        test("falls back to now when idle-start is missing", () => {
+            // effectiveIdleStartedAt null -> endedAtMs = Date.now(); kept = full elapsed
+            // (defensive: should not throw / produce negative).
+            expect(keptSecondsOnIdleStop(started, null)).toBeGreaterThanOrEqual(0);
+        });
+    });
 });

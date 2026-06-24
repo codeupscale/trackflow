@@ -1,6 +1,7 @@
 # Idle "Discard" inflated the today total, then auto-resumed (now stops the timer)
 
-**Status:** ✅ FIXED (2026-06-24, `develop`)
+**Status:** ✅ FIXED (2026-06-24, `develop`) — two rounds; see "Round 2" below for the phantom
+re-adopt that survived the first fix.
 
 **Scope:** Desktop agent idle handling — today-total accumulation + Discard button product
 behavior. Backend/web are correct (server splits the entry properly).
@@ -61,11 +62,33 @@ which resume tracking.
 shortcut) was removed from the idle popup. Idle popup is now 3 actions: **Keep** (count idle,
 resume), **Reassign** (move idle to project, resume), **Discard** (remove idle, **stop**).
 
+## Round 2 — phantom re-adopt after the Discard→stop change (the dev.51 repro)
+
+After Round 1, QA on build `v1.0.41-dev.51` (built from the Round-1 merge) reported: worked ~3m
+→ idle → **Discard** → timer "started automatically and jumped to ~12m" (the full wall clock).
+The fix WAS in the binary, so the `"stop"` path itself was buggy.
+
+**Root cause:** the `"stop"` case (used by the Discard button and idle auto-stop) did a
+`reportIdleTime(discard)` + `stopTimer()` dance. `reportIdle` opens a **new** server entry and
+the code set `currentEntry = new_entry`, but that new entry has **no local `_localId`**. So
+`stopTimer()` — which closes the local row via `currentEntry._localId` — **skipped
+`saveLocalTimerStop()`**, leaving the **original** `timer_sessions` row OPEN. The next
+`reconcileTimerState()` re-read that open row and re-adopted it as a phantom live timer anchored
+at the **original** start → "restarted itself, jumped to full elapsed".
+
+**Fix:** the `"stop"` case no longer splits server-side. It simply stops the current entry
+**effective at idle-START**: `await stopTimer({ endedAtMs: effectiveIdleStartedAt || Date.now() })`.
+The original entry closes at idle-start (pre-idle work kept, idle + dialog/grace wait excluded),
+no new entry is created, no resume happens, and `stopTimer()` closes the original local row via
+`currentEntry._localId` (set on every normal start), so reconcile cannot re-adopt it. Correct
+for both the Discard button and auto-stop. Offline-safe (local stop + reconcile on reconnect).
+
 ## Verify
 
-- `cd desktop && npm test` — full suite green (489/489). Added 3 regression tests in
-  `timer-sync-invariants.test.js` pinning the discard today-total math (display excludes the
-  idle gap; the old idle-END formula would inflate by exactly the gap). Updated
+- `cd desktop && npm test` — full suite green (492/492). Regression tests in
+  `timer-sync-invariants.test.js`: Round 1 pins the today-total math (display excludes the idle
+  gap; old idle-END formula inflates by the gap); Round 2 pins the stop-at-idle-start math (kept
+  = pre-idle work, NOT wall clock; old path left ~full elapsed running). Updated
   `e2e/idle-alert.test.js` (Discard → `stop`; removed Stop-button cases).
 - Manual (`mirza.blade@yopmail.com`, dev): track ~16 min → go idle → wait in the dialog →
   **Discard** → timer **stops**, main window returns to Start, desktop total == portal total

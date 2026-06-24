@@ -4594,43 +4594,28 @@ async function handleIdleAction(
                 break;
 
             case "stop":
-                // P1-2: Deduct idle time BEFORE stopping the timer.
-                if (apiClient && currentEntry && effectiveIdleStartedAt) {
-                    try {
-                        const idleResult = await apiClient.reportIdleTime({
-                            time_entry_id: currentEntry.id,
-                            idle_started_at: new Date(
-                                effectiveIdleStartedAt,
-                            ).toISOString(),
-                            idle_ended_at: new Date().toISOString(),
-                            idle_seconds: idleDuration,
-                            action: "discard",
-                        });
-                        // Update local state to the new entry so stopTimer() closes it
-                        if (idleResult?.new_entry) {
-                            currentEntry = idleResult.new_entry;
-                            _cachedStartedAtMs = currentEntry?.started_at
-                                ? new Date(currentEntry.started_at).getTime()
-                                : null;
-                        }
-                    } catch (e) {
-                        console.error(
-                            "Failed to discard idle time before stop:",
-                            e.message,
-                        );
-                        offlineQueue?.add("idle_discard", {
-                            time_entry_id: currentEntry?.id,
-                            idle_started_at: new Date(
-                                effectiveIdleStartedAt,
-                            ).toISOString(),
-                            idle_ended_at: new Date().toISOString(),
-                            idle_seconds: idleDuration,
-                            action: "discard",
-                        });
-                    }
-                }
-                // B1 FIX: await stopTimer() — it's async and must complete before returning
-                await stopTimer();
+                // Discard idle time AND stop the timer (used by the "Discard Idle
+                // Time" button and by idle auto-stop).
+                //
+                // Do NOT split the session server-side first (the old reportIdle +
+                // stopTimer dance): reportIdle opens a NEW server entry and we set it
+                // as currentEntry, but that new entry has no local `_localId`, so
+                // stopTimer() skips saveLocalTimerStop() and leaves the ORIGINAL local
+                // timer_sessions row OPEN. reconcileTimerState() then re-reads that
+                // still-open row and re-adopts it as a phantom live timer anchored at
+                // the ORIGINAL start — the "timer restarted itself and jumped to the
+                // full elapsed" bug.
+                //
+                // Instead, simply STOP the current entry effective at idle-START. The
+                // idle period (and the dialog/grace wait) is excluded because the
+                // entry ends where the user was last active; pre-idle work is kept, no
+                // new entry is created, no resume happens, and stopTimer() closes the
+                // ORIGINAL local row via currentEntry._localId so reconcile cannot
+                // re-adopt it. Offline-safe: stopTimer() records the stop locally and
+                // reconciles on reconnect.
+                await stopTimer({
+                    endedAtMs: effectiveIdleStartedAt || Date.now(),
+                });
                 break;
         }
         // After idle is resolved: flush any pending offline data (heartbeats,
