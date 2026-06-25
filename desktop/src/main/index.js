@@ -726,6 +726,14 @@ let _idleActionInProgress = false;
 let _isHandlingIdleAction = false;
 // Timestamp when the idle alert window was shown (FIX D1) — used to exclude dialog wait from idle_seconds
 let _idleAlertShownAt = null;
+// DISPLAY-ONLY: seconds of idle that an OFFLINE reassign moved to another project but
+// the server split has not yet been applied (timer is offline). The local timer is
+// still anchored at the original start (we must NOT re-anchor offline — that breaks
+// the reconnect split and gets reverted by reconcile), so the live elapsed wrongly
+// includes the reassigned idle on the origin project. We subtract this from the
+// DISPLAYED total only; it touches no entry/session/reconcile state and is cleared
+// once the reassign syncs (reanchorFromOfflineIdle), or on stop/start.
+let _pendingOfflineReassignIdleSec = 0;
 // Tray click timestamp — used to suppress spurious blur events on macOS/Windows
 let _lastTrayClickAt = 0;
 // Cache parsed started_at timestamp to avoid re-parsing every second
@@ -1240,6 +1248,10 @@ function reanchorFromOfflineIdle(payload, newEntry) {
         _cachedStartedAtMs = new Date(newEntry.started_at).getTime();
         isTimerRunning = true;
         isTimerPaused = false;
+        // The offline reassign just synced and the anchor now sits at idle-end, so the
+        // display-only subtraction is no longer needed — clear it (otherwise the live
+        // total would under-count by the reassigned idle from here on).
+        _pendingOfflineReassignIdleSec = 0;
 
         // Open a fresh local session anchored at the new entry's start.
         const newLocalId = `local-${Date.now()}-${Math.random()
@@ -2179,7 +2191,11 @@ function buildTrayContextMenu() {
     // ── Status header ──────────────────────────────────────────────────────
     if (isTimerRunning && currentEntry) {
         const elapsed = _cachedStartedAtMs
-            ? Math.floor((Date.now() - _cachedStartedAtMs) / 1000)
+            ? Math.max(
+                  0,
+                  Math.floor((Date.now() - _cachedStartedAtMs) / 1000) -
+                      _pendingOfflineReassignIdleSec,
+              )
             : 0;
         const projectName = currentEntry.project?.name || "No Project";
         template.push(
@@ -2879,7 +2895,11 @@ function setupIPC() {
         // bug). On a successful fetch below this is overwritten with server values.
         const localSessionElapsed =
             isTimerRunning && _cachedStartedAtMs
-                ? Math.floor((Date.now() - _cachedStartedAtMs) / 1000)
+                ? Math.max(
+                      0,
+                      Math.floor((Date.now() - _cachedStartedAtMs) / 1000) -
+                          _pendingOfflineReassignIdleSec,
+                  )
                 : 0;
         let todayTotalForDisplay = isTimerRunning
             ? todayTotalCurrentProject + localSessionElapsed
@@ -3215,6 +3235,7 @@ async function startTimer(projectId = null) {
         isTimerRunning = true;
         isTimerPaused = false;
         todayTotalCurrentProject = 0;
+        _pendingOfflineReassignIdleSec = 0;
 
         // Try to sync with server (non-blocking for the user)
         try {
@@ -3506,6 +3527,7 @@ async function stopTimer(options = {}) {
         currentEntry = null;
         _cachedStartedAtMs = null;
         todayTotalCurrentProject = 0;
+        _pendingOfflineReassignIdleSec = 0;
         _lastScreenshotAt = null;
         touchLastActiveAt(localEndedAt);
         // FIX D7: Increment state version on successful stop
@@ -4163,7 +4185,9 @@ function startTrayTimer() {
         const currentElapsed = Math.floor(
             (clientNowMs - _cachedStartedAtMs) / 1000,
         );
-        const totalSeconds = todayTotalCurrentProject + currentElapsed;
+        const totalSeconds =
+            todayTotalCurrentProject +
+            Math.max(0, currentElapsed - _pendingOfflineReassignIdleSec);
         const formatted = formatTimeShort(totalSeconds);
         setTrayText(formatted);
         // L12: Only send IPC to renderer when window is visible — avoids wasted work
@@ -4595,6 +4619,19 @@ async function handleIdleAction(
                             e.message,
                         );
                         offlineQueue?.add("idle_discard", payload);
+                        // DISPLAY-ONLY: for an offline REASSIGN, the idle is moving to
+                        // another project but the server split won't apply until
+                        // reconnect. The local timer stays anchored at the original
+                        // start (re-anchoring offline breaks the reconnect split), so
+                        // the live total would wrongly grow on the origin project by
+                        // this idle. Subtract it from the displayed total until the
+                        // reassign syncs. (discard does not resume, so only reassign.)
+                        if (payload.action === "reassign") {
+                            _pendingOfflineReassignIdleSec = Math.max(
+                                0,
+                                idleSeconds,
+                            );
+                        }
                         if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
                             idleAlertWindow.webContents.send(
                                 "idle-action-error",
