@@ -445,4 +445,54 @@ describe("Timer sync invariants", () => {
             expect(reassignSeconds(idleStart, reassignClick) - oldReassigned).toBe(4 * 60);
         });
     });
+
+    // Mirrors isServerTimerOpen() + the reconcile branch guards in
+    // reconcileTimerState() (src/main/index.js). An idle-PAUSED server timer must be
+    // treated as an OPEN entry so reconcile ADOPTS it instead of pushing a duplicate
+    // start (which created a second overlapping entry and 409'd a queued offline
+    // reassign). See bugs/idle-reassign-offline-reconcile-duplicate.md.
+    describe("Reconcile must not push a duplicate start when the server timer is paused", () => {
+        function isServerTimerPaused(status) {
+            return status?.state === "paused" || status?.paused === true;
+        }
+        function isServerTimerOpen(status) {
+            return status?.running === true || isServerTimerPaused(status);
+        }
+        // Which reconcile branch fires for a locally-running timer with a local id.
+        function reconcileAction(serverStatus, isTimerRunning = true, hasLocalId = true) {
+            if (!isServerTimerOpen(serverStatus) && isTimerRunning && hasLocalId) {
+                return "push-start";
+            }
+            if (isServerTimerOpen(serverStatus) && isTimerRunning) {
+                return "adopt";
+            }
+            return "none";
+        }
+
+        const paused = { running: false, paused: true, state: "paused", entry: { id: "srv-1" } };
+        const running = { running: true, paused: false, state: "running", entry: { id: "srv-1" } };
+        const stopped = { running: false, paused: false, state: "stopped" };
+
+        test("a paused server timer is OPEN, not 'no timer'", () => {
+            expect(isServerTimerOpen(paused)).toBe(true);
+        });
+
+        test("paused server timer → ADOPT (never push a duplicate start)", () => {
+            expect(reconcileAction(paused)).toBe("adopt");
+        });
+
+        test("regression: the old raw !running guard would have pushed a duplicate", () => {
+            // Old branch condition was simply !serverStatus.running.
+            expect(!paused.running).toBe(true); // old guard → duplicate start
+            expect(!isServerTimerOpen(paused)).toBe(false); // new guard → no duplicate
+        });
+
+        test("running server timer → ADOPT", () => {
+            expect(reconcileAction(running)).toBe("adopt");
+        });
+
+        test("genuinely stopped server timer → still PUSH start", () => {
+            expect(reconcileAction(stopped)).toBe("push-start");
+        });
+    });
 });
