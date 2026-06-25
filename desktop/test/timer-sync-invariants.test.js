@@ -527,4 +527,41 @@ describe("Timer sync invariants", () => {
             expect(reconcileShouldRun({ mutationInProgress: true })).toBe(false);
         });
     });
+
+    // Mirrors the running-total display in index.js (tick / tray / get-timer-state):
+    // todayTotalCurrentProject + max(0, sessionElapsed - _pendingOfflineReassignIdleSec).
+    // After an OFFLINE reassign the local timer stays anchored at the original start
+    // (re-anchoring offline breaks the reconnect split), so sessionElapsed includes the
+    // reassigned idle on the origin project. The DISPLAY subtracts that idle until the
+    // reassign syncs — without touching any entry/session/reconcile state.
+    describe("Offline reassign: display subtracts the pending idle from the origin project", () => {
+        function displayTotal(todayTotalCurrentProject, sessionElapsed, pendingIdle) {
+            return todayTotalCurrentProject + Math.max(0, sessionElapsed - pendingIdle);
+        }
+
+        // prior BladeOp total = 0; session = 1m pre-idle + 6m idle + 1m post-idle anchored
+        // at original start; idle 6m reassigned to Smart Card offline.
+        const prior = 0;
+        const sessionElapsed = 1 * 60 + 6 * 60 + 1 * 60; // 480s from original start
+        const pendingIdle = 6 * 60;
+
+        test("excludes the reassigned idle while offline", () => {
+            // Shows pre-idle + post-idle = 2m on BladeOp, NOT the 8m wall clock.
+            expect(displayTotal(prior, sessionElapsed, pendingIdle)).toBe(2 * 60);
+        });
+
+        test("regression: without the subtraction the origin shows the full elapsed", () => {
+            expect(displayTotal(prior, sessionElapsed, 0)).toBe(8 * 60);
+        });
+
+        test("after sync (pending cleared) the normal total is shown", () => {
+            // reanchor sets the anchor to idle-end, so sessionElapsed becomes post-idle
+            // only and pending is 0.
+            expect(displayTotal(prior, 1 * 60, 0)).toBe(1 * 60);
+        });
+
+        test("never goes negative", () => {
+            expect(displayTotal(0, 10, 999)).toBe(0);
+        });
+    });
 });
