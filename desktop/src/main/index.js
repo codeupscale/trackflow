@@ -3642,6 +3642,15 @@ async function reconcileTimerState() {
         console.log("[Reconcile] Skipping — idle alert active");
         return;
     }
+    // START-RACE FIX: while startTimer() is mid-flight it has already written the
+    // local start and is calling the API itself (and will mark it synced). If a
+    // TimerSync tick drives reconcile in that ~150ms window, reconcile would ALSO
+    // push the still-"unsynced" start → a second, duplicate server entry (the
+    // 1-second straggler overlapping the real entry). Defer to startTimer.
+    if (_startTimerInProgress) {
+        console.log("[Reconcile] Skipping — startTimer in progress");
+        return;
+    }
     // BUG 3 FIX: Shared guard — reconcile and the startTimerSync loop must not
     // mutate timer state (currentEntry / _cachedStartedAtMs / isTimerRunning)
     // concurrently. Whichever runs first wins; the other defers to the next tick.
