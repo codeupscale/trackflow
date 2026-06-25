@@ -495,4 +495,36 @@ describe("Timer sync invariants", () => {
             expect(reconcileAction(stopped)).toBe("push-start");
         });
     });
+
+    // Mirrors the early-return guards in reconcileTimerState(). reconcile must DEFER
+    // while startTimer() is mid-flight — otherwise a TimerSync tick drives reconcile
+    // to push the just-written (still "unsynced") local start while startTimer is
+    // also creating it → a duplicate 1-second server entry at start.
+    describe("Reconcile defers while startTimer is in flight (no duplicate start)", () => {
+        function reconcileShouldRun({
+            idleActionInProgress = false,
+            idleActive = false,
+            startTimerInProgress = false,
+            mutationInProgress = false,
+        } = {}) {
+            if (idleActionInProgress) return false;
+            if (idleActive) return false;
+            if (startTimerInProgress) return false; // START-RACE FIX
+            if (mutationInProgress) return false;
+            return true;
+        }
+
+        test("skips while startTimer is in progress", () => {
+            expect(reconcileShouldRun({ startTimerInProgress: true })).toBe(false);
+        });
+
+        test("runs once startTimer has finished", () => {
+            expect(reconcileShouldRun({ startTimerInProgress: false })).toBe(true);
+        });
+
+        test("still skips for the existing guards (idle / mutation)", () => {
+            expect(reconcileShouldRun({ idleActive: true })).toBe(false);
+            expect(reconcileShouldRun({ mutationInProgress: true })).toBe(false);
+        });
+    });
 });
