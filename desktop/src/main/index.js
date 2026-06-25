@@ -3751,11 +3751,20 @@ async function reconcileTimerState() {
                 }
             }
         } else if (
-            !serverStatus.running &&
+            !isServerTimerOpen(serverStatus) &&
             isTimerRunning &&
             currentEntry?._localId
         ) {
-            // Server has no open entry but local does — push start with original timestamp
+            // Server has NEITHER a running NOR a paused entry, but local does — push
+            // start with the original timestamp.
+            //
+            // MUST use isServerTimerOpen() (running OR paused), not raw
+            // !serverStatus.running: an idle-PAUSED server timer is still an OPEN
+            // entry. Treating "paused" as "no timer" here pushed a DUPLICATE start on
+            // reconnect (a second overlapping entry) AND changed the Redis entry id —
+            // which then 409'd and DROPPED a queued offline reassign that still
+            // referenced the original entry. See
+            // bugs/idle-reassign-offline-reconcile-duplicate.md.
             console.log(
                 "[Reconcile] Server has no timer but local is running — pushing start",
             );
@@ -3793,12 +3802,15 @@ async function reconcileTimerState() {
             } catch (e) {
                 console.warn("[Reconcile] Push start failed:", e.message);
             }
-        } else if (serverStatus.running && isTimerRunning) {
-            // Both have open entries. BUG 2 FIX: the local started_at is immutable truth.
-            // Adopt the server ENTRY (id, project) so stops can target it, but only let
-            // the displayed start move EARLIER, never later — adoptServerStartedAt enforces
-            // "earlier-or-equal wins", so a skewed/wrong server now()-start can never make
-            // the visible timer jump backward.
+        } else if (isServerTimerOpen(serverStatus) && isTimerRunning) {
+            // Server has an OPEN entry (running OR idle-paused) and local is running.
+            // Adopt the server ENTRY (id, project) so stops AND any queued offline
+            // reassign target the SAME entry instead of pushing a duplicate. A paused
+            // entry is resumed by the self-heal below; binding currentEntry to it here
+            // is what lets the queued reassign match (no 409). BUG 2 FIX: the local
+            // started_at is immutable truth — adoptServerStartedAt enforces
+            // "earlier-or-equal wins", so a skewed/wrong server now()-start can never
+            // make the visible timer jump backward.
             currentEntry = {
                 ...serverStatus.entry,
                 _localId: currentEntry?._localId,
