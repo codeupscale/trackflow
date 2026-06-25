@@ -3439,8 +3439,17 @@ async function stopTimer(options = {}) {
         const stoppedProjectId = currentEntry?.project_id || null;
         const stoppedEntryId = currentEntry?.id || null;
         const isZeroDurationEntry = sessionElapsed < MIN_ENTRY_DURATION_SEC;
+        // DISPLAY-ONLY: if an offline reassign is pending, the session elapsed (anchored
+        // at the original start) still includes the idle being moved to another project.
+        // Subtract it from the DISPLAYED stopped total so it matches what the running
+        // timer showed (no jump-up on stop). The SQLite stop below keeps the FULL
+        // sessionElapsed — the server split on reconnect re-attributes it, and
+        // getTodayTotal() then drives the authoritative total. Captured before the
+        // state-reset clears _pendingOfflineReassignIdleSec.
+        const pendingIdleAtStop = _pendingOfflineReassignIdleSec;
         const localStoppedProjectTotal =
-            todayTotalCurrentProject + sessionElapsed;
+            todayTotalCurrentProject +
+            Math.max(0, sessionElapsed - pendingIdleAtStop);
         posthog.capture(
             currentEntry?.user_id || "unknown",
             "timer_stopped",
@@ -3581,7 +3590,9 @@ async function stopTimer(options = {}) {
                     // base (excludes the running session), so add the just-stopped
                     // session locally — otherwise the stopped display / get-timer-state
                     // would show 00:00:00 even though the time was saved (sleep auto-stop).
-                    todayTotalGlobal = (todayTotalGlobal || 0) + sessionElapsed;
+                    todayTotalGlobal =
+                        (todayTotalGlobal || 0) +
+                        Math.max(0, sessionElapsed - pendingIdleAtStop);
                 }
             }
             updateTrayTitle();

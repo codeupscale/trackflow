@@ -563,5 +563,14 @@ describe("Timer sync invariants", () => {
         test("never goes negative", () => {
             expect(displayTotal(0, 10, 999)).toBe(0);
         });
+
+        // stopTimer() uses the SAME subtraction for the stopped display so the total
+        // doesn't jump up on Stop while an offline reassign is pending.
+        test("stop display matches the running display (no jump on Stop)", () => {
+            const runningShown = displayTotal(prior, sessionElapsed, pendingIdle);
+            const stopShown = displayTotal(prior, sessionElapsed, pendingIdle); // localStoppedProjectTotal
+            expect(stopShown).toBe(runningShown);
+            expect(stopShown).toBe(2 * 60);
+        });
     });
 });

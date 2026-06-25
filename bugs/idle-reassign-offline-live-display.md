@@ -33,11 +33,15 @@ Cleared when the reassign syncs (`reanchorFromOfflineIdle`, which moves the anch
 makes the subtraction unnecessary), and on `stopTimer`/`startTimer`. The queued reassign and the
 reconnect split are unchanged — the data path that was already correct is untouched.
 
-## Known scope limit
+## Stop while offline (follow-up — fixed 2026-06-25)
 
-This covers the **running** display. If the user stops while still offline, the stopped total can
-briefly include the idle until reconnect re-splits it (data still correct). Tracked as a follow-up
-if needed.
+Initially this covered only the running display, so **stopping** while offline jumped the shown
+total back up to include the reassigned idle ("app showed the total rather than the selected
+project"). `stopTimer()` now captures the pending idle and subtracts it from the DISPLAYED stopped
+totals (`localStoppedProjectTotal` and the offline `todayTotalGlobal` fallback) so the stop display
+matches the running display — no jump. The SQLite stop keeps the FULL `sessionElapsed`, so the
+reconnect split + `getTodayTotal()` still drive the authoritative total. Cleared by the state reset
+as before.
 
 ## Verify
 
