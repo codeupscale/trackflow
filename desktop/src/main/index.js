@@ -534,6 +534,8 @@ async function probeScreenRecordingPermission() {
                 );
                 _screenPermissionGranted = true;
                 saveScreenPermissionState(true);
+                // Clear any "permission needed" banner — permission is confirmed.
+                notifyPopup("permission-status", { granted: true });
                 return true;
             }
         }
@@ -1731,6 +1733,13 @@ async function initializeApp() {
     // an idle → Keep cycle the indicator stayed empty/stale.
     screenshotService.setScreenshotCapturedCallback(() => {
         _lastScreenshotAt = new Date().toISOString();
+        // A successful capture is definitive proof that Screen Recording permission
+        // is granted — clear the "permission needed" banner. macOS's
+        // getMediaAccessStatus() is unreliable for ad-hoc-signed builds and the
+        // banner otherwise stays up forever once shown (it was only hidden by the
+        // one-shot checkPermission() on load), even after the user grants permission.
+        _screenPermissionGranted = true;
+        notifyPopup("permission-status", { granted: true });
         if (popupWindow && !popupWindow.isDestroyed()) {
             popupWindow.webContents.send("activity-update", {
                 activityScore: activityMonitor
