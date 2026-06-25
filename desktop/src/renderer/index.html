@@ -52,6 +52,16 @@
       justify-content: center;
       gap: 6px;
     }
+
+    /* Secondary, non-ticking total: sum of all projects today (server-synced). */
+    .total-sum {
+      font-size: 11px;
+      color: var(--text-muted);
+      opacity: 0.75;
+      margin-top: 3px;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.3px;
+    }
     .dot {
       display: inline-block;
       width: 8px;
@@ -424,6 +434,7 @@
           <span class="dot gray" id="statusDot" aria-hidden="true"></span>
           <span id="statusText">Stopped</span>
         </div>
+        <div class="total-sum" id="totalSumDisplay" aria-live="polite">Today, all projects: 00:00:00</div>
       </div>
 
       <!-- Custom-styled select — identical on all platforms -->

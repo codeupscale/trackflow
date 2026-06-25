@@ -37,8 +37,24 @@ function showNotification(msg) {
 }
 
 const timerDisplay = document.getElementById('timerDisplay');
+const totalSumDisplay = document.getElementById('totalSumDisplay');
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
+
+// Secondary, NON-ticking total: sum of all projects today (server-synced
+// `todayTotalGlobal`). Only updated when the main process sends a fresh value
+// (start / stop / keep / discard / reassign / sync / network change), never on the
+// per-second tick's own counting — so it shows a stable sum, not a climbing timer.
+let _lastTotalSumSeconds = null;
+function updateTotalSum(seconds) {
+  if (seconds == null || Number.isNaN(seconds)) return;
+  const s = Math.max(0, Math.floor(seconds));
+  if (s === _lastTotalSumSeconds) return;
+  _lastTotalSumSeconds = s;
+  if (totalSumDisplay) {
+    totalSumDisplay.textContent = `Today, all projects: ${formatTime(s)}`;
+  }
+}
 const startBtn = document.getElementById('startBtn');
 const startBtnText = document.getElementById('startBtnText');
 const stopBtn = document.getElementById('stopBtn');
@@ -202,6 +218,9 @@ function startTicking() {
       if (!isRunning) return;
       elapsedSeconds = data.totalSeconds;
       timerDisplay.textContent = data.formatted;
+      // Non-ticking all-projects total — value is stable across ticks (it's the
+      // server-synced sum), so this does not climb every second.
+      updateTotalSum(data.todayTotalGlobal);
       // Update activity and connection status from tick data
       if (data.activityScore != null) updateActivityDisplay(data.activityScore);
       if (data.lastScreenshotAt) _lastScreenshotAt = data.lastScreenshotAt;
@@ -221,6 +240,7 @@ async function syncTimerState() {
     const selectedProjectId = projectSelect.value || null;
     const state = await window.trackflow.getTimerState(selectedProjectId);
     todayTotalBase = state.todayTotal ?? 0;
+    updateTotalSum(state.todayTotalGlobal);
     if (state.isRunning) {
       setStartedAt(state.entry?.started_at || null);
       const currentElapsed = state.elapsed || calcElapsedFromStartedAt();
@@ -606,6 +626,7 @@ window.trackflow.onTimerStopped((data) => {
     todayTotalBase = data.todayTotal;
   } else { syncTimerState(); return; }
   elapsedSeconds = todayTotalBase;
+  updateTotalSum(data.todayTotalGlobal);
   updateDisplay(false);
 });
 

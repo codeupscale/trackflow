@@ -1777,6 +1777,7 @@ async function initializeApp() {
                     notifyPopup("timer-stopped", {
                         entry: null,
                         todayTotal: serverTotal,
+                        todayTotalGlobal: serverTotal,
                     });
                 }
             } catch {
@@ -2120,6 +2121,7 @@ async function initializeApp() {
                     notifyPopup("timer-stopped", {
                         entry: null,
                         todayTotal: globalTotal,
+                        todayTotalGlobal: globalTotal,
                     });
                 }
             } catch {}
@@ -2985,6 +2987,8 @@ function setupIPC() {
             entry: currentEntry,
             elapsed: elapsedForState,
             todayTotal: todayTotalForDisplay,
+            // Non-ticking all-projects sum for the secondary field.
+            todayTotalGlobal,
         };
     });
 
@@ -3551,6 +3555,11 @@ async function stopTimer(options = {}) {
         notifyPopup("timer-stopped", {
             entry: null,
             todayTotal: localStoppedProjectTotal,
+            // All-projects sum including the just-stopped session (the async block
+            // below refreshes todayTotalGlobal from the server and re-emits).
+            todayTotalGlobal:
+                (todayTotalGlobal || 0) +
+                Math.max(0, sessionElapsed - pendingIdleAtStop),
         });
 
         // Post-stop async work (non-blocking)
@@ -3615,6 +3624,8 @@ async function stopTimer(options = {}) {
             notifyPopup("timer-stopped", {
                 entry: result?.entry ?? null,
                 todayTotal: todayTotalForPopup,
+                // Refreshed all-projects sum (server-authoritative when online).
+                todayTotalGlobal,
             });
         })().catch(() => {});
 
@@ -4210,6 +4221,10 @@ function startTrayTimer() {
             popupWindow.webContents.send("timer-tick", {
                 totalSeconds,
                 formatted,
+                // Non-ticking all-projects sum for the secondary field. This is the
+                // server-synced completed total (excludes the live running session),
+                // so it stays stable across ticks instead of climbing every second.
+                todayTotalGlobal,
                 activityScore: activityMonitor
                     ? activityMonitor.getCurrentScore()
                     : 0,
