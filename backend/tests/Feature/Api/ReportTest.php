@@ -104,10 +104,8 @@ class ReportTest extends TestCase
             ->assertJsonStructure(['projects']);
     }
 
-    public function test_can_request_export(): void
+    public function test_can_export_csv_synchronously(): void
     {
-        \Illuminate\Support\Facades\Queue::fake();
-
         $this->actingAs($this->owner, 'sanctum');
 
         $response = $this->postJson('/api/v1/reports/export', [
@@ -117,10 +115,11 @@ class ReportTest extends TestCase
             'date_to' => now()->toDateString(),
         ]);
 
-        $response->assertStatus(202)
-            ->assertJsonStructure(['job_id']);
-
-        \Illuminate\Support\Facades\Queue::assertPushed(\App\Jobs\GenerateReportJob::class);
+        $response->assertOk();
+        $this->assertStringContainsString('text/csv', $response->headers->get('Content-Type'));
+        $this->assertStringContainsString('attachment', $response->headers->get('Content-Disposition'));
+        // Human-readable header, never raw "Total Seconds".
+        $this->assertStringContainsString('Time Utilized', $response->getContent());
     }
 
     public function test_employee_cannot_access_payroll(): void

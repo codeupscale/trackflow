@@ -421,10 +421,16 @@ class AttendanceServiceTest extends TestCase
             'date' => '2026-03-18',
         ]);
 
-        $result = $this->service->getTeamAttendance($org->id, []);
+        // Roster-merge: every active employee gets a row for the day. user1 + user2
+        // have real records; admin is synthesised as absent → full roster of 3.
+        $result = $this->service->getTeamAttendance($org->id, [
+            'start_date' => '2026-03-18',
+            'end_date' => '2026-03-18',
+        ]);
 
-        $this->assertEquals(2, $result->total());
-        $this->assertTrue($result->first()->relationLoaded('user'));
+        $this->assertEquals(3, $result->total());
+        $this->assertArrayHasKey('user', $result->items()[0]);
+        $this->assertArrayHasKey('name', $result->items()[0]['user']);
     }
 
     public function test_get_team_attendance_filters_by_user_id(): void
@@ -447,9 +453,14 @@ class AttendanceServiceTest extends TestCase
             'date' => '2026-03-18',
         ]);
 
-        $result = $this->service->getTeamAttendance($org->id, ['user_id' => $user1->id]);
+        $result = $this->service->getTeamAttendance($org->id, [
+            'user_id' => $user1->id,
+            'start_date' => '2026-03-18',
+            'end_date' => '2026-03-18',
+        ]);
 
         $this->assertEquals(1, $result->total());
+        $this->assertEquals($user1->id, $result->items()[0]['user_id']);
     }
 
     // ── Get Attendance Summary ──────────────────────────
