@@ -21,6 +21,7 @@
 - `ReportController::export()` now generates the file **synchronously** and streams it back as a download (`text/csv` / `application/pdf` with `Content-Disposition: attachment`). No queue/S3 dependency.
 - `user_id` is validated (`nullable|uuid`), employees are forced to their own id, and it is passed to `summary` (the user-scoped report type; team/projects/payroll/attendance stay org-wide).
 - CSV/PDF generation extracted into `App\Support\ReportExportFormatter` (shared by the controller and the now-consistent `GenerateReportJob`).
+- **Frontend download trigger hardened (2026-06-30 follow-up):** verified end-to-end on dev that the API returns a correct `text/csv` blob (HTTP 200 + `Content-Disposition: attachment`), but the browser still downloaded nothing. Root cause: `handleExport` called `window.URL.revokeObjectURL(url)` synchronously right after `link.click()`, which aborts the download in some browsers. Extracted a shared `triggerDownload()` helper that defers cleanup (`setTimeout`), sets the blob MIME type, and a `readBlobError()` that reads the blob error body so failures surface the real server message instead of a silent no-op.
 
 ## Verify
 
