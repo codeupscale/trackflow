@@ -179,6 +179,42 @@ function activityBarColor(percent: number): string {
   return 'bg-red-500';
 }
 
+// Trigger a browser download from a blob/binary payload. Cleanup is deferred so the
+// browser has actually started the download — revoking the object URL synchronously
+// right after click() aborts the download in some browsers ("nothing happens").
+function triggerDownload(data: BlobPart, filename: string, mime: string) {
+  const blob = data instanceof Blob ? data : new Blob([data], { type: mime });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.rel = 'noopener';
+  document.body.appendChild(link);
+  link.click();
+  setTimeout(() => {
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  }, 1500);
+}
+
+// When an export fails, the error body is a Blob (responseType: 'blob'); read it back
+// as JSON so we can surface the real server message instead of a generic toast.
+async function readBlobError(err: unknown): Promise<string | null> {
+  const data = (err as { data?: unknown })?.data ?? (err as { response?: { data?: unknown } })?.response?.data;
+  if (data instanceof Blob) {
+    try {
+      const text = await data.text();
+      return (JSON.parse(text) as { message?: string })?.message ?? null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof data === 'object' && data && 'message' in data) {
+    return String((data as { message?: unknown }).message ?? '') || null;
+  }
+  return null;
+}
+
 // ─── Legacy report builder helpers ────────────────────────────────
 
 function transformReportResponse(type: ReportType, raw: Record<string, unknown>): ReportData {
@@ -446,20 +482,14 @@ export default function ReportsPage() {
         },
         { responseType: 'blob' }
       );
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute(
-        'download',
-        `report-${reportType}-${builderDateFrom}-to-${builderDateTo}.${exportFormat}`
+      triggerDownload(
+        res.data,
+        `report-${reportType}-${builderDateFrom}-to-${builderDateTo}.${exportFormat}`,
+        exportFormat === 'pdf' ? 'application/pdf' : 'text/csv'
       );
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
       toast.success(`Report exported as ${exportFormat.toUpperCase()}`);
-    } catch {
-      toast.error('Failed to export report');
+    } catch (err) {
+      toast.error((await readBlobError(err)) ?? 'Failed to export report');
     } finally {
       setIsExporting(null);
     }
@@ -478,17 +508,10 @@ export default function ReportsPage() {
         },
         { responseType: 'blob' }
       );
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `report-${dateFrom}-to-${dateTo}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
+      triggerDownload(res.data, `report-${dateFrom}-to-${dateTo}.csv`, 'text/csv');
       toast.success('Report exported as CSV');
-    } catch {
-      toast.error('Failed to export report');
+    } catch (err) {
+      toast.error((await readBlobError(err)) ?? 'Failed to export report');
     } finally {
       setIsExporting(null);
     }
