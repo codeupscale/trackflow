@@ -3,13 +3,13 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
-use App\Jobs\GenerateReportJob;
 use App\Services\ReportService;
+use App\Support\ReportExportFormatter;
 use App\Support\TimezoneAwareDateRange;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Str;
 
 class ReportController extends Controller
 {
@@ -143,31 +143,48 @@ class ReportController extends Controller
         return response()->json($data);
     }
 
-    // REPT-06: Export
-    public function export(Request $request): JsonResponse
+    // REPT-06: Export — generates the file synchronously and streams it back as a
+    // download. Honors the optional single-user filter for user-scoped report types.
+    public function export(Request $request): Response
     {
         $request->validate([
             'type' => 'required|in:summary,team,projects,payroll,attendance',
             'format' => 'required|in:pdf,csv',
             'date_from' => 'required|date',
             'date_to' => 'required|date|after_or_equal:date_from',
+            'user_id' => 'nullable|uuid',
         ]);
+
+        $user = $request->user();
+        $orgId = $user->organization_id;
+
+        // Employees can only ever export their own data.
+        $userId = $user->isEmployee() ? $user->id : $request->user_id;
 
         [$dateFrom, $dateTo] = $this->parseDateRange($request);
 
-        $jobId = Str::uuid()->toString();
+        // summary is user-scoped; team/projects/payroll/attendance are org-wide.
+        $data = match ($request->type) {
+            'summary' => $this->reportService->summary($orgId, $userId, $dateFrom, $dateTo),
+            'team' => $this->reportService->team($orgId, $dateFrom, $dateTo),
+            'projects' => $this->reportService->projects($orgId, $dateFrom, $dateTo),
+            'payroll' => $this->reportService->payroll($orgId, $dateFrom, $dateTo),
+            'attendance' => $this->reportService->attendance($orgId, $dateFrom, $dateTo),
+        };
 
-        GenerateReportJob::dispatch(
-            $jobId,
-            $request->user()->organization_id,
-            $request->user()->id,
-            $request->type,
-            $request->format,
-            $dateFrom,
-            $dateTo
-        );
+        $filename = "report-{$request->type}-{$request->date_from}-to-{$request->date_to}";
 
-        return response()->json(['job_id' => $jobId], 202);
+        if ($request->format === 'csv') {
+            return response(ReportExportFormatter::csv($request->type, $data), 200, [
+                'Content-Type' => 'text/csv; charset=UTF-8',
+                'Content-Disposition' => "attachment; filename=\"{$filename}.csv\"",
+            ]);
+        }
+
+        return response(ReportExportFormatter::pdf($request->type, $data, $request->date_from, $request->date_to), 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => "attachment; filename=\"{$filename}.pdf\"",
+        ]);
     }
 
     // REPT-07: Payroll

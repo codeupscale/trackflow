@@ -21,17 +21,19 @@
 
     @if($type === 'summary' && isset($data['daily']))
         <div class="summary">
-            Total Hours: <span>{{ round(($data['total_seconds'] ?? 0) / 3600, 2) }}</span> |
+            Time Utilized: <span>{{ round(($data['total_seconds_tracked'] ?? 0) / 3600, 2) }}h</span> |
+            Idle: <span>{{ round(($data['total_seconds_idle'] ?? 0) / 3600, 2) }}h</span> |
             Avg Activity: <span>{{ round($data['avg_activity'] ?? 0) }}%</span> |
             Total Entries: <span>{{ $data['total_entries'] ?? 0 }}</span> |
             Earnings: <span>${{ number_format($data['total_earnings'] ?? 0, 2) }}</span>
         </div>
         <table>
-            <tr><th>Date</th><th>Hours</th><th>Activity %</th><th>Entries</th></tr>
+            <tr><th>Date</th><th>Time Utilized (h)</th><th>Idle (h)</th><th>Activity %</th><th>Entries</th></tr>
             @foreach($data['daily'] as $row)
             <tr>
                 <td>{{ $row->date ?? ($row['date'] ?? '') }}</td>
-                <td>{{ round(($row->total_seconds ?? ($row['total_seconds'] ?? 0)) / 3600, 2) }}</td>
+                <td>{{ round(($row->tracked_seconds ?? ($row['tracked_seconds'] ?? 0)) / 3600, 2) }}</td>
+                <td>{{ round(($row->idle_seconds ?? ($row['idle_seconds'] ?? 0)) / 3600, 2) }}</td>
                 <td>{{ round($row->activity_score_avg ?? ($row['activity_score_avg'] ?? 0)) }}%</td>
                 <td>{{ $row->entry_count ?? ($row['entry_count'] ?? 0) }}</td>
             </tr>
@@ -39,12 +41,13 @@
         </table>
     @elseif($type === 'team' && is_array($data))
         <table>
-            <tr><th>Name</th><th>Email</th><th>Hours</th><th>Activity %</th><th>Entries</th></tr>
+            <tr><th>Name</th><th>Email</th><th>Time Utilized (h)</th><th>Idle (h)</th><th>Activity %</th><th>Entries</th></tr>
             @foreach($data as $row)
             <tr>
                 <td>{{ $row['user']['name'] ?? '' }}</td>
                 <td>{{ $row['user']['email'] ?? '' }}</td>
-                <td>{{ round(($row['total_seconds'] ?? 0) / 3600, 2) }}</td>
+                <td>{{ round((max(($row['total_seconds'] ?? 0) - ($row['seconds_idle'] ?? 0), 0)) / 3600, 2) }}</td>
+                <td>{{ round(($row['seconds_idle'] ?? 0) / 3600, 2) }}</td>
                 <td>{{ $row['avg_activity'] ?? 0 }}%</td>
                 <td>{{ $row['entry_count'] ?? 0 }}</td>
             </tr>
@@ -65,10 +68,10 @@
         </table>
     @elseif($type === 'attendance' && is_array($data))
         <table>
-            <tr><th>User ID</th><th>Date</th><th>First Seen</th><th>Last Seen</th><th>Hours</th></tr>
+            <tr><th>Employee</th><th>Date</th><th>First Seen</th><th>Last Seen</th><th>Time Utilized (h)</th></tr>
             @foreach($data as $row)
             <tr>
-                <td>{{ $row->user_id ?? ($row['user_id'] ?? '') }}</td>
+                <td>{{ $row->user_name ?? ($row['user_name'] ?? '') }}</td>
                 <td>{{ $row->date ?? ($row['date'] ?? '') }}</td>
                 <td>{{ $row->first_seen ?? ($row['first_seen'] ?? '') }}</td>
                 <td>{{ $row->last_seen ?? ($row['last_seen'] ?? '') }}</td>
@@ -77,19 +80,15 @@
             @endforeach
         </table>
     @elseif($type === 'projects' && is_array($data))
-        @foreach($data as $project)
-        <h3 style="color: {{ $project['color'] ?? '#333' }}">{{ $project['project_name'] ?? 'Unknown' }}</h3>
         <table>
-            <tr><th>Task</th><th>Hours</th><th>Entries</th></tr>
-            @foreach($project['tasks'] ?? [] as $task)
+            <tr><th>Project</th><th>Time Utilized (h)</th></tr>
+            @foreach($data as $project)
             <tr>
-                <td>{{ $task['task_name'] ?? 'No task' }}</td>
-                <td>{{ round(($task['total_seconds'] ?? 0) / 3600, 2) }}</td>
-                <td>{{ $task['entry_count'] ?? 0 }}</td>
+                <td style="color: {{ $project['color'] ?? '#333' }}">{{ $project['name'] ?? 'Unknown' }}</td>
+                <td>{{ $project['total_hours'] ?? round(($project['total_seconds'] ?? 0) / 3600, 2) }}</td>
             </tr>
             @endforeach
         </table>
-        @endforeach
     @else
         <pre>{{ json_encode($data, JSON_PRETTY_PRINT) }}</pre>
     @endif

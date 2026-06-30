@@ -242,36 +242,179 @@ class AttendanceService
 
     /**
      * Get team attendance: paginated, filterable by department, user, date range, status.
-     * Returns records with user name/email.
+     *
+     * Returns a COMPLETE roster: every active employee gets a row for each day in the
+     * range. Where a generated attendance_record exists it is used verbatim (so present /
+     * half-day / late / overtime stay accurate); where one is missing the row is
+     * synthesised with a derived non-worked status (holiday > on_leave > weekend > absent).
+     *
+     * This guarantees absent staff always appear, independent of whether the daily
+     * GenerateDailyAttendanceJob has run for the date yet (e.g. the current day, or
+     * environments where the scheduler is disabled).
      */
     public function getTeamAttendance(string $orgId, array $filters): LengthAwarePaginator
     {
-        $query = AttendanceRecord::where('organization_id', $orgId)
-            ->with(['user:id,name,email,avatar_url', 'shift:id,name,start_time,end_time']);
+        $perPage = (int) ($filters['per_page'] ?? 25);
+        $page = \Illuminate\Pagination\LengthAwarePaginator::resolveCurrentPage();
+
+        // Resolve range (default to today). Cap span to avoid runaway synthesis.
+        $end = !empty($filters['end_date']) ? Carbon::parse($filters['end_date']) : Carbon::now();
+        $start = !empty($filters['start_date']) ? Carbon::parse($filters['start_date']) : $end->copy();
+        if ($start->gt($end)) {
+            $start = $end->copy();
+        }
+        $maxDays = 92;
+        if ($start->diffInDays($end) > $maxDays) {
+            $start = $end->copy()->subDays($maxDays);
+        }
+        $startDate = $start->toDateString();
+        $endDate = $end->toDateString();
+
+        // Active employees (filtered by user / department).
+        $usersQuery = User::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->where('is_active', true);
 
         if (!empty($filters['user_id'])) {
-            $query->where('user_id', $filters['user_id']);
+            $usersQuery->where('id', $filters['user_id']);
         }
 
         if (!empty($filters['department_id'])) {
-            $query->whereHas('user.employeeProfile', function ($q) use ($filters) {
+            $usersQuery->whereHas('employeeProfile', function ($q) use ($filters) {
                 $q->where('department_id', $filters['department_id']);
             });
         }
 
-        if (!empty($filters['start_date'])) {
-            $query->where('date', '>=', $filters['start_date']);
+        $users = $usersQuery->orderBy('name')->get(['id', 'name', 'email', 'avatar_url']);
+        $userIds = $users->pluck('id');
+
+        if ($userIds->isEmpty()) {
+            return new \Illuminate\Pagination\LengthAwarePaginator([], 0, $perPage, $page, [
+                'path' => \Illuminate\Pagination\LengthAwarePaginator::resolveCurrentPath(),
+            ]);
         }
 
-        if (!empty($filters['end_date'])) {
-            $query->where('date', '<=', $filters['end_date']);
+        // Existing generated records in range, keyed by "user_id|YYYY-MM-DD".
+        $existing = AttendanceRecord::where('organization_id', $orgId)
+            ->whereIn('user_id', $userIds)
+            ->whereBetween('date', [$startDate, $endDate])
+            ->with(['user:id,name,email,avatar_url', 'shift:id,name,start_time,end_time'])
+            ->get()
+            ->keyBy(fn ($r) => $r->user_id . '|' . Carbon::parse($r->date)->toDateString());
+
+        // Prefetch holidays (set of date strings) and approved leaves overlapping the range.
+        $holidays = PublicHoliday::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->whereBetween('date', [$startDate, $endDate])
+            ->get()
+            ->map(fn ($h) => Carbon::parse($h->date)->toDateString())
+            ->flip();
+
+        $leaves = LeaveRequest::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->whereIn('user_id', $userIds)
+            ->where('status', 'approved')
+            ->where('start_date', '<=', $endDate)
+            ->where('end_date', '>=', $startDate)
+            ->get(['user_id', 'start_date', 'end_date'])
+            ->groupBy('user_id');
+
+        // Enumerate dates in range.
+        $dates = [];
+        for ($d = $start->copy(); $d->lte($end); $d->addDay()) {
+            $dates[] = $d->toDateString();
         }
 
+        $rows = [];
+        foreach ($users as $u) {
+            foreach ($dates as $dateStr) {
+                $record = $existing->get($u->id . '|' . $dateStr);
+                if ($record) {
+                    $rows[] = $record->toArray();
+                    continue;
+                }
+
+                $rows[] = [
+                    'id' => "synthetic-{$u->id}-{$dateStr}",
+                    'organization_id' => $orgId,
+                    'user_id' => $u->id,
+                    'date' => $dateStr,
+                    'shift_id' => null,
+                    'expected_start' => null,
+                    'expected_end' => null,
+                    'first_seen' => null,
+                    'last_seen' => null,
+                    'clock_in' => null,
+                    'clock_out' => null,
+                    'total_hours' => 0,
+                    'status' => $this->deriveAbsentStatus($u->id, $dateStr, $holidays, $leaves),
+                    'late_minutes' => 0,
+                    'early_departure_minutes' => 0,
+                    'overtime_minutes' => 0,
+                    'overtime_hours' => 0,
+                    'is_regularized' => false,
+                    'is_synthetic' => true,
+                    'user' => [
+                        'id' => $u->id,
+                        'name' => $u->name,
+                        'email' => $u->email,
+                        'avatar_url' => $u->avatar_url,
+                    ],
+                    'shift' => null,
+                ];
+            }
+        }
+
+        // Optional status filter applied across both real and synthesised rows.
         if (!empty($filters['status'])) {
-            $query->where('status', $filters['status']);
+            $rows = array_values(array_filter($rows, fn ($r) => $r['status'] === $filters['status']));
         }
 
-        return $query->orderByDesc('date')->paginate($filters['per_page'] ?? 25);
+        // Sort by date desc, then employee name asc.
+        usort($rows, function ($a, $b) {
+            $cmp = strcmp($b['date'], $a['date']);
+            if ($cmp !== 0) {
+                return $cmp;
+            }
+            return strcmp($a['user']['name'] ?? '', $b['user']['name'] ?? '');
+        });
+
+        $total = count($rows);
+        $items = array_slice($rows, ($page - 1) * $perPage, $perPage);
+
+        return new \Illuminate\Pagination\LengthAwarePaginator($items, $total, $perPage, $page, [
+            'path' => \Illuminate\Pagination\LengthAwarePaginator::resolveCurrentPath(),
+        ]);
+    }
+
+    /**
+     * Derive the non-worked status for a day with no attendance record.
+     * Synthesised rows have zero worked hours, so they can only be
+     * holiday / on_leave / weekend / absent (never present or half-day).
+     */
+    private function deriveAbsentStatus(string $userId, string $dateStr, $holidays, $leavesByUser): string
+    {
+        if ($holidays->has($dateStr)) {
+            return 'holiday';
+        }
+
+        $userLeaves = $leavesByUser->get($userId);
+        if ($userLeaves) {
+            foreach ($userLeaves as $leave) {
+                $from = Carbon::parse($leave->start_date)->toDateString();
+                $to = Carbon::parse($leave->end_date)->toDateString();
+                if ($dateStr >= $from && $dateStr <= $to) {
+                    return 'on_leave';
+                }
+            }
+        }
+
+        $dow = strtolower(Carbon::parse($dateStr)->format('l'));
+        if (in_array($dow, ['saturday', 'sunday'])) {
+            return 'weekend';
+        }
+
+        return 'absent';
     }
 
     /**

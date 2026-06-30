@@ -186,15 +186,17 @@ function transformReportResponse(type: ReportType, raw: Record<string, unknown>)
     case 'summary': {
       const daily = (raw.daily || []) as Record<string, unknown>[];
       return {
-        columns: ['date', 'total_seconds', 'activity_score_avg', 'entry_count'],
+        // "Time Utilized" = tracked working time (idle shown separately).
+        columns: ['date', 'tracked_seconds', 'idle_seconds', 'activity_score_avg', 'entry_count'],
         rows: daily.map((d) => ({
           date: String(d.date ?? ''),
-          total_seconds: Number(d.total_seconds ?? 0),
+          tracked_seconds: Number(d.tracked_seconds ?? d.total_seconds ?? 0),
+          idle_seconds: Number(d.idle_seconds ?? 0),
           activity_score_avg: Number(d.activity_score_avg ?? 0),
           entry_count: Number(d.entry_count ?? 0),
         })),
         summary: {
-          total_hours: Number(raw.total_seconds ?? 0) / 3600,
+          total_hours: Number(raw.total_seconds_tracked ?? raw.total_seconds ?? 0) / 3600,
           average_activity: Math.round(Number(raw.avg_activity ?? 0)),
           total_amount: Number(raw.total_earnings ?? 0),
           idle_hours: Number(raw.idle_hours ?? 0),
@@ -507,6 +509,17 @@ export default function ReportsPage() {
   };
 
   const formatColumnName = (key: string) => {
+    const labels: Record<string, string> = {
+      tracked_seconds: 'Time Utilized',
+      total_seconds: 'Time Utilized',
+      idle_seconds: 'Idle Time',
+      duration_seconds: 'Duration',
+      estimated_seconds: 'Est. Time',
+      activity_score_avg: 'Activity',
+      avg_activity: 'Activity',
+      entry_count: 'Entries',
+    };
+    if (labels[key]) return labels[key];
     return key
       .replace(/_/g, ' ')
       .replace(/\b\w/g, (c) => c.toUpperCase());
