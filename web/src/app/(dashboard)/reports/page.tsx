@@ -315,6 +315,13 @@ export default function ReportsPage() {
   const [dateTo, setDateTo] = useState(() => getDateRange('7days').to);
   const [logsPage, setLogsPage] = useState(1);
 
+  // Gate date-dependent rendering until after mount to avoid SSR/client
+  // hydration mismatches from timezone-sensitive date initialization.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   // Reset logsPage when date range changes
   useEffect(() => {
     setLogsPage(1);
@@ -533,6 +540,19 @@ export default function ReportsPage() {
 
   // ── Early return for employees ──
   if (isEmployee) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="size-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  // Date state is seeded from `new Date()`, which the SSR pass evaluates in the
+  // server timezone (UTC) and the browser re-evaluates in the user's timezone.
+  // Near midnight those produce different date strings, causing a hydration
+  // mismatch (React #418). Render a stable placeholder until mounted so the
+  // server HTML and the first client render are identical.
+  if (!mounted) {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 className="size-8 animate-spin text-muted-foreground" />
@@ -826,8 +846,8 @@ export default function ReportsPage() {
           <CardContent>
             {analyticsLoading ? (
               <div className="flex items-end gap-2 h-[280px] pb-8">
-                {Array.from({ length: 7 }).map((_, i) => (
-                  <Skeleton key={i} className="flex-1 rounded" style={{ height: `${40 + Math.random() * 60}%` }} />
+                {[65, 85, 50, 95, 70, 45, 80].map((h, i) => (
+                  <Skeleton key={i} className="flex-1 rounded" style={{ height: `${h}%` }} />
                 ))}
               </div>
             ) : analyticsError ? (
