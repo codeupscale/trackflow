@@ -285,6 +285,97 @@ class TimerServiceTest extends TestCase
         $this->assertEquals(3600, $status['today_total']);
     }
 
+    // ─── all_projects_today_total (global sum, never scoped) ─────────
+    // Regression: bugs/desktop-today-total-project-scoped-when-project-selected.md
+    // The desktop "Today, all projects" line + tray tooltip must never show a
+    // project-scoped total when a project is selected while the timer is stopped.
+
+    public function test_status_stopped_with_project_returns_scoped_today_total_but_global_all_projects_total(): void
+    {
+        $project = Project::factory()->create(['organization_id' => $this->org->id]);
+
+        // 1h on the selected project
+        TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'project_id' => $project->id,
+            'started_at' => now()->subHours(4),
+            'ended_at' => now()->subHours(3),
+            'duration_seconds' => 3600,
+            'type' => 'tracked',
+        ]);
+
+        // 1h on a different (null) project
+        TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'project_id' => null,
+            'started_at' => now()->subHours(2),
+            'ended_at' => now()->subHour(),
+            'duration_seconds' => 3600,
+            'type' => 'tracked',
+        ]);
+
+        $status = $this->service->status($project->id);
+
+        // today_total keeps historical scoped semantics.
+        $this->assertEquals(3600, $status['today_total']);
+        // all_projects_today_total must be the GLOBAL sum regardless of the project filter.
+        $this->assertArrayHasKey('all_projects_today_total', $status);
+        $this->assertEquals(7200, $status['all_projects_today_total']);
+        // project_today_total is now populated in the stopped branch (was 0 before).
+        $this->assertEquals(3600, $status['project_today_total']);
+    }
+
+    public function test_status_stopped_without_project_has_equal_today_and_all_projects_totals(): void
+    {
+        $project = Project::factory()->create(['organization_id' => $this->org->id]);
+
+        TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'project_id' => $project->id,
+            'started_at' => now()->subHours(2),
+            'ended_at' => now()->subHour(),
+            'duration_seconds' => 3600,
+            'type' => 'tracked',
+        ]);
+
+        $status = $this->service->status();
+
+        $this->assertEquals(3600, $status['today_total']);
+        $this->assertEquals(3600, $status['all_projects_today_total']);
+    }
+
+    public function test_status_running_all_projects_total_is_global_and_includes_elapsed(): void
+    {
+        $projectA = Project::factory()->create(['organization_id' => $this->org->id]);
+        $projectB = Project::factory()->create(['organization_id' => $this->org->id]);
+        $projectA->members()->attach($this->user->id);
+
+        // Completed 1h on project B (a DIFFERENT project than the one requested).
+        TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'project_id' => $projectB->id,
+            'started_at' => now()->subHours(3),
+            'ended_at' => now()->subHours(2),
+            'duration_seconds' => 3600,
+            'type' => 'tracked',
+        ]);
+
+        // Start a running timer on project A.
+        $this->service->start(['project_id' => $projectA->id]);
+
+        // Request status scoped to project A.
+        $status = $this->service->status($projectA->id);
+
+        // today_total is scoped to project A (only the running elapsed, ~0).
+        $this->assertLessThan(3600, $status['today_total']);
+        // all_projects_today_total includes project B's completed hour + A's elapsed.
+        $this->assertGreaterThanOrEqual(3600, $status['all_projects_today_total']);
+    }
+
     // ─── Multi-tenancy isolation ─────────────────────────────────────
 
     public function test_start_isolates_entries_by_organization(): void
