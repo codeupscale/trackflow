@@ -351,12 +351,36 @@ export default function DashboardPage() {
   }>;
 
   // ── Live tick for running entries (so duration counts up in real time) ──
+  // The displayed duration is DERIVED from started_at in getDisplayDuration() on
+  // every render — this interval only forces re-renders, it never accumulates a
+  // counter. Background tabs throttle/pause setInterval, so on refocus we force an
+  // immediate re-render via visibilitychange/focus; because the value is derived,
+  // that render snaps straight to the correct time with no visible jump.
   const [, setTick] = useState(0);
   const hasRunningEntry = timeEntries.some((e) => !e.ended_at);
   useEffect(() => {
     if (!hasRunningEntry) return;
     const id = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
+    const onFocusOrVisible = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        setTick((t) => t + 1);
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onFocusOrVisible);
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', onFocusOrVisible);
+    }
+    return () => {
+      clearInterval(id);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onFocusOrVisible);
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', onFocusOrVisible);
+      }
+    };
   }, [hasRunningEntry]);
 
   /** Display duration: for running entries, compute elapsed from started_at */

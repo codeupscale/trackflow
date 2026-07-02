@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Events\ScreenshotUploaded;
 use App\Models\Screenshot;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -78,6 +79,20 @@ class ProcessScreenshotJob implements ShouldQueue
             throw $e;
         } finally {
             if (file_exists($tmpInput)) @unlink($tmpInput);
+        }
+
+        // Broadcast AFTER processing is fully committed. Isolated from the try
+        // above and swallowed on failure: a momentarily-unreachable Reverb must
+        // never fail or retry the already-persisted job (the processed_at guard
+        // would early-return the retry and silently drop the event anyway). The
+        // web self-heals via its focus/interval refetch through the REST index.
+        try {
+            ScreenshotUploaded::dispatch($this->screenshot->refresh());
+        } catch (\Throwable $e) {
+            Log::warning('ProcessScreenshotJob: realtime broadcast failed (processing already committed)', [
+                'screenshot_id' => $this->screenshot->id,
+                'error'         => $e->getMessage(),
+            ]);
         }
     }
 

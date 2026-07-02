@@ -6,6 +6,7 @@
 .env.testing
 .phpactor.json
 .phpunit.result.cache
+backend/phpunit.local.xml
 /.fleet
 /.idea
 /.nova

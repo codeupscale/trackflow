@@ -155,26 +155,52 @@ describe('ActivityMonitor — Active-Seconds Scoring', () => {
     expect(score).toBeLessThanOrEqual(100);
   });
 
-  // ── getScoreForScreenshot ───────────────────────────────────────
+  // ── getScoreForScreenshot — ISSUE 3: trailing window aligned to capture ──
 
-  test('getScoreForScreenshot returns last completed interval score', async () => {
+  test('getScoreForScreenshot is 0 with no input near capture', () => {
+    monitor.start();
+    expect(monitor.getScoreForScreenshot()).toBe(0);
+  });
+
+  test('getScoreForScreenshot reflects input right before capture', () => {
+    monitor.start();
+    monitor._onKeydown(); // active second at capture moment
+    expect(monitor.getScoreForScreenshot()).toBeGreaterThan(0);
+  });
+
+  test('stale activity is pruned — quiet stretch before capture scores 0 (was showing a stale %)', () => {
+    monitor.start();
+    // Burst of activity right at the start...
+    monitor._onKeydown();
+    expect(monitor.getScoreForScreenshot()).toBeGreaterThan(0);
+
+    // ...then the user goes idle for longer than the trailing window. A screenshot
+    // taken now must NOT inherit the earlier burst (the QA bug: 0 input → 14%).
+    jest.advanceTimersByTime(31000);
+    expect(monitor.getScoreForScreenshot()).toBe(0);
+  });
+
+  test('light input just before capture yields a matching low nonzero % (was showing 0)', () => {
+    monitor.start();
+    // Quiet for most of the window, then a single active second right before capture.
+    jest.advanceTimersByTime(29000);
+    monitor._onKeydown();
+
+    const score = monitor.getScoreForScreenshot();
+    // The QA bug reported this case as 0%; it must now be a small nonzero value.
+    expect(score).toBeGreaterThan(0);
+    expect(score).toBeLessThanOrEqual(10);
+  });
+
+  test('rolling active-seconds persist across a heartbeat reset', async () => {
     jest.useRealTimers();
     monitor.start();
-
-    // Initially 0
-    expect(monitor.getScoreForScreenshot()).toBe(0);
-
-    // After a heartbeat, it should update
-    monitor.keyboardCount = 100;
-    monitor.mouseCount = 100;
-    monitor._activeSeconds.add(Math.floor(Date.now() / 1000));
-
+    monitor._onKeydown();
+    monitor._onClick();
+    // Heartbeat resets the per-interval set but must NOT wipe the rolling window.
     await monitor.sendHeartbeat();
-
-    // Score should now reflect the completed interval
-    const score = monitor.getScoreForScreenshot();
-    expect(score).toBeGreaterThanOrEqual(0);
-    expect(score).toBeLessThanOrEqual(100);
+    expect(monitor._activeSeconds.size).toBe(0);
+    expect(monitor.getScoreForScreenshot()).toBeGreaterThan(0);
     jest.useFakeTimers();
   }, 10000);
 
