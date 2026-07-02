@@ -603,8 +603,44 @@ let loginWindow = null;
 // Popup window size. Defined ONCE and shared by BOTH the initial creation and the
 // re-show reposition, so the two can never drift apart (the bug where the window
 // launched at one size and then resized itself on the next tray click).
-const POPUP_WIDTH = 320;
-const POPUP_HEIGHT = 400;
+// ── Popup sizing (Windows QA enhancement #10) ────────────────────────────────
+// QA asked for the popup to behave like a normal Windows app window (drag the
+// edges/corners to resize). Frameless windows on Windows support native edge
+// resizing when `resizable: true` + the default thick frame (WS_THICKFRAME) is
+// kept, so we only enable it there. macOS/Linux (incl. Wayland, where window
+// geometry is compositor-owned) stay at the fixed 320x400 design size — QA only
+// requested Windows and enabling elsewhere risks regressing the frameless tray
+// popup behaviour (blur-hide, positioning, DPI anti-shrink from issue #7).
+// The dimensions and clamp/resolve rules live in ./popup-size (unit-tested).
+const PopupSize = require("./popup-size");
+const POPUP_WIDTH = PopupSize.POPUP_WIDTH;
+const POPUP_HEIGHT = PopupSize.POPUP_HEIGHT;
+const POPUP_MIN_WIDTH = PopupSize.POPUP_MIN_WIDTH;
+const POPUP_MIN_HEIGHT = PopupSize.POPUP_MIN_HEIGHT;
+const POPUP_MAX_WIDTH = PopupSize.POPUP_MAX_WIDTH;
+const POPUP_MAX_HEIGHT = PopupSize.POPUP_MAX_HEIGHT;
+const IS_POPUP_RESIZABLE = process.platform === "win32";
+
+// Windows-only: the user's chosen size persisted in user-prefs.json. On every
+// other platform this always resolves to the fixed design size, so callers can
+// use it unconditionally without regressing macOS/Linux.
+function loadPopupSize() {
+    let persisted = null;
+    try {
+        persisted = loadUserPrefs().popupSize;
+    } catch {}
+    return PopupSize.resolvePopupSize(persisted, IS_POPUP_RESIZABLE);
+}
+
+function savePopupSize(width, height) {
+    if (!IS_POPUP_RESIZABLE) return;
+    try {
+        saveUserPrefsPatch({ popupSize: PopupSize.clampPopupSize(width, height) });
+    } catch (e) {
+        console.error("Failed to save popup size:", e.message);
+    }
+}
+
 let idleAlertWindow = null;
 // ISSUE 4 FIX: On multi-monitor setups the idle alert must appear on EVERY display
 // so it is never missed on the screen the user is actually looking at. `idleAlertWindow`
@@ -2561,8 +2597,14 @@ function showPopup() {
 
     if (popupWindow && !popupWindow.isDestroyed()) {
         // Reposition to primary display before showing (handles cases where a
-        // previous show placed it on an extended monitor)
-        _repositionToPrimaryDisplay(popupWindow, POPUP_WIDTH, POPUP_HEIGHT);
+        // previous show placed it on an extended monitor). On Windows the popup
+        // is user-resizable, so re-assert the persisted size (not the fixed
+        // design size) — otherwise the SHRINK/anti-drift setBounds below would
+        // snap a user-resized window back to 320x400 on every reshow. On
+        // macOS/Linux loadPopupSize() returns the fixed design size, so this is
+        // identical to the previous behaviour there.
+        const showSize = loadPopupSize();
+        _repositionToPrimaryDisplay(popupWindow, showSize.width, showSize.height);
         if (typeof popupWindow.moveTop === "function") {
             // Windows: moveTop() while a native <select> is open dismisses the
             // dropdown; only re-assert z-order on macOS where the tray popup
@@ -2608,21 +2650,24 @@ function showPopup() {
     // re-show reposition exactly (no launch-large / reshow-small jump). The earlier
     // bump to 380x520 was a workaround for a Windows dropdown clip that has since
     // been fixed separately (dropdown rebuild + pin-keepalive fixes).
-    const windowWidth = POPUP_WIDTH;
-    const windowHeight = POPUP_HEIGHT;
+    // On Windows, restore the user's last chosen size (clamped to min/max);
+    // everywhere else this resolves to the fixed POPUP_WIDTH/POPUP_HEIGHT.
+    const initialSize = loadPopupSize();
+    const windowWidth = initialSize.width;
+    const windowHeight = initialSize.height;
 
     // MULTI-MONITOR FIX: Always position on the PRIMARY display regardless of
     // which monitor the tray icon is on. Extended/secondary displays are excluded.
     // We still use the tray position to detect top-vs-bottom taskbar placement.
     const { x, y } = _calcPopupPosition(trayBounds, windowWidth, windowHeight);
 
-    popupWindow = new BrowserWindow({
+    const popupOptions = {
         width: windowWidth,
         height: windowHeight,
         x,
         y,
         frame: false,
-        resizable: false,
+        resizable: IS_POPUP_RESIZABLE,
         skipTaskbar: true,
         show: false,
         backgroundColor: "#0a0a0a", // Prevent white flash on all platforms
@@ -2633,25 +2678,65 @@ function showPopup() {
             sandbox: true,
             devTools: true,
         },
-    });
+    };
+
+    // Windows: enable native edge/corner resizing on the frameless popup.
+    // `thickFrame: true` (the default) keeps the WS_THICKFRAME window style that
+    // gives Chromium the resize borders and Aero-snap without drawing a caption
+    // bar. Min size pins the designed layout floor; max keeps it a compact
+    // utility window. macOS/Linux keep resizable:false — no size constraints
+    // applied so their fixed-size behaviour is untouched.
+    if (IS_POPUP_RESIZABLE) {
+        popupOptions.thickFrame = true;
+        popupOptions.minWidth = POPUP_MIN_WIDTH;
+        popupOptions.minHeight = POPUP_MIN_HEIGHT;
+        popupOptions.maxWidth = POPUP_MAX_WIDTH;
+        popupOptions.maxHeight = POPUP_MAX_HEIGHT;
+    }
+
+    popupWindow = new BrowserWindow(popupOptions);
 
     // Apply always-on-top AFTER window creation (not in constructor options).
     // On macOS, use 'floating' level + relativeLevel 1 for reliable z-order.
     _applyAlwaysOnTop(popupWindow, isAlwaysOnTop);
 
+    // Windows-only: persist the user's chosen size so it survives hide/show and
+    // app restarts. Debounced so a resize drag (many 'resize' events) writes
+    // once when it settles. `_repositionToPrimaryDisplay` also fires 'resize'
+    // when it re-asserts the persisted size on reshow, but that writes back the
+    // same clamped value, so it's a harmless no-op.
+    if (IS_POPUP_RESIZABLE) {
+        let _resizeSaveTimer = null;
+        popupWindow.on("resize", () => {
+            if (_resizeSaveTimer) clearTimeout(_resizeSaveTimer);
+            _resizeSaveTimer = setTimeout(() => {
+                _resizeSaveTimer = null;
+                if (!popupWindow || popupWindow.isDestroyed()) return;
+                const [w, h] = popupWindow.getContentSize();
+                savePopupSize(w, h);
+            }, 400);
+        });
+    }
+
     popupWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
 
     popupWindow.once("ready-to-show", () => {
-        // ISSUE 7 FIX: re-assert the exact content size on first show. A frameless,
-        // non-resizable window can be created a few px smaller than requested when a
+        // ISSUE 7 FIX (preserved): re-assert the exact content size on first show.
+        // A frameless window can be created a few px smaller than requested when a
         // fresh popup is built AFTER a logout/login on a fractional-DPI display
-        // (Electron rounds the bounds by the scale factor). That shrunk height clipped
-        // the footer (Sign out / Dashboard) against the bottom edge when the activity
-        // section appears on Start — but only post-relogin, where the window is rebuilt
-        // mid-session. Pinning the content size guarantees the same layout as a fresh
-        // launch. No-op where there is no DPI drift (macOS, Linux, 100%-scale Windows).
+        // (Electron rounds the bounds by the scale factor). That shrunk height
+        // clipped the footer (Sign out / Dashboard) when the activity section
+        // appears on Start — but only post-relogin, where the window is rebuilt
+        // mid-session. Pinning the content size guarantees the same layout as a
+        // fresh launch. On Windows (resizable) we re-assert the user's PERSISTED
+        // size instead of the fixed design size — still never below the minimum
+        // (loadPopupSize clamps to POPUP_MIN_*), so the footer can't clip. On
+        // macOS/Linux loadPopupSize() === {POPUP_WIDTH, POPUP_HEIGHT}, so this is
+        // byte-for-byte the previous issue #7 behaviour. No-op where there is no
+        // DPI drift (macOS, Linux, 100%-scale Windows).
         if (popupWindow && !popupWindow.isDestroyed()) {
-            popupWindow.setContentSize(POPUP_WIDTH, POPUP_HEIGHT);
+            const readySize = loadPopupSize();
+            popupWindow.setContentSize(readySize.width, readySize.height);
         }
         popupWindow.show();
         if (process.env.NODE_ENV === "development") {
