@@ -921,6 +921,7 @@ class TimerService
     private function buildOpenEntryStatus(
         TimeEntry $entry,
         int $todayTotal,
+        int $allProjectsTodayTotal,
         ?string $requestedProjectId,
         string $currentDay,
         string $redisKey,
@@ -933,6 +934,10 @@ class TimerService
         $frozenAt = $isPaused && $pausedAt ? $pausedAt : null;
         $currentElapsed = $this->computeOpenEntryElapsed($entry, $frozenAt);
         $entryProjectId = $entry->project_id !== null ? (string) $entry->project_id : null;
+
+        // The running entry always contributes to the global all-projects sum regardless
+        // of which project was requested.
+        $allProjectsTodayTotal += $currentElapsed;
 
         if ($requestedProjectId !== null && $entryProjectId === $requestedProjectId) {
             $todayTotal += $currentElapsed;
@@ -966,6 +971,7 @@ class TimerService
             'entry' => $entry,
             'elapsed_seconds' => $currentElapsed,
             'today_total' => $todayTotal,
+            'all_projects_today_total' => $allProjectsTodayTotal,
             'project_today_total' => $projectTodayTotal,
             'current_day' => $currentDay,
             'server_time' => now()->toISOString(),
@@ -975,11 +981,16 @@ class TimerService
     }
 
     /**
-     * Get timer status. When $projectId is provided, today_total is scoped to that project.
-     * "Today" is the user's current calendar day in their timezone (stored as UTC in DB).
+     * Get timer status. "Today" is the user's current calendar day in their timezone
+     * (stored as UTC in DB).
      *
-     * Always returns `project_today_total` — the total for the currently running entry's
-     * project — so the web header timer can show per-project time without a second API call.
+     * Field semantics (see bugs/desktop-today-total-project-scoped-when-project-selected.md):
+     * - `today_total`: historical semantics — scoped to $projectId when provided, else the
+     *   all-projects sum. Kept unchanged for backward compatibility with deployed clients.
+     * - `all_projects_today_total`: ALWAYS the global all-projects sum (never scoped). New,
+     *   additive field. Desktop uses this for the "Today, all projects" line + tray tooltip.
+     * - `project_today_total`: the requested project's total (also populated in the stopped
+     *   branch) so per-project displays don't need a second API call.
      */
     public function status(?string $projectId = null): array
     {
@@ -991,18 +1002,21 @@ class TimerService
         [$todayStartUtc, $todayEndUtc] = TimezoneAwareDateRange::userTodayUtcBounds($tz);
         $currentDay = Carbon::now($tz)->toDateString();
 
-        $todayQuery = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+        $baseTodayQuery = fn () => TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('user_id', $user->id)
             ->where('started_at', '>=', $todayStartUtc)
             ->where('started_at', '<', $todayEndUtc)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked');
 
-        if ($projectId !== null) {
-            $todayQuery->where('project_id', $projectId);
-        }
+        // Always-global sum across all projects (never scoped). Feeds the desktop
+        // "Today, all projects" line and the tray "Today: X" tooltip.
+        $allProjectsTodayTotal = (int) $baseTodayQuery()->sum('duration_seconds');
 
-        $todayTotal = (int) $todayQuery->sum('duration_seconds');
+        // today_total keeps its historical scoped-when-project-provided semantics.
+        $todayTotal = $projectId !== null
+            ? (int) $baseTodayQuery()->where('project_id', $projectId)->sum('duration_seconds')
+            : $allProjectsTodayTotal;
 
         $entry = $this->findOpenRunningEntry($user, $redisKey);
         if (! $entry) {
@@ -1013,7 +1027,8 @@ class TimerService
                 'entry' => null,
                 'elapsed_seconds' => 0,
                 'today_total' => $todayTotal,
-                'project_today_total' => 0,
+                'all_projects_today_total' => $allProjectsTodayTotal,
+                'project_today_total' => $projectId !== null ? $todayTotal : 0,
                 'current_day' => $currentDay,
                 'server_time' => now()->toISOString(),
             ];
@@ -1024,6 +1039,7 @@ class TimerService
         return $this->buildOpenEntryStatus(
             $entry,
             $todayTotal,
+            $allProjectsTodayTotal,
             $requestedProjectId,
             $currentDay,
             $redisKey,

@@ -3051,7 +3051,14 @@ function setupIPC() {
         if (apiClient) {
             try {
                 const status = await apiClient.getTimerStatus(validProjectId);
+                // `today_total` is scoped to `validProjectId` when a project is selected
+                // (historical API semantics). `all_projects_today_total` is ALWAYS the global
+                // sum — use it for the "Today, all projects" line + tray so a selected project
+                // never scopes those. Falls back to today_total for older backends.
+                // Bug: bugs/desktop-today-total-project-scoped-when-project-selected.md
                 const globalTotal = status.today_total ?? 0;
+                const allProjectsTotal =
+                    status.all_projects_today_total ?? globalTotal;
 
                 if (isServerTimerOpen(status)) {
                     applyRunningStatusFromServer(status);
@@ -3066,7 +3073,7 @@ function setupIPC() {
                             "[get-timer-state] Restoring orphaned local session after phantom stop",
                         );
                         restoreInMemoryFromLocalActive(localActive);
-                        todayTotalGlobal = globalTotal;
+                        todayTotalGlobal = allProjectsTotal;
                         const sessionElapsed = _cachedStartedAtMs
                             ? Math.floor(
                                   (Date.now() - _cachedStartedAtMs) / 1000,
@@ -3078,10 +3085,10 @@ function setupIPC() {
                         );
                         scheduleReconcileAndFlush();
                     } else {
-                        todayTotalGlobal = globalTotal;
+                        todayTotalGlobal = allProjectsTotal;
                     }
                 } else {
-                    todayTotalGlobal = globalTotal;
+                    todayTotalGlobal = allProjectsTotal;
                     todayTotalCurrentProject = 0;
                     isTimerRunning = false;
                     isTimerPaused = false;
