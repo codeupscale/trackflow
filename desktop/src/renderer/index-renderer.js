@@ -218,9 +218,15 @@ function startTicking() {
       if (!isRunning) return;
       elapsedSeconds = data.totalSeconds;
       timerDisplay.textContent = data.formatted;
-      // Non-ticking all-projects total — value is stable across ticks (it's the
-      // server-synced sum), so this does not climb every second.
-      updateTotalSum(data.todayTotalGlobal);
+      // ISSUE 1 FIX: "Today, all projects" now reflects the running session live.
+      // Prefer the live value (base sum + current session elapsed) computed by the
+      // main process; fall back to the static server-synced sum for older payloads
+      // (stop / sync / offline) that only carry todayTotalGlobal.
+      updateTotalSum(
+        data.todayTotalGlobalLive != null
+          ? data.todayTotalGlobalLive
+          : data.todayTotalGlobal
+      );
       // Update activity and connection status from tick data
       if (data.activityScore != null) updateActivityDisplay(data.activityScore);
       if (data.lastScreenshotAt) _lastScreenshotAt = data.lastScreenshotAt;
@@ -521,7 +527,11 @@ logoutLink.addEventListener('click', handleLogout);
 dashboardLink.addEventListener('click', () => window.trackflow.openDashboard());
 
 // Hide button — dismiss window to tray without logging out
-document.getElementById('hideBtn').addEventListener('click', () => {
+const hideBtn = document.getElementById('hideBtn');
+hideBtn.addEventListener('click', () => {
+  // ISSUE 9: when pinned, the close button is disabled — the modal is only
+  // closable after unpinning. Guard here too in case of a synthetic click.
+  if (hideBtn.disabled) return;
   window.trackflow.hideWindow();
 });
 
@@ -536,6 +546,12 @@ function updatePinUI(pinned) {
     pinBtn.classList.remove('pinned');
     pinBtn.title = 'Pin window on top';
   }
+  // ISSUE 9 FIX: the close (hide-to-tray) button is DISABLED while pinned. A pinned
+  // modal is meant to stay put; it can only be closed after the user unpins it.
+  hideBtn.disabled = pinned;
+  hideBtn.style.opacity = pinned ? '0.4' : '';
+  hideBtn.style.cursor = pinned ? 'not-allowed' : '';
+  hideBtn.title = pinned ? 'Unpin to close' : 'Hide to tray';
 }
 
 // Load initial pin state from main process

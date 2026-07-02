@@ -606,6 +606,11 @@ let loginWindow = null;
 const POPUP_WIDTH = 320;
 const POPUP_HEIGHT = 400;
 let idleAlertWindow = null;
+// ISSUE 4 FIX: On multi-monitor setups the idle alert must appear on EVERY display
+// so it is never missed on the screen the user is actually looking at. `idleAlertWindow`
+// is the PRIMARY, interactive window (on the display under the cursor); these are the
+// mirror windows shown on the other displays. All are torn down together on resolve.
+let _idleAlertExtraWindows = [];
 let apiClient = null;
 let activityMonitor = null;
 let screenshotService = null;
@@ -691,10 +696,41 @@ function refreshProjectsOnOpen(onUpdated) {
         .catch(() => {});
 }
 
+// ISSUE 4 FIX: every live idle-alert window (primary + per-display mirrors).
+function _getAllIdleAlertWindows() {
+    const all = [];
+    if (idleAlertWindow && !idleAlertWindow.isDestroyed()) all.push(idleAlertWindow);
+    for (const w of _idleAlertExtraWindows) {
+        if (w && !w.isDestroyed()) all.push(w);
+    }
+    return all;
+}
+
+// Send an IPC message to every idle-alert window (all displays).
+function _broadcastToIdleAlerts(channel, payload) {
+    for (const w of _getAllIdleAlertWindows()) {
+        try {
+            w.webContents.send(channel, payload);
+        } catch {}
+    }
+}
+
+// Destroy the mirror (non-primary) idle-alert windows and clear the list.
+function _destroyIdleAlertExtras() {
+    for (const w of _idleAlertExtraWindows) {
+        if (w && !w.isDestroyed()) {
+            w._dismissedProgrammatically = true;
+            try {
+                w.destroy();
+            } catch {}
+        }
+    }
+    _idleAlertExtraWindows = [];
+}
+
 function pushProjectsToIdleAlert(projects) {
-    if (!idleAlertWindow || idleAlertWindow.isDestroyed()) return;
     if (!Array.isArray(projects) || projects.length === 0) return;
-    idleAlertWindow.webContents.send("idle-data", { projects });
+    _broadcastToIdleAlerts("idle-data", { projects });
 }
 
 function startProjectsRefreshInterval() {
@@ -1532,6 +1568,7 @@ async function forceLogout() {
     config = {};
     currentShift = null;
 
+    _stopUnpinnedFocusWatch();
     if (popupWindow && !popupWindow.isDestroyed()) {
         popupWindow.destroy();
     }
@@ -2278,6 +2315,12 @@ function buildTrayContextMenu() {
                     popupWindow.webContents.send("pin-state-changed", {
                         pinned: isAlwaysOnTop,
                     });
+                    // ISSUE 8: keep the focus-loss watch in sync with the pin state.
+                    if (isAlwaysOnTop) {
+                        _stopUnpinnedFocusWatch();
+                    } else if (popupWindow.isVisible()) {
+                        _startUnpinnedFocusWatch();
+                    }
                 }
                 saveAlwaysOnTop(isAlwaysOnTop);
                 console.log(`[Pin] Always on top (tray): ${isAlwaysOnTop}`);
@@ -2315,6 +2358,66 @@ function buildTrayContextMenu() {
  */
 // Interval reference for the pin keepalive (macOS-only workaround)
 let _pinKeepalive = null;
+
+// ── ISSUE 8: focus-loss watch so an UNPINNED popup closes on a desktop/wallpaper click ──
+// On macOS, clicking the desktop/wallpaper does not reliably emit a 'blur' on an
+// accessory-app popup, so an unpinned popup could linger until the next click landed on
+// a real window ("stays open until you click somewhere"). While the popup is visible and
+// unpinned we poll focus; two consecutive unfocused samples hide it — this catches
+// clicking another app AND clicking the desktop. Windows/Linux keep using the window
+// 'blur' event (which DOES fire on desktop clicks there); a poll is intentionally NOT
+// used on those platforms because an open native <select> steals window focus and a poll
+// would wrongly hide the popup mid-selection. macOS renders <select> as an in-window
+// overlay that keeps webContents focused, so the poll is safe there.
+let _unpinnedFocusWatch = null;
+let _unpinnedUnfocusedTicks = 0;
+
+function _stopUnpinnedFocusWatch() {
+    if (_unpinnedFocusWatch) {
+        clearInterval(_unpinnedFocusWatch);
+        _unpinnedFocusWatch = null;
+    }
+    _unpinnedUnfocusedTicks = 0;
+}
+
+function _startUnpinnedFocusWatch() {
+    if (process.platform !== "darwin") return;
+    _stopUnpinnedFocusWatch();
+    if (isAlwaysOnTop) return; // pinned popups stay open (ISSUE 9)
+    _unpinnedFocusWatch = setInterval(() => {
+        if (
+            !popupWindow ||
+            popupWindow.isDestroyed() ||
+            !popupWindow.isVisible() ||
+            isAlwaysOnTop
+        ) {
+            _stopUnpinnedFocusWatch();
+            return;
+        }
+        const focused =
+            popupWindow.isFocused() ||
+            (popupWindow.webContents &&
+                !popupWindow.webContents.isDestroyed() &&
+                popupWindow.webContents.isFocused());
+        if (focused) {
+            _unpinnedUnfocusedTicks = 0;
+            return;
+        }
+        _unpinnedUnfocusedTicks++;
+        // ~2 ticks (~600ms) of sustained unfocus → the user clicked away (another app
+        // OR the desktop). Hide to tray.
+        if (_unpinnedUnfocusedTicks >= 2) {
+            _stopUnpinnedFocusWatch();
+            if (
+                popupWindow &&
+                !popupWindow.isDestroyed() &&
+                !popupWindow.isFocused()
+            ) {
+                popupWindow.hide();
+            }
+        }
+    }, 300);
+}
 
 function _applyAlwaysOnTop(win, pinned) {
     if (!win || win.isDestroyed()) return;
@@ -2539,6 +2642,17 @@ function showPopup() {
     popupWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
 
     popupWindow.once("ready-to-show", () => {
+        // ISSUE 7 FIX: re-assert the exact content size on first show. A frameless,
+        // non-resizable window can be created a few px smaller than requested when a
+        // fresh popup is built AFTER a logout/login on a fractional-DPI display
+        // (Electron rounds the bounds by the scale factor). That shrunk height clipped
+        // the footer (Sign out / Dashboard) against the bottom edge when the activity
+        // section appears on Start — but only post-relogin, where the window is rebuilt
+        // mid-session. Pinning the content size guarantees the same layout as a fresh
+        // launch. No-op where there is no DPI drift (macOS, Linux, 100%-scale Windows).
+        if (popupWindow && !popupWindow.isDestroyed()) {
+            popupWindow.setContentSize(POPUP_WIDTH, POPUP_HEIGHT);
+        }
         popupWindow.show();
         if (process.env.NODE_ENV === "development") {
             popupWindow.webContents.openDevTools({ mode: "detach" });
@@ -2588,7 +2702,13 @@ function showPopup() {
             clearTimeout(blurTimeout);
             blurTimeout = null;
         }
+        _unpinnedUnfocusedTicks = 0;
     });
+    // ISSUE 8: keep the macOS focus-loss watch tied to the popup's visibility.
+    // 'show' fires on both the initial show and every re-show (tray click), so this
+    // covers all show paths without touching the existing-window branch.
+    popupWindow.on("show", () => _startUnpinnedFocusWatch());
+    popupWindow.on("hide", () => _stopUnpinnedFocusWatch());
 
     popupWindow.on("closed", () => {
         popupWindow = null;
@@ -2683,6 +2803,7 @@ async function performLogout() {
     config = {};
     currentShift = null;
 
+    _stopUnpinnedFocusWatch();
     if (popupWindow && !popupWindow.isDestroyed()) {
         popupWindow.destroy();
     }
@@ -2704,7 +2825,7 @@ function getOSTheme() {
 // Broadcast theme change to all open renderer windows.
 function broadcastThemeChange() {
     const theme = getOSTheme();
-    const windows = [popupWindow, loginWindow, idleAlertWindow];
+    const windows = [popupWindow, loginWindow, ..._getAllIdleAlertWindows()];
     for (const win of windows) {
         if (win && !win.isDestroyed()) {
             win.webContents.send("theme-changed", theme);
@@ -2736,6 +2857,11 @@ function setupIPC() {
     ipcMain.removeHandler("install-update");
 
     ipcMain.handle("hide-window", () => {
+        // ISSUE 9 FIX: the close button is disabled while pinned; enforce it in the
+        // main process too so a pinned modal can only be closed after unpinning.
+        // (Tray-toggle and blur-to-hide call popupWindow.hide() directly, not this
+        // IPC, so they are unaffected.)
+        if (isAlwaysOnTop) return;
         if (popupWindow && !popupWindow.isDestroyed()) {
             popupWindow.hide();
         }
@@ -2750,6 +2876,13 @@ function setupIPC() {
             popupWindow.webContents.send("pin-state-changed", {
                 pinned: isAlwaysOnTop,
             });
+            // ISSUE 8: unpinning should make the popup close on click-away again;
+            // pinning should stop the focus-loss watch so it stays put.
+            if (isAlwaysOnTop) {
+                _stopUnpinnedFocusWatch();
+            } else if (popupWindow.isVisible()) {
+                _startUnpinnedFocusWatch();
+            }
         }
         saveAlwaysOnTop(isAlwaysOnTop);
         console.log(`[Pin] Always on top: ${isAlwaysOnTop}`);
@@ -4230,10 +4363,17 @@ function startTrayTimer() {
             popupWindow.webContents.send("timer-tick", {
                 totalSeconds,
                 formatted,
-                // Non-ticking all-projects sum for the secondary field. This is the
-                // server-synced completed total (excludes the live running session),
-                // so it stays stable across ticks instead of climbing every second.
+                // Server-synced completed all-projects sum (excludes the live running
+                // session). Kept for compatibility / stopped-state convergence.
                 todayTotalGlobal,
+                // ISSUE 1 FIX: LIVE all-projects total for the secondary field. The
+                // base `todayTotalGlobal` excludes the running session, so it used to
+                // sit frozen while tracking and only jump after stop. Add the current
+                // session's live elapsed so "Today, all projects" ticks up in real time
+                // (derived from the local started_at anchor, the source of truth).
+                todayTotalGlobalLive:
+                    todayTotalGlobal +
+                    Math.max(0, currentElapsed - _pendingOfflineReassignIdleSec),
                 activityScore: activityMonitor
                     ? activityMonitor.getCurrentScore()
                     : 0,
@@ -4280,14 +4420,17 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     }
 
     if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
-        // Alert already showing — bring it to front and update idle data
+        // Alert already showing — bring the primary to front and update idle data on
+        // EVERY display's alert window (ISSUE 4). Keep the _actionId in sync on all of
+        // them so whichever window the user acts on resolves the correct idle cycle.
         idleAlertWindow.focus();
         if (typeof idleAlertWindow.moveTop === "function") {
             idleAlertWindow.moveTop();
         }
-        // Update the action ID on the window so the close handler uses the latest
-        idleAlertWindow._actionId = alertActionId;
-        idleAlertWindow.webContents.send(
+        for (const w of _getAllIdleAlertWindows()) {
+            w._actionId = alertActionId;
+        }
+        _broadcastToIdleAlerts(
             "idle-data",
             buildIdleAlertPayload(_idleAlertShownAt),
         );
@@ -4323,28 +4466,114 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     // fresh list is pushed via idle-data when it arrives.
     refreshProjectsOnOpen(pushProjectsToIdleAlert);
 
-    idleAlertWindow = new BrowserWindow({
-        width: 380,
-        height: 520,
-        frame: false,
-        resizable: false,
-        alwaysOnTop: true,
-        skipTaskbar: false,
-        center: true,
-        show: false,
-        // Ensure the idle alert appears on whichever macOS Space / Linux workspace the
-        // user is currently viewing. Without this the window can open on a different
-        // desktop and appear invisible.
-        visibleOnAllWorkspaces: true,
-        backgroundColor: "#0a0a0a", // Prevent white flash on all platforms
-        webPreferences: {
-            preload: path.join(__dirname, "..", "preload", "index.js"),
-            contextIsolation: true,
-            nodeIntegration: false,
-            sandbox: true,
-            devTools: true,
-        },
-    });
+    // ISSUE 4 FIX: show one idle alert per display. Clear any stray mirrors from a
+    // previous cycle first, then pick the display under the cursor as the PRIMARY
+    // (interactive) window and mirror the alert onto every other display.
+    _destroyIdleAlertExtras();
+
+    let displays;
+    let primaryDisplay;
+    try {
+        displays = screen.getAllDisplays();
+        primaryDisplay = screen.getDisplayNearestPoint(
+            screen.getCursorScreenPoint(),
+        );
+    } catch {
+        displays = [];
+        primaryDisplay = null;
+    }
+    if (!Array.isArray(displays) || displays.length === 0) {
+        displays = primaryDisplay ? [primaryDisplay] : [];
+    }
+
+    const IDLE_W = 380;
+    const IDLE_H = 520;
+
+    // Build a BrowserWindow centered on a specific display's work area. Passing
+    // explicit x/y (instead of `center: true`) targets the intended monitor on
+    // Windows / macOS / X11. On Wayland the compositor owns placement, so the
+    // window still appears (on the active output) — never worse than before.
+    function _createIdleWindowOnDisplay(display) {
+        let x;
+        let y;
+        if (display && display.workArea) {
+            const wa = display.workArea;
+            x = Math.round(wa.x + (wa.width - IDLE_W) / 2);
+            y = Math.round(wa.y + (wa.height - IDLE_H) / 2);
+        }
+        const opts = {
+            width: IDLE_W,
+            height: IDLE_H,
+            frame: false,
+            resizable: false,
+            alwaysOnTop: true,
+            skipTaskbar: false,
+            show: false,
+            // Ensure the idle alert appears on whichever macOS Space / Linux workspace
+            // the user is currently viewing. Without this it can open on a different
+            // desktop and appear invisible.
+            visibleOnAllWorkspaces: true,
+            backgroundColor: "#0a0a0a", // Prevent white flash on all platforms
+            webPreferences: {
+                preload: path.join(__dirname, "..", "preload", "index.js"),
+                contextIsolation: true,
+                nodeIntegration: false,
+                sandbox: true,
+                devTools: true,
+            },
+        };
+        if (x != null && y != null) {
+            opts.x = x;
+            opts.y = y;
+        } else {
+            opts.center = true;
+        }
+        return new BrowserWindow(opts);
+    }
+
+    // Order displays so the cursor's display is created first (becomes primary).
+    const orderedDisplays = [];
+    if (primaryDisplay) orderedDisplays.push(primaryDisplay);
+    for (const d of displays) {
+        if (!primaryDisplay || d.id !== primaryDisplay.id) orderedDisplays.push(d);
+    }
+    if (orderedDisplays.length === 0) orderedDisplays.push(null);
+
+    // Create every display's window. The first (cursor display) is the primary,
+    // interactive window and carries the full close/re-show state machine; the
+    // rest are mirrors that share the same resolve path via the preload bridge.
+    idleAlertWindow = _createIdleWindowOnDisplay(orderedDisplays[0]);
+    for (let i = 1; i < orderedDisplays.length; i++) {
+        const mirror = _createIdleWindowOnDisplay(orderedDisplays[i]);
+        mirror._actionId = alertActionId;
+        mirror._dismissedProgrammatically = false;
+        let mirrorShown = false;
+        const showMirror = () => {
+            if (mirrorShown || mirror.isDestroyed()) return;
+            mirrorShown = true;
+            mirror.show();
+            mirror.webContents.send(
+                "idle-data",
+                buildIdleAlertPayload(_idleAlertShownAt),
+            );
+        };
+        mirror.once("ready-to-show", showMirror);
+        mirror.webContents.once("did-finish-load", showMirror);
+        mirror.on("closed", () => {
+            _idleAlertExtraWindows = _idleAlertExtraWindows.filter(
+                (w) => w !== mirror,
+            );
+        });
+        mirror
+            .loadFile(path.join(__dirname, "..", "renderer", "idle-alert.html"))
+            .catch((err) => {
+                console.error(
+                    "[IdleAlert] Failed to load idle-alert.html (mirror):",
+                    err.message,
+                );
+            });
+        _idleAlertExtraWindows.push(mirror);
+    }
 
     // Keep a local reference so the ready-to-show / did-finish-load callbacks
     // always operate on the window they were registered on, even if the outer
@@ -4383,6 +4612,9 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
 
     win.on("closed", () => {
         idleAlertWindow = null;
+        // The primary is gone — tear down any mirror windows so no orphan idle
+        // alert is left on another display.
+        _destroyIdleAlertExtras();
         if (!win._dismissedProgrammatically) {
             if (idleDetector?.isIdleActive() && isTimerRunning) {
                 console.log(
@@ -4433,6 +4665,8 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
 }
 
 function dismissIdleAlert() {
+    // ISSUE 4 FIX: tear down every display's idle alert together so none is orphaned.
+    _destroyIdleAlertExtras();
     if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
         // Mark as programmatic dismissal so the 'closed' handler doesn't
         // re-arm the idle detector (handleIdleAction already did that).

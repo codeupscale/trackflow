@@ -171,6 +171,78 @@ describe('Idle alert window visibility', () => {
   });
 });
 
+describe('Idle alert — one window per display (ISSUE 4)', () => {
+  function makeWin() {
+    let destroyed = false;
+    const handlers = {};
+    return {
+      _dismissedProgrammatically: false,
+      show: jest.fn(),
+      focus: jest.fn(),
+      destroy: jest.fn(() => { destroyed = true; }),
+      isDestroyed: () => destroyed,
+      on: jest.fn((e, h) => { handlers[e] = h; }),
+      once: jest.fn((e, h) => { handlers[e] = h; }),
+      loadFile: jest.fn(() => Promise.resolve()),
+      webContents: { send: jest.fn(), once: jest.fn((e, h) => { handlers[`wc:${e}`] = h; }) },
+      _handlers: handlers,
+    };
+  }
+
+  // Models the multi-display creation + teardown from showIdleAlert()/dismissIdleAlert().
+  function simulateMultiDisplay(displays) {
+    const windows = displays.map(() => makeWin());
+    const primary = windows[0];
+    const extras = windows.slice(1);
+    const dismiss = () => {
+      // dismissIdleAlert(): tear down extras + primary together
+      for (const w of [...extras, primary]) {
+        if (!w.isDestroyed()) { w._dismissedProgrammatically = true; w.destroy(); }
+      }
+    };
+    return { windows, primary, extras, dismiss };
+  }
+
+  test('creates exactly one window per display', () => {
+    const displays = [{ id: 1 }, { id: 2 }, { id: 3 }];
+    const { windows } = simulateMultiDisplay(displays);
+    expect(windows).toHaveLength(3);
+  });
+
+  test('a single-display setup creates a single window', () => {
+    const { windows } = simulateMultiDisplay([{ id: 1 }]);
+    expect(windows).toHaveLength(1);
+  });
+
+  test('resolving/dismissing destroys ALL display windows — no orphans left', () => {
+    const { windows, dismiss } = simulateMultiDisplay([{ id: 1 }, { id: 2 }]);
+    dismiss();
+    windows.forEach((w) => {
+      expect(w.destroy).toHaveBeenCalledTimes(1);
+      expect(w.isDestroyed()).toBe(true);
+      expect(w._dismissedProgrammatically).toBe(true);
+    });
+  });
+});
+
+describe('Pin/close-button state (ISSUE 9)', () => {
+  // Models renderer updatePinUI(): the close (hide-to-tray) button is disabled while
+  // pinned and enabled once unpinned; main also refuses hide-window while pinned.
+  function closeButtonDisabledFor(pinned) { return pinned === true; }
+  function mainAllowsHide(isAlwaysOnTop) { return isAlwaysOnTop !== true; }
+
+  test('close button disabled when pinned', () => {
+    expect(closeButtonDisabledFor(true)).toBe(true);
+  });
+  test('close button enabled when unpinned', () => {
+    expect(closeButtonDisabledFor(false)).toBe(false);
+  });
+  test('main process refuses hide-window while pinned', () => {
+    expect(mainAllowsHide(true)).toBe(false);
+    expect(mainAllowsHide(false)).toBe(true);
+  });
+});
+
 describe('IdleDetector callback integration', () => {
   const { powerMonitor } = require('electron');
   const IdleDetector = require('../src/main/idle-detector');

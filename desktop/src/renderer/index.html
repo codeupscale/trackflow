@@ -21,6 +21,9 @@
       flex: 1;
       display: flex;
       flex-direction: column;
+      /* ISSUE 7 FIX: allow this flex container to shrink below its content's
+         intrinsic height so the footer is never pushed off the bottom edge. */
+      min-height: 0;
     }
 
     /* ── Timer Display ──────────────────────────────────────── */
@@ -31,6 +34,20 @@
       display: flex;
       flex-direction: column;
       justify-content: center;
+      /* ISSUE 7 FIX: the timer block absorbs the flexible space; letting it shrink
+         (min-height:0) means the fixed rows below (select, activity bar, actions,
+         footer) always stay on-screen instead of overflowing when the activity
+         section appears on Start. */
+      min-height: 0;
+    }
+
+    /* ISSUE 7 FIX: keep the interactive rows at their natural height and always
+       visible — they must never be the ones clipped by an overflowing column. */
+    .select-wrap,
+    .activity-section.visible,
+    .actions,
+    .footer {
+      flex-shrink: 0;
     }
     .time {
       font-size: 42px;
