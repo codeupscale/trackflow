@@ -11,7 +11,13 @@ window.trackflow.onThemeChange(applyTheme);
 
 // ── Platform detection for shortcut labels ──
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+const isWin = navigator.platform.toUpperCase().indexOf('WIN') >= 0;
 const modKey = isMac ? 'Cmd' : 'Ctrl';
+
+// QA enhancement #10: the popup is user-resizable on Windows only. Tag the root
+// so the top-edge no-drag resize strip (see index.html) activates there and
+// stays fully inert on macOS/Linux (no reduction of the titlebar drag area).
+if (isWin) document.documentElement.classList.add('platform-win');
 
 // Apply shortcut hints
 document.getElementById('logoutBtn').title = `Sign out (${modKey}+Q)`;

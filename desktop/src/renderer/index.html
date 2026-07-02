@@ -16,6 +16,26 @@
       flex-direction: column;
     }
 
+    /* QA #10 — Windows top-edge resize strip. Hidden by default; only the
+       Windows build (html.platform-win, set in index-renderer.js) shows it.
+       The left/right/bottom window edges are already no-drag (the .content
+       area is not a drag region), so only the titlebar's top edge needs to be
+       carved out for the native resize handle. pointer-events stays enabled so
+       Chromium's hit-test sees the no-drag region; the strip is transparent and
+       only ~6px tall, above the titlebar buttons, so dragging/moving via the
+       rest of the titlebar is unaffected. */
+    .resize-edge-top { display: none; }
+    html.platform-win .resize-edge-top {
+      display: block;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 6px;
+      z-index: 9999;
+      -webkit-app-region: no-drag;
+    }
+
     .content {
       padding: 12px 16px 16px;
       flex: 1;
@@ -362,6 +382,11 @@
 </head>
 <body>
   <div class="container">
+    <!-- Windows-only top-edge resize strip. The titlebar below is a drag region,
+         which blocks the native top-edge resize handle on frameless Windows
+         windows; this thin no-drag strip re-exposes it. display:none everywhere
+         except .platform-win so macOS/Linux keep the full-height drag titlebar. -->
+    <div class="resize-edge-top" aria-hidden="true"></div>
     <!-- Custom titlebar — identical on all platforms -->
     <div class="titlebar" id="titlebar">
       <span class="titlebar-title">
