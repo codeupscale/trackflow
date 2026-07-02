@@ -299,6 +299,34 @@ describe('TimerStore', () => {
       expect(state.projectTodayTotalSeconds).toBe(620);
     });
 
+    it('derives correct elapsed after a large gap (background-tab throttle) in a single tick', () => {
+      // The interval that drives tick() is throttled/paused in background tabs, so
+      // many seconds can pass with no tick firing. Because elapsed is DERIVED from
+      // startedAt (not accumulated +1 per tick), the very next tick must snap
+      // straight to the correct value — no drift, no incremental catch-up.
+      const startedAt = '2026-03-27T09:00:00Z';
+      useTimerStore.setState({
+        isRunning: true,
+        startedAt,
+        todayTotalBase: 0,
+        projectTodayTotalBase: 0,
+        // Stale values as if only a few ticks fired before the tab was throttled.
+        elapsedSeconds: 5,
+        todayTotalSeconds: 5,
+        projectTodayTotalSeconds: 5,
+      });
+
+      // Simulate 2 hours passing on the wall clock with no ticks (throttled tab).
+      vi.setSystemTime(new Date('2026-03-27T11:00:00Z'));
+      useTimerStore.getState().tick();
+
+      const state = useTimerStore.getState();
+      // Exactly now - startedAt = 7200s, NOT 6 (which an accumulator would show).
+      expect(state.elapsedSeconds).toBe(7200);
+      expect(state.todayTotalSeconds).toBe(7200);
+      expect(state.projectTodayTotalSeconds).toBe(7200);
+    });
+
     it('todayTotalSeconds accumulates correctly across sessions', () => {
       vi.setSystemTime(new Date('2026-03-27T10:00:00Z'));
 

@@ -56,6 +56,7 @@ import api from '@/lib/api';
 import { cn, getActivityColor } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
+import { useScreenshotRealtime } from '@/hooks/use-screenshot-realtime';
 import { toast } from 'sonner';
 
 // --- Types ---
@@ -186,6 +187,10 @@ export default function ScreenshotsPage() {
   const { hasPermission, hasPermissionWithScope } = usePermissionStore();
   const isManager = hasPermissionWithScope('screenshots.view', 'project');
   const canDelete = hasPermission('screenshots.delete');
+
+  // Real-time: refresh the list when the backend broadcasts ScreenshotUploaded.
+  // Role scoping (employee sees only own) is enforced inside the hook.
+  useScreenshotRealtime();
 
   // Filter state
   const [datePreset, setDatePreset] = useState<DatePreset>('today');
