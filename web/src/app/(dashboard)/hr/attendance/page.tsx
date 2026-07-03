@@ -73,7 +73,7 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
-const STATUS_FILTERS = ['all', 'present', 'absent', 'half_day', 'on_leave'] as const;
+const STATUS_FILTERS = ['all', 'present', 'absent', 'on_leave'] as const;
 
 export default function MyAttendancePage() {
   const now = new Date();
@@ -231,8 +231,8 @@ export default function MyAttendancePage() {
       {/* Summary Cards */}
       <section aria-label="Attendance summary">
         {summaryLoading ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-            {Array.from({ length: 6 }).map((_, i) => (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            {Array.from({ length: 5 }).map((_, i) => (
               <Card key={i}>
                 <CardContent className="p-4">
                   <Skeleton className="h-16" />
@@ -241,7 +241,7 @@ export default function MyAttendancePage() {
             ))}
           </div>
         ) : summary ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <AttendanceSummaryCard
               label="Present Days"
               value={summary.present_days}
@@ -263,13 +263,6 @@ export default function MyAttendancePage() {
               icon={Clock}
               variant="amber"
               tooltip="Days your first check-in was after the org late threshold (default 11:45). Late minutes are counted from the official start (default 11:30)."
-            />
-            <AttendanceSummaryCard
-              label="Half Days"
-              value={summary.half_days}
-              icon={CalendarDays}
-              variant="amber"
-              tooltip="A working day with 2h to 4h of tracked time and no check-in."
             />
             <AttendanceSummaryCard
               label="On Leave"
