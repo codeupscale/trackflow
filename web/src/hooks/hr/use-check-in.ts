@@ -83,6 +83,11 @@ function useInvalidateAfterCheckAction() {
   return () => {
     queryClient.invalidateQueries({ queryKey: ['attendance', 'today'] });
     queryClient.invalidateQueries({ queryKey: ['attendance'] });
+    // The summary tiles live under a SEPARATE key (['attendance-summary', month,
+    // year]); prefix-matching on ['attendance'] does NOT reach it, so it must be
+    // invalidated explicitly — otherwise the Present/working-days tiles stay stale
+    // (e.g. "0 of 0") until a hard refresh after a check-in.
+    queryClient.invalidateQueries({ queryKey: ['attendance-summary'] });
     queryClient.invalidateQueries({ queryKey: ['team-attendance'] });
     queryClient.invalidateQueries({ queryKey: ['check-ins'] });
   };

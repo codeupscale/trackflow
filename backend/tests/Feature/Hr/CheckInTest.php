@@ -587,6 +587,78 @@ class CheckInTest extends TestCase
         $this->assertSame('present', $record->status);
     }
 
+    // ── Attendance list / summary reconciliation (check-in → table) ────────
+
+    public function test_check_in_populates_clock_in_and_late_in_attendance_list(): void
+    {
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        // 11:50 Karachi = 06:50 UTC — late by 20 minutes from the 11:30 official start.
+        $this->freezeUtc(self::MONDAY . ' 06:50:00');
+        $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(201);
+
+        $response = $this->getJson('/api/v1/hr/attendance?start_date=' . self::MONDAY . '&end_date=' . self::MONDAY);
+
+        $response->assertOk();
+        $row = $response->json('data.0');
+
+        // clock_in is filled from the physical check-in, rendered in the org tz (H:i).
+        $this->assertSame('11:50', $row['clock_in']);
+        $this->assertNull($row['clock_out']);
+        // Late minutes come from the check-in signal, not the (zero) tracker figure.
+        $this->assertSame(20, $row['late_minutes']);
+        $this->assertSame('late', $row['check_in_status']);
+        $this->assertSame('present', $row['status']);
+        // The check-in instant is passed through so the row can render its badge.
+        $this->assertNotNull($row['check_in_at']);
+    }
+
+    public function test_checkout_populates_clock_out_and_hours_in_attendance_list(): void
+    {
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        // Check in on time (11:40 Karachi), check out at the official off time (20:30).
+        $this->freezeUtc(self::MONDAY . ' 06:40:00');
+        $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(201);
+
+        $this->freezeUtc(self::MONDAY . ' 15:30:00'); // 20:30 Karachi
+        $this->postJson('/api/v1/hr/attendance/check-out')->assertOk();
+
+        $response = $this->getJson('/api/v1/hr/attendance?start_date=' . self::MONDAY . '&end_date=' . self::MONDAY);
+
+        $response->assertOk();
+        $row = $response->json('data.0');
+
+        $this->assertSame('11:40', $row['clock_in']);
+        $this->assertSame('20:30', $row['clock_out']);
+        // Hours derived from the check-in session (8h50m) even with no tracked time.
+        $this->assertGreaterThan(0, $row['total_hours']);
+        $this->assertEqualsWithDelta(8.83, (float) $row['total_hours'], 0.02);
+        $this->assertSame(31800, $row['worked_seconds']);
+        $this->assertSame('08:50', $row['worked_hhmm']);
+    }
+
+    public function test_summary_counts_a_check_in_present_day(): void
+    {
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        // A single on-time check-in on a working Monday, no nightly generation run.
+        $this->freezeUtc(self::MONDAY . ' 06:40:00');
+        $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(201);
+
+        $response = $this->getJson('/api/v1/hr/attendance/summary?month=3&year=2026');
+
+        $response->assertOk()
+            ->assertJsonPath('data.present_days', 1)
+            ->assertJsonPath('data.total_working_days', 1);
+    }
+
     // ── Cross-org isolation ────────────────────────────────────────────────
 
     public function test_check_in_cross_org_isolation(): void
