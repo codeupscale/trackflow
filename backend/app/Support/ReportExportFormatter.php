@@ -183,7 +183,7 @@ class ReportExportFormatter
         fwrite($out, "\xEF\xBB\xBF");
 
         fputcsv($out, [
-            'Employee', 'Email', 'Date', 'Check In', 'Check Out', 'Total (HH:MM)',
+            'Employee', 'Email', 'Date', 'Sessions', 'First In', 'Last Out', 'Total (HH:MM)',
             'Status', 'Late (min)', 'Early (min)', 'Overtime (min)', 'Missing Checkout',
         ]);
 
@@ -193,6 +193,7 @@ class ReportExportFormatter
                 self::neutralizeCsv(self::val($row, 'name')),
                 self::neutralizeCsv(self::val($row, 'email')),
                 self::neutralizeCsv(self::val($row, 'date')),
+                self::val($row, 'sessions_count', 0),
                 self::neutralizeCsv(self::val($row, 'check_in')),
                 self::neutralizeCsv(self::val($row, 'check_out')),
                 self::neutralizeCsv(self::val($row, 'worked_hhmm')),

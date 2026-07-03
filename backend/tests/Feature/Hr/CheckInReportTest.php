@@ -191,7 +191,7 @@ class CheckInReportTest extends TestCase
         );
 
         $body = $response->getContent();
-        $this->assertStringContainsString('Employee,Email,Date,"Check In","Check Out","Total (HH:MM)"', $body);
+        $this->assertStringContainsString('Employee,Email,Date,Sessions,"First In","Last Out","Total (HH:MM)"', $body);
         $this->assertStringContainsString('alice@example.test', $body);
         $this->assertStringContainsString('bob@example.test', $body);
     }

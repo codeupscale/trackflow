@@ -4,6 +4,7 @@ namespace Tests\Feature\Hr;
 
 use App\Models\AttendancePolicy;
 use App\Models\AttendanceRecord;
+use App\Models\CheckInSession;
 use App\Models\LeaveRequest;
 use App\Models\LeaveType;
 use App\Models\PublicHoliday;
@@ -132,9 +133,9 @@ class CheckInTest extends TestCase
         ]);
     }
 
-    // ── Edge 4: duplicate check-in → 409 ───────────────────────────────────
+    // ── Edge 4: check-in while a session is already OPEN → 422 ─────────────
 
-    public function test_duplicate_check_in_returns_409(): void
+    public function test_check_in_while_open_session_returns_422(): void
     {
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
@@ -143,11 +144,15 @@ class CheckInTest extends TestCase
         $this->freezeUtc(self::MONDAY . ' 06:40:00');
         $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(201);
 
-        // Same day, a few minutes later.
+        // Same day, a few minutes later — session still open → owner-mandated 422.
         $this->freezeUtc(self::MONDAY . ' 06:45:00');
-        $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(409);
+        $this->postJson('/api/v1/hr/attendance/check-in')
+            ->assertStatus(422)
+            ->assertJsonPath('error.message', 'You already have an open check-in. Please check out first.');
 
+        // Still one day row and exactly one session (no duplicate).
         $this->assertSame(1, AttendanceRecord::where('user_id', $user->id)->count());
+        $this->assertSame(1, CheckInSession::where('user_id', $user->id)->count());
     }
 
     // ── Edge 5: checkout without a check-in → 422 ──────────────────────────
@@ -332,9 +337,9 @@ class CheckInTest extends TestCase
         $this->postJson('/api/v1/hr/attendance/check-out')->assertStatus(422);
     }
 
-    // ── Edge 10: re-check-in after checkout rejected ───────────────────────
+    // ── Edge 10: re-check-in after checkout is ALLOWED (multi-session) ──────
 
-    public function test_re_check_in_after_checkout_rejected(): void
+    public function test_re_check_in_after_checkout_allowed(): void
     {
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
@@ -346,9 +351,15 @@ class CheckInTest extends TestCase
         $this->freezeUtc(self::MONDAY . ' 15:00:00');
         $this->postJson('/api/v1/hr/attendance/check-out')->assertOk();
 
-        // Attempt a second check-in the same day.
+        // A second check-in the same day now opens a NEW session (201).
         $this->freezeUtc(self::MONDAY . ' 15:05:00');
-        $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(422);
+        $this->postJson('/api/v1/hr/attendance/check-in')
+            ->assertStatus(201)
+            ->assertJsonPath('data.sessions_count', 2);
+
+        // One day row, two sessions.
+        $this->assertSame(1, AttendanceRecord::where('user_id', $user->id)->count());
+        $this->assertSame(2, CheckInSession::where('user_id', $user->id)->count());
     }
 
     // ── Edge 11: check-in on an off day keeps status + flags it ────────────
@@ -468,7 +479,7 @@ class CheckInTest extends TestCase
         );
     }
 
-    // ── Edge 15: null-guard blocks a second concurrent check-in ────────────
+    // ── Edge 15: open-session guard blocks a second concurrent check-in ────
 
     public function test_concurrent_check_in_only_one_succeeds(): void
     {
@@ -476,9 +487,9 @@ class CheckInTest extends TestCase
         $user = $this->createUser($org, 'employee');
         $this->actingAs($user, 'sanctum');
 
-        // Simulate the "first" transaction having already written check_in_at for
-        // today's row. The lockForUpdate + null-guard must reject the second attempt.
-        AttendanceRecord::factory()->create([
+        // Simulate the "first" transaction having already opened a session for today's
+        // row. The lockForUpdate + open-session guard must reject the second attempt.
+        $record = AttendanceRecord::factory()->create([
             'organization_id' => $org->id,
             'user_id' => $user->id,
             'date' => self::MONDAY,
@@ -487,10 +498,21 @@ class CheckInTest extends TestCase
             'check_in_status' => 'on_time',
             'check_in_late_minutes' => 0,
             'check_out_at' => null,
+            'sessions_count' => 1,
+        ]);
+        CheckInSession::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $user->id,
+            'attendance_record_id' => $record->id,
+            'seq' => 1,
+            'check_in_at' => Carbon::parse(self::MONDAY . ' 06:35:00', 'UTC'),
+            'check_out_at' => null,
         ]);
 
         $this->freezeUtc(self::MONDAY . ' 06:40:00');
-        $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(409);
+        $this->postJson('/api/v1/hr/attendance/check-in')
+            ->assertStatus(422)
+            ->assertJsonPath('error.message', 'You already have an open check-in. Please check out first.');
 
         $this->assertSame(1, AttendanceRecord::where('user_id', $user->id)->count());
     }

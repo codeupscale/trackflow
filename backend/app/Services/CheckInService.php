@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\AttendancePolicy;
 use App\Models\AttendanceRecord;
+use App\Models\CheckInSession;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
@@ -77,64 +78,89 @@ class CheckInService
         $lateAt = Carbon::parse("{$date} {$policy->late_threshold}", $tz);
 
         return DB::transaction(function () use ($user, $policy, $tz, $now, $local, $date, $officialStart, $lateAt) {
-            // Lock today's row if it already exists (it may have been pre-created by the
-            // nightly attendance job with a null check_in_at, so the unique constraint
-            // alone cannot guard the check-in — we need the row lock + null check).
-            $existing = AttendanceRecord::withoutGlobalScopes()
-                ->where('organization_id', $user->organization_id)
-                ->where('user_id', $user->id)
-                ->where('date', $date)
-                ->lockForUpdate()
-                ->first();
-
-            // Already completed (checked in AND out) for the day — single pair per day (v1).
-            if ($existing && $existing->check_out_at !== null) {
-                abort(422, 'You have already completed your check-in and checkout for today.');
-            }
-
-            // Already checked in (open session) — duplicate.
-            if ($existing && $existing->check_in_at !== null) {
-                $at = $existing->check_in_at->copy()->setTimezone($tz)->format('g:i A');
-                abort(409, "You already checked in at {$at}.");
-            }
-
-            // Enforce the check-in window unless early check-in is allowed.
-            if (! $policy->allow_early_check_in && $local->lt($officialStart)) {
-                $opensAt = $officialStart->format('g:i A');
-                abort(422, "Check-in opens at {$opensAt} ({$tz}).");
-            }
-
-            // On-time vs late. Boundary (exactly the late threshold) counts as on-time.
-            $isLate = $local->gt($lateAt);
-            $checkInStatus = $isLate ? 'late' : 'on_time';
-            // Late minutes are measured from the OFFICIAL START, not the threshold.
-            $lateMinutes = $isLate ? (int) $officialStart->diffInMinutes($local) : 0;
-
-            // Advisory flags (do not block the check-in).
-            $flags = [];
-            if ($this->attendanceService->isOnApprovedLeave($user, $date)) {
-                $flags['on_approved_leave'] = true;
-            }
-            if ($this->attendanceService->isOffDay($user, $date)) {
-                $flags['worked_on_off_day'] = true;
-            }
-
-            $status = $this->checkedInStatus($user, $date);
-
-            $record = AttendanceRecord::withoutGlobalScopes()->updateOrCreate(
+            // 1. Ensure the day row exists. The unique(org,user,date) index serializes the
+            //    first-of-day check-in even under concurrency. The row may already exist
+            //    (nightly attendance job pre-creates it with a null check_in_at), in which
+            //    case its status/columns are left as-is here.
+            $record = AttendanceRecord::withoutGlobalScopes()->firstOrCreate(
                 [
                     'organization_id' => $user->organization_id,
                     'user_id' => $user->id,
                     'date' => $date,
                 ],
                 [
-                    'check_in_at' => $now,
-                    'check_in_status' => $checkInStatus,
-                    'check_in_late_minutes' => $lateMinutes,
-                    'status' => $status,
-                    'check_in_flags' => $flags ?: null,
+                    // Same default status v1 wrote on create; overwritten below for the
+                    // first successful check-in and re-derived by the nightly job.
+                    'status' => $this->checkedInStatus($user, $date),
                 ]
             );
+
+            // 2. Re-select under a row lock — the day-lock anchor for the whole transaction.
+            $record = AttendanceRecord::withoutGlobalScopes()
+                ->where('organization_id', $user->organization_id)
+                ->whereKey($record->id)
+                ->lockForUpdate()
+                ->first();
+
+            // 3. Open-session guard: a user may only have one open session at a time.
+            $hasOpen = CheckInSession::withoutGlobalScopes()
+                ->where('organization_id', $user->organization_id)
+                ->where('attendance_record_id', $record->id)
+                ->open()
+                ->exists();
+
+            if ($hasOpen) {
+                abort(422, 'You already have an open check-in. Please check out first.');
+            }
+
+            // 4. Hard pre-window block on EVERY check-in (not only the first). The day row
+            //    may already exist from firstOrCreate — we simply do not create a session
+            //    and do not mutate any check-in fields.
+            if (! $policy->allow_early_check_in && $local->lt($officialStart)) {
+                $opensAt = $officialStart->format('g:i A');
+                abort(422, "Check-in opens at {$opensAt} ({$tz}).");
+            }
+
+            // 5. First-check-in-owned fields (late/status/flags), computed ONCE and never
+            //    recomputed on subsequent sessions.
+            $isFirst = $record->sessions()->count() === 0;
+            if ($isFirst) {
+                // On-time vs late. Boundary (exactly the late threshold) counts as on-time.
+                $isLate = $local->gt($lateAt);
+                // Late minutes are measured from the OFFICIAL START, not the threshold.
+                $lateMinutes = $isLate ? (int) $officialStart->diffInMinutes($local) : 0;
+
+                // Advisory flags (do not block the check-in).
+                $flags = [];
+                if ($this->attendanceService->isOnApprovedLeave($user, $date)) {
+                    $flags['on_approved_leave'] = true;
+                }
+                if ($this->attendanceService->isOffDay($user, $date)) {
+                    $flags['worked_on_off_day'] = true;
+                }
+
+                $record->update([
+                    'check_in_status' => $isLate ? 'late' : 'on_time',
+                    'check_in_late_minutes' => $lateMinutes,
+                    'status' => $this->checkedInStatus($user, $date),
+                    'check_in_flags' => $flags ?: null,
+                ]);
+            }
+
+            // 6-7. Append the new session with the next per-day sequence number.
+            $seq = ($record->sessions()->max('seq') ?? 0) + 1;
+
+            CheckInSession::create([
+                'organization_id' => $user->organization_id,
+                'user_id' => $user->id,
+                'attendance_record_id' => $record->id,
+                'seq' => $seq,
+                'check_in_at' => $now,
+                'check_out_at' => null,
+            ]);
+
+            // 8. Recompute the day rollup columns from the session set.
+            $this->recomputeRecordRollups($record, $policy);
 
             return $record->refresh();
         });
@@ -146,66 +172,121 @@ class CheckInService
     public function checkOut(User $user): AttendanceRecord
     {
         $policy = $this->getPolicy($user->organization_id);
-        $tz = $policy->timezone;
 
         $now = now(); // UTC, authoritative
 
-        return DB::transaction(function () use ($user, $policy, $tz, $now) {
-            // Find the open session (checked in, not yet out) within the lookback window,
-            // so a forgotten checkout that crosses midnight still links to its check-in.
-            $record = AttendanceRecord::withoutGlobalScopes()
+        return DB::transaction(function () use ($user, $policy, $now) {
+            // 1. Locate the open session (no lock yet — we only need its record id). The
+            //    36h lookback lets a forgotten checkout that crosses midnight still close
+            //    the prior day's open session.
+            $session = CheckInSession::withoutGlobalScopes()
                 ->where('organization_id', $user->organization_id)
                 ->where('user_id', $user->id)
-                ->openSessions()
+                ->open()
                 ->where('check_in_at', '>=', $now->copy()->subHours(self::OPEN_SESSION_LOOKBACK_HOURS))
                 ->orderByDesc('check_in_at')
-                ->lockForUpdate()
                 ->first();
 
-            if (! $record) {
+            if (! $session) {
                 abort(422, 'No open check-in found. Please check in first.');
             }
 
-            $checkInAt = $record->check_in_at; // Carbon (UTC)
+            // 2. Lock the parent record FIRST (consistent record → session lock order to
+            //    avoid deadlock with checkIn, which locks the record then the session).
+            $record = AttendanceRecord::withoutGlobalScopes()
+                ->where('organization_id', $user->organization_id)
+                ->whereKey($session->attendance_record_id)
+                ->lockForUpdate()
+                ->first();
 
-            // Checkout must be strictly after check-in.
-            if ($now->lessThanOrEqualTo($checkInAt)) {
+            // 3. Re-fetch the session under lock, still open. A concurrent checkout may
+            //    have closed it between step 1 and the lock.
+            $session = CheckInSession::withoutGlobalScopes()
+                ->where('organization_id', $user->organization_id)
+                ->whereKey($session->id)
+                ->open()
+                ->lockForUpdate()
+                ->first();
+
+            if (! $record || ! $session) {
+                abort(422, 'No open check-in found. Please check in first.');
+            }
+
+            // 4. Checkout must be strictly after this session's check-in.
+            if ($now->lessThanOrEqualTo($session->check_in_at)) {
                 abort(422, 'Checkout time must be after the check-in time.');
             }
 
-            // Absolute instants — spans midnight correctly.
-            $workedSeconds = (int) $checkInAt->diffInSeconds($now);
+            // 5. Close the session. Early/overtime for the day are derived from the LAST
+            //    checkout inside recomputeRecordRollups.
+            $session->update(['check_out_at' => $now]);
 
-            // Compare against the OFF time of the record's own day (the check-in day).
-            $recordDate = $record->date instanceof Carbon
-                ? $record->date->toDateString()
-                : Carbon::parse((string) $record->date)->toDateString();
-            $offAt = Carbon::parse("{$recordDate} {$policy->checkout_time}", $tz);
-            $localNow = $now->copy()->setTimezone($tz);
-
-            $isEarly = false;
-            $earlyMinutes = 0;
-            $overtimeMinutes = 0;
-
-            if ($localNow->lt($offAt)) {
-                // Left before the official off time.
-                $isEarly = true;
-                $earlyMinutes = (int) $localNow->diffInMinutes($offAt);
-            } else {
-                // At or after the off time — overtime (exactly the off time = 0 OT, normal).
-                $overtimeMinutes = (int) $offAt->diffInMinutes($localNow);
-            }
-
-            $record->update([
-                'check_out_at' => $now,
-                'worked_seconds' => $workedSeconds,
-                'is_early_checkout' => $isEarly,
-                'check_out_early_minutes' => $earlyMinutes,
-                'check_out_overtime_minutes' => $overtimeMinutes,
-            ]);
+            // 6. Recompute the day rollup columns from the session set.
+            $this->recomputeRecordRollups($record, $policy);
 
             return $record->refresh();
         });
+    }
+
+    /**
+     * Recompute a day record's rollup columns from its (non-deleted) session set.
+     *
+     * Invariants:
+     *   - worked_seconds = SUM of CLOSED session durations (open gaps excluded, absolute
+     *     instant diff so a session spanning midnight is counted correctly).
+     *   - check_in_at    = the FIRST session's check-in (drives "late" — owned by checkIn).
+     *   - check_out_at   = the LAST CLOSED session's checkout (drives early/overtime).
+     *
+     * MUST NOT touch check_in_status / check_in_late_minutes / check_in_flags / status —
+     * those are first-check-in-owned and set once in checkIn().
+     */
+    private function recomputeRecordRollups(AttendanceRecord $record, AttendancePolicy $policy): void
+    {
+        $tz = $policy->timezone;
+
+        $sessions = $record->sessions()->orderBy('check_in_at')->get();
+        $first = $sessions->first();
+        $closed = $sessions->whereNotNull('check_out_at');
+
+        // Absolute-instant diff — spans midnight correctly.
+        $worked = (int) $closed->sum(
+            fn (CheckInSession $s) => $s->check_in_at->diffInSeconds($s->check_out_at)
+        );
+
+        /** @var Carbon|null $lastClosedOut */
+        $lastClosedOut = $closed->max('check_out_at');
+
+        // Off time of the record's own day (rebuilt per-date so DST is handled).
+        $recordDate = $record->date instanceof Carbon
+            ? $record->date->toDateString()
+            : Carbon::parse((string) $record->date)->toDateString();
+        $offAt = Carbon::parse("{$recordDate} {$policy->checkout_time}", $tz);
+
+        $isEarly = false;
+        $earlyMinutes = 0;
+        $overtimeMinutes = 0;
+
+        if ($lastClosedOut !== null) {
+            $localOut = $lastClosedOut->copy()->setTimezone($tz);
+            if ($localOut->lt($offAt)) {
+                // Left before the official off time.
+                $isEarly = true;
+                $earlyMinutes = (int) $localOut->diffInMinutes($offAt);
+            } else {
+                // At or after the off time — overtime (exactly the off time = 0 OT, normal).
+                $overtimeMinutes = (int) $offAt->diffInMinutes($localOut);
+            }
+        }
+
+        $record->update([
+            'check_in_at' => $first?->check_in_at,
+            'check_out_at' => $lastClosedOut,
+            'worked_seconds' => $closed->isEmpty() ? null : $worked,
+            'sessions_count' => $sessions->count(),
+            'is_early_checkout' => $isEarly,
+            'check_out_early_minutes' => $earlyMinutes,
+            'check_out_overtime_minutes' => $overtimeMinutes,
+        ]);
     }
 
     /**
@@ -229,27 +310,67 @@ class CheckInService
         // No record for today yet — surface an open session from a prior day (forgotten
         // checkout) so the client can still show the running timer and offer checkout.
         if (! $record) {
-            $record = AttendanceRecord::withoutGlobalScopes()
+            $openSession = CheckInSession::withoutGlobalScopes()
                 ->where('organization_id', $user->organization_id)
                 ->where('user_id', $user->id)
-                ->openSessions()
+                ->open()
                 ->where('check_in_at', '>=', $now->copy()->subHours(self::OPEN_SESSION_LOOKBACK_HOURS))
                 ->orderByDesc('check_in_at')
                 ->first();
+
+            if ($openSession) {
+                $record = AttendanceRecord::withoutGlobalScopes()
+                    ->where('organization_id', $user->organization_id)
+                    ->whereKey($openSession->attendance_record_id)
+                    ->first();
+            }
         }
 
-        $checkInAt = $record?->check_in_at;
-        $checkOutAt = $record?->check_out_at;
+        $sessions = $record
+            ? $record->sessions()->orderBy('seq')->get()
+            : collect();
 
-        // For an open session, worked_seconds is the live elapsed time.
-        $workedSeconds = $record?->worked_seconds;
-        if ($checkInAt && ! $checkOutAt) {
-            $workedSeconds = (int) $checkInAt->diffInSeconds($now);
-        }
+        $openSession = $sessions->firstWhere('check_out_at', null);
+        $hasOpenSession = $openSession !== null;
+
+        // FE ticker base: sum of already-closed session durations. The client adds the
+        // live elapsed time of the open session on top of this.
+        $closedWorked = (int) $sessions
+            ->whereNotNull('check_out_at')
+            ->sum(fn (CheckInSession $s) => $s->check_in_at->diffInSeconds($s->check_out_at));
+
+        $sessionsPayload = $sessions->map(function (CheckInSession $s) use ($tz) {
+            $out = $s->check_out_at;
+            $worked = $out !== null ? (int) $s->check_in_at->diffInSeconds($out) : null;
+
+            return [
+                'seq' => (int) $s->seq,
+                'check_in_at' => $s->check_in_at->toIso8601String(),
+                'check_in_at_local' => $s->check_in_at->copy()->setTimezone($tz)->toIso8601String(),
+                'check_out_at' => $out?->toIso8601String(),
+                'check_out_at_local' => $out?->copy()->setTimezone($tz)->toIso8601String(),
+                'worked_seconds' => $worked,
+                'worked_hhmm' => $this->formatHhmm($worked),
+                'is_open' => $out === null,
+            ];
+        })->values()->all();
+
+        $checkInAt = $record?->check_in_at;   // first session's check-in (rollup)
+        $checkOutAt = $record?->check_out_at; // last CLOSED session's checkout (rollup)
 
         return [
-            'checked_in' => $checkInAt !== null,
-            'checked_out' => $checkOutAt !== null,
+            // Live session-state flags (drive the check-in/checkout button + timer).
+            'checked_in' => $hasOpenSession,
+            'checked_out' => $sessions->count() > 0 && ! $hasOpenSession,
+            'has_open_session' => $hasOpenSession,
+            'can_check_in' => ! $hasOpenSession,
+            'can_check_out' => $hasOpenSession,
+            'sessions_count' => $sessions->count(),
+            'closed_worked_seconds' => $closedWorked,
+            'open_check_in_at' => $openSession?->check_in_at?->toIso8601String(),
+            'sessions' => $sessionsPayload,
+
+            // Day rollup (existing v1 keys preserved).
             'check_in_at' => $checkInAt?->toIso8601String(),
             'check_in_at_local' => $checkInAt?->copy()->setTimezone($tz)->toIso8601String(),
             'check_out_at' => $checkOutAt?->toIso8601String(),
@@ -260,8 +381,10 @@ class CheckInService
             'check_out_early_minutes' => (int) ($record?->check_out_early_minutes ?? 0),
             'check_out_overtime_minutes' => (int) ($record?->check_out_overtime_minutes ?? 0),
             'missing_checkout' => (bool) ($record?->missing_checkout ?? false),
-            'worked_seconds' => $workedSeconds,
-            'worked_hhmm' => $this->formatHhmm($workedSeconds),
+            // Day worked total = closed sum (null until a session closes). FE adds the
+            // live open-session elapsed on top for the running display.
+            'worked_seconds' => $record?->worked_seconds,
+            'worked_hhmm' => $this->formatHhmm($record?->worked_seconds),
             'status' => $record?->status,
             'check_in_flags' => $record?->check_in_flags,
             'server_now' => $now->toIso8601String(),
@@ -327,11 +450,18 @@ class CheckInService
         $policy = $this->getPolicy($orgId);
         $today = now()->setTimezone($policy->timezone)->toDateString();
 
+        // Records from a past org-local day that still carry an OPEN session. The session
+        // is deliberately left open (no fabricated check_out_at) for regularization; we
+        // only flag the record and recompute its rollup from already-closed sessions.
         $stale = AttendanceRecord::withoutGlobalScopes()
             ->where('organization_id', $orgId)
-            ->openSessions()
             ->where('missing_checkout', false)
             ->where('date', '<', $today)
+            ->whereHas('sessions', function ($q) use ($orgId) {
+                $q->withoutGlobalScopes()
+                    ->where('organization_id', $orgId)
+                    ->whereNull('check_out_at');
+            })
             ->get();
 
         $count = 0;
@@ -343,6 +473,9 @@ class CheckInService
                 'missing_checkout' => true,
                 'check_in_flags' => $flags,
             ]);
+
+            // Rollup reflects the already-closed sessions; the open one stays open.
+            $this->recomputeRecordRollups($record, $policy);
 
             $count++;
         }
@@ -414,6 +547,8 @@ class CheckInService
                 'name' => $record->user?->name,
                 'email' => $record->user?->email,
                 'date' => $date,
+                'sessions_count' => (int) $record->sessions_count,
+                // check_in / check_out are the day rollup: first-in / last-out.
                 'check_in' => $record->check_in_at?->copy()->setTimezone($tz)->format('Y-m-d H:i:s'),
                 'check_out' => $record->check_out_at?->copy()->setTimezone($tz)->format('Y-m-d H:i:s'),
                 'worked_hhmm' => $this->formatHhmm($record->worked_seconds),

@@ -3,6 +3,7 @@ import {
   computeClockOffset,
   elapsedSeconds,
   formatElapsed,
+  formatDuration,
   formatHhmm,
   deriveCheckInBadgeStatus,
 } from '@/lib/check-in-time';
@@ -107,6 +108,31 @@ describe('formatElapsed', () => {
 
   it('clamps negatives to zero', () => {
     expect(formatElapsed(-10)).toBe('00:00:00');
+  });
+});
+
+describe('formatDuration — unambiguous "Xh Ym" totals', () => {
+  it('renders 0m for zero / sub-minute / null / undefined / negative', () => {
+    expect(formatDuration(0)).toBe('0m');
+    expect(formatDuration(59)).toBe('0m');
+    expect(formatDuration(null)).toBe('0m');
+    expect(formatDuration(undefined)).toBe('0m');
+    expect(formatDuration(-100)).toBe('0m');
+  });
+
+  it('floors to whole minutes below an hour', () => {
+    expect(formatDuration(90)).toBe('1m'); // 1m30s → 1m
+    expect(formatDuration(31800)).not.toBe('8h'); // sanity: 8h50m has minutes
+  });
+
+  it('renders whole hours with no minutes as "Xh"', () => {
+    expect(formatDuration(3600)).toBe('1h');
+    expect(formatDuration(8 * 3600)).toBe('8h');
+  });
+
+  it('renders hours + minutes as "Xh Ym"', () => {
+    expect(formatDuration(3660)).toBe('1h 1m');
+    expect(formatDuration(31800)).toBe('8h 50m'); // 8h50m
   });
 });
 

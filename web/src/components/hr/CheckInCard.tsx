@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Clock, LogIn, LogOut, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
+import { Clock, LogIn, LogOut, AlertTriangle, Loader2 } from 'lucide-react';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CheckInStatusBadge } from '@/components/hr/CheckInStatusBadge';
 import { useTodayStatus, useCheckIn, useCheckOut } from '@/hooks/hr/use-check-in';
@@ -13,8 +13,9 @@ import {
   computeClockOffset,
   elapsedSeconds,
   formatElapsed,
+  formatDuration,
 } from '@/lib/check-in-time';
-import { cn } from '@/lib/utils';
+import type { CheckInSessionRow } from '@/lib/validations/attendance';
 
 // Format a UTC ISO instant as a wall-clock time in the org policy timezone.
 // Falls back to the browser locale time if the timezone is invalid/unknown.
@@ -34,6 +35,39 @@ function formatClockTime(iso: string | null | undefined, timezone: string): stri
       minute: '2-digit',
     }).format(date);
   }
+}
+
+// One line per session. Closed: "#1  11:40 AM → 2:34 PM · 2h 54m".
+// Open:            "#2  3:00 PM → in progress".
+function SessionRow({
+  session,
+  timezone,
+}: {
+  session: CheckInSessionRow;
+  timezone: string;
+}) {
+  return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+      <span className="font-medium text-foreground tabular-nums">#{session.seq}</span>
+      <span className="tabular-nums">
+        {formatClockTime(session.check_in_at, timezone)}
+      </span>
+      <span aria-hidden>→</span>
+      {session.is_open ? (
+        <span className="italic">in progress</span>
+      ) : (
+        <>
+          <span className="tabular-nums">
+            {formatClockTime(session.check_out_at, timezone)}
+          </span>
+          <span aria-hidden>·</span>
+          <span className="font-medium text-foreground tabular-nums">
+            {formatDuration(session.worked_seconds)}
+          </span>
+        </>
+      )}
+    </div>
+  );
 }
 
 export function CheckInCard({ className }: { className?: string }) {
@@ -56,7 +90,7 @@ export function CheckInCard({ className }: { className?: string }) {
     }
   }, [data?.server_now]);
 
-  const isLive = Boolean(data?.checked_in && !data?.checked_out);
+  const isLive = Boolean(data?.has_open_session);
 
   // The interval ONLY forces a re-render. Elapsed is derived from wall-clock on
   // every render (below) — a slow or dropped tick can never accumulate drift.
@@ -96,13 +130,26 @@ export function CheckInCard({ className }: { className?: string }) {
 
   const timezone = data.policy?.timezone ?? 'UTC';
   const flags = data.check_in_flags ?? {};
+  const sessions = data.sessions ?? [];
 
-  // Live elapsed (checked in, not out) is derived; after checkout we show the
-  // server's frozen worked_hhmm. Before mount we render a stable placeholder.
-  const liveElapsed =
-    mounted && isLive
-      ? formatElapsed(elapsedSeconds(data.check_in_at, offsetRef.current, Date.now()))
-      : '00:00:00';
+  // ── State machine ──────────────────────────────────────────────────
+  // not_checked_in : sessions_count === 0
+  // live           : has_open_session
+  // idle_can_recheck : sessions_count > 0 && !has_open_session
+  // Transitions loop: not_checked_in → live → idle_can_recheck → live → …
+  // Next org-local day → payload returns sessions_count 0 → not_checked_in.
+  const notCheckedIn = data.sessions_count === 0;
+
+  // Day-total LIVE ticker (HH:MM:SS). Derived every render from closed sessions +
+  // the currently-open session's elapsed — NEVER an accumulating counter. Before
+  // mount we render a stable placeholder to avoid hydration mismatch.
+  const tickerSeconds =
+    data.closed_worked_seconds +
+    elapsedSeconds(data.open_check_in_at, offsetRef.current, Date.now());
+  const liveTotal = mounted && isLive ? formatElapsed(tickerSeconds) : '00:00:00';
+
+  // Frozen day total after checkout — unambiguous "Xh Ym" scheme (not a clock).
+  const frozenTotal = formatDuration(data.worked_seconds);
 
   return (
     <Card className={className}>
@@ -115,52 +162,35 @@ export function CheckInCard({ className }: { className?: string }) {
       <CardContent className="flex flex-col gap-4">
         {/* Status line */}
         <div className="flex flex-col gap-2">
-          {!data.checked_in ? (
+          {notCheckedIn ? (
             <p className="text-sm text-muted-foreground">
               You haven&apos;t checked in today.
             </p>
-          ) : data.checked_out ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm text-foreground">
-                Checked in at{' '}
-                <span className="font-medium tabular-nums">
-                  {formatClockTime(data.check_in_at, timezone)}
-                </span>
-                {data.check_out_at && (
-                  <>
-                    {' '}
-                    · out at{' '}
-                    <span className="font-medium tabular-nums">
-                      {formatClockTime(data.check_out_at, timezone)}
-                    </span>
-                  </>
-                )}
-              </span>
-              {data.check_in_status === 'late' && (
-                <CheckInStatusBadge status="late" />
-              )}
-              {data.is_early_checkout && (
-                <CheckInStatusBadge status="early_checkout" />
-              )}
-            </div>
           ) : (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm text-foreground">
-                Checked in at{' '}
-                <span className="font-medium tabular-nums">
-                  {formatClockTime(data.check_in_at, timezone)}
+                {isLive ? 'Currently checked in' : 'Checked out'}
+                {' · '}
+                <span className="tabular-nums">
+                  {data.sessions_count}{' '}
+                  {data.sessions_count === 1 ? 'session' : 'sessions'}
                 </span>
               </span>
+              {/* Day-level check-in signal badges (first check-in / last checkout). */}
               {data.check_in_status === 'late' && (
                 <CheckInStatusBadge status="late" />
+              )}
+              {!isLive && data.is_early_checkout && (
+                <CheckInStatusBadge status="early_checkout" />
+              )}
+              {!isLive && data.missing_checkout && (
+                <CheckInStatusBadge status="missing_checkout" />
               )}
             </div>
           )}
 
           {/* Advisory / warning flags */}
-          {(flags.on_approved_leave ||
-            flags.worked_on_off_day ||
-            data.missing_checkout) && (
+          {(flags.on_approved_leave || flags.worked_on_off_day) && (
             <div className="flex flex-wrap items-center gap-2">
               {flags.on_approved_leave && (
                 <CheckInStatusBadge status="on_approved_leave" />
@@ -168,50 +198,46 @@ export function CheckInCard({ className }: { className?: string }) {
               {flags.worked_on_off_day && (
                 <CheckInStatusBadge status="worked_on_off_day" />
               )}
-              {data.missing_checkout && (
-                <CheckInStatusBadge status="missing_checkout" />
-              )}
             </div>
           )}
         </div>
 
-        {/* Live elapsed clock (only while an open session is running) */}
-        {isLive && (
+        {/* Day total — LIVE ticker (HH:MM:SS) while a session is open, otherwise
+            the frozen total as "Xh Ym". One consistent scheme: clock while live,
+            duration when idle. */}
+        {isLive ? (
           <div
             className="text-3xl font-bold tabular-nums text-foreground"
             aria-live="off"
-            aria-label="Elapsed time since check-in"
+            aria-label="Total time worked today"
           >
-            {liveElapsed}
+            {liveTotal}
           </div>
+        ) : (
+          data.sessions_count > 0 && (
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-bold tabular-nums text-foreground">
+                {frozenTotal}
+              </span>
+              <span className="text-xs text-muted-foreground">worked today</span>
+            </div>
+          )
         )}
 
-        {/* Frozen worked total after checkout */}
-        {data.checked_out && data.worked_hhmm && (
-          <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-bold tabular-nums text-foreground">
-              {data.worked_hhmm}
-            </span>
-            <span className="text-xs text-muted-foreground">worked</span>
-          </div>
+        {/* Session list (live + idle_can_recheck) */}
+        {sessions.length > 0 && (
+          <ul className="flex flex-col gap-1.5">
+            {sessions.map((session, idx) => (
+              <li key={session.seq} className="flex flex-col gap-1.5">
+                {idx > 0 && <Separator />}
+                <SessionRow session={session} timezone={timezone} />
+              </li>
+            ))}
+          </ul>
         )}
 
         {/* Primary action */}
-        {!data.checked_in ? (
-          <Button
-            size="lg"
-            className="w-full"
-            disabled={checkIn.isPending}
-            onClick={() => checkIn.mutate()}
-          >
-            {checkIn.isPending ? (
-              <Loader2 className="animate-spin" data-icon="inline-start" />
-            ) : (
-              <LogIn data-icon="inline-start" />
-            )}
-            Check In
-          </Button>
-        ) : !data.checked_out ? (
+        {data.can_check_out ? (
           <Button
             size="lg"
             variant="destructive"
@@ -229,12 +255,16 @@ export function CheckInCard({ className }: { className?: string }) {
         ) : (
           <Button
             size="lg"
-            variant="outline"
-            className={cn('w-full', 'pointer-events-none')}
-            disabled
+            className="w-full"
+            disabled={checkIn.isPending || !data.can_check_in}
+            onClick={() => checkIn.mutate()}
           >
-            <CheckCircle2 data-icon="inline-start" />
-            Completed for today
+            {checkIn.isPending ? (
+              <Loader2 className="animate-spin" data-icon="inline-start" />
+            ) : (
+              <LogIn data-icon="inline-start" />
+            )}
+            {notCheckedIn ? 'Check In' : 'Check In again'}
           </Button>
         )}
       </CardContent>
