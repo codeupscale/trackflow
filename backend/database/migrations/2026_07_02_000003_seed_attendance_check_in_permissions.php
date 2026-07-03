@@ -19,14 +19,26 @@ use Illuminate\Support\Str;
  *   manager -> hr_manager
  *   employee-> employee
  * check_in is a universal personal action, so it is granted to every non-owner
- * staff role; manage_policy is admin-only (org_manager).
+ * staff role. manage_policy (edit the check-in windows) goes to org_manager AND
+ * hr_manager — matching PermissionSeeder's approved matrix so migration-upgraded
+ * orgs do not drift from fresh installs (finance excluded, owner bypass-only).
+ *
+ * view_all + export (added post-release): org-wide check-in visibility and CSV
+ * download. Granted to org_manager, hr_manager and finance_manager (finance needs
+ * org-wide attendance because payroll depends on late/early/worked-hours) — this
+ * mirrors PermissionSeeder's final matrix so existing orgs (migrations-only, no
+ * fresh seed) are not left with NOBODY holding these and silently 403'd. Owner is
+ * bypass-only in PermissionSeeder (no explicit role_permissions rows), so it is
+ * intentionally NOT granted here.
  */
 return new class extends Migration
 {
     // New permissions to insert (key, module, action, description, has_scope)
     private array $newPermissions = [
-        ['attendance.check_in',      'attendance', 'check_in',      'Check in and check out for the day',   false],
-        ['attendance.manage_policy', 'attendance', 'manage_policy', 'Configure attendance check-in policy', false],
+        ['attendance.check_in',      'attendance', 'check_in',      'Check in and check out for the day',           false],
+        ['attendance.manage_policy', 'attendance', 'manage_policy', 'Configure attendance check-in policy',         false],
+        ['attendance.view_all',      'attendance', 'view_all',      'View all employees check-in records org-wide', false],
+        ['attendance.export',        'attendance', 'export',        'Export attendance / check-in reports',         false],
     ];
 
     // role name => [ permission_key => scope ]
@@ -34,12 +46,19 @@ return new class extends Migration
         'org_manager' => [
             'attendance.check_in'      => 'none',
             'attendance.manage_policy' => 'none',
+            'attendance.view_all'      => 'none',
+            'attendance.export'        => 'none',
         ],
         'hr_manager' => [
-            'attendance.check_in' => 'none',
+            'attendance.check_in'      => 'none',
+            'attendance.manage_policy' => 'none',
+            'attendance.view_all'      => 'none',
+            'attendance.export'        => 'none',
         ],
         'finance_manager' => [
             'attendance.check_in' => 'none',
+            'attendance.view_all' => 'none',
+            'attendance.export'   => 'none',
         ],
         'employee' => [
             'attendance.check_in' => 'none',

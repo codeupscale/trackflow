@@ -62,6 +62,29 @@ class ReportExportFormatter
         return $row->{$key} ?? $default;
     }
 
+    /**
+     * OWASP CSV-injection (formula / DDE) mitigation. Employee-controlled cells
+     * (name, email, …) can start with a formula trigger — =HYPERLINK(...), +, -,
+     * @, or a leading TAB/CR for DDE — which spreadsheet apps execute on open.
+     * Prefix any such string with a single quote so it is treated as literal text.
+     *
+     * Prefix-based and string-only: numbers, ISO dates ("2026-03-16") and HH:MM
+     * totals ("09:05") never begin with these characters, so they pass through
+     * unchanged. Non-string values are returned as-is.
+     */
+    private static function neutralizeCsv($value)
+    {
+        if (! is_string($value) || $value === '') {
+            return $value;
+        }
+
+        if (in_array($value[0], ['=', '+', '-', '@', "\t", "\r"], true)) {
+            return "'" . $value;
+        }
+
+        return $value;
+    }
+
     private static function summaryCsv($out, array $data): void
     {
         fputcsv($out, ['Date', 'Time Utilized (h)', 'Idle (h)', 'Total (h)', 'Activity %', 'Entries']);
@@ -165,14 +188,15 @@ class ReportExportFormatter
         ]);
 
         foreach ($rows as $row) {
+            // All string cells pass through neutralizeCsv (formula-injection guard).
             fputcsv($out, [
-                self::val($row, 'name'),
-                self::val($row, 'email'),
-                self::val($row, 'date'),
-                self::val($row, 'check_in'),
-                self::val($row, 'check_out'),
-                self::val($row, 'worked_hhmm'),
-                self::val($row, 'status'),
+                self::neutralizeCsv(self::val($row, 'name')),
+                self::neutralizeCsv(self::val($row, 'email')),
+                self::neutralizeCsv(self::val($row, 'date')),
+                self::neutralizeCsv(self::val($row, 'check_in')),
+                self::neutralizeCsv(self::val($row, 'check_out')),
+                self::neutralizeCsv(self::val($row, 'worked_hhmm')),
+                self::neutralizeCsv(self::val($row, 'status')),
                 self::val($row, 'late_minutes', 0),
                 self::val($row, 'early_minutes', 0),
                 self::val($row, 'overtime_minutes', 0),
@@ -202,10 +226,11 @@ class ReportExportFormatter
 
         foreach ($rows as $row) {
             $user = self::val($row, 'user', []);
+            // name/email are employee-controlled → neutralize the formula-injection risk.
             fputcsv($out, [
-                is_array($user) ? ($user['name'] ?? '') : '',
-                is_array($user) ? ($user['email'] ?? '') : '',
-                self::val($row, 'worked_hhmm'),
+                self::neutralizeCsv(is_array($user) ? ($user['name'] ?? '') : ''),
+                self::neutralizeCsv(is_array($user) ? ($user['email'] ?? '') : ''),
+                self::neutralizeCsv(self::val($row, 'worked_hhmm')),
                 self::val($row, 'days_present', 0),
                 self::val($row, 'late_count', 0),
                 self::val($row, 'early_checkout_count', 0),

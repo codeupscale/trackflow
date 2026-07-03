@@ -272,4 +272,34 @@ class CheckInReportTest extends TestCase
         $this->assertNotContains($empA->id, $userIds);
         $this->assertCount(0, $response->json('data'));
     }
+
+    // ── CSV formula-injection neutralization (OWASP) ───────────────────────
+
+    public function test_export_neutralizes_csv_formula_injection_in_detail_and_summary(): void
+    {
+        $org = $this->createOrganization();
+        $hr = $this->createUser($org, 'hr_manager');
+        // Employee-controlled display name carrying a formula/DDE payload.
+        $attacker = $this->createUser($org, 'employee', [
+            'name' => '=cmd|/c calc',
+            'email' => 'attacker@example.test',
+        ]);
+        $this->checkInRecord($org->id, $attacker->id, ['check_in_status' => 'late']);
+
+        $this->actingAs($hr, 'sanctum');
+
+        // Detail export: the name cell must be prefixed with a single quote.
+        $detail = $this->get('/api/v1/hr/attendance/check-ins/export?period=day&date=' . self::DATE);
+        $detail->assertOk();
+        $detailBody = $detail->getContent();
+        $this->assertStringContainsString("'=cmd|/c calc", $detailBody);
+        $this->assertStringNotContainsString(',=cmd|/c calc', $detailBody);
+
+        // Summary export: same neutralization on the rollup row.
+        $summary = $this->get('/api/v1/hr/attendance/check-ins/export?period=day&date=' . self::DATE . '&view=summary');
+        $summary->assertOk();
+        $summaryBody = $summary->getContent();
+        $this->assertStringContainsString("'=cmd|/c calc", $summaryBody);
+        $this->assertStringNotContainsString(',=cmd|/c calc', $summaryBody);
+    }
 }

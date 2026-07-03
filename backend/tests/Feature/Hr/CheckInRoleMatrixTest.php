@@ -213,4 +213,53 @@ class CheckInRoleMatrixTest extends TestCase
             ]);
         }
     }
+
+    // ── Migration ↔ seeder parity for attendance.* grants ──────────────────
+
+    /**
+     * The upgrade migration (existing orgs) must grant the same attendance.*
+     * permissions per role as PermissionSeeder (fresh installs), or upgraded orgs
+     * drift — e.g. hr_manager losing manage_policy. Compares the migration's
+     * $rolePermissions matrix against the seeder role maps for the four check-in-era
+     * keys. Owner is bypass-only in both, so it is excluded.
+     */
+    public function test_migration_grant_matrix_matches_seeder_for_attendance_permissions(): void
+    {
+        $path = database_path('migrations/2026_07_02_000003_seed_attendance_check_in_permissions.php');
+        // Fresh eval avoids the require() include-cache returning int(1) after the
+        // migration was already loaded by RefreshDatabase.
+        $migration = eval('?>' . file_get_contents($path));
+        $prop = (new \ReflectionClass($migration))->getProperty('rolePermissions');
+        $migrationGrants = $prop->getValue($migration);
+
+        $seeder = new \Database\Seeders\PermissionSeeder;
+        $seederMaps = [
+            'org_manager' => $seeder->getOrgManagerPermissions(),
+            'hr_manager' => $seeder->getHrManagerPermissions(),
+            'finance_manager' => $seeder->getFinanceManagerPermissions(),
+            'employee' => $seeder->getEmployeePermissions(),
+        ];
+
+        $keys = [
+            'attendance.check_in',
+            'attendance.manage_policy',
+            'attendance.view_all',
+            'attendance.export',
+        ];
+
+        foreach ($seederMaps as $role => $seederMap) {
+            foreach ($keys as $key) {
+                $inSeeder = array_key_exists($key, $seederMap);
+                $inMigration = array_key_exists($key, $migrationGrants[$role] ?? []);
+                $this->assertSame(
+                    $inSeeder,
+                    $inMigration,
+                    "Migration/seeder parity mismatch for role '{$role}' and permission '{$key}'."
+                );
+            }
+        }
+
+        // Explicit guard for the finding under remediation.
+        $this->assertArrayHasKey('attendance.manage_policy', $migrationGrants['hr_manager']);
+    }
 }
