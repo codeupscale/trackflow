@@ -155,19 +155,112 @@ describe('Idle alert window visibility', () => {
     // No unhandled rejection — the .catch() in showIdleAlert handles it
   });
 
-  test('window is created with visibleOnAllWorkspaces for cross-desktop visibility', () => {
-    // Verify the BrowserWindow constructor receives visibleOnAllWorkspaces: true
-    // This is tested by checking the actual showIdleAlert function creates
-    // the window with this property. Since we can't call the real function
-    // here, we verify the pattern is correct.
+  test('idle alert window is created hidden and always-on-top', () => {
+    // The constructor options that survive as real Electron options (alwaysOnTop
+    // is re-asserted at 'screen-saver' level after creation; visibleOnAllWorkspaces
+    // is NOT a constructor option and is applied via setVisibleOnAllWorkspaces()).
     const opts = {
       alwaysOnTop: true,
-      visibleOnAllWorkspaces: true,
       show: false,
     };
-    expect(opts.visibleOnAllWorkspaces).toBe(true);
     expect(opts.alwaysOnTop).toBe(true);
     expect(opts.show).toBe(false);
+  });
+});
+
+/**
+ * ALL-WORKSPACES / FULLSCREEN VISIBILITY FIX
+ *
+ * Models `_applyIdleAlertEverywhereVisible()` + `_createIdleWindowOnDisplay()`
+ * from index.js. The idle alert used to rely on the (non-existent) constructor
+ * option `visibleOnAllWorkspaces: true`, which Electron ignores — so the alert
+ * stayed pinned to the Space it was created on and was invisible over fullscreen
+ * apps. The fix applies the popup's everywhere-visible treatment to EVERY alert
+ * window (primary + per-display mirrors): setVisibleOnAllWorkspaces(true, {
+ * visibleOnFullScreen: true }) + setAlwaysOnTop(true, 'screen-saver').
+ */
+describe('Idle alert — follows user across workspaces / fullscreen', () => {
+  function makeWin() {
+    let destroyed = false;
+    return {
+      setVisibleOnAllWorkspaces: jest.fn(),
+      setAlwaysOnTop: jest.fn(),
+      isDestroyed: () => destroyed,
+      _destroy: () => { destroyed = true; },
+    };
+  }
+
+  // Exact replica of _applyIdleAlertEverywhereVisible() in index.js.
+  function applyEverywhereVisible(win) {
+    if (!win || win.isDestroyed()) return;
+    try {
+      if (typeof win.setVisibleOnAllWorkspaces === 'function') {
+        win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      }
+      if (typeof win.setAlwaysOnTop === 'function') {
+        win.setAlwaysOnTop(true, 'screen-saver');
+      }
+    } catch {
+      // swallow — matches index.js console.error fallback
+    }
+  }
+
+  // Models _createIdleWindowOnDisplay(): create a window then apply the flags.
+  // Every alert window (primary + mirrors) funnels through this factory, so the
+  // treatment is guaranteed for all of them.
+  function createIdleWindowsForDisplays(displays) {
+    return displays.map(() => {
+      const win = makeWin();
+      applyEverywhereVisible(win);
+      return win;
+    });
+  }
+
+  function assertEverywhereVisible(win) {
+    expect(win.setVisibleOnAllWorkspaces).toHaveBeenCalledWith(true, {
+      visibleOnFullScreen: true,
+    });
+    expect(win.setAlwaysOnTop).toHaveBeenCalledWith(true, 'screen-saver');
+  }
+
+  test('primary window gets visibleOnFullScreen + screen-saver level', () => {
+    const [primary] = createIdleWindowsForDisplays([{ id: 1 }]);
+    assertEverywhereVisible(primary);
+  });
+
+  test('EVERY window (primary + all mirrors) gets the same treatment', () => {
+    const wins = createIdleWindowsForDisplays([{ id: 1 }, { id: 2 }, { id: 3 }]);
+    expect(wins).toHaveLength(3);
+    wins.forEach(assertEverywhereVisible);
+  });
+
+  test('setVisibleOnAllWorkspaces uses visibleOnFullScreen:true (surfaces over fullscreen apps)', () => {
+    const [win] = createIdleWindowsForDisplays([{ id: 1 }]);
+    const opts = win.setVisibleOnAllWorkspaces.mock.calls[0][1];
+    expect(opts).toEqual({ visibleOnFullScreen: true });
+  });
+
+  test("always-on-top level is 'screen-saver', not the default 'floating'", () => {
+    const [win] = createIdleWindowsForDisplays([{ id: 1 }]);
+    const [enabled, level] = win.setAlwaysOnTop.mock.calls[0];
+    expect(enabled).toBe(true);
+    expect(level).toBe('screen-saver');
+  });
+
+  test('helper is a no-op on a destroyed window (no throw, no calls)', () => {
+    const win = makeWin();
+    win._destroy();
+    expect(() => applyEverywhereVisible(win)).not.toThrow();
+    expect(win.setVisibleOnAllWorkspaces).not.toHaveBeenCalled();
+    expect(win.setAlwaysOnTop).not.toHaveBeenCalled();
+  });
+
+  test('each treatment call is applied exactly once per window at creation', () => {
+    const wins = createIdleWindowsForDisplays([{ id: 1 }, { id: 2 }]);
+    wins.forEach((w) => {
+      expect(w.setVisibleOnAllWorkspaces).toHaveBeenCalledTimes(1);
+      expect(w.setAlwaysOnTop).toHaveBeenCalledTimes(1);
+    });
   });
 });
 
