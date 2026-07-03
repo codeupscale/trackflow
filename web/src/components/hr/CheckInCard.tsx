@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
+import { cn } from '@/lib/utils';
 import { CheckInStatusBadge } from '@/components/hr/CheckInStatusBadge';
 import { useTodayStatus, useCheckIn, useCheckOut } from '@/hooks/hr/use-check-in';
 import {
@@ -69,6 +70,16 @@ function SessionRow({
     </div>
   );
 }
+
+// The project's shared `destructive` Button variant is a SOFT tint
+// (`bg-destructive/10 text-destructive`) — as a large primary CTA it reads as
+// disabled. For the Check Out action we want a strong, unmistakably-clickable
+// solid fill. This mirrors shadcn's canonical solid-destructive recipe: in dark
+// mode `--destructive` is a light coral, so `dark:bg-destructive/60` composites
+// it darker and keeps the white label at AA contrast.
+const CHECK_OUT_BUTTON_CLASSES =
+  'w-full bg-destructive text-white shadow-xs hover:bg-destructive/90 ' +
+  'focus-visible:ring-destructive/30 dark:bg-destructive/60 dark:hover:bg-destructive/70';
 
 export function CheckInCard({ className }: { className?: string }) {
   const { data, isLoading, isError } = useTodayStatus();
@@ -161,15 +172,52 @@ export function CheckInCard({ className }: { className?: string }) {
   // Frozen day total after checkout — unambiguous "Xh Ym" scheme (not a clock).
   const frozenTotal = formatDuration(data.worked_seconds);
 
+  const actionButton = data.can_check_out ? (
+    <Button
+      size="lg"
+      variant="destructive"
+      className={CHECK_OUT_BUTTON_CLASSES}
+      disabled={checkOut.isPending}
+      onClick={() => checkOut.mutate()}
+    >
+      {checkOut.isPending ? (
+        <Loader2 className="animate-spin" data-icon="inline-start" />
+      ) : (
+        <LogOut data-icon="inline-start" />
+      )}
+      Check Out
+    </Button>
+  ) : (
+    <Button
+      size="lg"
+      className="w-full"
+      disabled={checkIn.isPending || !data.can_check_in}
+      onClick={() => checkIn.mutate()}
+    >
+      {checkIn.isPending ? (
+        <Loader2 className="animate-spin" data-icon="inline-start" />
+      ) : (
+        <LogIn data-icon="inline-start" />
+      )}
+      {notCheckedIn ? 'Check In' : 'Check In again'}
+    </Button>
+  );
+
   return (
-    <Card className={className}>
+    // `@container` scopes the two-region breakpoint to the CARD's own width, not
+    // the viewport — the card renders in a narrow dashboard slot and a wider HR
+    // page, so a viewport `md:` would wrongly split the layout when the card is
+    // narrow. Below `@lg` (~512px) the regions stack (button full-width, mobile-safe).
+    <Card className={cn('@container/checkin', className)}>
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
           <Clock className="size-4 text-muted-foreground" />
           Attendance
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4">
+      <CardContent className="flex flex-col gap-4 @lg/checkin:flex-row @lg/checkin:items-stretch @lg/checkin:gap-6">
+        {/* LEFT region: status line, day total, session list */}
+        <div className="flex min-w-0 flex-1 flex-col gap-4">
         {/* Status line */}
         <div className="flex flex-col gap-2">
           {notCheckedIn ? (
@@ -249,38 +297,14 @@ export function CheckInCard({ className }: { className?: string }) {
             ))}
           </ul>
         )}
+        </div>
 
-        {/* Primary action */}
-        {data.can_check_out ? (
-          <Button
-            size="lg"
-            variant="destructive"
-            className="w-full"
-            disabled={checkOut.isPending}
-            onClick={() => checkOut.mutate()}
-          >
-            {checkOut.isPending ? (
-              <Loader2 className="animate-spin" data-icon="inline-start" />
-            ) : (
-              <LogOut data-icon="inline-start" />
-            )}
-            Check Out
-          </Button>
-        ) : (
-          <Button
-            size="lg"
-            className="w-full"
-            disabled={checkIn.isPending || !data.can_check_in}
-            onClick={() => checkIn.mutate()}
-          >
-            {checkIn.isPending ? (
-              <Loader2 className="animate-spin" data-icon="inline-start" />
-            ) : (
-              <LogIn data-icon="inline-start" />
-            )}
-            {notCheckedIn ? 'Check In' : 'Check In again'}
-          </Button>
-        )}
+        {/* RIGHT region: the primary action, visually separated from the session
+            list and vertically centred. On @lg+ it sits in its own column with a
+            divider; below that it stacks under the list as a full-width button. */}
+        <div className="flex flex-col justify-center @lg/checkin:w-52 @lg/checkin:shrink-0 @lg/checkin:border-l @lg/checkin:border-border @lg/checkin:pl-6">
+          {actionButton}
+        </div>
       </CardContent>
     </Card>
   );

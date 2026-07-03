@@ -203,7 +203,7 @@ export default function MyAttendancePage() {
       {/* Check-in / Checkout */}
       {canCheckIn && (
         <section aria-label="Check in and out">
-          <CheckInCard className="sm:max-w-md" />
+          <CheckInCard className="sm:max-w-2xl" />
         </section>
       )}
 
