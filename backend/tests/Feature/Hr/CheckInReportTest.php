@@ -224,6 +224,51 @@ class CheckInReportTest extends TestCase
         $this->assertStringNotContainsString('bob@example.test', $body);
     }
 
+    public function test_detail_export_renders_human_durations_and_renamed_headers(): void
+    {
+        $org = $this->createOrganization();
+        $hr = $this->createUser($org, 'hr_manager');
+        $late = $this->createUser($org, 'employee', ['email' => 'late@example.test']);
+        $overtime = $this->createUser($org, 'employee', ['email' => 'ot@example.test']);
+        $clean = $this->createUser($org, 'employee', ['email' => 'clean@example.test']);
+
+        // Late by 1h16m AND early checkout by 5h56m (356m ≈ a 2:34 PM checkout).
+        $this->checkInRecord($org->id, $late->id, [
+            'check_in_status' => 'late',
+            'check_in_late_minutes' => 76,
+            'is_early_checkout' => true,
+            'check_out_early_minutes' => 356,
+            'check_out_overtime_minutes' => 0,
+        ]);
+        // Overtime by 45m (mutually exclusive with early checkout).
+        $this->checkInRecord($org->id, $overtime->id, [
+            'check_out_early_minutes' => 0,
+            'check_out_overtime_minutes' => 45,
+        ]);
+        // Clean row: all zeros → empty duration cells.
+        $this->checkInRecord($org->id, $clean->id);
+
+        $this->actingAs($hr, 'sanctum');
+        $response = $this->get('/api/v1/hr/attendance/check-ins/export?period=day&date=' . self::DATE);
+
+        $response->assertOk();
+        $body = $response->getContent();
+
+        // Renamed headers (Late By / Early Checkout By / Overtime replace the raw "(min)" ones).
+        $this->assertStringContainsString('"Late By","Early Checkout By",Overtime,"Missing Checkout"', $body);
+        $this->assertStringNotContainsString('Late (min)', $body);
+        $this->assertStringNotContainsString('Early (min)', $body);
+        $this->assertStringNotContainsString('Overtime (min)', $body);
+
+        // Human-readable durations, not raw minute integers.
+        $this->assertStringContainsString('1h 16m', $body); // 76m late
+        $this->assertStringContainsString('5h 56m', $body); // 356m early checkout
+        $this->assertStringContainsString('45m', $body);    // 45m overtime
+
+        // Clean row (present, zero late/early/overtime) leaves the duration cells empty.
+        $this->assertStringContainsString('present,,,,no', $body);
+    }
+
     public function test_export_summary_view_rollup_columns(): void
     {
         $org = $this->createOrganization();

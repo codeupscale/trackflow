@@ -52,6 +52,41 @@ class ReportExportFormatter
         return number_format(((int) $seconds) / 3600, 2);
     }
 
+    /**
+     * Render a bare MINUTE count as a human-readable "Xh Ym" duration for report
+     * cells — mirrors the web UI treatment (web/src/lib/check-in-time.ts::formatMinutes).
+     *
+     * A raw "356" in an "Early Checkout By" column reads like garbage to HR; "5h 56m"
+     * is unmistakable. Zero (or missing) collapses to an empty string so clean rows
+     * stay clean rather than filling with "0m".
+     *
+     *   0 / null      → ""
+     *   45            → "45m"
+     *   60            → "1h"
+     *   76            → "1h 16m"
+     *   356           → "5h 56m"
+     */
+    private static function minutesToHuman($minutes): string
+    {
+        $m = (int) $minutes;
+        if ($m <= 0) {
+            return '';
+        }
+
+        $hours = intdiv($m, 60);
+        $mins = $m % 60;
+
+        $parts = [];
+        if ($hours > 0) {
+            $parts[] = $hours . 'h';
+        }
+        if ($mins > 0) {
+            $parts[] = $mins . 'm';
+        }
+
+        return implode(' ', $parts);
+    }
+
     /** Read a key from either an array row or a stdClass row. */
     private static function val($row, string $key, $default = '')
     {
@@ -182,13 +217,19 @@ class ReportExportFormatter
         $out = fopen('php://temp', 'r+');
         fwrite($out, "\xEF\xBB\xBF");
 
+        // 'Late By' / 'Early Checkout By' / 'Overtime' carry human "Xh Ym" durations
+        // (not raw minute integers): 'Early Checkout By' is minutes the LAST checkout
+        // preceded the org checkout time — a header of "Early (min)" with a value of
+        // "356" read to HR like an early CHECK-IN and looked like garbage.
         fputcsv($out, [
             'Employee', 'Email', 'Date', 'Sessions', 'First In', 'Last Out', 'Total (HH:MM)',
-            'Status', 'Late (min)', 'Early (min)', 'Overtime (min)', 'Missing Checkout',
+            'Status', 'Late By', 'Early Checkout By', 'Overtime', 'Missing Checkout',
         ]);
 
         foreach ($rows as $row) {
             // All string cells pass through neutralizeCsv (formula-injection guard).
+            // The duration cells are generated, but pass through the same writer, so they
+            // are neutralized too for defence-in-depth.
             fputcsv($out, [
                 self::neutralizeCsv(self::val($row, 'name')),
                 self::neutralizeCsv(self::val($row, 'email')),
@@ -198,9 +239,9 @@ class ReportExportFormatter
                 self::neutralizeCsv(self::val($row, 'check_out')),
                 self::neutralizeCsv(self::val($row, 'worked_hhmm')),
                 self::neutralizeCsv(self::val($row, 'status')),
-                self::val($row, 'late_minutes', 0),
-                self::val($row, 'early_minutes', 0),
-                self::val($row, 'overtime_minutes', 0),
+                self::neutralizeCsv(self::minutesToHuman(self::val($row, 'late_minutes', 0))),
+                self::neutralizeCsv(self::minutesToHuman(self::val($row, 'early_minutes', 0))),
+                self::neutralizeCsv(self::minutesToHuman(self::val($row, 'overtime_minutes', 0))),
                 self::val($row, 'missing_checkout') ? 'yes' : 'no',
             ]);
         }
