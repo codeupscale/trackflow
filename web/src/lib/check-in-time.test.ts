@@ -111,28 +111,39 @@ describe('formatElapsed', () => {
   });
 });
 
-describe('formatDuration — unambiguous "Xh Ym" totals', () => {
-  it('renders 0m for zero / sub-minute / null / undefined / negative', () => {
-    expect(formatDuration(0)).toBe('0m');
-    expect(formatDuration(59)).toBe('0m');
-    expect(formatDuration(null)).toBe('0m');
-    expect(formatDuration(undefined)).toBe('0m');
-    expect(formatDuration(-100)).toBe('0m');
+describe('formatDuration — unambiguous "Xh Ym Zs" totals', () => {
+  it('renders 0s for zero / null / undefined / negative', () => {
+    expect(formatDuration(0)).toBe('0s');
+    expect(formatDuration(null)).toBe('0s');
+    expect(formatDuration(undefined)).toBe('0s');
+    expect(formatDuration(-100)).toBe('0s');
   });
 
-  it('floors to whole minutes below an hour', () => {
-    expect(formatDuration(90)).toBe('1m'); // 1m30s → 1m
-    expect(formatDuration(31800)).not.toBe('8h'); // sanity: 8h50m has minutes
+  it('renders sub-minute values in seconds', () => {
+    expect(formatDuration(1)).toBe('1s');
+    expect(formatDuration(59)).toBe('59s');
   });
 
-  it('renders whole hours with no minutes as "Xh"', () => {
+  it('includes seconds below an hour', () => {
+    expect(formatDuration(90)).toBe('1m 30s'); // 1m30s
+    expect(formatDuration(158)).toBe('2m 38s'); // 2m38s
+    expect(formatDuration(120)).toBe('2m'); // exact minute drops trailing 0s
+  });
+
+  it('renders whole hours with no minutes/seconds as "Xh"', () => {
     expect(formatDuration(3600)).toBe('1h');
     expect(formatDuration(8 * 3600)).toBe('8h');
   });
 
-  it('renders hours + minutes as "Xh Ym"', () => {
-    expect(formatDuration(3660)).toBe('1h 1m');
-    expect(formatDuration(31800)).toBe('8h 50m'); // 8h50m
+  it('renders hours + minutes + seconds', () => {
+    expect(formatDuration(3660)).toBe('1h 1m'); // 1h1m0s → trailing 0s dropped
+    expect(formatDuration(3852)).toBe('1h 4m 12s'); // 1h4m12s
+    expect(formatDuration(31800)).toBe('8h 50m'); // 8h50m0s
+    expect(formatDuration(31812)).toBe('8h 50m 12s');
+  });
+
+  it('keeps an interior zero minute so "1h 0m 5s" is never ambiguous', () => {
+    expect(formatDuration(3605)).toBe('1h 0m 5s');
   });
 });
 

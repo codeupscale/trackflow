@@ -95,6 +95,11 @@ export default function MyAttendancePage() {
   const records = attendanceData?.data ?? [];
   const totalPages = attendanceData?.last_page ?? 1;
 
+  // Hide the Shift column entirely when NOT a single row in this result set carries
+  // shift data — an all-"—" column is noise. Rendered with real names when any exists.
+  const hasAnyShift = records.some((r) => Boolean(r.shift_name));
+  const gridCols = hasAnyShift ? 'lg:grid-cols-9' : 'lg:grid-cols-8';
+
   const {
     register,
     handleSubmit,
@@ -222,36 +227,42 @@ export default function MyAttendancePage() {
               subtext={`of ${summary.total_working_days} working days`}
               icon={CheckCircle2}
               variant="green"
+              tooltip="A working day with 4h+ of tracked time, or any physical check-in. Holiday, leave and weekend take priority."
             />
             <AttendanceSummaryCard
               label="Absent Days"
               value={summary.absent_days}
               icon={XCircle}
               variant="red"
+              tooltip="A working day with under 2h of tracked time and no check-in."
             />
             <AttendanceSummaryCard
               label="Late Days"
               value={summary.late_days}
               icon={Clock}
               variant="amber"
+              tooltip="Days your first check-in was after the org late threshold (default 11:45). Late minutes are counted from the official start (default 11:30)."
             />
             <AttendanceSummaryCard
               label="Half Days"
               value={summary.half_days}
               icon={CalendarDays}
               variant="amber"
+              tooltip="A working day with 2h to 4h of tracked time and no check-in."
             />
             <AttendanceSummaryCard
               label="On Leave"
               value={summary.on_leave_days}
               icon={Palmtree}
               variant="blue"
+              tooltip="Days covered by an approved leave request."
             />
             <AttendanceSummaryCard
               label="Overtime Hours"
               value={Number(summary.overtime_hours).toFixed(1)}
               icon={Timer}
               variant="purple"
+              tooltip="Time worked past the org checkout time (default 20:30), totaled across the month."
             />
           </div>
         ) : null}
@@ -320,11 +331,11 @@ export default function MyAttendancePage() {
           <Card>
             <CardContent className="p-0">
               {/* Header row */}
-              <div className="hidden lg:grid lg:grid-cols-9 gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border">
+              <div className={cn('hidden lg:grid gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border', gridCols)}>
                 <span>Date</span>
                 <span>Day</span>
                 <span>Status</span>
-                <span>Shift</span>
+                {hasAnyShift && <span>Shift</span>}
                 <span>Clock In</span>
                 <span>Clock Out</span>
                 <span className="text-right">Hours</span>
@@ -335,7 +346,7 @@ export default function MyAttendancePage() {
               {records.map((record, idx) => (
                 <div key={record.id}>
                   {idx > 0 && <Separator />}
-                  <div className="grid grid-cols-2 gap-2 px-4 py-3 lg:grid-cols-9 lg:gap-4 lg:items-center">
+                  <div className={cn('grid grid-cols-2 gap-2 px-4 py-3 lg:gap-4 lg:items-center', gridCols)}>
                     <div className="text-sm font-medium text-foreground">
                       {formatDate(record.date)}
                     </div>
@@ -351,9 +362,11 @@ export default function MyAttendancePage() {
                         ) : null;
                       })()}
                     </div>
-                    <div className="text-sm text-muted-foreground">
-                      {record.shift_name || '—'}
-                    </div>
+                    {hasAnyShift && (
+                      <div className="text-sm text-muted-foreground">
+                        {record.shift_name || '—'}
+                      </div>
+                    )}
                     <div className="text-sm text-foreground tabular-nums">
                       {record.clock_in || '—'}
                     </div>
@@ -361,9 +374,15 @@ export default function MyAttendancePage() {
                       {record.clock_out || '—'}
                     </div>
                     <div className="text-sm text-foreground tabular-nums text-right">
-                      {Number(record.total_hours) > 0
-                        ? formatDuration(Number(record.total_hours) * 3600)
-                        : '—'}
+                      {(() => {
+                        // Prefer exact worked_seconds when present; fall back to the
+                        // rounded total_hours float (× 3600) for tracker-only rows.
+                        const secs =
+                          record.worked_seconds != null
+                            ? record.worked_seconds
+                            : Number(record.total_hours) * 3600;
+                        return secs > 0 ? formatDuration(secs) : '—';
+                      })()}
                     </div>
                     <div className="text-sm tabular-nums text-right">
                       {record.late_minutes > 0 ? (
