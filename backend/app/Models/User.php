@@ -209,6 +209,36 @@ class User extends Authenticatable
     }
 
     /**
+     * Resolve the timezone to assign to a NEWLY created user (write-time default).
+     *
+     * Precedence:
+     *   1. A valid client-provided timezone (must be in timezone_identifiers_list()).
+     *   2. The target organization's 'timezone' setting when present/non-empty.
+     *   3. 'Asia/Karachi' — the platform default, matching direct registration.
+     *
+     * This is intentionally distinct from getTimezoneForDates(), which resolves the
+     * effective timezone at READ time for users whose stored timezone is still NULL.
+     * Every user-creation path (registration, invitation acceptance, Google signup,
+     * SAML JIT provisioning) MUST route through this helper so no user is created
+     * with a NULL timezone.
+     */
+    public static function defaultTimezoneForOrg(?Organization $org, ?string $requested = null): string
+    {
+        if ($requested !== null && $requested !== '' && in_array($requested, timezone_identifiers_list(), true)) {
+            return $requested;
+        }
+
+        if ($org !== null) {
+            $setting = $org->getSetting('timezone');
+            if (is_string($setting) && $setting !== '') {
+                return $setting;
+            }
+        }
+
+        return 'Asia/Karachi';
+    }
+
+    /**
      * Timezone for date filters and "today" (user → organization default → app).
      * Used so all date ranges and "today" are in the user's local time.
      */
