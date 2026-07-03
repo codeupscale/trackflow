@@ -22,7 +22,7 @@ import {
 import { AttendanceStatusBadge } from '@/components/hr/AttendanceStatusBadge';
 import { CheckInStatusBadge, type CheckInBadgeStatus } from '@/components/hr/CheckInStatusBadge';
 import { DepartmentSelect } from '@/components/hr/DepartmentSelect';
-import { deriveCheckInBadgeStatus, formatDuration } from '@/lib/check-in-time';
+import { deriveCheckInBadges, formatDuration } from '@/lib/check-in-time';
 import { useTeamAttendance } from '@/hooks/hr/use-attendance';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
@@ -189,12 +189,13 @@ export default function TeamAttendancePage() {
                     </div>
                     <div className="flex flex-wrap items-center gap-1">
                       <AttendanceStatusBadge status={record.status} />
-                      {(() => {
-                        const s = deriveCheckInBadgeStatus(record);
-                        return s ? (
-                          <CheckInStatusBadge status={s as CheckInBadgeStatus} />
-                        ) : null;
-                      })()}
+                      {/* Late and early-checkout coexist by design — render each
+                          applicable badge (order: Late → Early Checkout → Missing
+                          Checkout). Tooltips are omitted here (team view has no policy
+                          context loaded). */}
+                      {deriveCheckInBadges(record).map((s) => (
+                        <CheckInStatusBadge key={s} status={s as CheckInBadgeStatus} />
+                      ))}
                     </div>
                     <div className="text-sm text-foreground tabular-nums">
                       {record.clock_in || '—'}

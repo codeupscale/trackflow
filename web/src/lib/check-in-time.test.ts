@@ -8,7 +8,7 @@ import {
   formatMinutes,
   formatPolicyTime,
   checkInBadgeTooltip,
-  deriveCheckInBadgeStatus,
+  deriveCheckInBadges,
 } from '@/lib/check-in-time';
 
 describe('computeClockOffset', () => {
@@ -281,44 +281,83 @@ describe('checkInBadgeTooltip — plain-language, policy-anchored', () => {
   });
 });
 
-describe('deriveCheckInBadgeStatus', () => {
-  it('returns null when not checked in', () => {
-    expect(deriveCheckInBadgeStatus({ check_in_at: null })).toBeNull();
-    expect(deriveCheckInBadgeStatus({})).toBeNull();
+describe('deriveCheckInBadges', () => {
+  it('returns an empty array when not checked in', () => {
+    expect(deriveCheckInBadges({ check_in_at: null })).toEqual([]);
+    expect(deriveCheckInBadges({})).toEqual([]);
   });
 
-  it('prioritizes missing_checkout over everything', () => {
+  it('renders BOTH late and early_checkout when both are true (regression)', () => {
+    // The owner-reported bug: a day that is both late AND an early checkout must
+    // show both badges — the earlier single-badge collapse dropped "Late".
     expect(
-      deriveCheckInBadgeStatus({
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T11:30:00Z',
+        check_in_status: 'late',
+        is_early_checkout: true,
+      })
+    ).toEqual(['late', 'early_checkout']);
+  });
+
+  it('keeps a deterministic order: late → early_checkout → missing_checkout', () => {
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T11:30:00Z',
+        check_in_status: 'late',
+        is_early_checkout: true,
+        missing_checkout: true,
+      })
+    ).toEqual(['late', 'early_checkout', 'missing_checkout']);
+  });
+
+  it('coexists late with missing_checkout', () => {
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T11:30:00Z',
+        check_in_status: 'late',
+        missing_checkout: true,
+      })
+    ).toEqual(['late', 'missing_checkout']);
+  });
+
+  it('renders single exception badges alone', () => {
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T11:30:00Z',
+        check_in_status: 'late',
+      })
+    ).toEqual(['late']);
+
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T11:30:00Z',
+        is_early_checkout: true,
+      })
+    ).toEqual(['early_checkout']);
+
+    expect(
+      deriveCheckInBadges({
         check_in_at: '2026-07-03T11:30:00Z',
         missing_checkout: true,
-        is_early_checkout: true,
-        check_in_status: 'late',
       })
-    ).toBe('missing_checkout');
+    ).toEqual(['missing_checkout']);
   });
 
-  it('then early_checkout, then late, then on_time', () => {
+  it('surfaces on_time only when nothing else is worth flagging', () => {
     expect(
-      deriveCheckInBadgeStatus({
-        check_in_at: '2026-07-03T11:30:00Z',
-        is_early_checkout: true,
-        check_in_status: 'late',
-      })
-    ).toBe('early_checkout');
-
-    expect(
-      deriveCheckInBadgeStatus({
-        check_in_at: '2026-07-03T11:30:00Z',
-        check_in_status: 'late',
-      })
-    ).toBe('late');
-
-    expect(
-      deriveCheckInBadgeStatus({
+      deriveCheckInBadges({
         check_in_at: '2026-07-03T11:30:00Z',
         check_in_status: 'on_time',
       })
-    ).toBe('on_time');
+    ).toEqual(['on_time']);
+
+    // on_time never competes with an exception badge (e.g. an early checkout).
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T11:30:00Z',
+        check_in_status: 'on_time',
+        is_early_checkout: true,
+      })
+    ).toEqual(['early_checkout']);
   });
 });
