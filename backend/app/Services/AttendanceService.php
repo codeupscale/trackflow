@@ -683,9 +683,24 @@ class AttendanceService
         $presentDays = $records->where('status', 'present')->count();
         $absentDays = $records->where('status', 'absent')->count();
         $halfDays = $records->where('status', 'half_day')->count();
-        $lateDays = $records->where('late_minutes', '>', 0)->count();
+        // Lateness has two independent sources that must both count: the legacy
+        // tracker-era `late_minutes` column and the manual check-in
+        // `check_in_late_minutes` (marked `check_in_status = late`). A day is late
+        // when EITHER signal fires — see detailRowGenerator() for the same rule.
+        $lateDays = $records->filter(function ($record) {
+            return (int) $record->late_minutes > 0
+                || (int) ($record->check_in_late_minutes ?? 0) > 0
+                || $record->check_in_status === 'late';
+        })->count();
         $onLeaveDays = $records->where('status', 'on_leave')->count();
-        $overtimeMinutes = $records->sum('overtime_minutes');
+        // Overtime likewise has two sources: tracker `overtime_minutes`, falling
+        // back to the manual checkout `check_out_overtime_minutes` when the tracker
+        // recorded none — mirrors detailRowGenerator().
+        $overtimeMinutes = $records->sum(function ($record) {
+            $tracker = (int) $record->overtime_minutes;
+
+            return $tracker > 0 ? $tracker : (int) ($record->check_out_overtime_minutes ?? 0);
+        });
 
         // Total working days = days that aren't weekends or holidays
         $totalWorkingDays = $records->whereNotIn('status', ['weekend', 'holiday'])->count();

@@ -144,6 +144,37 @@ class AttendanceTest extends TestCase
             ->assertJsonPath('data.absent_days', 1);
     }
 
+    public function test_summary_counts_check_in_lateness_and_overtime(): void
+    {
+        // Regression: the Late Days / Overtime tiles must reflect manual
+        // check-in signals (check_in_late_minutes / check_out_overtime_minutes),
+        // not just the legacy tracker columns which stay 0 for clock-in flows.
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        $month = now()->month;
+        $year = now()->year;
+
+        AttendanceRecord::factory()->present()->create([
+            'organization_id' => $org->id,
+            'user_id' => $user->id,
+            'date' => now()->startOfMonth()->toDateString(),
+            // Legacy tracker columns are zero — lateness/overtime live in check-in cols.
+            'late_minutes' => 0,
+            'overtime_minutes' => 0,
+            'check_in_status' => 'late',
+            'check_in_late_minutes' => 15,
+            'check_out_overtime_minutes' => 90,
+        ]);
+
+        $response = $this->getJson("/api/v1/hr/attendance/summary?month={$month}&year={$year}");
+
+        $response->assertOk()
+            ->assertJsonPath('data.late_days', 1)
+            ->assertJsonPath('data.overtime_hours', 1.5); // 90 min = 1.5h
+    }
+
     // ── Generate ────────────────────────────────────────
 
     public function test_admin_can_trigger_attendance_generation(): void
