@@ -71,6 +71,51 @@ describe('exportCheckIns', () => {
     );
   });
 
+  it('includes user_id when an employee is selected', async () => {
+    const blob = new Blob(['csv'], { type: 'text/csv' });
+    vi.mocked(api.get).mockResolvedValue({ data: blob });
+
+    await exportCheckIns({
+      period: 'month',
+      month: '2026-07',
+      user_id: 'user-123',
+      view: 'summary',
+    });
+
+    expect(api.get).toHaveBeenCalledWith('/hr/attendance/check-ins/export', {
+      params: {
+        period: 'month',
+        month: '2026-07',
+        user_id: 'user-123',
+        view: 'summary',
+        format: 'csv',
+      },
+      responseType: 'blob',
+    });
+  });
+
+  it('omits user_id from params when null ("All employees")', async () => {
+    const blob = new Blob(['csv'], { type: 'text/csv' });
+    vi.mocked(api.get).mockResolvedValue({ data: blob });
+
+    await exportCheckIns({
+      period: 'day',
+      date: '2026-07-03',
+      user_id: null,
+      view: 'detail',
+    });
+
+    expect(api.get).toHaveBeenCalledWith('/hr/attendance/check-ins/export', {
+      params: {
+        period: 'day',
+        date: '2026-07-03',
+        view: 'detail',
+        format: 'csv',
+      },
+      responseType: 'blob',
+    });
+  });
+
   it('surfaces the server message via readBlobError on failure and rethrows', async () => {
     const err = { response: { data: new Blob(['{"message":"nope"}']) } };
     vi.mocked(api.get).mockRejectedValue(err);

@@ -79,6 +79,7 @@ export interface AttendanceRecord {
   worked_seconds?: number | null;
   worked_hhmm?: string | null;
   check_in_status?: CheckInStatus;
+  check_in_late_minutes?: number;
   is_early_checkout?: boolean;
   missing_checkout?: boolean;
   check_in_flags?: CheckInFlags | null;

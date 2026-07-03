@@ -27,6 +27,7 @@ import {
   PaginationPrevious,
 } from '@/components/ui/pagination';
 
+import { EmployeeSelect } from '@/components/hr/EmployeeSelect';
 import { useCheckInsSummary, exportCheckIns } from '@/hooks/hr/use-check-in';
 import { usePermissionStore } from '@/stores/permission-store';
 import { useAuthStore } from '@/stores/auth-store';
@@ -54,6 +55,7 @@ export default function CheckInReportPage() {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [year, setYear] = useState(now.getFullYear());
   const [page, setPage] = useState(1);
+  const [userId, setUserId] = useState<string | null>(null);
   const [exportingView, setExportingView] = useState<'detail' | 'summary' | null>(null);
 
   const monthString = `${year}-${String(month).padStart(2, '0')}`;
@@ -61,9 +63,9 @@ export default function CheckInReportPage() {
   const summaryFilters = useMemo(
     () =>
       period === 'day'
-        ? { period: 'day' as const, date: day, page }
-        : { period: 'month' as const, month: monthString, page },
-    [period, day, monthString, page]
+        ? { period: 'day' as const, date: day, user_id: userId, page }
+        : { period: 'month' as const, month: monthString, user_id: userId, page },
+    [period, day, monthString, userId, page]
   );
 
   const { data, isLoading, isError } = useCheckInsSummary(summaryFilters);
@@ -105,8 +107,8 @@ export default function CheckInReportPage() {
     try {
       await exportCheckIns(
         period === 'day'
-          ? { period: 'day', date: day, view }
-          : { period: 'month', month: monthString, view }
+          ? { period: 'day', date: day, user_id: userId, view }
+          : { period: 'month', month: monthString, user_id: userId, view }
       );
     } catch {
       // toast already surfaced by exportCheckIns
@@ -239,6 +241,17 @@ export default function CheckInReportPage() {
             </div>
           </div>
         )}
+
+        <div className="flex flex-col gap-1.5 w-full sm:w-[240px]">
+          <Label>Employee</Label>
+          <EmployeeSelect
+            value={userId}
+            onChange={(val) => {
+              setUserId(val);
+              setPage(1);
+            }}
+          />
+        </div>
       </div>
 
       {/* Summary table */}

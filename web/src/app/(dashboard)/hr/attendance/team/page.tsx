@@ -2,13 +2,18 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { CalendarDays, Users } from 'lucide-react';
+import { Users } from 'lucide-react';
 
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import {
   Pagination,
   PaginationContent,
@@ -22,8 +27,14 @@ import {
 import { AttendanceStatusBadge } from '@/components/hr/AttendanceStatusBadge';
 import { CheckInStatusBadge, type CheckInBadgeStatus } from '@/components/hr/CheckInStatusBadge';
 import { DepartmentSelect } from '@/components/hr/DepartmentSelect';
-import { deriveCheckInBadges, formatDuration } from '@/lib/check-in-time';
+import {
+  deriveCheckInBadges,
+  formatDuration,
+  formatMinutes,
+  checkInBadgeTooltip,
+} from '@/lib/check-in-time';
 import { useTeamAttendance } from '@/hooks/hr/use-attendance';
+import { useTodayStatus } from '@/hooks/hr/use-check-in';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
 import { formatDate } from '@/lib/utils';
@@ -31,8 +42,15 @@ import { formatDate } from '@/lib/utils';
 export default function TeamAttendancePage() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const { hasPermissionWithScope } = usePermissionStore();
+  const { hasPermissionWithScope, hasPermission } = usePermissionStore();
   const isManager = hasPermissionWithScope('attendance.view', 'project');
+  const canCheckIn = hasPermission('attendance.check_in');
+
+  // Pull org policy times so the Late tooltip can name a concrete anchor ("after the
+  // 11:30 AM official start"). Gated on attendance.check_in (the `today` endpoint's
+  // permission); falls back to generic phrasing when unavailable. Mirrors My Attendance.
+  const { data: todayStatus } = useTodayStatus({ enabled: canCheckIn });
+  const policyCheckInTime = todayStatus?.policy?.check_in_time;
 
   useEffect(() => {
     if (user && !isManager) {
@@ -162,20 +180,21 @@ export default function TeamAttendancePage() {
           <Card>
             <CardContent className="p-0">
               {/* Header row */}
-              <div className="hidden lg:grid lg:grid-cols-7 gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border">
+              <div className="hidden lg:grid lg:grid-cols-8 gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border">
                 <span>Employee</span>
                 <span>Date</span>
                 <span>Status</span>
                 <span>Clock In</span>
                 <span>Clock Out</span>
                 <span className="text-right">Hours</span>
+                <span className="text-right">Late</span>
                 <span className="text-right">Overtime</span>
               </div>
 
               {records.map((record, idx) => (
                 <div key={record.id}>
                   {idx > 0 && <Separator />}
-                  <div className="grid grid-cols-2 gap-2 px-4 py-3 lg:grid-cols-7 lg:gap-4 lg:items-center">
+                  <div className="grid grid-cols-2 gap-2 px-4 py-3 lg:grid-cols-8 lg:gap-4 lg:items-center">
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-foreground truncate">
                         {record.user?.name || '—'}
@@ -212,6 +231,27 @@ export default function TeamAttendancePage() {
                             : Number(record.total_hours) * 3600;
                         return secs > 0 ? formatDuration(secs) : '—';
                       })()}
+                    </div>
+                    <div className="text-sm tabular-nums text-right">
+                      {(record.check_in_late_minutes ?? 0) > 0 ? (
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={<span />}
+                            className="cursor-help text-amber-600 dark:text-amber-400"
+                            tabIndex={0}
+                          >
+                            {formatMinutes(record.check_in_late_minutes)}
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {checkInBadgeTooltip('late', {
+                              lateMinutes: record.check_in_late_minutes,
+                              checkInTime: policyCheckInTime,
+                            })}
+                          </TooltipContent>
+                        </Tooltip>
+                      ) : (
+                        '—'
+                      )}
                     </div>
                     <div className="text-sm tabular-nums text-right">
                       {Number(record.overtime_hours) > 0 ? (
