@@ -30,6 +30,7 @@ import {
 import { useCheckInsSummary, exportCheckIns } from '@/hooks/hr/use-check-in';
 import { usePermissionStore } from '@/stores/permission-store';
 import { useAuthStore } from '@/stores/auth-store';
+import { formatDuration } from '@/lib/check-in-time';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -279,7 +280,7 @@ export default function CheckInReportPage() {
             <CardContent className="p-0">
               <div className="hidden lg:grid lg:grid-cols-6 gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border">
                 <span className="col-span-2">Employee</span>
-                <span className="text-right">Total (HH:MM)</span>
+                <span className="text-right">Total</span>
                 <span className="text-right">Days</span>
                 <span className="text-right">Late</span>
                 <span className="text-right">Early / Missing</span>
@@ -298,7 +299,7 @@ export default function CheckInReportPage() {
                       </p>
                     </div>
                     <div className="text-sm text-foreground tabular-nums text-right">
-                      {row.worked_hhmm}
+                      {formatDuration(row.total_worked_seconds)}
                     </div>
                     <div className="text-sm text-foreground tabular-nums text-right">
                       {row.days_present}

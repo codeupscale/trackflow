@@ -99,6 +99,21 @@ export interface AttendancePolicy {
   is_active: boolean;
 }
 
+/**
+ * A single check-in / checkout session within a day. The multi-session redesign
+ * allows more than one pair per org-local day; sessions are ordered by `seq`.
+ */
+export interface CheckInSessionRow {
+  seq: number;
+  check_in_at: string;
+  check_in_at_local: string;
+  check_out_at: string | null;
+  check_out_at_local: string | null;
+  worked_seconds: number | null;
+  worked_hhmm: string | null;
+  is_open: boolean;
+}
+
 export interface TodayStatus {
   checked_in: boolean;
   checked_out: boolean;
@@ -117,6 +132,14 @@ export interface TodayStatus {
   status: AttendanceStatus | null;
   check_in_flags: CheckInFlags | null;
   server_now: string;
+  // ── Multi-session redesign ──
+  has_open_session: boolean;
+  can_check_in: boolean; // = !has_open_session
+  can_check_out: boolean; // = has_open_session
+  sessions_count: number;
+  closed_worked_seconds: number; // sum of CLOSED session durations — ticker base
+  open_check_in_at: string | null; // currently-open session's check_in_at
+  sessions: CheckInSessionRow[]; // ordered by seq
   policy: Pick<
     AttendancePolicy,
     'check_in_time' | 'late_threshold' | 'checkout_time' | 'timezone'

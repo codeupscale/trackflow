@@ -74,8 +74,33 @@ export function deriveCheckInBadgeStatus(record: {
 }
 
 /**
+ * Format a whole-second count as an unambiguous "Xh Ym" duration — used for ALL
+ * on-screen TOTALS (frozen day total, per-session durations, report columns).
+ * This is deliberately distinct from formatElapsed (HH:MM:SS, live ticker only):
+ * a total rendered as "00:02" reads as a running clock, whereas "2m" is
+ * unmistakably a duration. Floors to whole minutes.
+ *
+ *   null / undefined / <= 0  → "0m"
+ *   h > 0 && m > 0           → "Xh Ym"  (e.g. "8h 50m")
+ *   h > 0 && m === 0         → "Xh"     (e.g. "8h")
+ *   h === 0                  → "Ym"     (e.g. "50m")
+ */
+export function formatDuration(totalSeconds: number | null | undefined): string {
+  if (totalSeconds == null || totalSeconds <= 0) return '0m';
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h`;
+  return `${minutes}m`;
+}
+
+/**
  * Format a whole-second count as HH:MM — mirrors the backend CheckInService::formatHhmm.
  * Returns null for null input (a session with no worked_seconds).
+ *
+ * NOTE: no longer used for on-screen totals (see formatDuration). Retained for any
+ * callers that mirror the backend HH:MM contract directly.
  */
 export function formatHhmm(totalSeconds: number | null | undefined): string | null {
   if (totalSeconds == null) return null;

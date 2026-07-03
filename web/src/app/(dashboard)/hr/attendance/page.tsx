@@ -54,7 +54,7 @@ import { useAttendance, useAttendanceSummary, useRequestRegularization } from '@
 import { usePermissionStore } from '@/stores/permission-store';
 import { regularizationSchema, type RegularizationFormData, type AttendanceRecord } from '@/lib/validations/attendance';
 import { cn, formatDate } from '@/lib/utils';
-import { deriveCheckInBadgeStatus } from '@/lib/check-in-time';
+import { deriveCheckInBadgeStatus, formatDuration } from '@/lib/check-in-time';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -362,7 +362,7 @@ export default function MyAttendancePage() {
                     </div>
                     <div className="text-sm text-foreground tabular-nums text-right">
                       {Number(record.total_hours) > 0
-                        ? Number(record.total_hours).toFixed(1)
+                        ? formatDuration(Number(record.total_hours) * 3600)
                         : '—'}
                     </div>
                     <div className="text-sm tabular-nums text-right">

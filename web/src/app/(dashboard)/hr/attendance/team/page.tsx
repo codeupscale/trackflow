@@ -22,7 +22,7 @@ import {
 import { AttendanceStatusBadge } from '@/components/hr/AttendanceStatusBadge';
 import { CheckInStatusBadge, type CheckInBadgeStatus } from '@/components/hr/CheckInStatusBadge';
 import { DepartmentSelect } from '@/components/hr/DepartmentSelect';
-import { deriveCheckInBadgeStatus } from '@/lib/check-in-time';
+import { deriveCheckInBadgeStatus, formatDuration } from '@/lib/check-in-time';
 import { useTeamAttendance } from '@/hooks/hr/use-attendance';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
@@ -204,7 +204,7 @@ export default function TeamAttendancePage() {
                     </div>
                     <div className="text-sm text-foreground tabular-nums text-right">
                       {Number(record.total_hours) > 0
-                        ? Number(record.total_hours).toFixed(1)
+                        ? formatDuration(Number(record.total_hours) * 3600)
                         : '—'}
                     </div>
                     <div className="text-sm tabular-nums text-right">
