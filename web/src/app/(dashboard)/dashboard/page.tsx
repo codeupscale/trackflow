@@ -56,7 +56,6 @@ import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
 import { useTimerStore } from '@/stores/timer-store';
 import { DateFilter } from '@/components/date-filter';
-import { CheckInCard } from '@/components/hr/CheckInCard';
 
 // ─── Types ────────────────────────────────────────────────────────
 
@@ -462,11 +461,6 @@ export default function DashboardPage() {
           onCustomApply={applyCustom}
         />
       </div>
-
-      {/* Check-in / Checkout — employees only */}
-      {isEmployeeView && hasPermission('attendance.check_in') && (
-        <CheckInCard className="sm:max-w-2xl" />
-      )}
 
       {/* Stat Cards — dashboard-01 style */}
       {isEmployeeView ? (
