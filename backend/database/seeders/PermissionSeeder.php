@@ -364,10 +364,15 @@ class PermissionSeeder extends Seeder
             'leave.view_requests' => 'organization',
             'leave.view_calendar' => 'organization',
 
-            // attendance — view + regularize
+            // attendance — org-wide visibility + export because payroll depends on
+            // late/early/worked-hours data (mirrors payroll.view_all/run grants below).
+            // Policy editing (attendance.manage_policy) is intentionally NOT granted:
+            // setting the 11:30/11:45/20:30 windows is owner/org_manager/hr_manager only.
             'attendance.view'       => 'organization',
             'attendance.regularize' => 'none',
             'attendance.check_in'   => 'none',
+            'attendance.view_all'   => 'none',
+            'attendance.export'     => 'none',
 
             // payroll — full access (run, approve, manage structures & components)
             'payroll.view_own'          => 'none',
