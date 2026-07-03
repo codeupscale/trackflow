@@ -20,8 +20,8 @@ vi.mock('next/link', () => ({
 }));
 
 const baseEmployee: EmployeeListItem = {
-  id: 'profile-1',
-  user_id: 'user-1',
+  // Directory rows key on the User id (`users.id AS id`); there is no separate user_id.
+  id: 'user-1',
   employee_id: 'EMP-001',
   name: 'John Doe',
   email: 'john@example.com',
@@ -86,6 +86,8 @@ describe('EmployeeCard', () => {
     render(<EmployeeCard employee={baseEmployee} />);
 
     const link = screen.getByRole('link');
-    expect(link).toHaveAttribute('href', '/hr/employees/profile-1');
+    // The detail route resolves the segment as a User id (User::findOrFail), and the
+    // directory row's `id` IS the user id (`users.id AS id`), so the link uses it.
+    expect(link).toHaveAttribute('href', '/hr/employees/user-1');
   });
 });
