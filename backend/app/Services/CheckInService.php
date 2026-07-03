@@ -549,8 +549,10 @@ class CheckInService
                 'date' => $date,
                 'sessions_count' => (int) $record->sessions_count,
                 // check_in / check_out are the day rollup: first-in / last-out.
-                'check_in' => $record->check_in_at?->copy()->setTimezone($tz)->format('Y-m-d H:i:s'),
-                'check_out' => $record->check_out_at?->copy()->setTimezone($tz)->format('Y-m-d H:i:s'),
+                // Rendered as 12-hour clock times (the row already carries a Date column);
+                // matches the 'g:i A' display format used across the attendance API.
+                'check_in' => $record->check_in_at?->copy()->setTimezone($tz)->format('g:i A'),
+                'check_out' => $record->check_out_at?->copy()->setTimezone($tz)->format('g:i A'),
                 'worked_hhmm' => $this->formatHhmm($record->worked_seconds),
                 'status' => $record->status,
                 'late_minutes' => (int) $record->check_in_late_minutes,

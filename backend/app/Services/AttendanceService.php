@@ -525,7 +525,7 @@ class AttendanceService
         $hasOpenSession = $this->recordHasOpenSession($record);
 
         $clockIn = $checkInAt
-            ? $checkInAt->copy()->setTimezone($tz)->format('H:i')
+            ? $checkInAt->copy()->setTimezone($tz)->format('g:i A')
             : $this->trimTime($record->first_seen);
 
         if ($hasOpenSession) {
@@ -534,7 +534,7 @@ class AttendanceService
             $checkOutAt = null;
         } else {
             $clockOut = $checkOutAt
-                ? $checkOutAt->copy()->setTimezone($tz)->format('H:i')
+                ? $checkOutAt->copy()->setTimezone($tz)->format('g:i A')
                 : $this->trimTime($record->last_seen);
         }
 
@@ -638,7 +638,10 @@ class AttendanceService
     }
 
     /**
-     * Reduce a stored H:i:s wall-clock string to H:i for display. Null-safe.
+     * Render a stored H:i:s wall-clock string as a 12-hour display time
+     * (e.g. "09:00:00" → "9:00 AM"). Kept consistent with the check_in_at /
+     * check_out_at 'g:i A' formatting so both the physical check-in and the
+     * tracker-derived fallback render the same way. Null-safe.
      */
     private function trimTime(?string $time): ?string
     {
@@ -646,7 +649,7 @@ class AttendanceService
             return null;
         }
 
-        return substr($time, 0, 5);
+        return Carbon::createFromFormat('H:i:s', substr($time, 0, 8))->format('g:i A');
     }
 
     /**
