@@ -465,7 +465,7 @@ export default function DashboardPage() {
 
       {/* Check-in / Checkout — employees only */}
       {isEmployeeView && hasPermission('attendance.check_in') && (
-        <CheckInCard className="sm:max-w-md" />
+        <CheckInCard className="sm:max-w-2xl" />
       )}
 
       {/* Stat Cards — dashboard-01 style */}
