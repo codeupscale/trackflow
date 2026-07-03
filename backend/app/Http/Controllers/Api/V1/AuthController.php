@@ -50,7 +50,7 @@ class AuthController extends Controller
                 'email' => $request->email,
                 'password' => $request->password,
                 'role' => 'owner',
-                'timezone' => $request->timezone ?? 'Asia/Karachi',
+                'timezone' => User::defaultTimezoneForOrg($org, $request->timezone),
             ]);
 
             // Bootstrap system roles for the new org and assign the owner
@@ -432,6 +432,7 @@ class AuthController extends Controller
                         'email' => $email,
                         'password' => Str::random(32),
                         'role' => $invitation->role,
+                        'timezone' => User::defaultTimezoneForOrg($invitation->organization),
                         'sso_provider' => 'google',
                         'sso_provider_id' => $googleId,
                         'avatar_url' => $avatarUrl,
@@ -461,6 +462,7 @@ class AuthController extends Controller
                     'email' => $email,
                     'password' => Str::random(32),
                     'role' => 'owner',
+                    'timezone' => User::defaultTimezoneForOrg($org),
                     'sso_provider' => 'google',
                     'sso_provider_id' => $googleId,
                     'avatar_url' => $avatarUrl,
@@ -513,6 +515,7 @@ class AuthController extends Controller
                 'email' => $email,
                 'password' => Str::random(32),
                 'role' => 'owner',
+                'timezone' => User::defaultTimezoneForOrg($org),
                 'sso_provider' => 'google',
                 'sso_provider_id' => $googleId,
                 'avatar_url' => $avatarUrl,

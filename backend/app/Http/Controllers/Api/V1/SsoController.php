@@ -160,6 +160,7 @@ class SsoController extends Controller
                     'email' => $email,
                     'password' => Hash::make(Str::random(64)),
                     'role' => 'employee',
+                    'timezone' => User::defaultTimezoneForOrg($org),
                     'sso_provider' => 'saml2',
                     'sso_provider_id' => $email,
                     'email_verified_at' => now(),

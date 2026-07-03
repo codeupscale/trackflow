@@ -218,7 +218,7 @@ class InvitationController extends Controller
             ], 402);
         }
 
-        $user = DB::transaction(function () use ($request, $invitation) {
+        $user = DB::transaction(function () use ($request, $invitation, $org) {
             $existing = User::withoutGlobalScopes()
                 ->where('organization_id', $invitation->organization_id)
                 ->where('email', $invitation->email)
@@ -233,6 +233,7 @@ class InvitationController extends Controller
                 'email' => $invitation->email,
                 'password' => $request->password,
                 'role' => $invitation->role,
+                'timezone' => User::defaultTimezoneForOrg($org),
                 'email_verified_at' => now(),
             ]);
 
