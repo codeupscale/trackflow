@@ -1,6 +1,11 @@
 'use client';
 
 import { Badge } from '@/components/ui/badge';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 export type CheckInBadgeStatus =
@@ -47,14 +52,40 @@ const statusConfig: Record<CheckInBadgeStatus, { label: string; className: strin
 interface CheckInStatusBadgeProps {
   status: CheckInBadgeStatus;
   className?: string;
+  /**
+   * Optional plain-language explanation. When provided, the badge becomes a tooltip
+   * trigger — e.g. an "Early Checkout" badge explaining "Checked out 2h 48m before
+   * the 8:30 PM checkout time." Build it with `checkInBadgeTooltip` from
+   * `@/lib/check-in-time`. Without it the badge renders as a plain label (unchanged).
+   */
+  tooltip?: string;
 }
 
-export function CheckInStatusBadge({ status, className }: CheckInStatusBadgeProps) {
+export function CheckInStatusBadge({ status, className, tooltip }: CheckInStatusBadgeProps) {
   const config = statusConfig[status] ?? statusConfig.on_time;
 
-  return (
-    <Badge variant="outline" className={cn(config.className, className)}>
+  const badge = (
+    <Badge
+      variant="outline"
+      className={cn(config.className, tooltip && 'cursor-help', className)}
+    >
       {config.label}
     </Badge>
+  );
+
+  if (!tooltip) return badge;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={<span />}
+        className="inline-flex"
+        tabIndex={0}
+        aria-label={tooltip}
+      >
+        {badge}
+      </TooltipTrigger>
+      <TooltipContent>{tooltip}</TooltipContent>
+    </Tooltip>
   );
 }

@@ -46,15 +46,27 @@ import {
   PaginationPrevious,
 } from '@/components/ui/pagination';
 
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+
 import { AttendanceStatusBadge } from '@/components/hr/AttendanceStatusBadge';
 import { AttendanceSummaryCard } from '@/components/hr/AttendanceSummaryCard';
 import { CheckInCard } from '@/components/hr/CheckInCard';
 import { CheckInStatusBadge, type CheckInBadgeStatus } from '@/components/hr/CheckInStatusBadge';
 import { useAttendance, useAttendanceSummary, useRequestRegularization } from '@/hooks/hr/use-attendance';
+import { useTodayStatus } from '@/hooks/hr/use-check-in';
 import { usePermissionStore } from '@/stores/permission-store';
 import { regularizationSchema, type RegularizationFormData, type AttendanceRecord } from '@/lib/validations/attendance';
 import { cn, formatDate } from '@/lib/utils';
-import { deriveCheckInBadgeStatus, formatDuration } from '@/lib/check-in-time';
+import {
+  deriveCheckInBadgeStatus,
+  formatDuration,
+  formatMinutes,
+  checkInBadgeTooltip,
+} from '@/lib/check-in-time';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -91,6 +103,15 @@ export default function MyAttendancePage() {
   const regularizeMutation = useRequestRegularization();
   const { hasPermission } = usePermissionStore();
   const canCheckIn = hasPermission('attendance.check_in');
+
+  // Pull the org policy times (official start / checkout) so the late / early
+  // tooltips can name a concrete anchor ("after the 11:30 AM official start").
+  // The `today` endpoint requires `attendance.check_in`; gate the query on it and
+  // fall back to generic phrasing when the policy isn't available. Shares the query
+  // key with CheckInCard, so no extra request when both are on-screen.
+  const { data: todayStatus } = useTodayStatus({ enabled: canCheckIn });
+  const policyCheckInTime = todayStatus?.policy?.check_in_time;
+  const policyCheckoutTime = todayStatus?.policy?.checkout_time;
 
   const records = attendanceData?.data ?? [];
   const totalPages = attendanceData?.last_page ?? 1;
@@ -339,7 +360,7 @@ export default function MyAttendancePage() {
                 <span>Clock In</span>
                 <span>Clock Out</span>
                 <span className="text-right">Hours</span>
-                <span className="text-right">Late (min)</span>
+                <span className="text-right">Late</span>
                 <span className="text-right">Actions</span>
               </div>
 
@@ -357,9 +378,21 @@ export default function MyAttendancePage() {
                       <AttendanceStatusBadge status={record.status} />
                       {(() => {
                         const s = deriveCheckInBadgeStatus(record);
-                        return s ? (
-                          <CheckInStatusBadge status={s as CheckInBadgeStatus} />
-                        ) : null;
+                        if (!s) return null;
+                        // The check-ins list row carries late_minutes but not the
+                        // early-checkout minute count, so early_checkout falls back to
+                        // generic phrasing while late names the exact "Xh Ym".
+                        const tooltip = checkInBadgeTooltip(s, {
+                          lateMinutes: record.late_minutes,
+                          checkInTime: policyCheckInTime,
+                          checkoutTime: policyCheckoutTime,
+                        });
+                        return (
+                          <CheckInStatusBadge
+                            status={s as CheckInBadgeStatus}
+                            tooltip={tooltip}
+                          />
+                        );
                       })()}
                     </div>
                     {hasAnyShift && (
@@ -386,9 +419,21 @@ export default function MyAttendancePage() {
                     </div>
                     <div className="text-sm tabular-nums text-right">
                       {record.late_minutes > 0 ? (
-                        <span className="text-amber-600 dark:text-amber-400">
-                          {record.late_minutes}
-                        </span>
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={<span />}
+                            className="cursor-help text-amber-600 dark:text-amber-400"
+                            tabIndex={0}
+                          >
+                            {formatMinutes(record.late_minutes)}
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {checkInBadgeTooltip('late', {
+                              lateMinutes: record.late_minutes,
+                              checkInTime: policyCheckInTime,
+                            })}
+                          </TooltipContent>
+                        </Tooltip>
                       ) : (
                         '—'
                       )}

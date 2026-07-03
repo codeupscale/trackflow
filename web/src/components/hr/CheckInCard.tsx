@@ -15,6 +15,7 @@ import {
   elapsedSeconds,
   formatElapsed,
   formatDuration,
+  checkInBadgeTooltip,
 } from '@/lib/check-in-time';
 import type { CheckInSessionRow } from '@/lib/validations/attendance';
 
@@ -234,15 +235,32 @@ export function CheckInCard({ className }: { className?: string }) {
                   {data.sessions_count === 1 ? 'session' : 'sessions'}
                 </span>
               </span>
-              {/* Day-level check-in signal badges (first check-in / last checkout). */}
+              {/* Day-level check-in signal badges (first check-in / last checkout).
+                  Each carries a tooltip that converts the raw minute count into
+                  "Xh Ym" and anchors it to the org policy time. */}
               {data.check_in_status === 'late' && (
-                <CheckInStatusBadge status="late" />
+                <CheckInStatusBadge
+                  status="late"
+                  tooltip={checkInBadgeTooltip('late', {
+                    lateMinutes: data.check_in_late_minutes,
+                    checkInTime: data.policy?.check_in_time,
+                  })}
+                />
               )}
               {!isLive && data.is_early_checkout && (
-                <CheckInStatusBadge status="early_checkout" />
+                <CheckInStatusBadge
+                  status="early_checkout"
+                  tooltip={checkInBadgeTooltip('early_checkout', {
+                    earlyMinutes: data.check_out_early_minutes,
+                    checkoutTime: data.policy?.checkout_time,
+                  })}
+                />
               )}
               {!isLive && data.missing_checkout && (
-                <CheckInStatusBadge status="missing_checkout" />
+                <CheckInStatusBadge
+                  status="missing_checkout"
+                  tooltip={checkInBadgeTooltip('missing_checkout')}
+                />
               )}
             </div>
           )}
@@ -251,10 +269,16 @@ export function CheckInCard({ className }: { className?: string }) {
           {(flags.on_approved_leave || flags.worked_on_off_day) && (
             <div className="flex flex-wrap items-center gap-2">
               {flags.on_approved_leave && (
-                <CheckInStatusBadge status="on_approved_leave" />
+                <CheckInStatusBadge
+                  status="on_approved_leave"
+                  tooltip={checkInBadgeTooltip('on_approved_leave')}
+                />
               )}
               {flags.worked_on_off_day && (
-                <CheckInStatusBadge status="worked_on_off_day" />
+                <CheckInStatusBadge
+                  status="worked_on_off_day"
+                  tooltip={checkInBadgeTooltip('worked_on_off_day')}
+                />
               )}
             </div>
           )}
