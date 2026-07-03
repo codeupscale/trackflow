@@ -20,7 +20,9 @@ import {
 } from '@/components/ui/pagination';
 
 import { AttendanceStatusBadge } from '@/components/hr/AttendanceStatusBadge';
+import { CheckInStatusBadge, type CheckInBadgeStatus } from '@/components/hr/CheckInStatusBadge';
 import { DepartmentSelect } from '@/components/hr/DepartmentSelect';
+import { deriveCheckInBadgeStatus } from '@/lib/check-in-time';
 import { useTeamAttendance } from '@/hooks/hr/use-attendance';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
@@ -185,8 +187,14 @@ export default function TeamAttendancePage() {
                     <div className="text-sm text-muted-foreground">
                       {formatDate(record.date)}
                     </div>
-                    <div>
+                    <div className="flex flex-wrap items-center gap-1">
                       <AttendanceStatusBadge status={record.status} />
+                      {(() => {
+                        const s = deriveCheckInBadgeStatus(record);
+                        return s ? (
+                          <CheckInStatusBadge status={s as CheckInBadgeStatus} />
+                        ) : null;
+                      })()}
                     </div>
                     <div className="text-sm text-foreground tabular-nums">
                       {record.clock_in || '—'}

@@ -53,6 +53,7 @@ import {
 } from '@/components/ui/chart';
 import api from '@/lib/api';
 import { cn, formatDuration } from '@/lib/utils';
+import { triggerDownload, readBlobError } from '@/lib/download';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
 
@@ -177,42 +178,6 @@ function activityBarColor(percent: number): string {
   if (percent >= 80) return 'bg-green-500';
   if (percent >= 50) return 'bg-yellow-500';
   return 'bg-red-500';
-}
-
-// Trigger a browser download from a blob/binary payload. Cleanup is deferred so the
-// browser has actually started the download — revoking the object URL synchronously
-// right after click() aborts the download in some browsers ("nothing happens").
-function triggerDownload(data: BlobPart, filename: string, mime: string) {
-  const blob = data instanceof Blob ? data : new Blob([data], { type: mime });
-  const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  link.rel = 'noopener';
-  document.body.appendChild(link);
-  link.click();
-  setTimeout(() => {
-    link.remove();
-    window.URL.revokeObjectURL(url);
-  }, 1500);
-}
-
-// When an export fails, the error body is a Blob (responseType: 'blob'); read it back
-// as JSON so we can surface the real server message instead of a generic toast.
-async function readBlobError(err: unknown): Promise<string | null> {
-  const data = (err as { data?: unknown })?.data ?? (err as { response?: { data?: unknown } })?.response?.data;
-  if (data instanceof Blob) {
-    try {
-      const text = await data.text();
-      return (JSON.parse(text) as { message?: string })?.message ?? null;
-    } catch {
-      return null;
-    }
-  }
-  if (typeof data === 'object' && data && 'message' in data) {
-    return String((data as { message?: unknown }).message ?? '') || null;
-  }
-  return null;
 }
 
 // ─── Legacy report builder helpers ────────────────────────────────
