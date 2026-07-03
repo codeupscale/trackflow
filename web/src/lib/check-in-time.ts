@@ -74,25 +74,40 @@ export function deriveCheckInBadgeStatus(record: {
 }
 
 /**
- * Format a whole-second count as an unambiguous "Xh Ym" duration — used for ALL
+ * Format a whole-second count as an unambiguous "Xh Ym Zs" duration — used for ALL
  * on-screen TOTALS (frozen day total, per-session durations, report columns).
  * This is deliberately distinct from formatElapsed (HH:MM:SS, live ticker only):
- * a total rendered as "00:02" reads as a running clock, whereas "2m" is
- * unmistakably a duration. Floors to whole minutes.
+ * a total rendered as "00:02" reads as a running clock, whereas "2m 38s" is
+ * unmistakably a duration.
  *
- *   null / undefined / <= 0  → "0m"
- *   h > 0 && m > 0           → "Xh Ym"  (e.g. "8h 50m")
- *   h > 0 && m === 0         → "Xh"     (e.g. "8h")
- *   h === 0                  → "Ym"     (e.g. "50m")
+ * Seconds are always included so HR can verify totals to the second. Zero LEADING
+ * units are omitted (no "0h 2m 5s" → "2m 5s") and pure-zero trailing units are
+ * dropped, but interior zero units are kept so a value can never read ambiguously
+ * (e.g. "1h 0m 5s", never "1h 5s").
+ *
+ *   null / undefined / <= 0        → "0s"
+ *   0h 2m 38s                      → "2m 38s"
+ *   1h 4m 12s                      → "1h 4m 12s"
+ *   1h 0m 0s                       → "1h"
+ *   1h 1m 0s                       → "1h 1m"
+ *   1h 0m 5s                       → "1h 0m 5s"
+ *   0h 0m 59s                      → "59s"
  */
 export function formatDuration(totalSeconds: number | null | undefined): string {
-  if (totalSeconds == null || totalSeconds <= 0) return '0m';
-  const totalMinutes = Math.floor(totalSeconds / 60);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
-  if (hours > 0) return `${hours}h`;
-  return `${minutes}m`;
+  if (totalSeconds == null || totalSeconds <= 0) return '0s';
+  const total = Math.floor(totalSeconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+
+  const parts: string[] = [];
+  if (hours > 0) parts.push(`${hours}h`);
+  // Show minutes when non-zero, or as an interior zero between hours and seconds
+  // (so "1h 0m 5s" never collapses to the ambiguous "1h 5s").
+  if (minutes > 0 || (hours > 0 && seconds > 0)) parts.push(`${minutes}m`);
+  if (seconds > 0) parts.push(`${seconds}s`);
+
+  return parts.join(' ');
 }
 
 /**

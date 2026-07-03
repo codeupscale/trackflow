@@ -101,6 +101,16 @@ export function CheckInCard({ className }: { className?: string }) {
     return () => clearInterval(id);
   }, [isLive]);
 
+  // The session list is capped (~5 rows) and scrolls. Sessions render oldest-first
+  // (#1 at top), so pin the scroll to the bottom whenever a session is added or the
+  // open/closed state flips — keeping the most recent / open session visible by default.
+  const sessionListRef = useRef<HTMLUListElement>(null);
+  const sessionsCount = data?.sessions?.length ?? 0;
+  useEffect(() => {
+    const el = sessionListRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [sessionsCount, isLive]);
+
   if (isLoading) {
     return (
       <Card className={className}>
@@ -224,9 +234,13 @@ export function CheckInCard({ className }: { className?: string }) {
           )
         )}
 
-        {/* Session list (live + idle_can_recheck) */}
+        {/* Session list (live + idle_can_recheck). Capped at ~5 rows; scrolls
+            (pinned to bottom so the newest / open session is visible by default). */}
         {sessions.length > 0 && (
-          <ul className="flex flex-col gap-1.5">
+          <ul
+            ref={sessionListRef}
+            className="flex max-h-40 flex-col gap-1.5 overflow-y-auto pr-1"
+          >
             {sessions.map((session, idx) => (
               <li key={session.seq} className="flex flex-col gap-1.5">
                 {idx > 0 && <Separator />}

@@ -203,9 +203,14 @@ export default function TeamAttendancePage() {
                       {record.clock_out || '—'}
                     </div>
                     <div className="text-sm text-foreground tabular-nums text-right">
-                      {Number(record.total_hours) > 0
-                        ? formatDuration(Number(record.total_hours) * 3600)
-                        : '—'}
+                      {(() => {
+                        // Prefer exact worked_seconds; fall back to rounded total_hours.
+                        const secs =
+                          record.worked_seconds != null
+                            ? record.worked_seconds
+                            : Number(record.total_hours) * 3600;
+                        return secs > 0 ? formatDuration(secs) : '—';
+                      })()}
                     </div>
                     <div className="text-sm tabular-nums text-right">
                       {Number(record.overtime_hours) > 0 ? (
