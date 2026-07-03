@@ -194,6 +194,10 @@ class CheckInReportTest extends TestCase
         $this->assertStringContainsString('Employee,Email,Date,Sessions,"First In","Last Out","Total (HH:MM)"', $body);
         $this->assertStringContainsString('alice@example.test', $body);
         $this->assertStringContainsString('bob@example.test', $body);
+        // First In / Last Out render as 12-hour clock times in the org policy tz
+        // (06:40 UTC → 11:40 AM, 15:30 UTC → 8:30 PM in Asia/Karachi).
+        $this->assertStringContainsString('11:40 AM', $body);
+        $this->assertStringContainsString('8:30 PM', $body);
     }
 
     public function test_export_month_single_employee(): void

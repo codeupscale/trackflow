@@ -626,8 +626,8 @@ class CheckInTest extends TestCase
         $response->assertOk();
         $row = $response->json('data.0');
 
-        // clock_in is filled from the physical check-in, rendered in the org tz (H:i).
-        $this->assertSame('11:50', $row['clock_in']);
+        // clock_in is filled from the physical check-in, rendered in the org tz (12-hour g:i A).
+        $this->assertSame('11:50 AM', $row['clock_in']);
         $this->assertNull($row['clock_out']);
         // Late minutes come from the check-in signal, not the (zero) tracker figure.
         $this->assertSame(20, $row['late_minutes']);
@@ -655,8 +655,8 @@ class CheckInTest extends TestCase
         $response->assertOk();
         $row = $response->json('data.0');
 
-        $this->assertSame('11:40', $row['clock_in']);
-        $this->assertSame('20:30', $row['clock_out']);
+        $this->assertSame('11:40 AM', $row['clock_in']);
+        $this->assertSame('8:30 PM', $row['clock_out']);
         // Hours derived from the check-in session (8h50m) even with no tracked time.
         $this->assertGreaterThan(0, $row['total_hours']);
         $this->assertEqualsWithDelta(8.83, (float) $row['total_hours'], 0.02);
