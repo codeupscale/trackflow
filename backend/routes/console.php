@@ -1,5 +1,6 @@
 <?php
 
+use App\Jobs\CloseStaleCheckInsJob;
 use App\Jobs\CloseStaleTimerEntriesJob;
 use App\Jobs\GenerateDailyAttendanceJob;
 use App\Jobs\PruneOldActivityLogsJob;
@@ -84,6 +85,20 @@ Schedule::call(function () {
             }
         });
 })->dailyAt('00:30')->name('generate-daily-attendance');
+
+// Backstop: flag forgotten check-ins (open sessions whose org-local day is past)
+// as missing_checkout. Runs alongside the daily attendance generation.
+// NOTE: the Laravel scheduler is DISABLED on dev and only runs in prod — do not
+// rely on this firing in tests; test autoCloseStaleCheckIns() directly.
+Schedule::call(function () {
+    Organization::query()
+        ->select('id')
+        ->chunkById(500, function ($orgs) {
+            foreach ($orgs as $org) {
+                CloseStaleCheckInsJob::dispatch($org->id);
+            }
+        });
+})->dailyAt('03:00')->name('close-stale-check-ins');
 
 // FIX B11: Watchdog — close stale open entries (no heartbeat for 2+ hours)
 Schedule::job(new CloseStaleTimerEntriesJob)->everyThirtyMinutes()->name('close-stale-timer-entries');

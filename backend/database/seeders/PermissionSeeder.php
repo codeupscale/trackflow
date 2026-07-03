@@ -9,7 +9,7 @@ use Illuminate\Support\Str;
 class PermissionSeeder extends Seeder
 {
     /**
-     * All 59 permissions in the system.
+     * All 63 permissions in the system.
      * Format: [key, module, action, description, has_scope]
      */
     public function getPermissions(): array
@@ -74,12 +74,16 @@ class PermissionSeeder extends Seeder
             ['leave.manage_balances', 'leave', 'manage_balances', 'Adjust leave balances manually',        false],
             ['leave.manage_holidays', 'leave', 'manage_holidays', 'Create, edit, delete public holidays',  false],
 
-            // --- attendance (5) ---
+            // --- attendance (7) ---
             ['attendance.view',                     'attendance', 'view',                     'View attendance records',              true],
             ['attendance.generate',                 'attendance', 'generate',                 'Trigger daily attendance generation',  false],
             ['attendance.regularize',               'attendance', 'regularize',               'Submit regularization requests',       false],
             ['attendance.approve_regularizations',  'attendance', 'approve_regularizations',  'Approve or reject regularizations',   true],
             ['attendance.manage_overtime_rules',    'attendance', 'manage_overtime_rules',    'Configure overtime rules',            false],
+            ['attendance.check_in',                 'attendance', 'check_in',                 'Check in / out for oneself',           false],
+            ['attendance.manage_policy',            'attendance', 'manage_policy',            'Configure the check-in attendance policy', false],
+            ['attendance.view_all',                 'attendance', 'view_all',                 'View all employees check-in records org-wide', false],
+            ['attendance.export',                   'attendance', 'export',                   'Export attendance / check-in reports', false],
 
             // --- payroll (7) ---
             ['payroll.view_own',           'payroll', 'view_own',           'View own payslips',                               false],
@@ -198,6 +202,10 @@ class PermissionSeeder extends Seeder
             'attendance.regularize'              => 'none',
             'attendance.approve_regularizations' => 'organization',
             'attendance.manage_overtime_rules'   => 'none',
+            'attendance.check_in'                => 'none',
+            'attendance.manage_policy'           => 'none',
+            'attendance.view_all'                => 'none',
+            'attendance.export'                  => 'none',
 
             // payroll — admin gets full access
             'payroll.view_own'          => 'none',
@@ -292,6 +300,10 @@ class PermissionSeeder extends Seeder
             'attendance.regularize'              => 'none',
             'attendance.approve_regularizations' => 'organization',
             'attendance.manage_overtime_rules'   => 'none',
+            'attendance.check_in'                => 'none',
+            'attendance.manage_policy'           => 'none',
+            'attendance.view_all'                => 'none',
+            'attendance.export'                  => 'none',
 
             // payroll — view only (cannot run, manage structures, or approve)
             'payroll.view_own'  => 'none',
@@ -355,6 +367,7 @@ class PermissionSeeder extends Seeder
             // attendance — view + regularize
             'attendance.view'       => 'organization',
             'attendance.regularize' => 'none',
+            'attendance.check_in'   => 'none',
 
             // payroll — full access (run, approve, manage structures & components)
             'payroll.view_own'          => 'none',
@@ -436,6 +449,7 @@ class PermissionSeeder extends Seeder
             'attendance.view'                    => 'organization',
             'attendance.regularize'              => 'none',
             'attendance.approve_regularizations' => 'organization',
+            'attendance.check_in'                => 'none',
 
             // payroll — manager: view own + view team
             'payroll.view_own'  => 'none',
@@ -492,9 +506,10 @@ class PermissionSeeder extends Seeder
             'leave.cancel'        => 'own',
             'leave.view_calendar' => 'project',
 
-            // attendance — own view, can regularize
+            // attendance — own view, can regularize, self check-in
             'attendance.view'       => 'own',
             'attendance.regularize' => 'none',
+            'attendance.check_in'   => 'none',
 
             // payroll — employee: view own payslips only
             'payroll.view_own' => 'none',

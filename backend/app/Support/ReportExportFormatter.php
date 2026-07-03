@@ -149,4 +149,74 @@ class ReportExportFormatter
             ]);
         }
     }
+
+    /**
+     * Per-record check-in / checkout detail export. Accepts an iterable (a lazy DB
+     * cursor) so month × all-employee volumes never materialise in memory.
+     */
+    public static function checkInDetail(iterable $rows): string
+    {
+        $out = fopen('php://temp', 'r+');
+        fwrite($out, "\xEF\xBB\xBF");
+
+        fputcsv($out, [
+            'Employee', 'Email', 'Date', 'Check In', 'Check Out', 'Total (HH:MM)',
+            'Status', 'Late (min)', 'Early (min)', 'Overtime (min)', 'Missing Checkout',
+        ]);
+
+        foreach ($rows as $row) {
+            fputcsv($out, [
+                self::val($row, 'name'),
+                self::val($row, 'email'),
+                self::val($row, 'date'),
+                self::val($row, 'check_in'),
+                self::val($row, 'check_out'),
+                self::val($row, 'worked_hhmm'),
+                self::val($row, 'status'),
+                self::val($row, 'late_minutes', 0),
+                self::val($row, 'early_minutes', 0),
+                self::val($row, 'overtime_minutes', 0),
+                self::val($row, 'missing_checkout') ? 'yes' : 'no',
+            ]);
+        }
+
+        rewind($out);
+        $csv = stream_get_contents($out);
+        fclose($out);
+
+        return $csv;
+    }
+
+    /**
+     * Per-employee check-in rollup export (worked totals + late / early / missing counts).
+     */
+    public static function checkInSummary(iterable $rows): string
+    {
+        $out = fopen('php://temp', 'r+');
+        fwrite($out, "\xEF\xBB\xBF");
+
+        fputcsv($out, [
+            'Employee', 'Email', 'Total (HH:MM)', 'Days Present',
+            'Late Count', 'Early Checkout Count', 'Missing Checkout Count',
+        ]);
+
+        foreach ($rows as $row) {
+            $user = self::val($row, 'user', []);
+            fputcsv($out, [
+                is_array($user) ? ($user['name'] ?? '') : '',
+                is_array($user) ? ($user['email'] ?? '') : '',
+                self::val($row, 'worked_hhmm'),
+                self::val($row, 'days_present', 0),
+                self::val($row, 'late_count', 0),
+                self::val($row, 'early_checkout_count', 0),
+                self::val($row, 'missing_checkout_count', 0),
+            ]);
+        }
+
+        rewind($out);
+        $csv = stream_get_contents($out);
+        fclose($out);
+
+        return $csv;
+    }
 }

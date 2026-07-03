@@ -135,6 +135,24 @@ class AttendanceService
                 $firstSeenTime = $firstSeen ? Carbon::parse($firstSeen)->setTimezone($userTz)->format('H:i:s') : null;
                 $lastSeenTime = $lastSeen ? Carbon::parse($lastSeen)->setTimezone($userTz)->format('H:i:s') : null;
 
+                // Check-in reconciliation: if the employee physically checked in (via the
+                // check-in/checkout feature) but has little/no tracked time, the nightly
+                // computation would mark them absent/half_day and hide the fact they were
+                // present. Elevate to 'present' so the check-in is honoured. The
+                // updateOrCreate payload below deliberately excludes every check-in column,
+                // so check_in_at/check_out_at/worked_seconds are never clobbered here.
+                $existingRecord = AttendanceRecord::withoutGlobalScopes()
+                    ->where('organization_id', $orgId)
+                    ->where('user_id', $user->id)
+                    ->where('date', $date)
+                    ->first();
+
+                if ($existingRecord
+                    && $existingRecord->check_in_at !== null
+                    && in_array($status, ['absent', 'half_day'], true)) {
+                    $status = 'present';
+                }
+
                 AttendanceRecord::withoutGlobalScopes()->updateOrCreate(
                     [
                         'organization_id' => $orgId,
@@ -181,15 +199,7 @@ class AttendanceService
         }
 
         // 2. On approved leave
-        $onLeave = LeaveRequest::withoutGlobalScopes()
-            ->where('organization_id', $orgId)
-            ->where('user_id', $user->id)
-            ->where('status', 'approved')
-            ->where('start_date', '<=', $date->toDateString())
-            ->where('end_date', '>=', $date->toDateString())
-            ->exists();
-
-        if ($onLeave) {
+        if ($this->isOnApprovedLeave($user, $date->toDateString())) {
             return 'on_leave';
         }
 
@@ -214,6 +224,48 @@ class AttendanceService
         }
 
         return 'absent';
+    }
+
+    /**
+     * Whether the given org-local date is a public holiday for the organization.
+     * Shared by AttendanceService and CheckInService so the two never diverge.
+     */
+    public function isHoliday(string $orgId, string $date): bool
+    {
+        return PublicHoliday::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->whereDate('date', $date)
+            ->exists();
+    }
+
+    /**
+     * Whether the user has an approved leave request covering the given date.
+     * Shared by AttendanceService and CheckInService so the two never diverge.
+     */
+    public function isOnApprovedLeave(User $user, string $date): bool
+    {
+        return LeaveRequest::withoutGlobalScopes()
+            ->where('organization_id', $user->organization_id)
+            ->where('user_id', $user->id)
+            ->where('status', 'approved')
+            ->where('start_date', '<=', $date)
+            ->where('end_date', '>=', $date)
+            ->exists();
+    }
+
+    /**
+     * Whether the given date is a non-working day for the user: a public holiday
+     * or a weekend (Saturday/Sunday). Used to flag check-ins made on off days.
+     */
+    public function isOffDay(User $user, string $date): bool
+    {
+        if ($this->isHoliday($user->organization_id, $date)) {
+            return true;
+        }
+
+        $dayOfWeek = strtolower(Carbon::parse($date)->format('l'));
+
+        return in_array($dayOfWeek, ['saturday', 'sunday'], true);
     }
 
     /**
