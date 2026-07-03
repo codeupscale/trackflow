@@ -4491,6 +4491,58 @@ function notifyPopup(event, data) {
 
 // ── Idle Alert System ────────────────────────────────────────────────────────
 
+/**
+ * ALL-WORKSPACES / FULLSCREEN VISIBILITY (idle alert)
+ *
+ * Root cause of the "idle alert only shows on the workspace it was created on"
+ * bug: the alert relied on the BrowserWindow constructor option
+ * `visibleOnAllWorkspaces: true`. Electron has NO such constructor option — it
+ * is silently ignored — so the alert only ever inherited the plain
+ * `alwaysOnTop: true` ('floating') level and stayed pinned to the Space/virtual
+ * desktop it was born on. A macOS fullscreen app lives on its own dedicated
+ * Space, so a user working there never saw the alert. The tray popup does NOT
+ * have this problem because it calls `setVisibleOnAllWorkspaces()` (a method,
+ * not a constructor flag) with `{ visibleOnFullScreen: true }`.
+ *
+ * This helper gives every idle alert window (primary + per-display mirrors) the
+ * same everywhere-visible treatment as the popup:
+ *   - macOS: setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }) so
+ *     it surfaces on every Space AND over fullscreen apps, plus the
+ *     'screen-saver' always-on-top level (higher than 'floating') so it floats
+ *     above a fullscreen Space and the menu bar. This does not steal focus
+ *     beyond the existing win.focus() call in showAndSendData(); the level only
+ *     affects z-order/Space membership, not activation policy, so the
+ *     close/re-show state machine is unaffected.
+ *   - Windows: no Spaces API. setVisibleOnAllWorkspaces is a documented no-op;
+ *     the 'screen-saver' level maps to an HWND_TOPMOST window so the alert sits
+ *     over other apps — at least parity with the popup's always-on-top.
+ *   - Linux/X11: 'screen-saver' maps to _NET_WM_STATE_ABOVE; workspace pinning
+ *     is best-effort via setVisibleOnAllWorkspaces.
+ *   - Linux/Wayland: the compositor owns window stacking AND workspace/output
+ *     placement — both calls are advisory. The alert appears on the active
+ *     output (same documented limitation as the multi-monitor fix); we cannot
+ *     force it onto every virtual desktop from the app side.
+ */
+function _applyIdleAlertEverywhereVisible(win) {
+    if (!win || win.isDestroyed()) return;
+    try {
+        if (typeof win.setVisibleOnAllWorkspaces === "function") {
+            win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+        }
+        // 'screen-saver' is the highest standard level — it clears fullscreen
+        // apps where plain alwaysOnTop ('floating') does not. Constructor already
+        // set alwaysOnTop:true; this re-asserts it at the stronger level.
+        if (typeof win.setAlwaysOnTop === "function") {
+            win.setAlwaysOnTop(true, "screen-saver");
+        }
+    } catch (err) {
+        console.error(
+            "[IdleAlert] Failed to apply everywhere-visible flags:",
+            err.message,
+        );
+    }
+}
+
 async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     // Capture the actionId at call time; if not provided, read from detector
     const alertActionId = actionId ?? idleDetector?.getActionId() ?? 0;
@@ -4601,10 +4653,6 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
             alwaysOnTop: true,
             skipTaskbar: false,
             show: false,
-            // Ensure the idle alert appears on whichever macOS Space / Linux workspace
-            // the user is currently viewing. Without this it can open on a different
-            // desktop and appear invisible.
-            visibleOnAllWorkspaces: true,
             backgroundColor: "#0a0a0a", // Prevent white flash on all platforms
             webPreferences: {
                 preload: path.join(__dirname, "..", "preload", "index.js"),
@@ -4620,7 +4668,12 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
         } else {
             opts.center = true;
         }
-        return new BrowserWindow(opts);
+        const win = new BrowserWindow(opts);
+        // ALL-WORKSPACES FIX: make the alert follow the user everywhere, exactly
+        // like the tray popup. Must be applied to EVERY alert window (primary +
+        // per-display mirrors), which is why it lives here in the shared factory.
+        _applyIdleAlertEverywhereVisible(win);
+        return win;
     }
 
     // Order displays so the cursor's display is created first (becomes primary).
