@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\DataPrivacyController;
 use App\Http\Controllers\Api\V1\Hr\AttendanceController;
+use App\Http\Controllers\Api\V1\Hr\AttendancePolicyController;
 use App\Http\Controllers\Api\V1\Hr\AttendanceRegularizationController;
 use App\Http\Controllers\Api\V1\Hr\DepartmentController;
 use App\Http\Controllers\Api\V1\Hr\EmployeeController;
@@ -279,6 +280,26 @@ Route::prefix('v1')->group(function () {
                 ->middleware('permission:attendance.view');
             Route::post('attendance/generate', [AttendanceController::class, 'store'])
                 ->middleware('permission:attendance.generate');
+
+            // Check-in / Checkout (self-service). STATIC routes MUST be declared
+            // before the attendance/{record}/... wildcard to avoid route-model-binding
+            // collision (e.g. 'check-in' being captured as a {record} id).
+            Route::post('attendance/check-in', [AttendanceController::class, 'checkIn'])
+                ->middleware('permission:attendance.check_in');
+            Route::post('attendance/check-out', [AttendanceController::class, 'checkOut'])
+                ->middleware('permission:attendance.check_in');
+            Route::get('attendance/today', [AttendanceController::class, 'todayStatus'])
+                ->middleware('permission:attendance.check_in');
+            Route::get('attendance/check-ins', [AttendanceController::class, 'checkInsIndex'])
+                ->middleware('permission:attendance.view');
+            Route::get('attendance/check-ins/summary', [AttendanceController::class, 'checkInsSummary'])
+                ->middleware('permission:attendance.view');
+            Route::get('attendance/check-ins/export', [AttendanceController::class, 'checkInsExport'])
+                ->middleware('permission:attendance.export');
+            Route::get('attendance/policy', [AttendancePolicyController::class, 'show'])
+                ->middleware('permission:attendance.view');
+            Route::put('attendance/policy', [AttendancePolicyController::class, 'update'])
+                ->middleware('permission:attendance.manage_policy');
 
             // Attendance Regularizations
             Route::get('attendance/regularizations', [AttendanceRegularizationController::class, 'index'])

@@ -15,6 +15,8 @@ import {
   CalendarCheck,
   UsersRound,
   FileEdit,
+  FileBarChart2,
+  SlidersHorizontal,
   Shield,
   Clock4,
   CalendarClock,
@@ -80,6 +82,10 @@ export const navigationConfig: NavGroup[] = [
       { name: 'Team Attendance', href: '/hr/attendance/team', icon: UsersRound, requiredPermission: 'attendance.view', requiredScope: 'project' },
       // Regularizations approvals — managers/admins only
       { name: 'Regularizations', href: '/hr/attendance/regularizations', icon: FileEdit, requiredPermission: 'attendance.approve_regularizations' },
+      // Check-in Report (all-employees rollup) — HR/admin only
+      { name: 'Check-in Report', href: '/hr/attendance/report', icon: FileBarChart2, requiredPermission: 'attendance.view_all' },
+      // Attendance Policy settings — HR/admin only
+      { name: 'Attendance Policy', href: '/hr/attendance/settings', icon: SlidersHorizontal, requiredPermission: 'attendance.manage_policy' },
       // Shifts management — managers/admins only (employees have shifts.view but NOT shifts.create)
       { name: 'Shifts', href: '/hr/shifts', icon: Clock4, requiredPermission: 'shifts.create' },
       { name: 'Shift Roster', href: '/hr/shifts/roster', icon: CalendarClock, requiredPermission: 'shifts.manage_assignments' },

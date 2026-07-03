@@ -48,9 +48,13 @@ import {
 
 import { AttendanceStatusBadge } from '@/components/hr/AttendanceStatusBadge';
 import { AttendanceSummaryCard } from '@/components/hr/AttendanceSummaryCard';
+import { CheckInCard } from '@/components/hr/CheckInCard';
+import { CheckInStatusBadge, type CheckInBadgeStatus } from '@/components/hr/CheckInStatusBadge';
 import { useAttendance, useAttendanceSummary, useRequestRegularization } from '@/hooks/hr/use-attendance';
+import { usePermissionStore } from '@/stores/permission-store';
 import { regularizationSchema, type RegularizationFormData, type AttendanceRecord } from '@/lib/validations/attendance';
 import { cn, formatDate } from '@/lib/utils';
+import { deriveCheckInBadgeStatus } from '@/lib/check-in-time';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -85,6 +89,8 @@ export default function MyAttendancePage() {
   );
 
   const regularizeMutation = useRequestRegularization();
+  const { hasPermission } = usePermissionStore();
+  const canCheckIn = hasPermission('attendance.check_in');
 
   const records = attendanceData?.data ?? [];
   const totalPages = attendanceData?.last_page ?? 1;
@@ -188,6 +194,13 @@ export default function MyAttendancePage() {
           </Select>
         </div>
       </div>
+
+      {/* Check-in / Checkout */}
+      {canCheckIn && (
+        <section aria-label="Check in and out">
+          <CheckInCard className="sm:max-w-md" />
+        </section>
+      )}
 
       {/* Summary Cards */}
       <section aria-label="Attendance summary">
@@ -329,8 +342,14 @@ export default function MyAttendancePage() {
                     <div className="text-sm text-muted-foreground">
                       {record.day}
                     </div>
-                    <div>
+                    <div className="flex flex-wrap items-center gap-1">
                       <AttendanceStatusBadge status={record.status} />
+                      {(() => {
+                        const s = deriveCheckInBadgeStatus(record);
+                        return s ? (
+                          <CheckInStatusBadge status={s as CheckInBadgeStatus} />
+                        ) : null;
+                      })()}
                     </div>
                     <div className="text-sm text-muted-foreground">
                       {record.shift_name || '—'}

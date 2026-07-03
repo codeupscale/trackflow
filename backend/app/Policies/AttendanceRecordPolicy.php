@@ -47,4 +47,41 @@ class AttendanceRecordPolicy
     {
         return app(PermissionService::class)->hasPermission($user, 'attendance.generate');
     }
+
+    /**
+     * Any authenticated employee can check in / out for themselves (self-service).
+     * The route middleware (permission:attendance.check_in) gates access to the feature.
+     */
+    public function checkIn(User $user): bool
+    {
+        return true;
+    }
+
+    /**
+     * View the check-in list. The route middleware (permission:attendance.view)
+     * gates access; CheckInService role-scopes the actual results (admin=all,
+     * manager=team, employee=own), so any authenticated viewer is permitted here.
+     */
+    public function viewCheckIns(User $user): bool
+    {
+        return true;
+    }
+
+    /**
+     * View EVERY employee's check-in records org-wide (not just a managed team).
+     * Held by admin/owner and hr_manager via attendance.view_all. The service still
+     * scopes results, but this gate decides the "all-org" branch.
+     */
+    public function viewAll(User $user): bool
+    {
+        return app(PermissionService::class)->hasPermission($user, 'attendance.view_all');
+    }
+
+    /**
+     * Export a check-in report (CSV). Gated by attendance.export (admin/owner + hr_manager).
+     */
+    public function export(User $user): bool
+    {
+        return app(PermissionService::class)->hasPermission($user, 'attendance.export');
+    }
 }

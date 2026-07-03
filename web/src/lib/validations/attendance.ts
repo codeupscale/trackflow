@@ -45,6 +45,20 @@ export type AttendanceStatus =
   | 'holiday'
   | 'weekend';
 
+// --- Check-in / Checkout ---
+
+export type CheckInStatus = 'on_time' | 'late' | null;
+
+/**
+ * Advisory flags attached to a check-in record. All keys are optional booleans;
+ * the object is null when no flags apply.
+ */
+export interface CheckInFlags {
+  on_approved_leave?: boolean;
+  worked_on_off_day?: boolean;
+  auto_closed?: boolean;
+}
+
 export interface AttendanceRecord {
   id: string;
   user_id: string;
@@ -59,12 +73,77 @@ export interface AttendanceRecord {
   overtime_hours: number;
   is_regularized: boolean;
   regularization_status: 'pending' | 'approved' | 'rejected' | null;
+  // Check-in / checkout fields (present on check-ins list rows)
+  check_in_at?: string | null;
+  check_out_at?: string | null;
+  worked_seconds?: number | null;
+  worked_hhmm?: string | null;
+  check_in_status?: CheckInStatus;
+  is_early_checkout?: boolean;
+  missing_checkout?: boolean;
+  check_in_flags?: CheckInFlags | null;
   user?: {
     id: string;
     name: string;
     email: string;
     avatar_url: string | null;
   };
+}
+
+export interface AttendancePolicy {
+  check_in_time: string;
+  late_threshold: string;
+  checkout_time: string;
+  timezone: string;
+  allow_early_check_in: boolean;
+  is_active: boolean;
+}
+
+export interface TodayStatus {
+  checked_in: boolean;
+  checked_out: boolean;
+  check_in_at: string | null;
+  check_in_at_local: string | null;
+  check_out_at: string | null;
+  check_out_at_local?: string | null;
+  check_in_status: CheckInStatus;
+  check_in_late_minutes?: number;
+  is_early_checkout: boolean;
+  check_out_early_minutes?: number;
+  check_out_overtime_minutes?: number;
+  missing_checkout?: boolean;
+  worked_seconds: number | null;
+  worked_hhmm: string | null;
+  status: AttendanceStatus | null;
+  check_in_flags: CheckInFlags | null;
+  server_now: string;
+  policy: Pick<
+    AttendancePolicy,
+    'check_in_time' | 'late_threshold' | 'checkout_time' | 'timezone'
+  >;
+}
+
+export interface CheckInSummaryRow {
+  user: {
+    id: string;
+    name: string;
+    email: string;
+  };
+  total_worked_seconds: number;
+  worked_hhmm: string;
+  days_present: number;
+  late_count: number;
+  early_checkout_count: number;
+  missing_checkout_count: number;
+}
+
+export interface PaginatedCheckInSummary {
+  data: CheckInSummaryRow[];
+  current_page: number;
+  last_page: number;
+  total: number;
+  from: number | null;
+  to: number | null;
 }
 
 export interface AttendanceSummary {
