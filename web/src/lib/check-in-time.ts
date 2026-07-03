@@ -125,3 +125,136 @@ export function formatHhmm(totalSeconds: number | null | undefined): string | nu
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${pad(hours)}:${pad(minutes)}`;
 }
+
+/**
+ * Format a raw MINUTE count as the human "Xh Ym" scheme — used for late / early /
+ * overtime signals that the backend reports as bare minute integers.
+ *
+ * The core problem this solves: a column reading "456" (or "Early (min): 168") is
+ * uninterpretable at a glance. "7h 36m" / "2h 48m" is unmistakable. This DELEGATES
+ * to formatDuration (whole minutes never produce a seconds part) so there is one
+ * duration-formatting source of truth.
+ *
+ *   null / undefined / <= 0  → "0m"
+ *   36                       → "36m"
+ *   60                       → "1h"
+ *   90                       → "1h 30m"
+ *   168                      → "2h 48m"
+ *   456                      → "7h 36m"
+ */
+export function formatMinutes(minutes: number | null | undefined): string {
+  if (minutes == null || minutes <= 0) return '0m';
+  return formatDuration(Math.floor(minutes) * 60);
+}
+
+/**
+ * Format a policy wall-clock time string ("HH:MM" or "HH:MM:SS", 24-hour) as a
+ * 12-hour label ("11:30 AM", "8:30 PM"). Returns null when the input is missing or
+ * unparseable, so callers can fall back to generic phrasing.
+ *
+ * This reads the org POLICY config values (check_in_time / checkout_time), which are
+ * stable 24-hour strings — deliberately independent of any display-string format the
+ * API uses for clock_in / clock_out columns.
+ */
+export function formatPolicyTime(time: string | null | undefined): string | null {
+  if (!time) return null;
+  const m = /^(\d{1,2}):(\d{2})/.exec(time.trim());
+  if (!m) return null;
+  let hours = Number(m[1]);
+  const minutes = Number(m[2]);
+  if (Number.isNaN(hours) || Number.isNaN(minutes) || hours > 23 || minutes > 59) {
+    return null;
+  }
+  const period = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  if (hours === 0) hours = 12;
+  return `${hours}:${String(minutes).padStart(2, '0')} ${period}`;
+}
+
+/** Context for building a check-in badge tooltip. All fields optional. */
+export interface CheckInTooltipContext {
+  /** Minutes late from the official start (check_in_late_minutes / late_minutes). */
+  lateMinutes?: number | null;
+  /** Minutes checked out before the checkout time (check_out_early_minutes). */
+  earlyMinutes?: number | null;
+  /** Minutes worked past the checkout time (check_out_overtime_minutes). */
+  overtimeMinutes?: number | null;
+  /** Policy official start time, 24-hour "HH:MM[:SS]" (policy.check_in_time). */
+  checkInTime?: string | null;
+  /** Policy checkout time, 24-hour "HH:MM[:SS]" (policy.checkout_time). */
+  checkoutTime?: string | null;
+}
+
+/**
+ * Build a plain-language tooltip for a check-in signal badge, converting the bare
+ * minute count into "Xh Ym" and anchoring it to the org policy time when available.
+ * Returns undefined when there is nothing worth explaining (e.g. on_time), so the
+ * caller can skip rendering a tooltip wrapper.
+ *
+ *   late,  lateMinutes 456, checkInTime "11:30:00"  →
+ *     "Checked in 7h 36m after the 11:30 AM official start."
+ *   early_checkout, earlyMinutes 168, checkoutTime "20:30:00" →
+ *     "Checked out 2h 48m before the 8:30 PM checkout time."
+ *   early_checkout, no minutes, no policy →
+ *     "Checked out before the organization's checkout time."
+ */
+export function checkInBadgeTooltip(
+  status:
+    | 'on_time'
+    | 'late'
+    | 'early_checkout'
+    | 'missing_checkout'
+    | 'on_approved_leave'
+    | 'worked_on_off_day'
+    | 'overtime',
+  ctx: CheckInTooltipContext = {}
+): string | undefined {
+  switch (status) {
+    case 'late': {
+      const start = formatPolicyTime(ctx.checkInTime);
+      const anchor = start ? `the ${start} official start` : 'the official start time';
+      const dur =
+        ctx.lateMinutes != null && ctx.lateMinutes > 0
+          ? formatMinutes(ctx.lateMinutes)
+          : null;
+      return dur
+        ? `Checked in ${dur} after ${anchor}.`
+        : `Checked in after ${anchor}.`;
+    }
+    case 'early_checkout': {
+      const checkout = formatPolicyTime(ctx.checkoutTime);
+      const anchor = checkout
+        ? `the ${checkout} checkout time`
+        : "the organization's checkout time";
+      const dur =
+        ctx.earlyMinutes != null && ctx.earlyMinutes > 0
+          ? formatMinutes(ctx.earlyMinutes)
+          : null;
+      return dur
+        ? `Checked out ${dur} before ${anchor}.`
+        : `Checked out before ${anchor}.`;
+    }
+    case 'overtime': {
+      const checkout = formatPolicyTime(ctx.checkoutTime);
+      const anchor = checkout
+        ? `the ${checkout} checkout time`
+        : "the organization's checkout time";
+      const dur =
+        ctx.overtimeMinutes != null && ctx.overtimeMinutes > 0
+          ? formatMinutes(ctx.overtimeMinutes)
+          : null;
+      return dur
+        ? `Worked ${dur} of overtime past ${anchor}.`
+        : `Worked overtime past ${anchor}.`;
+    }
+    case 'missing_checkout':
+      return "You didn't check out — the session was auto-closed for you.";
+    case 'on_approved_leave':
+      return 'You checked in on a day covered by an approved leave request.';
+    case 'worked_on_off_day':
+      return 'You checked in on a weekend or holiday.';
+    case 'on_time':
+    default:
+      return undefined;
+  }
+}

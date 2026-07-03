@@ -5,6 +5,9 @@ import {
   formatElapsed,
   formatDuration,
   formatHhmm,
+  formatMinutes,
+  formatPolicyTime,
+  checkInBadgeTooltip,
   deriveCheckInBadgeStatus,
 } from '@/lib/check-in-time';
 
@@ -160,6 +163,121 @@ describe('formatHhmm — mirrors backend', () => {
   it('returns null for null/undefined', () => {
     expect(formatHhmm(null)).toBeNull();
     expect(formatHhmm(undefined)).toBeNull();
+  });
+});
+
+describe('formatMinutes — raw minute counts as "Xh Ym"', () => {
+  it('renders 0m for zero / null / undefined / negative', () => {
+    expect(formatMinutes(0)).toBe('0m');
+    expect(formatMinutes(null)).toBe('0m');
+    expect(formatMinutes(undefined)).toBe('0m');
+    expect(formatMinutes(-5)).toBe('0m');
+  });
+
+  it('renders sub-hour values in minutes only', () => {
+    expect(formatMinutes(1)).toBe('1m');
+    expect(formatMinutes(36)).toBe('36m');
+    expect(formatMinutes(59)).toBe('59m');
+  });
+
+  it('renders whole hours with no trailing minutes', () => {
+    expect(formatMinutes(60)).toBe('1h');
+    expect(formatMinutes(120)).toBe('2h');
+  });
+
+  it('renders hours + minutes for values >= 60 (the confusing raw-number case)', () => {
+    // The owner's screenshot: a check-in 456 minutes after the official start must
+    // read as "7h 36m", never the bare "456".
+    expect(formatMinutes(456)).toBe('7h 36m');
+    expect(formatMinutes(168)).toBe('2h 48m');
+    expect(formatMinutes(90)).toBe('1h 30m');
+    expect(formatMinutes(61)).toBe('1h 1m');
+  });
+
+  it('floors fractional minutes', () => {
+    expect(formatMinutes(90.9)).toBe('1h 30m');
+  });
+});
+
+describe('formatPolicyTime — 24h policy string to 12h label', () => {
+  it('formats HH:MM:SS wall-clock strings', () => {
+    expect(formatPolicyTime('11:30:00')).toBe('11:30 AM');
+    expect(formatPolicyTime('20:30:00')).toBe('8:30 PM');
+    expect(formatPolicyTime('11:45:00')).toBe('11:45 AM');
+  });
+
+  it('handles midnight and noon boundaries', () => {
+    expect(formatPolicyTime('00:00:00')).toBe('12:00 AM');
+    expect(formatPolicyTime('12:00:00')).toBe('12:00 PM');
+    expect(formatPolicyTime('12:30')).toBe('12:30 PM');
+    expect(formatPolicyTime('00:15')).toBe('12:15 AM');
+  });
+
+  it('accepts HH:MM without seconds', () => {
+    expect(formatPolicyTime('09:05')).toBe('9:05 AM');
+  });
+
+  it('returns null for missing / invalid input', () => {
+    expect(formatPolicyTime(null)).toBeNull();
+    expect(formatPolicyTime(undefined)).toBeNull();
+    expect(formatPolicyTime('')).toBeNull();
+    expect(formatPolicyTime('not-a-time')).toBeNull();
+    expect(formatPolicyTime('25:00')).toBeNull();
+    expect(formatPolicyTime('10:99')).toBeNull();
+  });
+});
+
+describe('checkInBadgeTooltip — plain-language, policy-anchored', () => {
+  it('late: names the "Xh Ym" and the concrete policy start when available', () => {
+    expect(
+      checkInBadgeTooltip('late', { lateMinutes: 456, checkInTime: '11:30:00' })
+    ).toBe('Checked in 7h 36m after the 11:30 AM official start.');
+  });
+
+  it('late: falls back to generic anchor when policy start is missing', () => {
+    expect(checkInBadgeTooltip('late', { lateMinutes: 168 })).toBe(
+      'Checked in 2h 48m after the official start time.'
+    );
+  });
+
+  it('late: omits the duration when no minutes are known', () => {
+    expect(checkInBadgeTooltip('late', { checkInTime: '11:30:00' })).toBe(
+      'Checked in after the 11:30 AM official start.'
+    );
+  });
+
+  it('early_checkout: names the "Xh Ym" and the concrete checkout time', () => {
+    expect(
+      checkInBadgeTooltip('early_checkout', {
+        earlyMinutes: 168,
+        checkoutTime: '20:30:00',
+      })
+    ).toBe('Checked out 2h 48m before the 8:30 PM checkout time.');
+  });
+
+  it('early_checkout: generic phrasing when minutes and policy are unavailable', () => {
+    expect(checkInBadgeTooltip('early_checkout', {})).toBe(
+      "Checked out before the organization's checkout time."
+    );
+  });
+
+  it('overtime: names the "Xh Ym" past the checkout time', () => {
+    expect(
+      checkInBadgeTooltip('overtime', {
+        overtimeMinutes: 75,
+        checkoutTime: '20:30:00',
+      })
+    ).toBe('Worked 1h 15m of overtime past the 8:30 PM checkout time.');
+  });
+
+  it('missing_checkout / advisory flags return a fixed explanation', () => {
+    expect(checkInBadgeTooltip('missing_checkout')).toMatch(/auto-closed/);
+    expect(checkInBadgeTooltip('on_approved_leave')).toMatch(/approved leave/);
+    expect(checkInBadgeTooltip('worked_on_off_day')).toMatch(/weekend or holiday/);
+  });
+
+  it('on_time returns undefined (no tooltip worth showing)', () => {
+    expect(checkInBadgeTooltip('on_time')).toBeUndefined();
   });
 });
 

@@ -62,7 +62,7 @@ function extractMessage(error: unknown, fallback: string): string {
 
 // ─── Today status ─────────────────────────────────────────────────
 
-export function useTodayStatus() {
+export function useTodayStatus(options?: { enabled?: boolean }) {
   return useQuery<TodayStatus>({
     queryKey: ['attendance', 'today'],
     queryFn: async () => {
@@ -73,6 +73,11 @@ export function useTodayStatus() {
     // re-anchors to a fresh server_now after tab switches / sleep.
     staleTime: 0,
     refetchOnWindowFocus: true,
+    // The `today` endpoint requires `attendance.check_in`; callers that lack it
+    // (e.g. an owner viewing another user's attendance) pass `enabled: false` to
+    // avoid a guaranteed 403. Shares the query key with CheckInCard, so when both
+    // are enabled the request de-dupes to a single fetch.
+    enabled: options?.enabled ?? true,
   });
 }
 
