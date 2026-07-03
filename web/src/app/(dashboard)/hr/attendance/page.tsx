@@ -62,7 +62,7 @@ import { usePermissionStore } from '@/stores/permission-store';
 import { regularizationSchema, type RegularizationFormData, type AttendanceRecord } from '@/lib/validations/attendance';
 import { cn, formatDate } from '@/lib/utils';
 import {
-  deriveCheckInBadgeStatus,
+  deriveCheckInBadges,
   formatDuration,
   formatMinutes,
   checkInBadgeTooltip,
@@ -376,24 +376,23 @@ export default function MyAttendancePage() {
                     </div>
                     <div className="flex flex-wrap items-center gap-1">
                       <AttendanceStatusBadge status={record.status} />
-                      {(() => {
-                        const s = deriveCheckInBadgeStatus(record);
-                        if (!s) return null;
-                        // The check-ins list row carries late_minutes but not the
-                        // early-checkout minute count, so early_checkout falls back to
-                        // generic phrasing while late names the exact "Xh Ym".
-                        const tooltip = checkInBadgeTooltip(s, {
-                          lateMinutes: record.late_minutes,
-                          checkInTime: policyCheckInTime,
-                          checkoutTime: policyCheckoutTime,
-                        });
-                        return (
-                          <CheckInStatusBadge
-                            status={s as CheckInBadgeStatus}
-                            tooltip={tooltip}
-                          />
-                        );
-                      })()}
+                      {/* All applicable check-in signals — late AND early-checkout
+                          coexist by design, so each renders its own badge (deterministic
+                          order: Late → Early Checkout → Missing Checkout). The check-ins
+                          list row carries late_minutes but not the early-checkout minute
+                          count, so early_checkout falls back to generic phrasing while
+                          late names the exact "Xh Ym". */}
+                      {deriveCheckInBadges(record).map((s) => (
+                        <CheckInStatusBadge
+                          key={s}
+                          status={s as CheckInBadgeStatus}
+                          tooltip={checkInBadgeTooltip(s, {
+                            lateMinutes: record.late_minutes,
+                            checkInTime: policyCheckInTime,
+                            checkoutTime: policyCheckoutTime,
+                          })}
+                        />
+                      ))}
                     </div>
                     {hasAnyShift && (
                       <div className="text-sm text-muted-foreground">

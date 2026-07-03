@@ -49,28 +49,52 @@ export function formatElapsed(totalSeconds: number): string {
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
 }
 
+export type DerivedCheckInBadge =
+  | 'on_time'
+  | 'late'
+  | 'early_checkout'
+  | 'missing_checkout';
+
 /**
- * Derive the single most notable check-in signal badge status for a record row.
- * Priority: missing_checkout > early_checkout > late > on_time. Returns null when
- * there is no check-in signal worth flagging (e.g. a non-checked-in record).
+ * Derive ALL notable check-in signal badges for a record row, in a deterministic
+ * render order: late → early_checkout → missing_checkout.
+ *
+ * Late and early-checkout COEXIST by design (the backend records both on the same
+ * day — you can arrive after the start AND leave before the checkout time), so both
+ * badges must render. An earlier single-badge collapse dropped the Late badge when a
+ * day was also an early checkout; that was the bug this fixes. Missing-checkout
+ * likewise coexists as applicable.
+ *
+ * The positive "On Time" badge is only surfaced when there is nothing else worth
+ * flagging (a clean check-in with no early checkout / missing checkout), so it never
+ * competes with an exception badge. Returns an empty array when there is no check-in
+ * signal at all (e.g. a non-checked-in record).
  */
-export function deriveCheckInBadgeStatus(record: {
+export function deriveCheckInBadges(record: {
   check_in_at?: string | null;
   check_in_status?: 'on_time' | 'late' | null;
   is_early_checkout?: boolean;
   missing_checkout?: boolean;
-}):
-  | 'on_time'
-  | 'late'
-  | 'early_checkout'
-  | 'missing_checkout'
-  | null {
-  if (!record.check_in_at) return null;
-  if (record.missing_checkout) return 'missing_checkout';
-  if (record.is_early_checkout) return 'early_checkout';
-  if (record.check_in_status === 'late') return 'late';
-  if (record.check_in_status === 'on_time') return 'on_time';
-  return null;
+}): DerivedCheckInBadge[] {
+  if (!record.check_in_at) return [];
+
+  const badges: DerivedCheckInBadge[] = [];
+
+  // Check-in signal: late is an exception badge and coexists with checkout signals.
+  if (record.check_in_status === 'late') badges.push('late');
+
+  // Checkout signals — each coexists with a late check-in (and with each other, in
+  // the unlikely event the backend sets both). Deterministic order after `late`.
+  if (record.is_early_checkout) badges.push('early_checkout');
+  if (record.missing_checkout) badges.push('missing_checkout');
+
+  // Positive "On Time" only when nothing else is worth flagging — it should never
+  // sit next to an exception badge (preserves the prior on_time-alone behavior).
+  if (badges.length === 0 && record.check_in_status === 'on_time') {
+    badges.push('on_time');
+  }
+
+  return badges;
 }
 
 /**
