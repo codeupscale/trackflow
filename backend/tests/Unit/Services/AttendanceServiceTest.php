@@ -396,7 +396,8 @@ class AttendanceServiceTest extends TestCase
         $result = $this->service->getAttendance($user->id, $org->id, ['status' => 'present']);
 
         $this->assertEquals(1, $result->total());
-        $this->assertEquals('present', $result->first()->status);
+        // getAttendance now returns serialized rows (arrays), not Eloquent models.
+        $this->assertEquals('present', $result->first()['status']);
     }
 
     // ── Get Team Attendance ─────────────────────────────

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\AttendancePolicy;
 use App\Models\AttendanceRecord;
 use App\Models\AttendanceRegularization;
 use App\Models\LeaveRequest;
@@ -289,7 +290,14 @@ class AttendanceService
             $query->where('status', $filters['status']);
         }
 
-        return $query->orderByDesc('date')->paginate($filters['per_page'] ?? 25);
+        $paginator = $query->orderByDesc('date')->paginate($filters['per_page'] ?? 25);
+
+        // Serialize into the shape the web table expects (clock_in/clock_out/day/
+        // shift_name/hours/late), reconciling tracker-derived and check-in fields.
+        $tz = $this->orgTimezone($orgId);
+        $paginator->getCollection()->transform(fn (AttendanceRecord $r) => $this->serializeRecord($r, $tz));
+
+        return $paginator;
     }
 
     /**
@@ -377,12 +385,14 @@ class AttendanceService
             $dates[] = $d->toDateString();
         }
 
+        $tz = $this->orgTimezone($orgId);
+
         $rows = [];
         foreach ($users as $u) {
             foreach ($dates as $dateStr) {
                 $record = $existing->get($u->id . '|' . $dateStr);
                 if ($record) {
-                    $rows[] = $record->toArray();
+                    $rows[] = $this->serializeRecord($record, $tz) + ['is_synthetic' => false];
                     continue;
                 }
 
@@ -391,7 +401,9 @@ class AttendanceService
                     'organization_id' => $orgId,
                     'user_id' => $u->id,
                     'date' => $dateStr,
+                    'day' => Carbon::parse($dateStr)->format('D'),
                     'shift_id' => null,
+                    'shift_name' => null,
                     'expected_start' => null,
                     'expected_end' => null,
                     'first_seen' => null,
@@ -405,6 +417,16 @@ class AttendanceService
                     'overtime_minutes' => 0,
                     'overtime_hours' => 0,
                     'is_regularized' => false,
+                    // Check-in signal columns — always absent on a synthesised row.
+                    'check_in_at' => null,
+                    'check_out_at' => null,
+                    'worked_seconds' => null,
+                    'worked_hhmm' => null,
+                    'check_in_status' => null,
+                    'check_in_late_minutes' => 0,
+                    'is_early_checkout' => false,
+                    'missing_checkout' => false,
+                    'check_in_flags' => null,
                     'is_synthetic' => true,
                     'user' => [
                         'id' => $u->id,
@@ -467,6 +489,144 @@ class AttendanceService
         }
 
         return 'absent';
+    }
+
+    /**
+     * Serialize an attendance record into the shape the web dashboard consumes.
+     *
+     * Reconciles the two attendance signals into single display columns:
+     *   - clock_in / clock_out  ← physical check-in/checkout instant (rendered in the
+     *     org policy timezone) when present, else the tracker-derived first/last-seen
+     *     wall-clock. Only filled from check-in data when it exists, so tracker-only
+     *     orgs are unaffected.
+     *   - total_hours           ← tracked hours, else the check-in worked_seconds.
+     *   - late_minutes          ← check_in_late_minutes when the user checked in,
+     *     else the tracker/shift late figure.
+     * The raw check-in signal columns are also passed through so the row can render
+     * the on-time / late / early-checkout / missing-checkout badge.
+     */
+    private function serializeRecord(AttendanceRecord $record, string $tz): array
+    {
+        $date = $record->date instanceof Carbon
+            ? $record->date->toDateString()
+            : Carbon::parse((string) $record->date)->toDateString();
+
+        $checkInAt = $record->check_in_at;   // Carbon|null (UTC)
+        $checkOutAt = $record->check_out_at; // Carbon|null (UTC)
+
+        $clockIn = $checkInAt
+            ? $checkInAt->copy()->setTimezone($tz)->format('H:i')
+            : $this->trimTime($record->first_seen);
+        $clockOut = $checkOutAt
+            ? $checkOutAt->copy()->setTimezone($tz)->format('H:i')
+            : $this->trimTime($record->last_seen);
+
+        // Hours: tracked time wins; otherwise the check-in session length (set on checkout).
+        $totalHours = (float) $record->total_hours;
+        if ($totalHours <= 0 && $record->worked_seconds !== null) {
+            $totalHours = round($record->worked_seconds / 3600, 2);
+        }
+
+        // Late: the physical check-in figure wins whenever the employee checked in.
+        $lateMinutes = $checkInAt !== null
+            ? (int) ($record->check_in_late_minutes ?? 0)
+            : (int) $record->late_minutes;
+
+        // Overtime: tracker OT, else the checkout overtime.
+        $overtimeMinutes = (int) $record->overtime_minutes;
+        if ($overtimeMinutes <= 0) {
+            $overtimeMinutes = (int) ($record->check_out_overtime_minutes ?? 0);
+        }
+
+        $data = [
+            'id' => $record->id,
+            'organization_id' => $record->organization_id,
+            'user_id' => $record->user_id,
+            'date' => $date,
+            'day' => Carbon::parse($date)->format('D'),
+            'status' => $record->status,
+            'shift_id' => $record->shift_id,
+            'shift_name' => $record->shift?->name,
+            'expected_start' => $record->expected_start,
+            'expected_end' => $record->expected_end,
+            'first_seen' => $record->first_seen,
+            'last_seen' => $record->last_seen,
+            'clock_in' => $clockIn,
+            'clock_out' => $clockOut,
+            'total_hours' => $totalHours,
+            'late_minutes' => $lateMinutes,
+            'early_departure_minutes' => (int) $record->early_departure_minutes,
+            'overtime_minutes' => $overtimeMinutes,
+            'overtime_hours' => round($overtimeMinutes / 60, 2),
+            'is_regularized' => (bool) $record->is_regularized,
+            // Check-in / checkout signal columns (drive the row badge + clock display).
+            'check_in_at' => $checkInAt?->toIso8601String(),
+            'check_out_at' => $checkOutAt?->toIso8601String(),
+            'worked_seconds' => $record->worked_seconds,
+            'worked_hhmm' => $this->formatHhmm($record->worked_seconds),
+            'check_in_status' => $record->check_in_status,
+            'check_in_late_minutes' => (int) ($record->check_in_late_minutes ?? 0),
+            'is_early_checkout' => (bool) $record->is_early_checkout,
+            'missing_checkout' => (bool) $record->missing_checkout,
+            'check_in_flags' => $record->check_in_flags,
+            'shift' => $record->shift ? [
+                'id' => $record->shift->id,
+                'name' => $record->shift->name,
+                'start_time' => $record->shift->start_time,
+                'end_time' => $record->shift->end_time,
+            ] : null,
+        ];
+
+        if ($record->relationLoaded('user') && $record->user) {
+            $data['user'] = [
+                'id' => $record->user->id,
+                'name' => $record->user->name,
+                'email' => $record->user->email,
+                'avatar_url' => $record->user->avatar_url,
+            ];
+        }
+
+        return $data;
+    }
+
+    /**
+     * The org's check-in policy timezone, used to render check-in instants as
+     * org-local wall-clock. Falls back to the app timezone when no policy exists
+     * (an org with no policy has no check-in data, so the fallback is never applied
+     * to a real check-in instant).
+     */
+    private function orgTimezone(string $orgId): string
+    {
+        return AttendancePolicy::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->value('timezone') ?? (string) config('app.timezone', 'UTC');
+    }
+
+    /**
+     * Reduce a stored H:i:s wall-clock string to H:i for display. Null-safe.
+     */
+    private function trimTime(?string $time): ?string
+    {
+        if ($time === null || $time === '') {
+            return null;
+        }
+
+        return substr($time, 0, 5);
+    }
+
+    /**
+     * Format a second count as HH:MM (mirrors CheckInService::formatHhmm). Null-safe.
+     */
+    private function formatHhmm(?int $seconds): ?string
+    {
+        if ($seconds === null) {
+            return null;
+        }
+
+        $hours = intdiv($seconds, 3600);
+        $minutes = intdiv($seconds % 3600, 60);
+
+        return sprintf('%02d:%02d', $hours, $minutes);
     }
 
     /**
