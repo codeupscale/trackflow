@@ -42,6 +42,8 @@ class AttendanceRecord extends Model
         'is_early_checkout',
         'missing_checkout',
         'check_in_flags',
+        // Multi-session redesign (Module 3.1)
+        'sessions_count',
     ];
 
     protected function casts(): array
@@ -63,6 +65,8 @@ class AttendanceRecord extends Model
             'check_out_overtime_minutes' => 'integer',
             'is_early_checkout' => 'boolean',
             'missing_checkout' => 'boolean',
+            // Multi-session redesign (Module 3.1)
+            'sessions_count' => 'integer',
         ];
     }
 
@@ -82,6 +86,15 @@ class AttendanceRecord extends Model
     }
 
     /**
+     * Check-in/checkout sessions for this day's record, ordered by their
+     * 1-based per-day sequence (multi-session redesign, Module 3.1).
+     */
+    public function sessions(): HasMany
+    {
+        return $this->hasMany(CheckInSession::class)->orderBy('seq');
+    }
+
+    /**
      * Scope to filter attendance records within a date range.
      */
     public function scopeForDateRange(Builder $query, string $from, string $to): Builder
@@ -89,12 +102,9 @@ class AttendanceRecord extends Model
         return $query->whereBetween('date', [$from, $to]);
     }
 
-    /**
-     * Scope to open check-in sessions: checked in but not yet checked out.
-     * Backed by the partial index idx_ar_open_sessions.
-     */
-    public function scopeOpenSessions(Builder $query): Builder
-    {
-        return $query->whereNotNull('check_in_at')->whereNull('check_out_at');
-    }
+    // NOTE: The former scopeOpenSessions() was removed in the multi-session redesign.
+    // Under multi-session, a record's check_out_at holds the LAST closed session's
+    // checkout, so "check_in_at NOT NULL AND check_out_at NULL" no longer means
+    // "still checked in" (a later session can be open while an earlier one is closed).
+    // Open-session lookups now live on CheckInSession::open() / the idx_cis_open index.
 }

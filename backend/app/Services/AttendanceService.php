@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\AttendancePolicy;
 use App\Models\AttendanceRecord;
 use App\Models\AttendanceRegularization;
+use App\Models\CheckInSession;
 use App\Models\LeaveRequest;
 use App\Models\OvertimeRule;
 use App\Models\PublicHoliday;
@@ -276,7 +277,8 @@ class AttendanceService
     {
         $query = AttendanceRecord::where('organization_id', $orgId)
             ->where('user_id', $userId)
-            ->with('shift:id,name,start_time,end_time');
+            ->with('shift:id,name,start_time,end_time')
+            ->withCount(['sessions as open_sessions_count' => fn ($q) => $q->whereNull('check_out_at')]);
 
         if (!empty($filters['start_date'])) {
             $query->where('date', '>=', $filters['start_date']);
@@ -359,6 +361,7 @@ class AttendanceService
             ->whereIn('user_id', $userIds)
             ->whereBetween('date', [$startDate, $endDate])
             ->with(['user:id,name,email,avatar_url', 'shift:id,name,start_time,end_time'])
+            ->withCount(['sessions as open_sessions_count' => fn ($q) => $q->whereNull('check_out_at')])
             ->get()
             ->keyBy(fn ($r) => $r->user_id . '|' . Carbon::parse($r->date)->toDateString());
 
@@ -511,15 +514,29 @@ class AttendanceService
             ? $record->date->toDateString()
             : Carbon::parse((string) $record->date)->toDateString();
 
-        $checkInAt = $record->check_in_at;   // Carbon|null (UTC)
-        $checkOutAt = $record->check_out_at; // Carbon|null (UTC)
+        $checkInAt = $record->check_in_at;   // Carbon|null (UTC) — first session's check-in
+        $checkOutAt = $record->check_out_at; // Carbon|null (UTC) — LAST CLOSED session's checkout
+
+        // Post multi-session redesign, check_out_at is the last CLOSED session's checkout,
+        // so "check_out_at IS NULL" no longer means "still working" — a record can hold a
+        // closed checkout AND a later open session. Derive the live state from an actual
+        // open-session existence check so we never render a stale checkout while a later
+        // session is running.
+        $hasOpenSession = $this->recordHasOpenSession($record);
 
         $clockIn = $checkInAt
             ? $checkInAt->copy()->setTimezone($tz)->format('H:i')
             : $this->trimTime($record->first_seen);
-        $clockOut = $checkOutAt
-            ? $checkOutAt->copy()->setTimezone($tz)->format('H:i')
-            : $this->trimTime($record->last_seen);
+
+        if ($hasOpenSession) {
+            // Still checked in — no checkout to display yet.
+            $clockOut = null;
+            $checkOutAt = null;
+        } else {
+            $clockOut = $checkOutAt
+                ? $checkOutAt->copy()->setTimezone($tz)->format('H:i')
+                : $this->trimTime($record->last_seen);
+        }
 
         // Hours: tracked time wins; otherwise the check-in session length (set on checkout).
         $totalHours = (float) $record->total_hours;
@@ -587,6 +604,24 @@ class AttendanceService
         }
 
         return $data;
+    }
+
+    /**
+     * Does this record currently have an open check-in session (checked in, not yet
+     * out)? Prefers the eager-loaded `open_sessions_count` (set via withCount at the
+     * query sites) to avoid an N+1; falls back to a single org-scoped existence query.
+     */
+    private function recordHasOpenSession(AttendanceRecord $record): bool
+    {
+        if (array_key_exists('open_sessions_count', $record->getAttributes())) {
+            return (int) $record->open_sessions_count > 0;
+        }
+
+        return CheckInSession::withoutGlobalScopes()
+            ->where('organization_id', $record->organization_id)
+            ->where('attendance_record_id', $record->id)
+            ->open()
+            ->exists();
     }
 
     /**
