@@ -33,20 +33,20 @@ class InvitationTest extends TestCase
     /** AUTH-09: Admin can create invitation */
     public function test_admin_can_create_invitation(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $response = $this->postJson('/api/v1/invitations', [
             'email' => 'newuser@example.com',
-            'role' => 'manager',
+            'role' => 'org_manager',
         ]);
 
         $response->assertStatus(201);
     }
 
     /** AUTH-09: Manager CAN create invitation (team.invite granted in RBAC) */
-    public function test_manager_can_create_invitation(): void
+    public function test_org_manager_can_create_invitation(): void
     {
-        $this->actingAsUser('manager');
+        $this->actingAsUser('org_manager');
 
         $response = $this->postJson('/api/v1/invitations', [
             'email' => 'newuser@example.com',

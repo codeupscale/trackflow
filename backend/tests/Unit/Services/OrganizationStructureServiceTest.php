@@ -42,7 +42,7 @@ class OrganizationStructureServiceTest extends TestCase
     public function test_create_department_with_parent_and_manager(): void
     {
         $org = $this->createOrganization();
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
 
         $parent = Department::factory()->create(['organization_id' => $org->id]);
 

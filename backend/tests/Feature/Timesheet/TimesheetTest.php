@@ -22,7 +22,7 @@ class TimesheetTest extends TestCase
 
         $this->org = $this->createOrganization();
         $this->owner = $this->createUser($this->org, 'owner');
-        $this->manager = $this->createUser($this->org, 'manager');
+        $this->manager = $this->createUser($this->org, 'org_manager');
         $this->employee = $this->createUser($this->org, 'employee');
         $this->otherEmployee = $this->createUser($this->org, 'employee');
     }
@@ -165,7 +165,7 @@ class TimesheetTest extends TestCase
     public function test_manager_cannot_review_other_org_timesheet(): void
     {
         $otherOrg = $this->createOrganization();
-        $otherManager = $this->createUser($otherOrg, 'manager');
+        $otherManager = $this->createUser($otherOrg, 'org_manager');
 
         $timesheet = Timesheet::factory()->create([
             'organization_id' => $this->org->id,
@@ -233,6 +233,43 @@ class TimesheetTest extends TestCase
         $response->assertStatus(201);
         $timesheet = Timesheet::latest()->first();
         $this->assertGreaterThan(0, $timesheet->total_seconds);
+    }
+
+    public function test_timesheet_total_excludes_idle_entries(): void
+    {
+        $periodStart = now()->subDays(7)->startOfDay();
+        $periodEnd = now()->subDays(1)->endOfDay();
+
+        // 2h of real tracked work...
+        TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->employee->id,
+            'started_at' => $periodStart->copy()->addHours(8),
+            'ended_at' => $periodStart->copy()->addHours(10),
+            'duration_seconds' => 7200,
+            'type' => 'tracked',
+        ]);
+        // ...plus an idle audit marker that must NOT count toward the timesheet.
+        TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->employee->id,
+            'started_at' => $periodStart->copy()->addHours(10),
+            'ended_at' => $periodStart->copy()->addHours(11),
+            'duration_seconds' => 3600,
+            'type' => 'idle',
+        ]);
+
+        $this->actingAs($this->employee, 'sanctum');
+
+        $response = $this->postJson('/api/v1/timesheets/submit', [
+            'period_start' => $periodStart->format('Y-m-d'),
+            'period_end' => $periodEnd->format('Y-m-d'),
+        ]);
+
+        $response->assertStatus(201);
+        $timesheet = Timesheet::latest()->first();
+        // 7200 tracked only — the 3600 idle is excluded.
+        $this->assertEquals(7200, $timesheet->total_seconds);
     }
 
     public function test_review_timesheet_validation_notes_max_length(): void

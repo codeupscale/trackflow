@@ -35,10 +35,30 @@ const IDLE_ACTIVE_THRESHOLD_SEC = 5;
 // Hubstaff counts "mouse activity intervals" not raw events.
 const MOUSEMOVE_THROTTLE_MS = 200;
 
+// ISSUE 3 FIX: Trailing window (seconds) used to score a SCREENSHOT's activity.
+// A screenshot is captured at an arbitrary moment; its activity % must reflect the
+// input in the seconds *immediately preceding* the capture — not the previous fully
+// completed 30s heartbeat interval, which is stale/misaligned. Using a trailing
+// window that always ends at capture time keeps the two aligned:
+//   - a screenshot taken during a 0-input stretch scores 0% (was showing a stale
+//     nonzero % from an earlier interval)
+//   - a screenshot taken during light input scores a matching low % (was showing 0%
+//     because the previous completed interval happened to be empty)
+// 30s matches the heartbeat granularity so the desktop hint lines up with the
+// active-seconds ground truth the backend recalculates from.
+const SCREENSHOT_ACTIVITY_WINDOW_SEC = 30;
+
 class ActivityMonitor {
   constructor(apiClient, offlineQueue) {
     this.apiClient = apiClient;
     this.offlineQueue = offlineQueue;
+    // Injected by index.js. Returns { time_entry_id, idempotency_key } for the
+    // CURRENTLY running entry (local id + idempotency_key), or null when no timer
+    // is active. A heartbeat that fails to send is queued offline; without this
+    // anchor it carries no entry id and the offline-queue drops it as an
+    // unresolvable orphan, losing the offline activity. With it, the queue resolves
+    // it to the server entry once the start syncs and replays it.
+    this.getCurrentEntryMeta = null;
     this.interval = null;
     this.keyboardCount = 0;
     this.mouseCount = 0;
@@ -54,19 +74,32 @@ class ActivityMonitor {
     this._activeSeconds = new Set();
     this._intervalStartTime = null; // unix ms when current interval started
 
+    // ISSUE 3 FIX: Rolling trailing-window active-seconds for SCREENSHOT scoring.
+    // Unlike _activeSeconds (cleared every 30s heartbeat), this persists across
+    // heartbeats and is pruned to a trailing window, so a screenshot's activity %
+    // reflects the seconds right before capture instead of a stale prior interval.
+    this._rollingActiveSeconds = new Set();
+    // unix ms when monitoring started — lets the screenshot score divide by the
+    // elapsed time (not the full window) during the first <window seconds so a
+    // freshly-started, fully-active session isn't under-reported.
+    this._monitorStartedAt = null;
+
     // Stores the score from the last COMPLETED 30s interval.
     // Screenshots use this so they get a stable, interval-based score
     // instead of a partial point-in-time reading.
     this._lastCompletedIntervalScore = 0;
 
+    /** @type {(() => void)|null} */
+    this._onHeartbeatSuccess = null;
+
     // Bound handlers so we can add/remove them without leaking
     this._onKeydown = () => {
       this.keyboardCount++;
-      this._activeSeconds.add(Math.floor(Date.now() / 1000));
+      this._markActiveSecond(Math.floor(Date.now() / 1000));
     };
     this._onClick = () => {
       this.mouseCount++;
-      this._activeSeconds.add(Math.floor(Date.now() / 1000));
+      this._markActiveSecond(Math.floor(Date.now() / 1000));
     };
     this._onMousemove = () => {
       // Throttle: only count 1 movement per 200ms
@@ -74,9 +107,16 @@ class ActivityMonitor {
       if (now - this._lastMouseMoveTime >= MOUSEMOVE_THROTTLE_MS) {
         this._lastMouseMoveTime = now;
         this.mouseCount++;
-        this._activeSeconds.add(Math.floor(now / 1000));
+        this._markActiveSecond(Math.floor(now / 1000));
       }
     };
+  }
+
+  // Record a second of input into BOTH the per-heartbeat interval set and the
+  // rolling trailing-window set used for screenshot scoring (ISSUE 3 FIX).
+  _markActiveSecond(sec) {
+    this._activeSeconds.add(sec);
+    this._rollingActiveSeconds.add(sec);
   }
 
   start() {
@@ -86,7 +126,9 @@ class ActivityMonitor {
     this.mouseCount = 0;
     this._lastMouseMoveTime = 0;
     this._activeSeconds = new Set();
+    this._rollingActiveSeconds = new Set();
     this._intervalStartTime = Date.now();
+    this._monitorStartedAt = Date.now();
     this._lastCompletedIntervalScore = 0;
 
     // Try uiohook-napi, but only if accessibility permission is available
@@ -143,7 +185,7 @@ class ActivityMonitor {
         // mark all 3 seconds as active.
         const nowSec = Math.floor(Date.now() / 1000);
         for (let i = 0; i < 3; i++) {
-          this._activeSeconds.add(nowSec - i);
+          this._markActiveSecond(nowSec - i);
         }
       }
     } catch {}
@@ -169,15 +211,42 @@ class ActivityMonitor {
   }
 
   /**
-   * Get the score for the last COMPLETED heartbeat interval.
-   * Used by screenshot-service so screenshots get stable, interval-based
-   * scores instead of partial point-in-time readings.
+   * ISSUE 3 FIX: Score for a SCREENSHOT, computed over a trailing window that
+   * ENDS at the moment of capture (now). Previously this returned the last
+   * COMPLETED 30s heartbeat interval score, which is off by up to a full
+   * interval from the capture moment and produced the QA-reported mismatches
+   * (0 input → nonzero %, and light input → 0%). Aligning the window to the
+   * capture moment makes the % represent the input right before the shot.
    *
-   * This is the Hubstaff approach: all screenshots within the same interval
-   * show the same consistent activity score.
+   * The window is `SCREENSHOT_ACTIVITY_WINDOW_SEC`; during warmup (monitor has
+   * run for less than a full window) we divide by the elapsed time so a short,
+   * fully-active session still reads high.
    */
   getScoreForScreenshot() {
-    return this._lastCompletedIntervalScore;
+    return this._computeRollingScore();
+  }
+
+  /** Prune expired entries from the rolling set and compute the trailing-window %. */
+  _computeRollingScore() {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const cutoff = nowSec - SCREENSHOT_ACTIVITY_WINDOW_SEC;
+    let activeCount = 0;
+    for (const ts of this._rollingActiveSeconds) {
+      if (ts <= cutoff) {
+        this._rollingActiveSeconds.delete(ts); // prune anything older than the window
+      } else if (ts <= nowSec) {
+        activeCount++;
+      }
+    }
+    // Denominator: full window once warmed up, else the seconds actually elapsed
+    // since monitoring began (avoids under-reporting a brand-new active session).
+    let denom = SCREENSHOT_ACTIVITY_WINDOW_SEC;
+    if (this._monitorStartedAt) {
+      const elapsedSec = Math.floor((Date.now() - this._monitorStartedAt) / 1000);
+      denom = Math.max(1, Math.min(SCREENSHOT_ACTIVITY_WINDOW_SEC, elapsedSec));
+    }
+    activeCount = Math.min(activeCount, denom);
+    return Math.min(100, Math.round((activeCount / denom) * 100));
   }
 
   /**
@@ -186,6 +255,10 @@ class ActivityMonitor {
    */
   getCurrentScore() {
     return this._computeIntervalScore();
+  }
+
+  setOnHeartbeatSuccess(callback) {
+    this._onHeartbeatSuccess = typeof callback === 'function' ? callback : null;
   }
 
   // Send final heartbeat before stopping — prevents losing the last 0-29s of data
@@ -223,7 +296,9 @@ class ActivityMonitor {
     this.mouseCount = 0;
     this._lastMouseMoveTime = 0;
     this._activeSeconds = new Set();
+    this._rollingActiveSeconds = new Set();
     this._intervalStartTime = null;
+    this._monitorStartedAt = null;
     this._lastCompletedIntervalScore = 0;
   }
 
@@ -260,12 +335,22 @@ class ActivityMonitor {
 
     try {
       await this.apiClient.sendHeartbeat(data);
+      this._onHeartbeatSuccess?.();
     } catch (apiErr) {
       try {
         // M7 FIX: Guard offlineQueue access — it may be null after logout
         if (this.offlineQueue) {
+          // Anchor the queued heartbeat to the current entry (local id +
+          // idempotency_key) so the offline-queue resolver can map it to the
+          // server entry on replay. Without this it's an unanchored orphan and
+          // gets dropped — losing offline-captured activity.
+          const entryMeta =
+            typeof this.getCurrentEntryMeta === 'function'
+              ? this.getCurrentEntryMeta()
+              : null;
           await this.offlineQueue.add('heartbeat', {
             ...data,
+            ...(entryMeta || {}),
             logged_at: new Date().toISOString(),
           });
         } else {

@@ -1,0 +1,20 @@
+---
+description: Known-bug reports in bugs/ — read before fixing, update after fixing
+alwaysApply: true
+---
+
+# Bug Reports (`bugs/`)
+
+TrackFlow maintains investigated bug reports in the **`bugs/`** folder at the repo root.
+
+## Workflow
+
+1. **Before fixing a reported issue** — read `bugs/README.md` (index) and the relevant `bugs/*.md` file for root cause, file:line evidence, and recommended fix.
+2. **When a new bug is identified** — add or extend a report in `bugs/` (one file per issue area). Include symptom, scope, severity, root cause, and fix recommendation.
+3. **After a fix is merged** — update the report: change status to `✅ FIXED` (or `🟡` for partial/product-decision), add resolution summary with date/branch, and refresh the index table in `bugs/README.md`.
+
+## Conventions
+
+- Status markers: `🔴 OPEN`, `🟡` partial/needs decision, `✅ FIXED`
+- Verify `file:line` references still match the codebase before implementing
+- These are implementation defects — the local-first timer architecture is sound; prefer targeted fixes over redesigns

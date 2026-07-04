@@ -63,7 +63,7 @@ class OvertimeRuleTest extends TestCase
     public function test_update_validates_multiplier_max_range(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         OvertimeRule::factory()->create(['organization_id' => $org->id]);
@@ -79,7 +79,7 @@ class OvertimeRuleTest extends TestCase
     public function test_update_validates_multiplier_min_range(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         OvertimeRule::factory()->create(['organization_id' => $org->id]);
@@ -95,7 +95,7 @@ class OvertimeRuleTest extends TestCase
     public function test_update_validates_daily_threshold_range(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         OvertimeRule::factory()->create(['organization_id' => $org->id]);
@@ -126,7 +126,7 @@ class OvertimeRuleTest extends TestCase
     public function test_admin_can_update_overtime_rules(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         OvertimeRule::factory()->create(['organization_id' => $org->id]);
@@ -152,7 +152,7 @@ class OvertimeRuleTest extends TestCase
         $orgA = $this->createOrganization();
         $orgB = $this->createOrganization();
 
-        $adminA = $this->createUser($orgA, 'admin');
+        $adminA = $this->createUser($orgA, 'org_manager');
 
         OvertimeRule::factory()->create([
             'organization_id' => $orgA->id,

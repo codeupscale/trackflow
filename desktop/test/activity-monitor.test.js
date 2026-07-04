@@ -126,6 +126,39 @@ describe('ActivityMonitor', () => {
     jest.useFakeTimers();
   }, 10000);
 
+  test('queued heartbeat is anchored to the current entry (id + idempotency_key) so it can replay', async () => {
+    jest.useRealTimers();
+    // Anchor to the live entry, exactly as index.js injects it
+    monitor.getCurrentEntryMeta = () => ({
+      time_entry_id: 'local-abc-123',
+      idempotency_key: 'idem-xyz',
+    });
+    mockApiClient.sendHeartbeat.mockRejectedValueOnce(new Error('Network error'));
+    monitor.keyboardCount = 3;
+
+    await monitor.sendHeartbeat();
+
+    expect(mockOfflineQueue.add).toHaveBeenCalledWith('heartbeat', expect.objectContaining({
+      time_entry_id: 'local-abc-123',
+      idempotency_key: 'idem-xyz',
+    }));
+    jest.useFakeTimers();
+  }, 10000);
+
+  test('queued heartbeat has no entry anchor when no timer is active (orphan dropped by queue)', async () => {
+    jest.useRealTimers();
+    monitor.getCurrentEntryMeta = () => null; // no running entry
+    mockApiClient.sendHeartbeat.mockRejectedValueOnce(new Error('Network error'));
+    monitor.keyboardCount = 1;
+
+    await monitor.sendHeartbeat();
+
+    const queued = mockOfflineQueue.add.mock.calls.at(-1)[1];
+    expect(queued.time_entry_id).toBeUndefined();
+    expect(queued.idempotency_key).toBeUndefined();
+    jest.useFakeTimers();
+  }, 10000);
+
   test('sendFinalHeartbeat sends remaining data', async () => {
     jest.useRealTimers();
     monitor.keyboardCount = 7;

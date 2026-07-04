@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\AuditService;
+use App\Services\AuthTokenService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -13,6 +14,10 @@ use Illuminate\Support\Str;
 
 class SsoController extends Controller
 {
+    public function __construct(
+        private readonly AuthTokenService $authTokens,
+    ) {}
+
     /**
      * Get SSO configuration for the organization.
      */
@@ -155,6 +160,7 @@ class SsoController extends Controller
                     'email' => $email,
                     'password' => Hash::make(Str::random(64)),
                     'role' => 'employee',
+                    'timezone' => User::defaultTimezoneForOrg($org),
                     'sso_provider' => 'saml2',
                     'sso_provider_id' => $email,
                     'email_verified_at' => now(),
@@ -169,10 +175,7 @@ class SsoController extends Controller
             return $user;
         });
 
-        // Issue tokens
-        $user->tokens()->delete();
-        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+        $tokens = $this->authTokens->issueTokenPair($user);
 
         $user->update(['last_active_at' => now()]);
 
@@ -185,8 +188,8 @@ class SsoController extends Controller
                 'email' => $user->email,
                 'role' => $user->role,
             ],
-            'access_token' => $token->plainTextToken,
-            'refresh_token' => $refreshToken->plainTextToken,
+            'access_token' => $tokens['access_token'],
+            'refresh_token' => $tokens['refresh_token'],
             'token_type' => 'Bearer',
         ]);
     }

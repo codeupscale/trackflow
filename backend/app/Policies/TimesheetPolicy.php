@@ -31,8 +31,8 @@ class TimesheetPolicy
             return true;
         }
 
-        if ($scope === 'team') {
-            return in_array($timesheet->user_id, $service->getTeamUserIds($user));
+        if (($scope === 'project')) {
+            return in_array($timesheet->user_id, $service->getProjectUserIds($user));
         }
 
         return false;
@@ -61,8 +61,8 @@ class TimesheetPolicy
             return true;
         }
 
-        if ($scope === 'team') {
-            return in_array($timesheet->user_id, $service->getTeamUserIds($user));
+        if (($scope === 'project')) {
+            return in_array($timesheet->user_id, $service->getProjectUserIds($user));
         }
 
         return false;

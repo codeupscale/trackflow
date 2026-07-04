@@ -17,7 +17,7 @@ class LeaveRequestPolicy
     }
 
     /**
-     * Own request, OR has team/org scope for leave.view_requests.
+     * Own request, OR has project/org scope for leave.view_requests.
      */
     public function view(User $user, LeaveRequest $leaveRequest): bool
     {
@@ -37,8 +37,8 @@ class LeaveRequestPolicy
             return true;
         }
 
-        if ($scope === 'team') {
-            return in_array($leaveRequest->user_id, $service->getTeamUserIds($user));
+        if (($scope === 'project')) {
+            return in_array($leaveRequest->user_id, $service->getProjectUserIds($user));
         }
 
         return false;
@@ -90,8 +90,8 @@ class LeaveRequestPolicy
             return true;
         }
 
-        if ($scope === 'team') {
-            return in_array($leaveRequest->user_id, $service->getTeamUserIds($user));
+        if (($scope === 'project')) {
+            return in_array($leaveRequest->user_id, $service->getProjectUserIds($user));
         }
 
         return false;

@@ -18,7 +18,7 @@ class EmployeeDocumentTest extends TestCase
     public function test_can_list_employee_documents(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         EmployeeDocument::factory()->count(3)->create([
@@ -43,7 +43,7 @@ class EmployeeDocumentTest extends TestCase
     public function test_can_upload_document(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $this->actingAs($admin, 'sanctum');
@@ -70,7 +70,7 @@ class EmployeeDocumentTest extends TestCase
     public function test_admin_can_verify_document(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $doc = EmployeeDocument::factory()->create([
@@ -109,7 +109,7 @@ class EmployeeDocumentTest extends TestCase
     public function test_admin_can_delete_document(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $doc = EmployeeDocument::factory()->create([
@@ -133,7 +133,7 @@ class EmployeeDocumentTest extends TestCase
     public function test_upload_rejects_invalid_mime_type(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $this->actingAs($admin, 'sanctum');
@@ -153,7 +153,7 @@ class EmployeeDocumentTest extends TestCase
     public function test_upload_rejects_oversized_file(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $this->actingAs($admin, 'sanctum');
@@ -176,7 +176,7 @@ class EmployeeDocumentTest extends TestCase
     public function test_document_category_filter_works(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         EmployeeDocument::factory()->count(2)->create([
@@ -208,7 +208,7 @@ class EmployeeDocumentTest extends TestCase
         $orgA = $this->createOrganization();
         $orgB = $this->createOrganization();
 
-        $adminA = $this->createUser($orgA, 'admin');
+        $adminA = $this->createUser($orgA, 'org_manager');
         $employeeB = $this->createUser($orgB, 'employee');
 
         EmployeeDocument::factory()->create([
@@ -229,7 +229,7 @@ class EmployeeDocumentTest extends TestCase
     public function test_verify_sets_verified_at_timestamp(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $doc = EmployeeDocument::factory()->create([

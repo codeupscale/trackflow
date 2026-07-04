@@ -29,6 +29,7 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 
 const schema = z.object({
   name: z.string().min(2, 'Name is required'),
@@ -45,6 +46,7 @@ function AcceptInviteContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { setUser } = useAuthStore();
+  const { setPermissions } = usePermissionStore();
 
   const token = useMemo(() => searchParams.get('token')?.trim() || '', [searchParams]);
   const [state, setState] = useState<'idle' | 'success'>('idle');
@@ -71,6 +73,7 @@ function AcceptInviteContent() {
       // Store tokens and user, then redirect (and clean URL via auto-login page)
       localStorage.setItem('access_token', res.data.access_token);
       localStorage.setItem('refresh_token', res.data.refresh_token);
+      setPermissions(res.data.user.permissions ?? {});
       setUser(res.data.user);
 
       setState('success');

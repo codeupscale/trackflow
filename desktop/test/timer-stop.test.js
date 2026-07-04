@@ -99,6 +99,46 @@ describe('Timer Stop', () => {
     await expect(client.stopTimer()).rejects.toThrow('timeout');
   });
 
+  test('BUG 3: stopTimer sends time_entry_id to target a specific entry', async () => {
+    const startedAt = '2026-06-15T09:00:00.000Z';
+    const endedAt = '2026-06-15T11:00:00.000Z';
+    const mockResponse = {
+      data: { entry: { id: 'old-entry', duration_seconds: 7200 }, today_total: 7200 },
+    };
+    mockAxios.post.mockResolvedValueOnce(mockResponse);
+
+    await client.stopTimer({
+      time_entry_id: 'old-entry',
+      started_at: startedAt,
+      ended_at: endedAt,
+      idempotency_key: 'idem-stop-1',
+    });
+
+    // Must pass the SPECIFIC entry id so the server never closes a newer/live session.
+    expect(mockAxios.post).toHaveBeenCalledWith(
+      '/timer/stop',
+      {
+        time_entry_id: 'old-entry',
+        started_at: startedAt,
+        ended_at: endedAt,
+        idempotency_key: 'idem-stop-1',
+      },
+      { timeout: 10000 }
+    );
+  });
+
+  test('BUG 3: caller treats 404 on stop as already-synced (error surfaces with status 404)', async () => {
+    const err = new Error('Not Found');
+    err.response = { status: 404 };
+    mockAxios.post.mockRejectedValueOnce(err);
+
+    // api-client propagates the error; the caller (stopTimer/syncSessionStop) maps
+    // 404 -> already-synced success. Here we assert the status is observable.
+    await expect(
+      client.stopTimer({ time_entry_id: 'gone-entry' })
+    ).rejects.toMatchObject({ response: { status: 404 } });
+  });
+
   test('stopTimer with partial data (only ended_at)', async () => {
     const endedAt = '2026-04-06T11:00:00.000Z';
     const mockResponse = {

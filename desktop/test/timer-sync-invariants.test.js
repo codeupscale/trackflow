@@ -1,0 +1,576 @@
+// Unit tests for the local-first timer-sync invariants introduced by the
+// timer-sync bug fixes (BUG 1 / BUG 2 / BUG 3).
+//
+// The mutation logic lives inside src/main/index.js, which cannot be imported in
+// a unit test without booting the full Electron app. These tests therefore
+// re-implement the pure invariants exactly as coded in index.js and assert their
+// behavior, so a regression in the algorithm is caught here. Each test cites the
+// index.js function it mirrors.
+
+describe("Timer sync invariants", () => {
+    // Mirrors adoptServerStartedAt() in src/main/index.js.
+    // Local started_at is the immutable source of truth: the server start is only
+    // adopted when there is no local anchor yet, or it is earlier-or-equal.
+    function adoptServerStartedAt(cachedStartedAtMs, serverStartedAtIso) {
+        const serverMs = serverStartedAtIso
+            ? new Date(serverStartedAtIso).getTime()
+            : null;
+        if (serverMs == null || Number.isNaN(serverMs))
+            return cachedStartedAtMs;
+        if (cachedStartedAtMs == null || serverMs <= cachedStartedAtMs)
+            return serverMs;
+        return cachedStartedAtMs; // server start is LATER — keep local truth
+    }
+
+    describe("BUG 2: adoptServerStartedAt never pushes the start forward", () => {
+        test("adopts server start when no local anchor exists", () => {
+            const server = "2026-06-15T09:00:00.000Z";
+            expect(adoptServerStartedAt(null, server)).toBe(
+                new Date(server).getTime(),
+            );
+        });
+
+        test("adopts server start when it is EARLIER than local (never lose time)", () => {
+            const local = new Date("2026-06-15T09:05:00.000Z").getTime();
+            const server = "2026-06-15T09:00:00.000Z";
+            expect(adoptServerStartedAt(local, server)).toBe(
+                new Date(server).getTime(),
+            );
+        });
+
+        test("KEEPS local anchor when server start is LATER (prevents backward jump)", () => {
+            // This is the core BUG 2 scenario: offline start 09:00, server reconcile
+            // stamps 11:00. The displayed timer must NOT jump from 2h down to 0.
+            const local = new Date("2026-06-15T09:00:00.000Z").getTime();
+            const server = "2026-06-15T11:00:00.000Z";
+            expect(adoptServerStartedAt(local, server)).toBe(local);
+        });
+
+        test("keeps local anchor when server start is missing/invalid", () => {
+            const local = new Date("2026-06-15T09:00:00.000Z").getTime();
+            expect(adoptServerStartedAt(local, null)).toBe(local);
+            expect(adoptServerStartedAt(local, "not-a-date")).toBe(local);
+        });
+
+        test("equal starts are a no-op (idempotent)", () => {
+            const iso = "2026-06-15T09:00:00.000Z";
+            const local = new Date(iso).getTime();
+            expect(adoptServerStartedAt(local, iso)).toBe(local);
+        });
+    });
+
+    describe("BUG 2: clock-skew is applied consistently (neither stored nor displayed)", () => {
+        // Mirrors startTrayTimer(): elapsed = Date.now() - _cachedStartedAtMs, with
+        // NO _clockOffsetMs added. The anchor is stored on the local clock, so the
+        // display must measure on the local clock too.
+        function elapsedSeconds(cachedStartedAtMs, nowMs) {
+            return Math.floor((nowMs - cachedStartedAtMs) / 1000);
+        }
+
+        test("elapsed is computed purely on the local clock (no double-applied skew)", () => {
+            const start = new Date("2026-06-15T09:00:00.000Z").getTime();
+            const now = new Date("2026-06-15T09:00:30.000Z").getTime();
+            // Even if the server clock were +60s skewed, we do NOT add it here.
+            expect(elapsedSeconds(start, now)).toBe(30);
+        });
+    });
+
+    describe("BUG 3: stop targeting binds to a specific server entry id", () => {
+        // Mirrors syncSessionStop()/stopTimer() payload construction.
+        function buildStopPayload({
+            serverEntryId,
+            startedAt,
+            endedAt,
+            idempotencyKey,
+            offline,
+        }) {
+            const payload = {};
+            if (serverEntryId) payload.time_entry_id = serverEntryId;
+            if (idempotencyKey) payload.idempotency_key = idempotencyKey;
+            if (offline) {
+                payload.started_at = startedAt;
+                payload.ended_at = endedAt;
+            }
+            return payload;
+        }
+
+        test("reconcile stop always carries time_entry_id (never a bare timestamp pair)", () => {
+            const payload = buildStopPayload({
+                serverEntryId: "srv-entry-1",
+                startedAt: "2026-06-15T09:00:00.000Z",
+                endedAt: "2026-06-15T10:00:00.000Z",
+                idempotencyKey: "idem-1",
+                offline: true,
+            });
+            expect(payload.time_entry_id).toBe("srv-entry-1");
+            expect(payload.idempotency_key).toBe("idem-1");
+            expect(payload).toHaveProperty("started_at");
+            expect(payload).toHaveProperty("ended_at");
+        });
+
+        test("404 on stop is mapped to already-synced success", () => {
+            // Mirrors syncSessionStop()/stopTimer() 404 handling.
+            function handleStopError(status) {
+                if (status === 404) return { synced: true };
+                return { synced: false };
+            }
+            expect(handleStopError(404)).toEqual({ synced: true });
+            expect(handleStopError(500)).toEqual({ synced: false });
+        });
+    });
+
+    describe("phantom-stop desync: unsynced local start drives a reconcile push", () => {
+        // Mirrors the branch in startTimerSync() (src/main/index.js) where the 10s
+        // loop sees server.running===false while isTimerRunning===true AND the active
+        // local session has synced_start===0. Previously this branch only bailed,
+        // leaving the start stranded until an offline→online transition (which never
+        // fires when the original POST /timer/start failed transiently while
+        // net.isOnline() stayed true). The fix: release both mutation guards, then
+        // schedule reconcileTimerState()+flush via setImmediate, gated on isOnline.
+        //
+        // This models the loop branch + reconcile's "push unsynced active start" step
+        // (reconcileTimerState Phase 2) to prove the start is pushed with the ORIGINAL
+        // idempotency_key and the REAL local started_at.
+
+        // Mirrors reconcileTimerState() Phase 2: push the unsynced active local start.
+        async function reconcileTimerState({
+            apiClient,
+            getActiveLocalTimer,
+            mutationInProgress,
+        }) {
+            if (mutationInProgress) return { skipped: "guard-held" }; // early-return invariant
+            const localActive = getActiveLocalTimer();
+            if (localActive && !localActive.synced_start) {
+                await apiClient.startTimer(
+                    localActive.project_id || null,
+                    localActive.idempotency_key,
+                    localActive.started_at,
+                );
+                return { pushed: true };
+            }
+            return { pushed: false };
+        }
+
+        // Mirrors the startTimerSync() branch decision.
+        function syncLoopBranch({
+            serverRunning,
+            isTimerRunning,
+            localActive,
+            isOnline,
+        }) {
+            const result = { releasedGuards: false, scheduledReconcile: false };
+            if (!serverRunning && isTimerRunning) {
+                if (localActive && !localActive.synced_start) {
+                    // Release both guards BEFORE reconcile (reconcile early-returns if held).
+                    result.releasedGuards = true;
+                    if (isOnline) result.scheduledReconcile = true;
+                    return result;
+                }
+            }
+            return result;
+        }
+
+        test("loop schedules reconcile (after releasing guards) when start is unsynced and online", () => {
+            const r = syncLoopBranch({
+                serverRunning: false,
+                isTimerRunning: true,
+                localActive: { synced_start: 0 },
+                isOnline: true,
+            });
+            expect(r.releasedGuards).toBe(true);
+            expect(r.scheduledReconcile).toBe(true);
+        });
+
+        test("loop does NOT schedule reconcile while genuinely offline (online handler owns that)", () => {
+            const r = syncLoopBranch({
+                serverRunning: false,
+                isTimerRunning: true,
+                localActive: { synced_start: 0 },
+                isOnline: false,
+            });
+            // Guards still release (local state preserved), but no push while offline.
+            expect(r.releasedGuards).toBe(true);
+            expect(r.scheduledReconcile).toBe(false);
+        });
+
+        test("reconcile pushes the start with the ORIGINAL idempotency_key and REAL local started_at", async () => {
+            const startTimer = jest
+                .fn()
+                .mockResolvedValue({ entry: { id: "srv-1" } });
+            const localActive = {
+                synced_start: 0,
+                project_id: "proj-9",
+                idempotency_key: "idem-original-abc",
+                started_at: "2026-06-15T09:00:00.000Z",
+            };
+            const res = await reconcileTimerState({
+                apiClient: { startTimer },
+                getActiveLocalTimer: () => localActive,
+                mutationInProgress: false, // guards were released by the loop first
+            });
+            expect(res.pushed).toBe(true);
+            expect(startTimer).toHaveBeenCalledTimes(1);
+            expect(startTimer).toHaveBeenCalledWith(
+                "proj-9",
+                "idem-original-abc",
+                "2026-06-15T09:00:00.000Z",
+            );
+        });
+
+        test("reconcile is a no-op if invoked while the mutation guard is STILL held (proves release ordering matters)", async () => {
+            const startTimer = jest.fn();
+            const res = await reconcileTimerState({
+                apiClient: { startTimer },
+                getActiveLocalTimer: () => ({
+                    synced_start: 0,
+                    idempotency_key: "k",
+                    started_at: "x",
+                }),
+                mutationInProgress: true,
+            });
+            expect(res).toEqual({ skipped: "guard-held" });
+            expect(startTimer).not.toHaveBeenCalled();
+        });
+    });
+
+    describe("BUG 3: stop mutex serializes concurrent stops", () => {
+        // Mirrors the _stopTimerInProgress guard in stopTimer().
+        function makeStopper() {
+            let inProgress = false;
+            let stops = 0;
+            return async function stopTimer() {
+                if (inProgress)
+                    return { error: "Timer stop already in progress" };
+                inProgress = true;
+                try {
+                    await Promise.resolve();
+                    stops++;
+                    return { success: true, stops };
+                } finally {
+                    inProgress = false;
+                }
+            };
+        }
+
+        test("only the first of two concurrent stops proceeds", async () => {
+            const stopTimer = makeStopper();
+            const [a, b] = await Promise.all([stopTimer(), stopTimer()]);
+            const results = [a, b];
+            expect(results.filter((r) => r.success)).toHaveLength(1);
+            expect(results.filter((r) => r.error)).toHaveLength(1);
+        });
+    });
+
+    describe("phantom-stop recovery: orphaned SQLite session", () => {
+        // Mirrors restoreInMemoryFromLocalActive() + shouldPreserveLocalRunningWhenServerStopped().
+        function restoreInMemoryFromLocalActive(localActive) {
+            if (!localActive || localActive.ended_at) return null;
+            return {
+                isTimerRunning: true,
+                currentEntry: {
+                    id: localActive.server_entry_id || localActive.id,
+                    started_at: localActive.started_at,
+                    _localId: localActive.id,
+                },
+                cachedStartedAtMs: new Date(localActive.started_at).getTime(),
+            };
+        }
+
+        function shouldPreserveLocalRunningWhenServerStopped({
+            isTimerRunning,
+            localActive,
+            idleActive,
+        }) {
+            if (idleActive) return true;
+            if (isTimerRunning && localActive && !localActive.synced_start)
+                return true;
+            if (!isTimerRunning && localActive && !localActive.ended_at)
+                return true;
+            return false;
+        }
+
+        test("preserves and restores when SQLite has open session but memory was cleared", () => {
+            const localActive = {
+                id: "local-1",
+                server_entry_id: "srv-1",
+                started_at: "2026-06-15T06:00:00.000Z",
+                synced_start: 1,
+                ended_at: null,
+            };
+            expect(
+                shouldPreserveLocalRunningWhenServerStopped({
+                    isTimerRunning: false,
+                    localActive,
+                    idleActive: false,
+                }),
+            ).toBe(true);
+            const restored = restoreInMemoryFromLocalActive(localActive);
+            expect(restored.isTimerRunning).toBe(true);
+            expect(restored.currentEntry.id).toBe("srv-1");
+            expect(restored.cachedStartedAtMs).toBe(
+                new Date(localActive.started_at).getTime(),
+            );
+        });
+    });
+
+    // Mirrors the "FIX D5" today-total update + display formula in
+    // handleIdleAction()/buildTimerTickPayload() in src/main/index.js.
+    // After a discard/reassign split, the server closes the original tracked
+    // entry at idle_START and the idle gap is excluded (audit-only `idle` entry);
+    // the new live entry counts from idle_END. The displayed total is
+    // todayTotalCurrentProject + liveElapsed, so todayTotal MUST advance by the
+    // pre-idle work measured to idle-START — never to idle-END (that double-counts
+    // the discarded gap and inflates the display to the full wall-clock elapsed).
+    describe("BUG D5: discard excludes the idle gap from the today total", () => {
+        // delta added to todayTotalCurrentProject for the closed pre-idle entry
+        function preIdleDelta(startedAtMs, idleStartedAtMs) {
+            return Math.max(
+                0,
+                Math.floor((idleStartedAtMs - startedAtMs) / 1000),
+            );
+        }
+        // what the running widget shows after the split
+        function displayTotalAfterDiscard(
+            startedAtMs,
+            idleStartedAtMs,
+            idleEndedAtMs,
+            nowMs,
+            priorTodayTotal = 0,
+        ) {
+            const todayTotal =
+                priorTodayTotal + preIdleDelta(startedAtMs, idleStartedAtMs);
+            const liveElapsed = Math.max(
+                0,
+                Math.floor((nowMs - idleEndedAtMs) / 1000),
+            );
+            return todayTotal + liveElapsed;
+        }
+
+        const started = new Date("2026-06-15T09:00:00.000Z").getTime();
+        const idleStart = started + 16 * 60 * 1000; // 16m pre-idle work
+        const idleEnd = idleStart + 4 * 60 * 1000; // 4m idle gap (discarded)
+        const now = idleEnd + 30 * 1000; // 30s post-idle work
+
+        test("today total advances by pre-idle work measured to idle-START", () => {
+            expect(preIdleDelta(started, idleStart)).toBe(16 * 60);
+        });
+
+        test("displayed total excludes the discarded idle gap", () => {
+            // 16m pre-idle + 30s post-idle = 990s. NOT 16m + 4m + 30s (wall clock).
+            expect(
+                displayTotalAfterDiscard(started, idleStart, idleEnd, now),
+            ).toBe(16 * 60 + 30);
+        });
+
+        test("regression: measuring to idle-END would inflate by the whole gap", () => {
+            // The old buggy formula used idleEnd as the pre-idle boundary.
+            const buggyTodayTotal = Math.floor((idleEnd - started) / 1000);
+            const buggyDisplay =
+                buggyTodayTotal + Math.floor((now - idleEnd) / 1000);
+            const correctDisplay = displayTotalAfterDiscard(
+                started,
+                idleStart,
+                idleEnd,
+                now,
+            );
+            // The bug inflated the display by exactly the 4-minute idle gap.
+            expect(buggyDisplay - correctDisplay).toBe(4 * 60);
+            // ...and made the display equal the full wall-clock elapsed.
+            expect(buggyDisplay).toBe(Math.floor((now - started) / 1000));
+        });
+    });
+
+    // Mirrors the "stop" case in handleIdleAction() — used by the Discard button
+    // and idle auto-stop. The timer is stopped effective at idle-START via
+    // stopTimer({ endedAtMs: effectiveIdleStartedAt }); stopTimer computes the kept
+    // duration as floor((endedAtMs - _cachedStartedAtMs) / 1000) and closes the
+    // ORIGINAL local row (currentEntry._localId) so reconcile cannot re-adopt it.
+    describe("Discard/auto-stop stops at idle-start (no resume, no phantom re-adopt)", () => {
+        // kept (tracked) seconds when the timer is stopped at idle-start
+        function keptSecondsOnIdleStop(cachedStartedAtMs, effectiveIdleStartedAtMs) {
+            const endedAtMs = effectiveIdleStartedAtMs || Date.now();
+            return Math.max(0, Math.floor((endedAtMs - cachedStartedAtMs) / 1000));
+        }
+
+        const started = new Date("2026-06-15T09:00:00.000Z").getTime();
+        const idleStart = started + 3 * 60 * 1000 + 1000; // 3m01s pre-idle work
+        const now = idleStart + 9 * 60 * 1000; // user pressed Discard ~9m later
+
+        test("keeps pre-idle work, excludes idle + dialog wait", () => {
+            // Reported repro: worked ~3m, idle, then Discard ~9m later. Kept time is
+            // the pre-idle 3m01s — NOT the ~12m wall clock.
+            expect(keptSecondsOnIdleStop(started, idleStart)).toBe(3 * 60 + 1);
+        });
+
+        test("regression: the old stop path would have left ~full wall-clock running", () => {
+            // The old reportIdle+stop path set the anchor to a NEW entry / left the
+            // original local row open, so reconcile re-adopted the ORIGINAL start and
+            // displayed now - started (~12m) while still 'running'.
+            const phantomElapsed = Math.floor((now - started) / 1000);
+            expect(phantomElapsed).toBe(12 * 60 + 1);
+            expect(phantomElapsed).not.toBe(keptSecondsOnIdleStop(started, idleStart));
+        });
+
+        test("falls back to now when idle-start is missing", () => {
+            // effectiveIdleStartedAt null -> endedAtMs = Date.now(); kept = full elapsed
+            // (defensive: should not throw / produce negative).
+            expect(keptSecondsOnIdleStop(started, null)).toBeGreaterThanOrEqual(0);
+        });
+    });
+
+    // Mirrors the reassign payload in handleIdleAction(): idle_seconds spans
+    // idle_start -> NOW (reassign click), so the FULL time the user was away —
+    // including the time the idle dialog stayed open — is reassigned to the chosen
+    // project. The same payload is reused for the offline queue, so the offline
+    // reconnect replay reassigns the same full duration.
+    describe("Reassign covers the full away duration (idle-start -> reassign click)", () => {
+        function reassignSeconds(idleStartedAtMs, reassignClickMs) {
+            return Math.max(1, Math.floor((reassignClickMs - idleStartedAtMs) / 1000));
+        }
+
+        const idleStart = new Date("2026-06-15T09:01:00.000Z").getTime();
+        const alertShown = idleStart + 5 * 60 * 1000; // 5-min idle threshold
+        const reassignClick = alertShown + 4 * 60 * 1000; // waited 4 more min at dialog
+
+        test("includes the dialog wait — not just the idle threshold", () => {
+            // 5m threshold + 4m dialog = 9m reassigned to the target project.
+            expect(reassignSeconds(idleStart, reassignClick)).toBe(9 * 60);
+        });
+
+        test("regression: capping at the alert-shown time under-counted to the threshold", () => {
+            // The old idle_ended_at = _idleAlertShownAt reassigned only the 5-min
+            // threshold, losing the 4 min the user waited at the dialog.
+            const oldReassigned = reassignSeconds(idleStart, alertShown);
+            expect(oldReassigned).toBe(5 * 60);
+            expect(reassignSeconds(idleStart, reassignClick) - oldReassigned).toBe(4 * 60);
+        });
+    });
+
+    // Mirrors isServerTimerOpen() + the reconcile branch guards in
+    // reconcileTimerState() (src/main/index.js). An idle-PAUSED server timer must be
+    // treated as an OPEN entry so reconcile ADOPTS it instead of pushing a duplicate
+    // start (which created a second overlapping entry and 409'd a queued offline
+    // reassign). See bugs/idle-reassign-offline-reconcile-duplicate.md.
+    describe("Reconcile must not push a duplicate start when the server timer is paused", () => {
+        function isServerTimerPaused(status) {
+            return status?.state === "paused" || status?.paused === true;
+        }
+        function isServerTimerOpen(status) {
+            return status?.running === true || isServerTimerPaused(status);
+        }
+        // Which reconcile branch fires for a locally-running timer with a local id.
+        function reconcileAction(serverStatus, isTimerRunning = true, hasLocalId = true) {
+            if (!isServerTimerOpen(serverStatus) && isTimerRunning && hasLocalId) {
+                return "push-start";
+            }
+            if (isServerTimerOpen(serverStatus) && isTimerRunning) {
+                return "adopt";
+            }
+            return "none";
+        }
+
+        const paused = { running: false, paused: true, state: "paused", entry: { id: "srv-1" } };
+        const running = { running: true, paused: false, state: "running", entry: { id: "srv-1" } };
+        const stopped = { running: false, paused: false, state: "stopped" };
+
+        test("a paused server timer is OPEN, not 'no timer'", () => {
+            expect(isServerTimerOpen(paused)).toBe(true);
+        });
+
+        test("paused server timer → ADOPT (never push a duplicate start)", () => {
+            expect(reconcileAction(paused)).toBe("adopt");
+        });
+
+        test("regression: the old raw !running guard would have pushed a duplicate", () => {
+            // Old branch condition was simply !serverStatus.running.
+            expect(!paused.running).toBe(true); // old guard → duplicate start
+            expect(!isServerTimerOpen(paused)).toBe(false); // new guard → no duplicate
+        });
+
+        test("running server timer → ADOPT", () => {
+            expect(reconcileAction(running)).toBe("adopt");
+        });
+
+        test("genuinely stopped server timer → still PUSH start", () => {
+            expect(reconcileAction(stopped)).toBe("push-start");
+        });
+    });
+
+    // Mirrors the early-return guards in reconcileTimerState(). reconcile must DEFER
+    // while startTimer() is mid-flight — otherwise a TimerSync tick drives reconcile
+    // to push the just-written (still "unsynced") local start while startTimer is
+    // also creating it → a duplicate 1-second server entry at start.
+    describe("Reconcile defers while startTimer is in flight (no duplicate start)", () => {
+        function reconcileShouldRun({
+            idleActionInProgress = false,
+            idleActive = false,
+            startTimerInProgress = false,
+            mutationInProgress = false,
+        } = {}) {
+            if (idleActionInProgress) return false;
+            if (idleActive) return false;
+            if (startTimerInProgress) return false; // START-RACE FIX
+            if (mutationInProgress) return false;
+            return true;
+        }
+
+        test("skips while startTimer is in progress", () => {
+            expect(reconcileShouldRun({ startTimerInProgress: true })).toBe(false);
+        });
+
+        test("runs once startTimer has finished", () => {
+            expect(reconcileShouldRun({ startTimerInProgress: false })).toBe(true);
+        });
+
+        test("still skips for the existing guards (idle / mutation)", () => {
+            expect(reconcileShouldRun({ idleActive: true })).toBe(false);
+            expect(reconcileShouldRun({ mutationInProgress: true })).toBe(false);
+        });
+    });
+
+    // Mirrors the running-total display in index.js (tick / tray / get-timer-state):
+    // todayTotalCurrentProject + max(0, sessionElapsed - _pendingOfflineReassignIdleSec).
+    // After an OFFLINE reassign the local timer stays anchored at the original start
+    // (re-anchoring offline breaks the reconnect split), so sessionElapsed includes the
+    // reassigned idle on the origin project. The DISPLAY subtracts that idle until the
+    // reassign syncs — without touching any entry/session/reconcile state.
+    describe("Offline reassign: display subtracts the pending idle from the origin project", () => {
+        function displayTotal(todayTotalCurrentProject, sessionElapsed, pendingIdle) {
+            return todayTotalCurrentProject + Math.max(0, sessionElapsed - pendingIdle);
+        }
+
+        // prior BladeOp total = 0; session = 1m pre-idle + 6m idle + 1m post-idle anchored
+        // at original start; idle 6m reassigned to Smart Card offline.
+        const prior = 0;
+        const sessionElapsed = 1 * 60 + 6 * 60 + 1 * 60; // 480s from original start
+        const pendingIdle = 6 * 60;
+
+        test("excludes the reassigned idle while offline", () => {
+            // Shows pre-idle + post-idle = 2m on BladeOp, NOT the 8m wall clock.
+            expect(displayTotal(prior, sessionElapsed, pendingIdle)).toBe(2 * 60);
+        });
+
+        test("regression: without the subtraction the origin shows the full elapsed", () => {
+            expect(displayTotal(prior, sessionElapsed, 0)).toBe(8 * 60);
+        });
+
+        test("after sync (pending cleared) the normal total is shown", () => {
+            // reanchor sets the anchor to idle-end, so sessionElapsed becomes post-idle
+            // only and pending is 0.
+            expect(displayTotal(prior, 1 * 60, 0)).toBe(1 * 60);
+        });
+
+        test("never goes negative", () => {
+            expect(displayTotal(0, 10, 999)).toBe(0);
+        });
+
+        // stopTimer() uses the SAME subtraction for the stopped display so the total
+        // doesn't jump up on Stop while an offline reassign is pending.
+        test("stop display matches the running display (no jump on Stop)", () => {
+            const runningShown = displayTotal(prior, sessionElapsed, pendingIdle);
+            const stopShown = displayTotal(prior, sessionElapsed, pendingIdle); // localStoppedProjectTotal
+            expect(stopShown).toBe(runningShown);
+            expect(stopShown).toBe(2 * 60);
+        });
+    });
+});

@@ -35,6 +35,18 @@ describe('IdleDetector', () => {
     expect(detector.checkIntervalMs).toBe(30000);
   });
 
+  test('caps idle auto-stop at 4 hours regardless of a misconfigured org setting', () => {
+    // Regression: an org setting of 8600 min (~6 days) produced an absurd
+    // "auto-stop in 8597:40" countdown and a never-auto-stopping timer.
+    detector = new IdleDetector({ idle_alert_auto_stop_min: 8600 });
+    expect(detector.alertAutoStopSec).toBe(240 * 60); // clamped to 4h
+  });
+
+  test('does not raise a small auto-stop value to the cap', () => {
+    detector = new IdleDetector({ idle_alert_auto_stop_min: 2 });
+    expect(detector.alertAutoStopSec).toBe(120);
+  });
+
   test('should not start if disabled', () => {
     detector = new IdleDetector({ idle_detection: false });
     expect(detector.enabled).toBe(false);
@@ -424,9 +436,9 @@ describe('IdleDetector', () => {
     jest.advanceTimersByTime(10000);
     expect(onIdle).toHaveBeenCalledTimes(1); // no second fire
 
-    // User provides input — cooldown clears
+    // User provides input — cooldown clears after 60s minimum window
     powerMonitor.getSystemIdleTime.mockReturnValue(5);
-    jest.advanceTimersByTime(10000);
+    jest.advanceTimersByTime(60000); // advance 60s so elapsed >= MIN_COOLDOWN_MS
 
     // User goes idle again — should fire
     powerMonitor.getSystemIdleTime.mockReturnValue(60);
@@ -576,6 +588,79 @@ describe('IdleDetector', () => {
       expect(detector.state).toBe(IDLE_STATE.ALERTING);
       expect(detector.idleStartedAt).toBe(idleStart);
       expect(actionId).toBeGreaterThan(0);
+    });
+  });
+
+  // BUG B: a spurious start() (e.g. from the timer sync loop seeing a transient
+  // `status.running && !isTimerRunning` tick) must NOT clobber a live idle alert.
+  // Before the fix, start() reset idleStartedAt/alertShownAt to null and cleared
+  // the auto-stop interval, flipping isIdleActive() to false and causing the
+  // idle popup to "sometimes not appear" (showIdleAlert's guard swallowed it).
+  describe('start() does not clobber a live alert (BUG B)', () => {
+    test('start() during ALERTING is a no-op and preserves idle state', () => {
+      detector = new IdleDetector({ idle_timeout: 1, idle_check_interval_sec: 10 });
+      detector.onIdleDetected(jest.fn());
+      detector.start();
+
+      powerMonitor.getSystemIdleTime.mockReturnValue(60);
+      jest.advanceTimersByTime(10000);
+      expect(detector.state).toBe(IDLE_STATE.ALERTING);
+
+      const idleStart = detector.idleStartedAt;
+      const shownAt = detector.alertShownAt;
+      const actionId = detector.getActionId();
+
+      // Spurious re-arm while the alert is live
+      detector.start();
+
+      expect(detector.state).toBe(IDLE_STATE.ALERTING);
+      expect(detector.isIdleActive()).toBe(true);
+      expect(detector.idleStartedAt).toBe(idleStart);
+      expect(detector.alertShownAt).toBe(shownAt);
+      expect(detector.getActionId()).toBe(actionId);
+    });
+
+    test('start() during DETECTED is a no-op (callback mid-flight)', () => {
+      detector = new IdleDetector({ idle_timeout: 1, idle_check_interval_sec: 10 });
+      // Simulate a callback that re-enters start() while still DETECTED, before
+      // _check() promotes the state to ALERTING.
+      detector.onIdleDetected(() => {
+        expect(detector.state).toBe(IDLE_STATE.DETECTED);
+        detector.start(); // must be ignored
+        expect(detector.state).toBe(IDLE_STATE.DETECTED);
+        expect(detector.idleStartedAt).not.toBeNull();
+      });
+      detector.start();
+
+      powerMonitor.getSystemIdleTime.mockReturnValue(60);
+      jest.advanceTimersByTime(10000);
+
+      // _check() still completes the promotion to ALERTING afterward
+      expect(detector.state).toBe(IDLE_STATE.ALERTING);
+      expect(detector.isIdleActive()).toBe(true);
+    });
+
+    test('auto-stop still fires after a spurious start() during ALERTING', () => {
+      const onAutoStop = jest.fn();
+      detector = new IdleDetector({
+        idle_timeout: 1,
+        idle_alert_auto_stop_min: 1,
+        idle_check_interval_sec: 10,
+      });
+      detector.onIdleDetected(jest.fn());
+      detector.onAutoStop(onAutoStop);
+      detector.start();
+
+      powerMonitor.getSystemIdleTime.mockReturnValue(60);
+      jest.advanceTimersByTime(10000);
+      expect(detector.state).toBe(IDLE_STATE.ALERTING);
+
+      // Spurious start() must NOT cancel the auto-stop interval
+      detector.start();
+
+      // Advance past the 1-minute auto-stop window
+      jest.advanceTimersByTime(60 * 1000);
+      expect(onAutoStop).toHaveBeenCalledTimes(1);
     });
   });
 });

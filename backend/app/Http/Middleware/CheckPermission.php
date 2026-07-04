@@ -14,7 +14,7 @@ class CheckPermission
     /**
      * Usage in routes:
      *   ->middleware('permission:time_entries.view')           // any scope
-     *   ->middleware('permission:time_entries.view,team')      // team or higher
+     *   ->middleware('permission:time_entries.view,project')      // project or higher
      *   ->middleware('permission:settings.edit_org')           // non-scoped
      */
     public function handle(Request $request, Closure $next, string $permission, ?string $scope = null): Response

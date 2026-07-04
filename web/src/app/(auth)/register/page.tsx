@@ -49,6 +49,7 @@ const timezones = [
   'Europe/Berlin',
   'Europe/Moscow',
   'Asia/Dubai',
+  'Asia/Karachi',
   'Asia/Kolkata',
   'Asia/Shanghai',
   'Asia/Tokyo',
@@ -78,6 +79,13 @@ export default function RegisterPage() {
   const [error, setError] = useState<string | null>(null);
 
   const detectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // Always make the user's actual zone selectable and use it as the default.
+  // The detected value is a valid IANA zone even when it is not in the curated
+  // list — falling back to a hardcoded US zone is what caused PKT users to be
+  // saved as America/New_York (see bugs/timezone-midnight-rolls-to-previous-day.md).
+  const timezoneOptions = detectedTimezone && !timezones.includes(detectedTimezone)
+    ? [detectedTimezone, ...timezones]
+    : timezones;
 
   const form = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
@@ -87,7 +95,7 @@ export default function RegisterPage() {
       password: '',
       password_confirmation: '',
       company_name: '',
-      timezone: timezones.includes(detectedTimezone) ? detectedTimezone : 'America/New_York',
+      timezone: detectedTimezone || 'UTC',
     },
   });
 
@@ -203,7 +211,7 @@ export default function RegisterPage() {
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {timezones.map((tz) => (
+                      {timezoneOptions.map((tz) => (
                         <SelectItem key={tz} value={tz}>
                           {tz.replace(/_/g, ' ')}
                         </SelectItem>

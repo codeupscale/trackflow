@@ -31,8 +31,8 @@ class ScreenshotPolicy
             return true;
         }
 
-        if ($scope === 'team') {
-            return in_array($screenshot->user_id, $service->getTeamUserIds($user));
+        if (($scope === 'project')) {
+            return in_array($screenshot->user_id, $service->getProjectUserIds($user));
         }
 
         return false;

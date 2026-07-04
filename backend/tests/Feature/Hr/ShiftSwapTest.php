@@ -99,7 +99,7 @@ class ShiftSwapTest extends TestCase
         $org = $this->createOrganization();
         $requester = $this->createUser($org, 'employee');
         $target = $this->createUser($org, 'employee');
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
 
         $shiftA = Shift::factory()->create(['organization_id' => $org->id]);
         $shiftB = Shift::factory()->create(['organization_id' => $org->id]);
@@ -132,7 +132,7 @@ class ShiftSwapTest extends TestCase
     public function test_self_approval_rejected(): void
     {
         $org = $this->createOrganization();
-        $requester = $this->createUser($org, 'manager');
+        $requester = $this->createUser($org, 'org_manager');
         $target = $this->createUser($org, 'employee');
 
         $shiftA = Shift::factory()->create(['organization_id' => $org->id]);
@@ -162,7 +162,7 @@ class ShiftSwapTest extends TestCase
         $org = $this->createOrganization();
         $requester = $this->createUser($org, 'employee');
         $target = $this->createUser($org, 'employee');
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
 
         $shiftA = Shift::factory()->create(['organization_id' => $org->id]);
         $shiftB = Shift::factory()->create(['organization_id' => $org->id]);
@@ -232,7 +232,7 @@ class ShiftSwapTest extends TestCase
         $org = $this->createOrganization();
         $requester = $this->createUser($org, 'employee');
         $target = $this->createUser($org, 'employee');
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
 
         $shiftA = Shift::factory()->create(['organization_id' => $org->id]);
         $shiftB = Shift::factory()->create(['organization_id' => $org->id]);
@@ -265,7 +265,7 @@ class ShiftSwapTest extends TestCase
         $emp1 = $this->createUser($org, 'employee');
         $emp2 = $this->createUser($org, 'employee');
         $emp3 = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
 
         $shiftA = Shift::factory()->create(['organization_id' => $org->id]);
         $shiftB = Shift::factory()->create(['organization_id' => $org->id]);
@@ -312,7 +312,7 @@ class ShiftSwapTest extends TestCase
         $orgA = $this->createOrganization();
         $orgB = $this->createOrganization();
 
-        $adminA = $this->createUser($orgA, 'admin');
+        $adminA = $this->createUser($orgA, 'org_manager');
         $empB1 = $this->createUser($orgB, 'employee');
         $empB2 = $this->createUser($orgB, 'employee');
 

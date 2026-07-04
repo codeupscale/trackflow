@@ -34,11 +34,11 @@ class AppServiceProvider extends ServiceProvider
         });
 
         RateLimiter::for('api', function (Request $request) {
-            return Limit::perMinute(1000)->by($request->user()?->id ?: $request->ip());
+            return Limit::perMinute(config('security.rate_limits.api'))->by($request->user()?->id ?: $request->ip());
         });
 
         RateLimiter::for('auth', function (Request $request) {
-            return Limit::perMinute(10)->by($request->ip());
+            return Limit::perMinute(config('security.rate_limits.auth'))->by($request->ip());
         });
     }
 }

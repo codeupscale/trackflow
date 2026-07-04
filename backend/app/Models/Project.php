@@ -77,7 +77,7 @@ class Project extends Model
 
     public function isAssignedTo(User $user): bool
     {
-        if ($user->hasRole('owner', 'admin', 'manager')) {
+        if ($user->hasRole('owner', 'org_manager')) {
             return true;
         }
         $org = $user->relationLoaded('organization') ? $user->organization : $user->organization()->first();

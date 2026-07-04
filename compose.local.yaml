@@ -1,0 +1,227 @@
+# Local Docker Compose for TrackFlow
+# Mirrors production service topology with dev-friendly settings
+# Usage: docker compose -f compose.local.yaml up -d
+services:
+    tf-app:
+        build:
+            context: ./backend/docker/8.5
+            dockerfile: Dockerfile
+            args:
+                WWWGROUP: '${WWWGROUP:-1000}'
+        image: sail-8.5/app
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+        restart: unless-stopped
+        ports:
+            - '${APP_PORT:-8080}:80'
+            - '${VITE_PORT:-5173}:${VITE_PORT:-5173}'
+        env_file: ./backend/.env
+        volumes:
+            - './backend:/var/www/html'
+        environment:
+            WWWUSER: '${WWWUSER:-1000}'
+            LARAVEL_SAIL: 1
+            APP_ENV: local
+            APP_DEBUG: 'true'
+            LOG_CHANNEL: stack
+            XDEBUG_MODE: '${SAIL_XDEBUG_MODE:-off}'
+            XDEBUG_CONFIG: '${SAIL_XDEBUG_CONFIG:-client_host=host.docker.internal}'
+        depends_on:
+            postgres:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        healthcheck:
+            test: ['CMD', 'curl', '-f', 'http://localhost/api/v1/health/live']
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 30s
+        networks:
+            - local
+
+    tf-web:
+        image: node:20-alpine
+        working_dir: /app
+        command: sh -c "npm install && npm run dev"
+        restart: unless-stopped
+        ports:
+            - '3001:3000'
+        volumes:
+            - './web:/app'
+            - tf-web-node-modules:/app/node_modules
+        environment:
+            NODE_ENV: development
+            NEXT_PUBLIC_API_URL: 'http://localhost:${APP_PORT:-8080}/api/v1'
+            NEXT_PUBLIC_REVERB_APP_KEY: '${REVERB_APP_KEY:-trackflow-key}'
+            NEXT_PUBLIC_REVERB_HOST: localhost
+            NEXT_PUBLIC_REVERB_PORT: '${REVERB_PORT:-8081}'
+            NEXT_PUBLIC_GOOGLE_CLIENT_ID: '${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-}'
+            WATCHPACK_POLLING: 'true'
+        depends_on:
+            tf-app:
+                condition: service_healthy
+        healthcheck:
+            test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3000/']
+            interval: 30s
+            timeout: 10s
+            retries: 5
+            start_period: 120s
+        networks:
+            - local
+
+    tf-horizon:
+        build:
+            context: ./backend/docker/8.5
+            dockerfile: Dockerfile
+            args:
+                WWWGROUP: '${WWWGROUP:-1000}'
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+        restart: unless-stopped
+        command: php artisan horizon
+        env_file: ./backend/.env
+        volumes:
+            - './backend:/var/www/html'
+        environment:
+            WWWUSER: '${WWWUSER:-1000}'
+            LARAVEL_SAIL: 1
+            APP_ENV: local
+            APP_DEBUG: 'true'
+            LOG_CHANNEL: stack
+        depends_on:
+            postgres:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        networks:
+            - local
+
+    tf-scheduler:
+        build:
+            context: ./backend/docker/8.5
+            dockerfile: Dockerfile
+            args:
+                WWWGROUP: '${WWWGROUP:-1000}'
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+        restart: unless-stopped
+        command: '/bin/sh -c "while true; do php artisan schedule:run --no-interaction; sleep 60; done"'
+        env_file: ./backend/.env
+        volumes:
+            - './backend:/var/www/html'
+        environment:
+            WWWUSER: '${WWWUSER:-1000}'
+            LARAVEL_SAIL: 1
+            APP_ENV: local
+            APP_DEBUG: 'true'
+            LOG_CHANNEL: stack
+        depends_on:
+            postgres:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        networks:
+            - local
+
+    tf-marketing:
+        build:
+            context: ./marketing
+            dockerfile: Dockerfile.production
+        restart: unless-stopped
+        ports:
+            - '3002:3000'
+        environment:
+            NODE_ENV: production
+            NODE_OPTIONS: '--max-old-space-size=512'
+        healthcheck:
+            test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3000/']
+            interval: 30s
+            timeout: 5s
+            retries: 3
+            start_period: 30s
+        networks:
+            - local
+
+    tf-reverb:
+        build:
+            context: ./backend/docker/8.5
+            dockerfile: Dockerfile
+            args:
+                WWWGROUP: '${WWWGROUP:-1000}'
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+        restart: unless-stopped
+        ports:
+            - '${REVERB_PORT:-8081}:8080'
+        command: php artisan reverb:start --host=0.0.0.0 --port=8080
+        env_file: ./backend/.env
+        volumes:
+            - './backend:/var/www/html'
+        environment:
+            WWWUSER: '${WWWUSER:-1000}'
+            LARAVEL_SAIL: 1
+            APP_ENV: local
+            APP_DEBUG: 'true'
+        depends_on:
+            - redis
+        networks:
+            - local
+
+    postgres:
+        image: 'postgres:18-alpine'
+        restart: unless-stopped
+        ports:
+            - '${FORWARD_DB_PORT:-5432}:5432'
+        environment:
+            PGPASSWORD: '${DB_PASSWORD:-secret}'
+            POSTGRES_DB: '${DB_DATABASE}'
+            POSTGRES_USER: '${DB_USERNAME}'
+            POSTGRES_PASSWORD: '${DB_PASSWORD:-secret}'
+        volumes:
+            - 'local-postgres:/var/lib/postgresql'
+            - './backend/docker/pgsql/create-testing-database.sql:/docker-entrypoint-initdb.d/10-create-testing-database.sql'
+        networks:
+            - local
+        healthcheck:
+            test: ['CMD', 'pg_isready', '-q', '-d', '${DB_DATABASE}', '-U', '${DB_USERNAME}']
+            interval: 10s
+            retries: 5
+            timeout: 5s
+
+    redis:
+        image: 'redis:7-alpine'
+        restart: unless-stopped
+        ports:
+            - '${FORWARD_REDIS_PORT:-6379}:6379'
+        command: redis-server --save "" --appendonly no
+        volumes:
+            - 'local-redis:/data'
+        networks:
+            - local
+        healthcheck:
+            test: ['CMD', 'redis-cli', 'ping']
+            interval: 10s
+            retries: 3
+            timeout: 5s
+
+    mailpit:
+        image: 'axllent/mailpit:latest'
+        restart: unless-stopped
+        ports:
+            - '${FORWARD_MAILPIT_PORT:-1025}:1025'
+            - '${FORWARD_MAILPIT_DASHBOARD_PORT:-8025}:8025'
+        networks:
+            - local
+
+networks:
+    local:
+        driver: bridge
+
+volumes:
+    local-postgres:
+        driver: local
+    local-redis:
+        driver: local
+    tf-web-node-modules:
+        driver: local

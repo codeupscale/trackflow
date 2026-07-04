@@ -93,7 +93,7 @@ class TimerServiceTest extends TestCase
 
     public function test_start_allows_admin_on_any_project(): void
     {
-        $admin = $this->createUser($this->org, 'admin');
+        $admin = $this->createUser($this->org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         $project = Project::factory()->create([
@@ -283,6 +283,97 @@ class TimerServiceTest extends TestCase
 
         // Should only include the project-specific entry
         $this->assertEquals(3600, $status['today_total']);
+    }
+
+    // ─── all_projects_today_total (global sum, never scoped) ─────────
+    // Regression: bugs/desktop-today-total-project-scoped-when-project-selected.md
+    // The desktop "Today, all projects" line + tray tooltip must never show a
+    // project-scoped total when a project is selected while the timer is stopped.
+
+    public function test_status_stopped_with_project_returns_scoped_today_total_but_global_all_projects_total(): void
+    {
+        $project = Project::factory()->create(['organization_id' => $this->org->id]);
+
+        // 1h on the selected project
+        TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'project_id' => $project->id,
+            'started_at' => now()->subHours(4),
+            'ended_at' => now()->subHours(3),
+            'duration_seconds' => 3600,
+            'type' => 'tracked',
+        ]);
+
+        // 1h on a different (null) project
+        TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'project_id' => null,
+            'started_at' => now()->subHours(2),
+            'ended_at' => now()->subHour(),
+            'duration_seconds' => 3600,
+            'type' => 'tracked',
+        ]);
+
+        $status = $this->service->status($project->id);
+
+        // today_total keeps historical scoped semantics.
+        $this->assertEquals(3600, $status['today_total']);
+        // all_projects_today_total must be the GLOBAL sum regardless of the project filter.
+        $this->assertArrayHasKey('all_projects_today_total', $status);
+        $this->assertEquals(7200, $status['all_projects_today_total']);
+        // project_today_total is now populated in the stopped branch (was 0 before).
+        $this->assertEquals(3600, $status['project_today_total']);
+    }
+
+    public function test_status_stopped_without_project_has_equal_today_and_all_projects_totals(): void
+    {
+        $project = Project::factory()->create(['organization_id' => $this->org->id]);
+
+        TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'project_id' => $project->id,
+            'started_at' => now()->subHours(2),
+            'ended_at' => now()->subHour(),
+            'duration_seconds' => 3600,
+            'type' => 'tracked',
+        ]);
+
+        $status = $this->service->status();
+
+        $this->assertEquals(3600, $status['today_total']);
+        $this->assertEquals(3600, $status['all_projects_today_total']);
+    }
+
+    public function test_status_running_all_projects_total_is_global_and_includes_elapsed(): void
+    {
+        $projectA = Project::factory()->create(['organization_id' => $this->org->id]);
+        $projectB = Project::factory()->create(['organization_id' => $this->org->id]);
+        $projectA->members()->attach($this->user->id);
+
+        // Completed 1h on project B (a DIFFERENT project than the one requested).
+        TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'project_id' => $projectB->id,
+            'started_at' => now()->subHours(3),
+            'ended_at' => now()->subHours(2),
+            'duration_seconds' => 3600,
+            'type' => 'tracked',
+        ]);
+
+        // Start a running timer on project A.
+        $this->service->start(['project_id' => $projectA->id]);
+
+        // Request status scoped to project A.
+        $status = $this->service->status($projectA->id);
+
+        // today_total is scoped to project A (only the running elapsed, ~0).
+        $this->assertLessThan(3600, $status['today_total']);
+        // all_projects_today_total includes project B's completed hour + A's elapsed.
+        $this->assertGreaterThanOrEqual(3600, $status['all_projects_today_total']);
     }
 
     // ─── Multi-tenancy isolation ─────────────────────────────────────
@@ -561,6 +652,78 @@ class TimerServiceTest extends TestCase
 
         $this->assertNull($result['idle_entry']);
         $this->assertNull($result['new_entry']);
+    }
+
+    public function test_report_idle_reassign_on_stopped_timer_splits_closed_entry(): void
+    {
+        // Scenario: user reassigned idle time while offline, then stopped the timer
+        // before the offline queue flushed. By flush time the timer is stopped (no
+        // Redis) and the entry is closed. The reassign must still split the CLOSED
+        // entry historically — WITHOUT resurrecting a running timer.
+        $target = Project::factory()->create(['organization_id' => $this->org->id]);
+        $target->members()->attach($this->user->id);
+
+        $start = now()->subMinutes(10);
+        $end = now();
+        $closed = TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'project_id' => null, // original (default) project
+            'started_at' => $start,
+            'ended_at' => $end,
+            'duration_seconds' => 600,
+            'type' => 'tracked',
+        ]);
+
+        $idleStart = (clone $start)->addMinutes(1); // 1 min of work, then idle
+        $idleEnd = (clone $start)->addMinutes(8);   // 7 min idle window
+
+        // No Redis timer set — timer is stopped.
+        $result = $this->service->reportIdle([
+            'time_entry_id' => $closed->id,
+            'idle_started_at' => $idleStart->toISOString(),
+            'idle_ended_at' => $idleEnd->toISOString(),
+            'idle_seconds' => 420,
+            'action' => 'reassign',
+            'project_id' => $target->id,
+        ]);
+
+        // No running timer reopened.
+        $this->assertNull($result['new_entry']);
+        $this->assertNotNull($result['idle_entry']);
+        $this->assertNull(Redis::get("timer:{$this->user->id}"));
+
+        // Original entry shortened to idle-start.
+        $orig = TimeEntry::withoutGlobalScopes()->find($closed->id);
+        $this->assertEqualsWithDelta($idleStart->timestamp, $orig->ended_at->timestamp, 1);
+
+        // Reassigned tracked entry on the target project for the full idle window.
+        $reassigned = TimeEntry::withoutGlobalScopes()
+            ->where('project_id', $target->id)->where('type', 'tracked')->first();
+        $this->assertNotNull($reassigned);
+        $this->assertEqualsWithDelta(420, $reassigned->duration_seconds, 1);
+
+        // Post-idle remainder on the original project — CLOSED (not running).
+        $remainder = TimeEntry::withoutGlobalScopes()
+            ->where('id', '!=', $closed->id)
+            ->where('type', 'tracked')
+            ->whereNull('project_id')
+            ->first();
+        $this->assertNotNull($remainder);
+        $this->assertNotNull($remainder->ended_at);
+        $this->assertEqualsWithDelta($end->timestamp, $remainder->ended_at->timestamp, 1);
+
+        // Idempotent: a replay finds the entry already shortened and no-ops.
+        $again = $this->service->reportIdle([
+            'time_entry_id' => $closed->id,
+            'idle_started_at' => $idleStart->toISOString(),
+            'idle_ended_at' => $idleEnd->toISOString(),
+            'idle_seconds' => 420,
+            'action' => 'reassign',
+            'project_id' => $target->id,
+        ]);
+        $this->assertNull($again['idle_entry']);
+        $this->assertNull($again['new_entry']);
     }
 
     // ─── Edge cases ──────────────────────────────────────────────────

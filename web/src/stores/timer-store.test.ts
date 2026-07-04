@@ -36,6 +36,7 @@ function resetStore() {
   if (store.pollId) clearInterval(store.pollId);
   useTimerStore.setState({
     isRunning: false,
+    isPaused: false,
     entryId: null,
     projectId: null,
     projectName: null,
@@ -98,6 +99,33 @@ describe('TimerStore', () => {
       expect(state.projectName).toBe('TrackFlow');
       expect(state.elapsedSeconds).toBe(3600);
       expect(state.todayTotalSeconds).toBe(7200);
+    });
+
+    it('sets paused state with frozen elapsed (no live tick)', async () => {
+      mockApiGet.mockResolvedValueOnce({
+        data: {
+          running: false,
+          paused: true,
+          state: 'paused',
+          entry: {
+            id: 'entry-1',
+            project_id: 'proj-1',
+            project: { name: 'TrackFlow' },
+            started_at: '2026-03-27T09:00:00Z',
+          },
+          elapsed_seconds: 3600,
+          today_total: 7200,
+          project_today_total: 3600,
+        },
+      });
+
+      await useTimerStore.getState().fetchStatus();
+
+      const state = useTimerStore.getState();
+      expect(state.isRunning).toBe(false);
+      expect(state.isPaused).toBe(true);
+      expect(state.elapsedSeconds).toBe(3600);
+      expect(state.intervalId).toBeNull();
     });
 
     it('sets stopped state when timer is not active', async () => {
@@ -241,6 +269,62 @@ describe('TimerStore', () => {
 
       expect(useTimerStore.getState().elapsedSeconds).toBe(0);
       expect(useTimerStore.getState().todayTotalSeconds).toBe(100);
+    });
+
+    it('freezes (does not advance) while the browser is offline', () => {
+      const startedAt = new Date('2026-03-27T09:00:00Z');
+      vi.setSystemTime(new Date('2026-03-27T09:05:00Z'));
+
+      useTimerStore.setState({
+        isRunning: true,
+        startedAt: startedAt.toISOString(),
+        elapsedSeconds: 120,
+        todayTotalBase: 1000,
+        todayTotalSeconds: 1120,
+        projectTodayTotalBase: 500,
+        projectTodayTotalSeconds: 620,
+      });
+
+      const onLineSpy = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+      try {
+        useTimerStore.getState().tick();
+      } finally {
+        onLineSpy.mockRestore();
+      }
+
+      // Offline → counter stays frozen at its last value, not recomputed from startedAt.
+      const state = useTimerStore.getState();
+      expect(state.elapsedSeconds).toBe(120);
+      expect(state.todayTotalSeconds).toBe(1120);
+      expect(state.projectTodayTotalSeconds).toBe(620);
+    });
+
+    it('derives correct elapsed after a large gap (background-tab throttle) in a single tick', () => {
+      // The interval that drives tick() is throttled/paused in background tabs, so
+      // many seconds can pass with no tick firing. Because elapsed is DERIVED from
+      // startedAt (not accumulated +1 per tick), the very next tick must snap
+      // straight to the correct value — no drift, no incremental catch-up.
+      const startedAt = '2026-03-27T09:00:00Z';
+      useTimerStore.setState({
+        isRunning: true,
+        startedAt,
+        todayTotalBase: 0,
+        projectTodayTotalBase: 0,
+        // Stale values as if only a few ticks fired before the tab was throttled.
+        elapsedSeconds: 5,
+        todayTotalSeconds: 5,
+        projectTodayTotalSeconds: 5,
+      });
+
+      // Simulate 2 hours passing on the wall clock with no ticks (throttled tab).
+      vi.setSystemTime(new Date('2026-03-27T11:00:00Z'));
+      useTimerStore.getState().tick();
+
+      const state = useTimerStore.getState();
+      // Exactly now - startedAt = 7200s, NOT 6 (which an accumulator would show).
+      expect(state.elapsedSeconds).toBe(7200);
+      expect(state.todayTotalSeconds).toBe(7200);
+      expect(state.projectTodayTotalSeconds).toBe(7200);
     });
 
     it('todayTotalSeconds accumulates correctly across sessions', () => {

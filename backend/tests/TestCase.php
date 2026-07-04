@@ -94,10 +94,11 @@ abstract class TestCase extends BaseTestCase
         $now = now();
 
         $roleDefinitions = [
-            ['name' => 'owner',    'display_name' => 'Owner',    'priority' => 100, 'is_default' => false],
-            ['name' => 'admin',    'display_name' => 'Admin',    'priority' => 75,  'is_default' => false],
-            ['name' => 'manager',  'display_name' => 'Manager',  'priority' => 50,  'is_default' => false],
-            ['name' => 'employee', 'display_name' => 'Employee', 'priority' => 10,  'is_default' => true],
+            ['name' => 'owner',           'display_name' => 'Owner',                'priority' => 100, 'is_default' => false],
+            ['name' => 'org_manager',     'display_name' => 'Organization Manager', 'priority' => 75,  'is_default' => false],
+            ['name' => 'hr_manager',      'display_name' => 'HR Manager',           'priority' => 65,  'is_default' => false],
+            ['name' => 'finance_manager', 'display_name' => 'Finance Manager',      'priority' => 60,  'is_default' => false],
+            ['name' => 'employee',        'display_name' => 'Employee / Member',    'priority' => 10,  'is_default' => true],
         ];
 
         $orgRoleIds = [];
@@ -119,9 +120,10 @@ abstract class TestCase extends BaseTestCase
         }
 
         // Assign permissions to roles
-        $this->insertRolePermissions($orgRoleIds['admin'],    $seeder->getAdminPermissions(),    $this->permissionMap);
-        $this->insertRolePermissions($orgRoleIds['manager'],  $seeder->getManagerPermissions(),  $this->permissionMap);
-        $this->insertRolePermissions($orgRoleIds['employee'], $seeder->getEmployeePermissions(), $this->permissionMap);
+        $this->insertRolePermissions($orgRoleIds['org_manager'],     $seeder->getOrgManagerPermissions(),     $this->permissionMap);
+        $this->insertRolePermissions($orgRoleIds['hr_manager'],      $seeder->getHrManagerPermissions(),      $this->permissionMap);
+        $this->insertRolePermissions($orgRoleIds['finance_manager'], $seeder->getFinanceManagerPermissions(), $this->permissionMap);
+        $this->insertRolePermissions($orgRoleIds['employee'],        $seeder->getEmployeePermissions(),       $this->permissionMap);
         // owner: no role_permissions rows (PermissionService handles by priority >= 100)
     }
 

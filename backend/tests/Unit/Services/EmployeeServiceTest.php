@@ -33,7 +33,7 @@ class EmployeeServiceTest extends TestCase
         }
 
         // Authenticate as one of the org users
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         $result = $this->service->getDirectory($org->id, ['per_page' => 10], $admin);
@@ -393,7 +393,7 @@ class EmployeeServiceTest extends TestCase
     {
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
-        $verifier = $this->createUser($org, 'admin');
+        $verifier = $this->createUser($org, 'org_manager');
         $this->actingAs($verifier, 'sanctum');
 
         $doc = EmployeeDocument::factory()->create([
@@ -456,7 +456,7 @@ class EmployeeServiceTest extends TestCase
     {
         $org = $this->createOrganization();
         $employee = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($employee, 'sanctum');
 
         // Regular note
@@ -486,7 +486,7 @@ class EmployeeServiceTest extends TestCase
     {
         $org = $this->createOrganization();
         $employee = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         EmployeeNote::factory()->create([
@@ -532,7 +532,7 @@ class EmployeeServiceTest extends TestCase
     {
         $org = $this->createOrganization();
         $employee = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         EmployeeNote::factory()->create([
@@ -552,7 +552,7 @@ class EmployeeServiceTest extends TestCase
     {
         $org = $this->createOrganization();
         $employee = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         $note = $this->service->createNote($employee->id, $org->id, $admin->id, [
@@ -572,7 +572,7 @@ class EmployeeServiceTest extends TestCase
     {
         $org = $this->createOrganization();
         $employee = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         $note = $this->service->createNote($employee->id, $org->id, $admin->id, [
@@ -587,7 +587,7 @@ class EmployeeServiceTest extends TestCase
     {
         $org = $this->createOrganization();
         $employee = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         $note = $this->service->createNote($employee->id, $org->id, $admin->id, [
@@ -674,7 +674,7 @@ class EmployeeServiceTest extends TestCase
     {
         $org = $this->createOrganization();
         $employee = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         $dept = Department::factory()->create(['organization_id' => $org->id]);
@@ -720,7 +720,7 @@ class EmployeeServiceTest extends TestCase
     public function test_update_profile_creates_profile_if_not_exists(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
         $this->actingAs($admin, 'sanctum');
 

@@ -8,7 +8,7 @@ class StorePublicHolidayRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user()->hasRole('owner', 'admin');
+        return $this->user()->hasRole('owner', 'org_manager', 'hr_manager');
     }
 
     public function rules(): array

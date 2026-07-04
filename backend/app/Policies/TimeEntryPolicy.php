@@ -31,8 +31,8 @@ class TimeEntryPolicy
             return true;
         }
 
-        if ($scope === 'team') {
-            return in_array($entry->user_id, $service->getTeamUserIds($user));
+        if (($scope === 'project')) {
+            return in_array($entry->user_id, $service->getProjectUserIds($user));
         }
 
         return false;
@@ -61,8 +61,8 @@ class TimeEntryPolicy
             return true;
         }
 
-        if ($scope === 'team') {
-            return in_array($entry->user_id, $service->getTeamUserIds($user));
+        if (($scope === 'project')) {
+            return in_array($entry->user_id, $service->getProjectUserIds($user));
         }
 
         return false;
@@ -86,8 +86,8 @@ class TimeEntryPolicy
             return true;
         }
 
-        if ($scope === 'team') {
-            return in_array($entry->user_id, $service->getTeamUserIds($user));
+        if (($scope === 'project')) {
+            return in_array($entry->user_id, $service->getProjectUserIds($user));
         }
 
         return false;
@@ -110,8 +110,8 @@ class TimeEntryPolicy
             return true;
         }
 
-        if ($scope === 'team') {
-            return in_array($entry->user_id, $service->getTeamUserIds($user));
+        if (($scope === 'project')) {
+            return in_array($entry->user_id, $service->getProjectUserIds($user));
         }
 
         return false;

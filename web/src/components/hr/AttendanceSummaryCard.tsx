@@ -1,7 +1,12 @@
 'use client';
 
-import { type LucideIcon } from 'lucide-react';
+import { Info, type LucideIcon } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 interface AttendanceSummaryCardProps {
@@ -10,6 +15,8 @@ interface AttendanceSummaryCardProps {
   subtext?: string;
   icon: LucideIcon;
   variant?: 'green' | 'red' | 'amber' | 'blue' | 'purple' | 'default';
+  /** Optional 1-2 line explanation shown behind an info icon in the top-right. */
+  tooltip?: string;
 }
 
 const variantStyles: Record<string, { icon: string; bg: string }> = {
@@ -45,12 +52,25 @@ export function AttendanceSummaryCard({
   subtext,
   icon: Icon,
   variant = 'default',
+  tooltip,
 }: AttendanceSummaryCardProps) {
   const styles = variantStyles[variant] ?? variantStyles.default;
 
   return (
     <Card>
-      <CardContent className="flex items-center gap-3 p-4">
+      <CardContent className="relative flex items-center gap-3 p-4">
+        {tooltip && (
+          <Tooltip>
+            <TooltipTrigger
+              render={<span />}
+              className="absolute right-3 top-3 inline-flex text-muted-foreground/60 transition-colors hover:text-foreground"
+              aria-label={`How ${label} is calculated`}
+            >
+              <Info className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipContent>{tooltip}</TooltipContent>
+          </Tooltip>
+        )}
         <div
           className={cn(
             'flex items-center justify-center rounded-lg size-10 shrink-0',

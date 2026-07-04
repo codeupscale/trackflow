@@ -18,6 +18,26 @@ const MAX_QUEUE_ENTRIES = 1000;
 // Exponential backoff schedule: 5s, 15s, 30s, 60s, 120s (cap)
 const BACKOFF_SCHEDULE = [5000, 15000, 30000, 60000, 120000];
 
+// Pace screenshot uploads during a backlog flush. The server throttles
+// screenshots/presign and screenshots/confirm at 60/min (1/sec) each, so firing
+// a backlog as fast as possible trips HTTP 429. ~1.1s between screenshots keeps
+// us safely under the limit (≈54/min) while still draining the backlog promptly.
+const SCREENSHOT_FLUSH_INTERVAL_MS = 1100;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// A transient error means "retry later", NOT "this item is bad". Rate limiting
+// (429), server errors (5xx), and network failures (no response) must NOT count
+// toward the drop-after-5-attempts limit — otherwise a rate-limited backlog
+// silently loses valid screenshots. Genuine client errors (other 4xx) are permanent.
+function isTransientError(e) {
+  const status = e && e.response && e.response.status;
+  if (status === 429) return true;            // rate limited — slow down & retry
+  if (status >= 500 && status < 600) return true; // server error — retry
+  if (!status) return true;                   // network/timeout (no HTTP response) — retry
+  return false;                               // permanent client error (400/404/422…)
+}
+
 class OfflineQueue {
   constructor() {
     this.db = null;
@@ -27,7 +47,70 @@ class OfflineQueue {
     this._flushTimer = null;
     this._screenshotDir = null;
 
+    // FIX D1/D2: Resolver injected by index.js. Given a queued item's
+    // { time_entry_id, idempotency_key }, returns the REAL server entry id by
+    // reading the timer_sessions table (server_entry_id). Lets us replace a
+    // `local-…` placeholder id with the synced server id before sending —
+    // heartbeats and screenshots that carried a local id used to 422 and drop.
+    // Returns null when the originating session hasn't synced its start yet.
+    /** @type {((meta: {time_entry_id?: string, idempotency_key?: string}) => (string|null))|null} */
+    this.resolveServerEntryId = null;
+
+    // FIX D3: Re-anchor callback injected by index.js. Invoked when a queued
+    // idle_discard/idle_reassign flushes and the server returns a NEW (post-split)
+    // entry — the desktop must re-anchor its local timer to that new entry exactly
+    // like the online idle path, or it stays bound to the now-closed entry and the
+    // server leaves a new entry open forever (elapsed inflates / stopped timers
+    // resurrect). Signature: (payload, newEntry) => void.
+    /** @type {((payload: object, newEntry: object) => void)|null} */
+    this.onIdleReanchor = null;
+
+    // FIX D3: Predicate injected by index.js — returns true when a local timer
+    // session is currently active. A queued idle_discard must be SKIPPED when the
+    // user already stopped the timer before it flushed, otherwise replaying it
+    // resurrects a running timer on the server. Defaults to "assume active" when
+    // not wired so behavior is unchanged in contexts that don't set it.
+    /** @type {(() => boolean)|null} */
+    this.isLocalTimerActive = null;
+
     this.init();
+  }
+
+  // FIX D1/D2: Resolve a queued item's time_entry_id to the real server entry id.
+  // - If the id is already a real server id (not `local-…`), return it as-is.
+  // - If it's a `local-…` placeholder, ask the resolver for the synced server id.
+  // - Return null when unresolved (start not synced yet) so the caller HOLDS the
+  //   item for a later flush instead of sending an id the server will reject.
+  _resolveEntryId(meta) {
+    const raw = meta && meta.time_entry_id != null ? String(meta.time_entry_id) : null;
+    if (raw && !raw.startsWith('local-')) return raw;
+    if (typeof this.resolveServerEntryId === 'function') {
+      try {
+        const resolved = this.resolveServerEntryId({
+          time_entry_id: raw,
+          idempotency_key: meta && meta.idempotency_key,
+        });
+        if (resolved && !String(resolved).startsWith('local-')) return String(resolved);
+      } catch (e) {
+        console.warn('[OfflineQueue] resolveServerEntryId threw:', e.message);
+      }
+    }
+    return null; // unresolved — hold for later
+  }
+
+  // An item can only ever resolve to a real server entry id if it carries either a
+  // `local-…` placeholder (resolvable once its start syncs) or an idempotency_key.
+  // An item with NEITHER — e.g. a heartbeat captured during a timer-state transition
+  // when there was no entry to anchor it to (time_entry_id null/undefined) — can never
+  // resolve. Holding it loops forever: it is re-read and "held" every flush cycle,
+  // spamming the log and blocking the queue. Such orphans must be DROPPED, not held.
+  _isUnresolvableOrphan(meta) {
+    const hasIdem = !!(meta && meta.idempotency_key != null && meta.idempotency_key !== '');
+    if (hasIdem) return false;
+    const raw = meta && meta.time_entry_id != null ? String(meta.time_entry_id) : null;
+    // In the unresolved branch a real id would already have resolved, so raw here is
+    // either a `local-…` placeholder (keep — may sync later) or null (orphan).
+    return raw == null;
   }
 
   init() {
@@ -248,6 +331,8 @@ class OfflineQueue {
       const heartbeatIds = [];  // Track separately — only delete after successful bulk upload
       const deleteIds = [];
       const screenshotFilesToDelete = []; // Track files to delete after successful upload
+      let transientStop = false; // Set when we hit rate-limit/server/network — pause & retry later
+      let screenshotsUploadedThisFlush = 0; // For pacing between screenshot uploads
 
       for (const item of items) {
         let data;
@@ -260,7 +345,23 @@ class OfflineQueue {
 
         try {
           if (item.type === 'heartbeat') {
-            heartbeats.push(data);
+            // FIX D1: The /agent/logs replay endpoint requires a real time_entry_id.
+            // A heartbeat queued during an offline start carries a `local-…` id (or
+            // none) until its session syncs. Resolve it to the server entry id via
+            // timer_sessions; if still unresolved, HOLD this heartbeat (don't add it
+            // to the batch) so a single unresolvable id can't 422 the whole batch and
+            // drop all offline activity. It flushes on a later cycle once the start syncs.
+            const resolvedId = this._resolveEntryId(data);
+            if (!resolvedId) {
+              if (this._isUnresolvableOrphan(data)) {
+                console.warn('[OfflineQueue] Dropping orphaned heartbeat — no entry id or idempotency_key to resolve (can never sync)');
+                deleteIds.push(item.id);
+                continue;
+              }
+              console.log(`[OfflineQueue] Holding heartbeat — entry not synced yet (entry=${data.time_entry_id})`);
+              continue; // leave in queue; do NOT count an attempt
+            }
+            heartbeats.push({ ...data, time_entry_id: resolvedId });
             heartbeatIds.push(item.id);
           } else if (item.type === 'screenshot') {
             // SS-4: Read screenshot from file, not from base64 in SQLite
@@ -282,8 +383,23 @@ class OfflineQueue {
               continue;
             }
 
+            // FIX D2: A screenshot queued during an offline start carries a
+            // `local-…` time_entry_id; presign 422s on it. Resolve to the synced
+            // server entry id via timer_sessions. If unresolved, HOLD the item
+            // (its buffer file stays on disk) until the start syncs.
+            const resolvedScreenshotEntryId = this._resolveEntryId(data);
+            if (!resolvedScreenshotEntryId) {
+              if (this._isUnresolvableOrphan(data)) {
+                console.warn('[OfflineQueue] Dropping orphaned screenshot — no entry id or idempotency_key to resolve (can never sync)');
+                deleteIds.push(item.id);
+                continue;
+              }
+              console.log(`[OfflineQueue] Holding screenshot — entry not synced yet (entry=${data.time_entry_id})`);
+              continue; // leave in queue + keep file; do NOT count an attempt
+            }
+
             const metadata = {
-              time_entry_id:   data.time_entry_id,
+              time_entry_id:   resolvedScreenshotEntryId,
               captured_at:     data.captured_at,
               file_size:       buffer.length,
               idempotency_key: data.idempotency_key,
@@ -294,9 +410,15 @@ class OfflineQueue {
             if (data.display_index != null)  metadata.display_index  = data.display_index;
             if (data.display_count != null)  metadata.display_count  = data.display_count;
 
+            // Pace uploads to stay under the server's 60/min presign+confirm
+            // throttle. Skip the delay before the first screenshot of the flush.
+            if (screenshotsUploadedThisFlush > 0) {
+              await sleep(SCREENSHOT_FLUSH_INTERVAL_MS);
+            }
             const { screenshot_id, upload_url, upload_headers } = await apiClient.presignScreenshot(metadata);
             await apiClient.uploadToS3(upload_url, buffer, upload_headers || {});
             await apiClient.confirmScreenshot(screenshot_id);
+            screenshotsUploadedThisFlush++;
             console.log(`[OfflineQueue] Screenshot uploaded successfully (entry=${data.time_entry_id}, captured=${data.captured_at})`);
             deleteIds.push(item.id);
             // Track file for deletion after successful upload
@@ -304,18 +426,50 @@ class OfflineQueue {
               screenshotFilesToDelete.push(data.file_path);
             }
           } else if (item.type === 'idle_discard') {
-            await apiClient.reportIdleTime(data);
+            // Send the queued reassign/discard regardless of whether a local timer
+            // is still active.
+            //
+            // - Timer still RUNNING: the server splits the open entry and opens a NEW
+            //   one; re-anchor the local session to it (the running path).
+            // - Timer already STOPPED before this flushed (e.g. offline reassign, then
+            //   Stop): the server now splits the CLOSED entry in place and returns
+            //   new_entry=null, so the reassignment is applied historically WITHOUT
+            //   resurrecting a timer. Previously we DROPPED the item here, which lost
+            //   the reassignment entirely (idle time stuck on the original project).
+            //   See bugs/idle-reassign-offline-stop-lost.md.
+            const res = await apiClient.reportIdleTime(data);
+            if (res?.new_entry && typeof this.onIdleReanchor === 'function') {
+              // Only re-anchor when the server reopened a running entry (timer still
+              // live). A null new_entry means the closed-entry split path ran — leave
+              // the stopped timer stopped.
+              try {
+                this.onIdleReanchor(data, res.new_entry);
+              } catch (cbErr) {
+                console.warn('[OfflineQueue] onIdleReanchor threw:', cbErr.message);
+              }
+            }
             deleteIds.push(item.id);
           }
           // NOTE: timer_start and timer_stop are no longer queued here.
           // Timer sync is handled exclusively by timer_sessions table + reconcileTimerState().
           // This eliminates the dual-replay bug that caused duplicate time entries.
         } catch (e) {
+          // Transient errors (429 rate-limit, 5xx, network) must NOT count toward
+          // the drop limit — pause the flush and let the backoff scheduler retry the
+          // whole queue later. This prevents a rate-limited backlog from silently
+          // dropping valid screenshots (the 429 data-loss bug).
+          if (isTransientError(e)) {
+            const status = (e && e.response && e.response.status) || 'network';
+            console.warn(`[OfflineQueue] Transient error (${status}) on ${item.type} — pausing flush, will retry: ${e.message}`);
+            transientStop = true;
+            break;
+          }
+
           console.warn(`[OfflineQueue] Flush item failed (type=${item.type}, attempt=${item.attempts + 1}): ${e.message}`);
-          // Update attempt count
+          // Permanent error — count the attempt
           this._stmtIncAttempt.run(item.id);
 
-          // Remove items that have failed too many times
+          // Remove items that have failed too many times (permanent errors only)
           if (item.attempts >= 4) { // Will be 5 after the update above
             console.warn(`[OfflineQueue] Dropping item after 5 failed attempts (type=${item.type}, id=${item.id})`);
             deleteIds.push(item.id);
@@ -358,9 +512,17 @@ class OfflineQueue {
         }
       }
 
-      // Reset backoff on success
-      this._backoffStep = 0;
-      this.retryDelay = BACKOFF_SCHEDULE[0];
+      if (transientStop) {
+        // Hit rate-limit/server/network — advance backoff so the scheduled retry
+        // waits longer (5→15→30→60→120s), letting the rate-limit window clear.
+        this._backoffStep = Math.min(this._backoffStep + 1, BACKOFF_SCHEDULE.length - 1);
+        this.retryDelay = BACKOFF_SCHEDULE[this._backoffStep];
+        console.log(`[OfflineQueue] Flush paused (transient) — retrying in ${this.retryDelay / 1000}s`);
+      } else {
+        // Reset backoff on a clean flush
+        this._backoffStep = 0;
+        this.retryDelay = BACKOFF_SCHEDULE[0];
+      }
 
       // L7: Clean up orphaned screenshot files after successful flush
       this.cleanupOrphanedFiles();

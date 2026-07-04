@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Clock, Plus, Search } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 import { useShifts, useDeleteShift } from '@/hooks/hr/use-shifts';
 import type { Shift } from '@/lib/validations/shift';
 import { PageHeader } from '@/components/common/PageHeader';
@@ -34,10 +35,8 @@ const STATUS_TABS = [
 
 export default function ShiftsPage() {
   const { user } = useAuthStore();
-  const canManage =
-    user?.role === 'owner' ||
-    user?.role === 'admin' ||
-    user?.role === 'manager';
+  const { hasPermission } = usePermissionStore();
+  const canManage = hasPermission('shifts.create');
 
   const [page, setPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState('');

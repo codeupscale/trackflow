@@ -14,7 +14,7 @@ class ApiErrorHandlingTest extends TestCase
     public function test_404_returns_consistent_error_format(): void
     {
         $org = $this->createOrganization();
-        $user = $this->createUser($org, 'admin');
+        $user = $this->createUser($org, 'org_manager');
 
         // Use a valid UUID format that doesn't exist — PostgreSQL rejects non-UUID strings
         $fakeUuid = '00000000-0000-0000-0000-000000000000';

@@ -37,7 +37,7 @@ class ShiftAssignmentTest extends TestCase
     public function test_manager_can_view_assignments(): void
     {
         $org = $this->createOrganization();
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
         $this->actingAs($manager, 'sanctum');
 
@@ -58,7 +58,7 @@ class ShiftAssignmentTest extends TestCase
     public function test_manager_can_assign_user(): void
     {
         $org = $this->createOrganization();
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
         $this->actingAs($manager, 'sanctum');
 
@@ -83,7 +83,7 @@ class ShiftAssignmentTest extends TestCase
     public function test_assign_rejects_overlapping_shift(): void
     {
         $org = $this->createOrganization();
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
         $this->actingAs($manager, 'sanctum');
 
@@ -108,7 +108,7 @@ class ShiftAssignmentTest extends TestCase
     public function test_manager_can_unassign_user(): void
     {
         $org = $this->createOrganization();
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
         $this->actingAs($manager, 'sanctum');
 
@@ -135,7 +135,7 @@ class ShiftAssignmentTest extends TestCase
     public function test_manager_can_bulk_assign(): void
     {
         $org = $this->createOrganization();
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
         $emp1 = $this->createUser($org, 'employee');
         $emp2 = $this->createUser($org, 'employee');
         $emp3 = $this->createUser($org, 'employee');
@@ -183,7 +183,7 @@ class ShiftAssignmentTest extends TestCase
     public function test_assign_validates_user_exists_in_org(): void
     {
         $org = $this->createOrganization();
-        $manager = $this->createUser($org, 'manager');
+        $manager = $this->createUser($org, 'org_manager');
         $this->actingAs($manager, 'sanctum');
 
         $shift = Shift::factory()->create(['organization_id' => $org->id]);
@@ -204,7 +204,7 @@ class ShiftAssignmentTest extends TestCase
         $orgA = $this->createOrganization();
         $orgB = $this->createOrganization();
 
-        $managerA = $this->createUser($orgA, 'manager');
+        $managerA = $this->createUser($orgA, 'org_manager');
         $employeeB = $this->createUser($orgB, 'employee');
 
         $shiftA = Shift::factory()->create(['organization_id' => $orgA->id]);

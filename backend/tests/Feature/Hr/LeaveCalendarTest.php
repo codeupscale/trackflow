@@ -14,7 +14,7 @@ class LeaveCalendarTest extends TestCase
     public function test_can_get_leave_calendar(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
         $this->actingAs($admin, 'sanctum');
 
@@ -71,7 +71,7 @@ class LeaveCalendarTest extends TestCase
     public function test_calendar_only_shows_approved_and_pending_leaves(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
         $this->actingAs($admin, 'sanctum');
 
@@ -143,7 +143,7 @@ class LeaveCalendarTest extends TestCase
         $orgA = $this->createOrganization();
         $orgB = $this->createOrganization();
 
-        $adminA = $this->createUser($orgA, 'admin');
+        $adminA = $this->createUser($orgA, 'org_manager');
         $employeeB = $this->createUser($orgB, 'employee');
 
         $leaveTypeA = LeaveType::factory()->create(['organization_id' => $orgA->id]);

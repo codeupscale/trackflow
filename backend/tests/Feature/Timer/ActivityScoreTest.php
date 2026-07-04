@@ -2,12 +2,15 @@
 
 namespace Tests\Feature\Timer;
 
+use App\Events\TimerStarted;
+use App\Events\TimerStopped;
 use App\Models\ActivityLog;
 use App\Models\Organization;
 use App\Models\TimeEntry;
 use App\Models\User;
 use App\Services\TimerService;
 use Illuminate\Foundation\Testing\DatabaseMigrations;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
 use Tests\TestCase;
 
@@ -43,11 +46,8 @@ class ActivityScoreTest extends TestCase
     {
         parent::setUp();
         $this->service = new TimerService();
-        $this->org = Organization::factory()->create();
-        $this->user = User::factory()->create([
-            'organization_id' => $this->org->id,
-            'role' => 'employee',
-        ]);
+        $this->org  = $this->createOrganization();
+        $this->user = $this->createUser($this->org, 'employee');
         $this->actingAs($this->user, 'sanctum');
     }
 
@@ -83,6 +83,10 @@ class ActivityScoreTest extends TestCase
      */
     private function mockRedisForStop(TimeEntry $entry): void
     {
+        // Prevent ShouldBroadcast events from hitting Horizon's Redis job repository
+        // while the Redis facade is partially mocked.
+        Event::fake([TimerStopped::class, TimerStarted::class]);
+
         $redisData = json_encode([
             'entry_id' => $entry->id,
             'started_at' => $entry->started_at->toISOString(),
@@ -94,7 +98,7 @@ class ActivityScoreTest extends TestCase
             ->with("timer:{$this->user->id}")
             ->andReturn($redisData);
         Redis::shouldReceive('set')
-            ->with("timer:lock:{$this->user->id}", 1, 'EX', 5, 'NX')
+            ->with("timer:lock:{$this->user->id}", 1, 'EX', 15, 'NX')
             ->andReturn(true);
         Redis::shouldReceive('del')
             ->with("timer:{$this->user->id}")
@@ -109,6 +113,10 @@ class ActivityScoreTest extends TestCase
      */
     private function mockRedisForSwitch(TimeEntry $entry): void
     {
+        // Prevent ShouldBroadcast events from hitting Horizon's Redis job repository
+        // while the Redis facade is partially mocked.
+        Event::fake([TimerStopped::class, TimerStarted::class]);
+
         $redisData = json_encode([
             'entry_id' => $entry->id,
             'started_at' => $entry->started_at->toISOString(),
@@ -120,7 +128,7 @@ class ActivityScoreTest extends TestCase
             ->with("timer:{$this->user->id}")
             ->andReturn($redisData);
         Redis::shouldReceive('set')
-            ->with("timer:lock:{$this->user->id}", 1, 'EX', 5, 'NX')
+            ->with("timer:lock:{$this->user->id}", 1, 'EX', 15, 'NX')
             ->andReturn(true);
         Redis::shouldReceive('setex')
             ->withAnyArgs()

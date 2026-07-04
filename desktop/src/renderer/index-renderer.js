@@ -11,7 +11,13 @@ window.trackflow.onThemeChange(applyTheme);
 
 // ── Platform detection for shortcut labels ──
 const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+const isWin = navigator.platform.toUpperCase().indexOf('WIN') >= 0;
 const modKey = isMac ? 'Cmd' : 'Ctrl';
+
+// QA enhancement #10: the popup is user-resizable on Windows only. Tag the root
+// so the top-edge no-drag resize strip (see index.html) activates there and
+// stays fully inert on macOS/Linux (no reduction of the titlebar drag area).
+if (isWin) document.documentElement.classList.add('platform-win');
 
 // Apply shortcut hints
 document.getElementById('logoutBtn').title = `Sign out (${modKey}+Q)`;
@@ -19,6 +25,7 @@ document.getElementById('logoutBtn').title = `Sign out (${modKey}+Q)`;
 let elapsedSeconds = 0;
 let todayTotalBase = 0;
 let isRunning = false;
+let isPaused = false;
 let currentStartedAt = null;
 let _startedAtMs = null;
 // RACE-FIX: Track the latest state version from the main process.
@@ -36,8 +43,24 @@ function showNotification(msg) {
 }
 
 const timerDisplay = document.getElementById('timerDisplay');
+const totalSumDisplay = document.getElementById('totalSumDisplay');
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
+
+// Secondary, NON-ticking total: sum of all projects today (server-synced
+// `todayTotalGlobal`). Only updated when the main process sends a fresh value
+// (start / stop / keep / discard / reassign / sync / network change), never on the
+// per-second tick's own counting — so it shows a stable sum, not a climbing timer.
+let _lastTotalSumSeconds = null;
+function updateTotalSum(seconds) {
+  if (seconds == null || Number.isNaN(seconds)) return;
+  const s = Math.max(0, Math.floor(seconds));
+  if (s === _lastTotalSumSeconds) return;
+  _lastTotalSumSeconds = s;
+  if (totalSumDisplay) {
+    totalSumDisplay.textContent = `Today, all projects: ${formatTime(s)}`;
+  }
+}
 const startBtn = document.getElementById('startBtn');
 const startBtnText = document.getElementById('startBtnText');
 const stopBtn = document.getElementById('stopBtn');
@@ -157,17 +180,30 @@ function setStartedAt(isoOrMs) {
   }
 }
 
-function updateDisplay(running) {
+function updateDisplay(running, paused = false) {
   isRunning = running;
+  isPaused = paused;
   timerDisplay.textContent = formatTime(elapsedSeconds);
-  timerDisplay.className = `time ${running ? 'running' : 'stopped'}`;
-  statusDot.className = `dot ${running ? 'green' : 'gray'}`;
-  statusText.textContent = running ? 'Tracking' : (todayTotalBase > 0 ? 'Today\u2019s Total' : 'Stopped');
-  startBtn.style.display = running ? 'none' : 'flex';
-  stopBtn.style.display = running ? 'flex' : 'none';
-  projectSelect.disabled = running || projectSelect.options.length <= 1;
-  startBtn.disabled = isRunning;
-  showTrackingInfo(running);
+  timerDisplay.className = `time ${running ? 'running' : paused ? 'paused' : 'stopped'}`;
+  statusDot.className = `dot ${running ? 'green' : paused ? 'amber' : 'gray'}`;
+  statusText.textContent = running
+    ? 'Tracking'
+    : paused
+      ? 'Paused (idle)'
+      : (todayTotalBase > 0 ? 'Today\u2019s Total' : 'Stopped');
+  startBtn.style.display = running || paused ? 'none' : 'flex';
+  stopBtn.style.display = running || paused ? 'flex' : 'none';
+  projectSelect.disabled = running || paused || projectSelect.options.length <= 1;
+  // When stopped, Start must stay disabled until a project is selected — defer to
+  // updateStartBtnState() instead of unconditionally enabling it. (The old
+  // `startBtn.disabled = isRunning || isPaused` re-enabled Start with no project,
+  // letting the timer start unassigned.)
+  if (running || paused) {
+    startBtn.disabled = true;
+  } else {
+    updateStartBtnState();
+  }
+  showTrackingInfo(running || paused);
   if (!running) {
     updateActivityDisplay(0);
     _lastScreenshotAt = null;
@@ -188,6 +224,15 @@ function startTicking() {
       if (!isRunning) return;
       elapsedSeconds = data.totalSeconds;
       timerDisplay.textContent = data.formatted;
+      // ISSUE 1 FIX: "Today, all projects" now reflects the running session live.
+      // Prefer the live value (base sum + current session elapsed) computed by the
+      // main process; fall back to the static server-synced sum for older payloads
+      // (stop / sync / offline) that only carry todayTotalGlobal.
+      updateTotalSum(
+        data.todayTotalGlobalLive != null
+          ? data.todayTotalGlobalLive
+          : data.todayTotalGlobal
+      );
       // Update activity and connection status from tick data
       if (data.activityScore != null) updateActivityDisplay(data.activityScore);
       if (data.lastScreenshotAt) _lastScreenshotAt = data.lastScreenshotAt;
@@ -207,13 +252,21 @@ async function syncTimerState() {
     const selectedProjectId = projectSelect.value || null;
     const state = await window.trackflow.getTimerState(selectedProjectId);
     todayTotalBase = state.todayTotal ?? 0;
+    updateTotalSum(state.todayTotalGlobal);
     if (state.isRunning) {
       setStartedAt(state.entry?.started_at || null);
       const currentElapsed = state.elapsed || calcElapsedFromStartedAt();
       todayTotalBase = Math.max(0, todayTotalBase - currentElapsed);
       elapsedSeconds = todayTotalBase + currentElapsed;
-      updateDisplay(true);
+      updateDisplay(true, false);
       startTicking();
+    } else if (state.isPaused) {
+      setStartedAt(state.entry?.started_at || null);
+      const currentElapsed = state.elapsed || calcElapsedFromStartedAt();
+      todayTotalBase = Math.max(0, todayTotalBase - currentElapsed);
+      elapsedSeconds = todayTotalBase + currentElapsed;
+      stopTicking();
+      updateDisplay(false, true);
     } else {
       setStartedAt(null);
       stopTicking();
@@ -252,7 +305,27 @@ async function loadProjects(retryCount = 0) {
     // OFFLINE FIX: Don't clear the dropdown if we got empty and already have options
     if (list.length === 0 && projectSelect.options.length > 1) {
       console.log('[loadProjects] Empty list but dropdown has options — keeping current');
+      syncProjectSelectEnabled();
       _loadProjectsInFlight = false;
+      return;
+    }
+
+    // Skip the rebuild when the project list is unchanged. loadProjects() runs on
+    // init, every syncTimerState() (incl. the one fired right after a `change`),
+    // polls and the projects-ready signal — rebuilding the <select> each time
+    // destroys/recreates its <option>s. On Windows that disrupts an in-progress
+    // selection (closes the native dropdown), so the user can never complete a
+    // pick. Only rebuild when the set of project ids actually changed.
+    const existingIds = Array.from(projectSelect.options)
+      .map(o => o.value)
+      .filter(v => v !== '');
+    const newIds = list.map(p => String(p.id));
+    const sameList = existingIds.length === newIds.length
+      && existingIds.every((id, i) => id === newIds[i]);
+    if (sameList && projectSelect.options.length > 1) {
+      _loadProjectsInFlight = false;
+      syncProjectSelectEnabled();
+      updateStartBtnState();
       return;
     }
 
@@ -268,6 +341,10 @@ async function loadProjects(retryCount = 0) {
     if (currentValue && list.some(p => String(p.id) === currentValue)) {
       projectSelect.value = currentValue;
     }
+    // Re-enable the dropdown now that options exist. An earlier updateDisplay()
+    // may have disabled it while the list was still loading, leaving it stuck
+    // disabled/empty-looking even after projects arrived (the "doesn't load" bug).
+    syncProjectSelectEnabled();
     updateStartBtnState();
   } catch (e) {
     console.error('[loadProjects] Failed:', e);
@@ -280,6 +357,13 @@ async function loadProjects(retryCount = 0) {
       _loadProjectsInFlight = false;
     }
   }
+}
+
+// Keep the project dropdown enabled whenever the timer is stopped and the list
+// has real options. Called after async project loads so a dropdown disabled by an
+// earlier updateDisplay() (while the list was empty) gets re-enabled.
+function syncProjectSelectEnabled() {
+  projectSelect.disabled = isRunning || isPaused || projectSelect.options.length <= 1;
 }
 
 // Disable Start button when no project selected
@@ -429,6 +513,13 @@ stopBtn.addEventListener('click', () => {
     }
   }).catch(() => {}).finally(() => {
     _stopInFlight = false;
+    // Converge the stopped display onto the server-authoritative total. The
+    // synchronous paint above shows the last *live* tick (floored from the local
+    // clock), which can sit 1s above the server's stored duration (the server
+    // floors from its own received timestamps) — the "desktop 06:03 vs web 06:02"
+    // remainder. get-timer-state does a fresh status fetch and, when stopped,
+    // returns the server total; offline it falls back to the local total (never 0).
+    syncTimerState();
   });
 });
 
@@ -442,7 +533,11 @@ logoutLink.addEventListener('click', handleLogout);
 dashboardLink.addEventListener('click', () => window.trackflow.openDashboard());
 
 // Hide button — dismiss window to tray without logging out
-document.getElementById('hideBtn').addEventListener('click', () => {
+const hideBtn = document.getElementById('hideBtn');
+hideBtn.addEventListener('click', () => {
+  // ISSUE 9: when pinned, the close button is disabled — the modal is only
+  // closable after unpinning. Guard here too in case of a synthetic click.
+  if (hideBtn.disabled) return;
   window.trackflow.hideWindow();
 });
 
@@ -457,6 +552,12 @@ function updatePinUI(pinned) {
     pinBtn.classList.remove('pinned');
     pinBtn.title = 'Pin window on top';
   }
+  // ISSUE 9 FIX: the close (hide-to-tray) button is DISABLED while pinned. A pinned
+  // modal is meant to stay put; it can only be closed after the user unpins it.
+  hideBtn.disabled = pinned;
+  hideBtn.style.opacity = pinned ? '0.4' : '';
+  hideBtn.style.cursor = pinned ? 'not-allowed' : '';
+  hideBtn.title = pinned ? 'Unpin to close' : 'Hide to tray';
 }
 
 // Load initial pin state from main process
@@ -509,6 +610,27 @@ window.trackflow.onTimerStarted((data) => {
   startTicking();
 });
 
+if (window.trackflow.onTimerPaused) {
+  window.trackflow.onTimerPaused((data) => {
+    stopTicking();
+    if (data?.entry?.started_at) setStartedAt(data.entry.started_at);
+    if (data?.todayTotal != null) todayTotalBase = data.todayTotal;
+    const currentElapsed = data?.elapsed ?? calcElapsedFromStartedAt();
+    elapsedSeconds = todayTotalBase + currentElapsed;
+    updateDisplay(false, true);
+  });
+}
+
+if (window.trackflow.onTimerResumed) {
+  window.trackflow.onTimerResumed((data) => {
+    if (data?.started_at) setStartedAt(data.started_at);
+    if (data?.todayTotal > 0) todayTotalBase = data.todayTotal;
+    elapsedSeconds = todayTotalBase + calcElapsedFromStartedAt();
+    updateDisplay(true, false);
+    startTicking();
+  });
+}
+
 window.trackflow.onTimerStopped((data) => {
   // RACE-FIX: Discard stale notifications that arrive out of order.
   if (data?._stateVersion != null && data._stateVersion < _lastStateVersion) {
@@ -526,6 +648,7 @@ window.trackflow.onTimerStopped((data) => {
     todayTotalBase = data.todayTotal;
   } else { syncTimerState(); return; }
   elapsedSeconds = todayTotalBase;
+  updateTotalSum(data.todayTotalGlobal);
   updateDisplay(false);
 });
 

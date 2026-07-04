@@ -47,7 +47,9 @@ describe('ScreenshotService', () => {
     jest.clearAllMocks();
 
     mockApiClient = {
-      uploadScreenshot: jest.fn().mockResolvedValue({ screenshot: { id: '1' } }),
+      presignScreenshot: jest.fn().mockResolvedValue({ screenshot_id: 'ss-1', upload_url: 'https://s3.example.com/upload', upload_headers: {} }),
+      uploadToS3: jest.fn().mockResolvedValue({}),
+      confirmScreenshot: jest.fn().mockResolvedValue({}),
     };
     mockOfflineQueue = {
       add: jest.fn(),
@@ -239,6 +241,42 @@ describe('ScreenshotService', () => {
   });
 
   // ═════════════════════════════════════════════════════════════════
+  // ── rebindEntryId() — FIX D2 ──
+  // ═════════════════════════════════════════════════════════════════
+
+  describe('rebindEntryId()', () => {
+    test('swaps currentEntryId without touching the interval timer', () => {
+      service.start('local-123');
+      const intervalBefore = service._intervalTimer;
+      const initialBefore = service.initialTimeout;
+      service.rebindEntryId('server-uuid-9');
+      expect(service.currentEntryId).toBe('server-uuid-9');
+      // Cadence preserved — timers are the SAME references (not restarted)
+      expect(service._intervalTimer).toBe(intervalBefore);
+      expect(service.initialTimeout).toBe(initialBefore);
+    });
+
+    test('no-op when not capturing (currentEntryId is null)', () => {
+      service.stop();
+      service.rebindEntryId('server-uuid-9');
+      expect(service.currentEntryId).toBeNull();
+    });
+
+    test('no-op when id is unchanged', () => {
+      service.currentEntryId = 'server-uuid-9';
+      service.rebindEntryId('server-uuid-9');
+      expect(service.currentEntryId).toBe('server-uuid-9');
+    });
+
+    test('no-op when serverId is empty/null', () => {
+      service.currentEntryId = 'local-123';
+      service.rebindEntryId(null);
+      service.rebindEntryId('');
+      expect(service.currentEntryId).toBe('local-123');
+    });
+  });
+
+  // ═════════════════════════════════════════════════════════════════
   // ── capture() — Core ──
   // ═════════════════════════════════════════════════════════════════
 
@@ -251,7 +289,9 @@ describe('ScreenshotService', () => {
         thumbnailSize: expect.any(Object),
         fetchWindowIcons: false,
       });
-      expect(mockApiClient.uploadScreenshot).toHaveBeenCalled();
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalled();
+      expect(mockApiClient.uploadToS3).toHaveBeenCalled();
+      expect(mockApiClient.confirmScreenshot).toHaveBeenCalled();
       expect(service._consecutiveFailures).toBe(0);
     });
 
@@ -285,7 +325,7 @@ describe('ScreenshotService', () => {
       service.currentEntryId = 'entry-1';
       desktopCapturer.getSources.mockResolvedValue([]);
       await service.capture();
-      expect(mockApiClient.uploadScreenshot).not.toHaveBeenCalled();
+      expect(mockApiClient.presignScreenshot).not.toHaveBeenCalled();
       expect(service._consecutiveFailures).toBe(1);
     });
 
@@ -301,11 +341,76 @@ describe('ScreenshotService', () => {
           display_id: '1',
         }]);
         await service.capture();
-        expect(mockApiClient.uploadScreenshot).not.toHaveBeenCalled();
+        expect(mockApiClient.presignScreenshot).not.toHaveBeenCalled();
         expect(service._consecutiveFailures).toBe(1);
       } finally {
         Object.defineProperty(process, 'platform', { value: origPlatform, configurable: true });
       }
+    });
+  });
+
+  // ═════════════════════════════════════════════════════════════════
+  // ── screenshot-captured callback ──
+  // Regression guard for bug "idle-keep-last-ss-indicator-stale": the
+  // _onScreenshotCaptured callback (which updates the main-side
+  // _lastScreenshotAt and pushes a live `activity-update` to the popup so the
+  // "Last SS …" indicator stays fresh) must fire on EVERY successful capture,
+  // and must persist across stop()/start() cycles (idle keep, sleep/wake, etc.)
+  // since it is registered once at service creation — not per start().
+  // ═════════════════════════════════════════════════════════════════
+
+  describe('setScreenshotCapturedCallback()', () => {
+    test('fires the callback when a screenshot is uploaded', async () => {
+      const onCaptured = jest.fn();
+      service.setScreenshotCapturedCallback(onCaptured);
+      service.currentEntryId = 'entry-1';
+      await service.capture();
+      expect(mockApiClient.confirmScreenshot).toHaveBeenCalled();
+      expect(onCaptured).toHaveBeenCalledTimes(1);
+    });
+
+    test('fires the callback when a screenshot is queued offline', async () => {
+      const onCaptured = jest.fn();
+      service.setScreenshotCapturedCallback(onCaptured);
+      service.currentEntryId = 'entry-1';
+      // Drive the offline-queue branch directly. The upload path retries 3x with
+      // real-time setTimeout backoff which doesn't play well with fake timers;
+      // _queueForOffline is the exact code that runs once those retries are
+      // exhausted, and it is what fires the captured callback on the offline path.
+      service._queueForOffline(
+        Buffer.alloc(50000, 0x42), 'VS Code', 'index.js', null,
+        new Date().toISOString(), 'idem-key', 75, 'entry-1'
+      );
+      expect(mockOfflineQueue.add).toHaveBeenCalledWith('screenshot', expect.any(Object));
+      expect(onCaptured).toHaveBeenCalledTimes(1);
+    });
+
+    test('callback survives stop()/start() — fires on captures after an idle→keep resume', async () => {
+      const onCaptured = jest.fn();
+      // Registered once (as initializeApp does), BEFORE any start()
+      service.setScreenshotCapturedCallback(onCaptured);
+
+      // First capture (normal tracking)
+      service.currentEntryId = 'entry-1';
+      await service.capture();
+      expect(onCaptured).toHaveBeenCalledTimes(1);
+
+      // Simulate idle: capture stops. stop() must NOT clear the callback.
+      service.stop();
+      expect(service._onScreenshotCaptured).toBe(onCaptured);
+
+      // Simulate "Keep idle time" resume: start() is called again WITHOUT
+      // re-registering the callback (the bug was that only afterStartTimer
+      // registered it, so resume paths lost it).
+      service.start('entry-1', { immediateCapture: false });
+      service.currentEntryId = 'entry-1';
+      await service.capture();
+      expect(onCaptured).toHaveBeenCalledTimes(2);
+    });
+
+    test('does not throw when no callback is registered', async () => {
+      service.currentEntryId = 'entry-1';
+      await expect(service.capture()).resolves.not.toThrow();
     });
   });
 
@@ -327,7 +432,7 @@ describe('ScreenshotService', () => {
       powerMonitor.getSystemIdleTime.mockReturnValue(60);
       await service.capture();
       expect(desktopCapturer.getSources).toHaveBeenCalled();
-      expect(mockApiClient.uploadScreenshot).toHaveBeenCalled();
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalled();
     });
 
     test('skips at exact threshold boundary (300s)', async () => {
@@ -366,7 +471,7 @@ describe('ScreenshotService', () => {
       service.currentEntryId = 'entry-1';
       await service.capture();
       expect(desktopCapturer.getSources).toHaveBeenCalled();
-      expect(mockApiClient.uploadScreenshot).toHaveBeenCalled();
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalled();
     });
 
     test('captures when capture_only_when_visible is false regardless of visibility', async () => {
@@ -667,33 +772,35 @@ describe('ScreenshotService', () => {
       service.currentEntryId = 'entry-1';
     });
 
-    test('uploads screenshot via apiClient', async () => {
+    test('uploads screenshot via presign → S3 PUT → confirm flow', async () => {
       const buffer = Buffer.alloc(50000, 0x42);
       await service.upload(buffer);
-      expect(mockApiClient.uploadScreenshot).toHaveBeenCalledTimes(1);
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalledTimes(1);
+      expect(mockApiClient.uploadToS3).toHaveBeenCalledTimes(1);
+      expect(mockApiClient.confirmScreenshot).toHaveBeenCalledTimes(1);
     });
 
     test('retries up to 3 times on failure', async () => {
       jest.useRealTimers();
-      mockApiClient.uploadScreenshot
+      mockApiClient.presignScreenshot
         .mockRejectedValueOnce(new Error('Network error'))
         .mockRejectedValueOnce(new Error('Timeout'))
-        .mockResolvedValueOnce({ screenshot: { id: '1' } });
+        .mockResolvedValueOnce({ screenshot_id: 'ss-1', upload_url: 'https://s3.example.com/upload', upload_headers: {} });
 
       const buffer = Buffer.alloc(50000, 0x42);
       await service.upload(buffer);
-      expect(mockApiClient.uploadScreenshot).toHaveBeenCalledTimes(3);
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalledTimes(3);
       expect(mockOfflineQueue.add).not.toHaveBeenCalled();
       jest.useFakeTimers();
     });
 
     test('queues for offline after 3 failed attempts', async () => {
       jest.useRealTimers();
-      mockApiClient.uploadScreenshot.mockRejectedValue(new Error('Network error'));
+      mockApiClient.presignScreenshot.mockRejectedValue(new Error('Network error'));
 
       const buffer = Buffer.alloc(50000, 0x42);
       await service.upload(buffer);
-      expect(mockApiClient.uploadScreenshot).toHaveBeenCalledTimes(3);
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalledTimes(3);
       expect(mockOfflineQueue.add).toHaveBeenCalledWith('screenshot', expect.objectContaining({
         buffer: expect.any(Buffer),
         time_entry_id: 'entry-1',
@@ -789,36 +896,57 @@ describe('ScreenshotService', () => {
   });
 
   // ═════════════════════════════════════════════════════════════════
-  // ── _buildFormData() ──
+  // ── upload() metadata ──
   // ═════════════════════════════════════════════════════════════════
 
-  describe('_buildFormData()', () => {
+  describe('upload() metadata', () => {
     beforeEach(() => {
       service.currentEntryId = 'entry-456';
     });
 
-    test('constructs FormData with required fields', () => {
-      const buffer = Buffer.alloc(100);
-      const formData = service._buildFormData(buffer);
-      expect(formData).toBeDefined();
+    test('passes required fields to presignScreenshot', async () => {
+      const buffer = Buffer.alloc(50000, 0x42);
+      await service.upload(buffer);
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          time_entry_id: 'entry-456',
+          captured_at: expect.any(String),
+          file_size: buffer.length,
+          idempotency_key: expect.any(String),
+        })
+      );
     });
 
-    test('includes app context when provided', () => {
-      const buffer = Buffer.alloc(100);
-      const formData = service._buildFormData(buffer, 'VS Code', 'file.js');
-      expect(formData).toBeDefined();
+    test('includes app context from activityMonitor', async () => {
+      const buffer = Buffer.alloc(50000, 0x42);
+      await service.upload(buffer);
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          app_name: 'VS Code',
+          window_title: 'index.js - trackflow',
+        })
+      );
     });
 
-    test('includes display info for multi-monitor', () => {
-      const buffer = Buffer.alloc(100);
-      const formData = service._buildFormData(buffer, null, null, { display_index: 0, display_count: 2 });
-      expect(formData).toBeDefined();
+    test('includes display info for multi-monitor', async () => {
+      const buffer = Buffer.alloc(50000, 0x42);
+      await service.upload(buffer, { display_index: 0, display_count: 2 });
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          display_index: 0,
+          display_count: 2,
+        })
+      );
     });
 
-    test('includes activity score when activityMonitor exists', () => {
-      const buffer = Buffer.alloc(100);
-      const formData = service._buildFormData(buffer);
-      expect(formData).toBeDefined();
+    test('includes activity score when activityMonitor exists', async () => {
+      const buffer = Buffer.alloc(50000, 0x42);
+      await service.upload(buffer);
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          activity_score: 75,
+        })
+      );
     });
   });
 
@@ -901,7 +1029,7 @@ describe('ScreenshotService', () => {
       service.currentEntryId = 'entry-1';
       await service.capture();
       expect(sharp._instance.blur).not.toHaveBeenCalled();
-      expect(mockApiClient.uploadScreenshot).toHaveBeenCalled();
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalled();
     });
   });
 
@@ -918,17 +1046,17 @@ describe('ScreenshotService', () => {
       // Flush setImmediate + await capture
       await jest.advanceTimersByTimeAsync(10);
 
-      expect(mockApiClient.uploadScreenshot).toHaveBeenCalled();
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalled();
     });
 
     test('stop after start prevents further captures', async () => {
       service.start('entry-1');
       service.stop();
 
-      mockApiClient.uploadScreenshot.mockClear();
+      mockApiClient.presignScreenshot.mockClear();
       jest.advanceTimersByTime(10 * 60 * 1000);
 
-      expect(mockApiClient.uploadScreenshot).not.toHaveBeenCalled();
+      expect(mockApiClient.presignScreenshot).not.toHaveBeenCalled();
     });
   });
 });

@@ -9,7 +9,7 @@ use Illuminate\Support\Str;
 class PermissionSeeder extends Seeder
 {
     /**
-     * All 59 permissions in the system.
+     * All 63 permissions in the system.
      * Format: [key, module, action, description, has_scope]
      */
     public function getPermissions(): array
@@ -57,7 +57,7 @@ class PermissionSeeder extends Seeder
             ['positions.view_salary', 'positions', 'view_salary', 'View min/max salary encrypted fields',         false],
 
             // --- employees (6) ---
-            ['employees.view_directory',   'employees', 'view_directory',   'View employee directory',             false],
+            ['employees.view_directory',   'employees', 'view_directory',   'View employee directory',             true],
             ['employees.view_profile',     'employees', 'view_profile',     'View full employee profile',          true],
             ['employees.edit_profile',     'employees', 'edit_profile',     'Edit employee profile fields',        true],
             ['employees.view_financial',   'employees', 'view_financial',   'View bank details and tax ID',        true],
@@ -74,12 +74,16 @@ class PermissionSeeder extends Seeder
             ['leave.manage_balances', 'leave', 'manage_balances', 'Adjust leave balances manually',        false],
             ['leave.manage_holidays', 'leave', 'manage_holidays', 'Create, edit, delete public holidays',  false],
 
-            // --- attendance (5) ---
+            // --- attendance (7) ---
             ['attendance.view',                     'attendance', 'view',                     'View attendance records',              true],
             ['attendance.generate',                 'attendance', 'generate',                 'Trigger daily attendance generation',  false],
             ['attendance.regularize',               'attendance', 'regularize',               'Submit regularization requests',       false],
             ['attendance.approve_regularizations',  'attendance', 'approve_regularizations',  'Approve or reject regularizations',   true],
             ['attendance.manage_overtime_rules',    'attendance', 'manage_overtime_rules',    'Configure overtime rules',            false],
+            ['attendance.check_in',                 'attendance', 'check_in',                 'Check in / out for oneself',           false],
+            ['attendance.manage_policy',            'attendance', 'manage_policy',            'Configure the check-in attendance policy', false],
+            ['attendance.view_all',                 'attendance', 'view_all',                 'View all employees check-in records org-wide', false],
+            ['attendance.export',                   'attendance', 'export',                   'Export attendance / check-in reports', false],
 
             // --- payroll (7) ---
             ['payroll.view_own',           'payroll', 'view_own',           'View own payslips',                               false],
@@ -127,7 +131,10 @@ class PermissionSeeder extends Seeder
      * Format: 'permission.key' => scope
      * For has_scope=false permissions, scope is 'none'.
      */
-    public function getAdminPermissions(): array
+
+    // ── Organization Manager (was 'admin', priority 75) ───────────────────
+    // Full org access except billing (owner only) and role create/edit/delete (owner only).
+    public function getOrgManagerPermissions(): array
     {
         return [
             // time_entries — all at organization scope
@@ -172,7 +179,7 @@ class PermissionSeeder extends Seeder
             'positions.view_salary' => 'none',
 
             // employees
-            'employees.view_directory'   => 'none',
+            'employees.view_directory'   => 'organization',
             'employees.view_profile'     => 'organization',
             'employees.edit_profile'     => 'organization',
             'employees.view_financial'   => 'organization',
@@ -195,6 +202,10 @@ class PermissionSeeder extends Seeder
             'attendance.regularize'              => 'none',
             'attendance.approve_regularizations' => 'organization',
             'attendance.manage_overtime_rules'   => 'none',
+            'attendance.check_in'                => 'none',
+            'attendance.manage_policy'           => 'none',
+            'attendance.view_all'                => 'none',
+            'attendance.export'                  => 'none',
 
             // payroll — admin gets full access
             'payroll.view_own'          => 'none',
@@ -219,42 +230,204 @@ class PermissionSeeder extends Seeder
             'team.remove'       => 'none',
             'team.change_role'  => 'none',
 
-            // settings
-            'settings.view_org'       => 'none',
-            'settings.edit_org'       => 'none',
-            'settings.edit_tracking'  => 'none',
-            'settings.manage_billing' => 'none',
+            // settings — org_manager does NOT have billing (owner+finance_manager only)
+            'settings.view_org'      => 'none',
+            'settings.edit_org'      => 'none',
+            'settings.edit_tracking' => 'none',
 
             // audit_logs
             'audit_logs.view' => 'none',
 
-            // roles — admin can only view, not create/edit/delete
+            // roles — org_manager can only view, not create/edit/delete (owner only)
             'roles.view' => 'none',
         ];
     }
 
+    // ── HR Manager (priority 65) ──────────────────────────────────────────
+    // Full HR module, time-entry viewing, payroll viewing only.
+    public function getHrManagerPermissions(): array
+    {
+        return [
+            // dashboard
+            'dashboard.view_own_stats'  => 'none',
+            'dashboard.view_team_stats' => 'none',
+
+            // time_entries — view + export only (for attendance verification)
+            'time_entries.view'   => 'organization',
+            'time_entries.export' => 'organization',
+
+            // screenshots — view only
+            'screenshots.view' => 'organization',
+
+            // reports — org-wide
+            'reports.view'   => 'organization',
+            'reports.export' => 'organization',
+
+            // departments — full CRUD
+            'departments.view'   => 'none',
+            'departments.create' => 'none',
+            'departments.edit'   => 'none',
+            'departments.delete' => 'none',
+
+            // positions — full CRUD including salary bands
+            'positions.view'        => 'none',
+            'positions.create'      => 'none',
+            'positions.edit'        => 'none',
+            'positions.delete'      => 'none',
+            'positions.view_salary' => 'none',
+
+            // employees — full access including financial data and notes
+            'employees.view_directory'   => 'organization',
+            'employees.view_profile'     => 'organization',
+            'employees.edit_profile'     => 'organization',
+            'employees.view_financial'   => 'organization',
+            'employees.manage_documents' => 'organization',
+            'employees.manage_notes'     => 'organization',
+
+            // leave — full management
+            'leave.apply'           => 'none',
+            'leave.view_requests'   => 'organization',
+            'leave.approve'         => 'organization',
+            'leave.cancel'          => 'organization',
+            'leave.view_calendar'   => 'organization',
+            'leave.manage_types'    => 'none',
+            'leave.manage_balances' => 'none',
+            'leave.manage_holidays' => 'none',
+
+            // attendance — full management
+            'attendance.view'                    => 'organization',
+            'attendance.generate'                => 'none',
+            'attendance.regularize'              => 'none',
+            'attendance.approve_regularizations' => 'organization',
+            'attendance.manage_overtime_rules'   => 'none',
+            'attendance.check_in'                => 'none',
+            'attendance.manage_policy'           => 'none',
+            'attendance.view_all'                => 'none',
+            'attendance.export'                  => 'none',
+
+            // payroll — view only (cannot run, manage structures, or approve)
+            'payroll.view_own'  => 'none',
+            'payroll.view_team' => 'none',
+            'payroll.view_all'  => 'none',
+
+            // shifts — full management
+            'shifts.view'               => 'none',
+            'shifts.create'             => 'none',
+            'shifts.edit'               => 'none',
+            'shifts.delete'             => 'none',
+            'shifts.manage_assignments' => 'none',
+            'shifts.manage_swaps'       => 'none',
+
+            // team — view + invite (cannot remove or change roles)
+            'team.view_members' => 'none',
+            'team.invite'       => 'none',
+
+            // settings — view only
+            'settings.view_org' => 'none',
+
+            // audit_logs
+            'audit_logs.view' => 'none',
+
+            // roles — view only (needed for invite dialog role picker)
+            'roles.view' => 'none',
+        ];
+    }
+
+    // ── Finance Manager (priority 60) ─────────────────────────────────────
+    // Payroll + billing + financial data. No HR management.
+    public function getFinanceManagerPermissions(): array
+    {
+        return [
+            // dashboard
+            'dashboard.view_own_stats'  => 'none',
+            'dashboard.view_team_stats' => 'none',
+
+            // time_entries — view + export (for payroll calculations)
+            'time_entries.view'   => 'organization',
+            'time_entries.export' => 'organization',
+
+            // reports — org-wide
+            'reports.view'   => 'organization',
+            'reports.export' => 'organization',
+
+            // positions — salary band visibility
+            'positions.view_salary' => 'none',
+
+            // employees — view directory + profile + financial data + documents
+            'employees.view_directory'   => 'organization',
+            'employees.view_profile'     => 'organization',
+            'employees.view_financial'   => 'organization',
+            'employees.manage_documents' => 'organization',
+
+            // leave — view + apply (no approve/cancel/manage)
+            'leave.apply'         => 'none',
+            'leave.view_requests' => 'organization',
+            'leave.view_calendar' => 'organization',
+
+            // attendance — org-wide visibility + export because payroll depends on
+            // late/early/worked-hours data (mirrors payroll.view_all/run grants below).
+            // Policy editing (attendance.manage_policy) is intentionally NOT granted:
+            // setting the 11:30/11:45/20:30 windows is owner/org_manager/hr_manager only.
+            'attendance.view'       => 'organization',
+            'attendance.regularize' => 'none',
+            'attendance.check_in'   => 'none',
+            'attendance.view_all'   => 'none',
+            'attendance.export'     => 'none',
+
+            // payroll — full access (run, approve, manage structures & components)
+            'payroll.view_own'          => 'none',
+            'payroll.view_team'         => 'none',
+            'payroll.view_all'          => 'none',
+            'payroll.run'               => 'none',
+            'payroll.manage_structures' => 'none',
+            'payroll.manage_components' => 'none',
+            'payroll.approve'           => 'none',
+
+            // shifts — view only
+            'shifts.view' => 'none',
+
+            // team — view only
+            'team.view_members' => 'none',
+
+            // settings — view + billing
+            'settings.view_org'       => 'none',
+            'settings.manage_billing' => 'none',
+
+            // audit_logs
+            'audit_logs.view' => 'none',
+        ];
+    }
+
+    // ── Deprecated aliases kept for backward compatibility ─────────────────
+    /** @deprecated Use getOrgManagerPermissions() */
+    public function getAdminPermissions(): array
+    {
+        return $this->getOrgManagerPermissions();
+    }
+
+    /** @deprecated Merged into org_manager. Returns org_manager permissions. */
     public function getManagerPermissions(): array
     {
         return [
-            // time_entries — team scope
-            'time_entries.view'   => 'team',
-            'time_entries.create' => 'team',
-            'time_entries.edit'   => 'team',
-            'time_entries.delete' => 'team',
+            // time_entries — project scope
+            'time_entries.view'   => 'project',
+            'time_entries.create' => 'project',
+            'time_entries.edit'   => 'project',
+            'time_entries.delete' => 'project',
             'time_entries.approve'=> 'organization',
-            'time_entries.export' => 'team',
+            'time_entries.export' => 'project',
 
-            // screenshots — team view only
-            'screenshots.view' => 'team',
+            // screenshots — project view only
+            'screenshots.view' => 'project',
 
             // projects
             'projects.view'           => 'organization',
             'projects.edit'           => 'own',
             'projects.manage_members' => 'own',
 
-            // reports — team
-            'reports.view'   => 'team',
-            'reports.export' => 'team',
+            // reports — project
+            'reports.view'   => 'project',
+            'reports.export' => 'project',
 
             // dashboard
             'dashboard.view_own_stats'  => 'none',
@@ -265,9 +438,9 @@ class PermissionSeeder extends Seeder
             'positions.view'   => 'none',
 
             // employees
-            'employees.view_directory'   => 'none',
-            'employees.view_profile'     => 'team',
-            'employees.manage_documents' => 'team',
+            'employees.view_directory'   => 'project',
+            'employees.view_profile'     => 'project',
+            'employees.manage_documents' => 'project',
             // employees.manage_notes: admin/owner only — not granted to manager
 
             // leave
@@ -281,6 +454,7 @@ class PermissionSeeder extends Seeder
             'attendance.view'                    => 'organization',
             'attendance.regularize'              => 'none',
             'attendance.approve_regularizations' => 'organization',
+            'attendance.check_in'                => 'none',
 
             // payroll — manager: view own + view team
             'payroll.view_own'  => 'none',
@@ -295,16 +469,17 @@ class PermissionSeeder extends Seeder
             'team.view_members' => 'none',
             'team.invite'       => 'none',
         ];
+        // Deprecated: same as org_manager
+        return $this->getOrgManagerPermissions();
     }
 
     public function getEmployeePermissions(): array
     {
         return [
-            // time_entries — own scope, no approve
+            // time_entries — own scope, no delete/approve
             'time_entries.view'   => 'own',
             'time_entries.create' => 'own',
             'time_entries.edit'   => 'own',
-            'time_entries.delete' => 'own',
             'time_entries.export' => 'own',
 
             // screenshots — own view only
@@ -320,26 +495,26 @@ class PermissionSeeder extends Seeder
             // dashboard — own stats only
             'dashboard.view_own_stats' => 'none',
 
-            // departments & positions — view only
+            // departments — employees can view the org tree (not positions)
             'departments.view' => 'none',
-            'positions.view'   => 'none',
 
             // employees — own profile
-            'employees.view_directory'   => 'none',
+            'employees.view_directory'   => 'own',
             'employees.view_profile'     => 'own',
             'employees.edit_profile'     => 'own',
             'employees.view_financial'   => 'own',
             'employees.manage_documents' => 'own',
 
-            // leave — own requests, team calendar
+            // leave — own requests, project calendar
             'leave.apply'         => 'none',
             'leave.view_requests' => 'own',
             'leave.cancel'        => 'own',
-            'leave.view_calendar' => 'team',
+            'leave.view_calendar' => 'project',
 
-            // attendance — own view, can regularize
+            // attendance — own view, can regularize, self check-in
             'attendance.view'       => 'own',
             'attendance.regularize' => 'none',
+            'attendance.check_in'   => 'none',
 
             // payroll — employee: view own payslips only
             'payroll.view_own' => 'none',
@@ -381,15 +556,17 @@ class PermissionSeeder extends Seeder
             $organizations = DB::table('organizations')->select('id')->get();
 
             $roleDefinitions = [
-                ['name' => 'owner',    'display_name' => 'Owner',    'priority' => 100, 'is_default' => false],
-                ['name' => 'admin',    'display_name' => 'Admin',    'priority' => 75,  'is_default' => false],
-                ['name' => 'manager',  'display_name' => 'Manager',  'priority' => 50,  'is_default' => false],
-                ['name' => 'employee', 'display_name' => 'Employee', 'priority' => 10,  'is_default' => true],
+                ['name' => 'owner',           'display_name' => 'Owner',                  'priority' => 100, 'is_default' => false],
+                ['name' => 'org_manager',     'display_name' => 'Organization Manager',   'priority' => 75,  'is_default' => false],
+                ['name' => 'hr_manager',      'display_name' => 'HR Manager',             'priority' => 65,  'is_default' => false],
+                ['name' => 'finance_manager', 'display_name' => 'Finance Manager',        'priority' => 60,  'is_default' => false],
+                ['name' => 'employee',        'display_name' => 'Employee / Member',      'priority' => 10,  'is_default' => true],
             ];
 
-            $adminPerms    = $this->getAdminPermissions();
-            $managerPerms  = $this->getManagerPermissions();
-            $employeePerms = $this->getEmployeePermissions();
+            $orgManagerPerms     = $this->getOrgManagerPermissions();
+            $hrManagerPerms      = $this->getHrManagerPermissions();
+            $financeManagerPerms = $this->getFinanceManagerPermissions();
+            $employeePerms       = $this->getEmployeePermissions();
 
             foreach ($organizations as $org) {
                 $orgRoleIds = [];
@@ -419,11 +596,14 @@ class PermissionSeeder extends Seeder
 
                 // Owner: NO role_permissions rows (bypass in code)
 
-                // Admin permissions
-                $this->insertRolePermissions($orgRoleIds['admin'], $adminPerms, $permissionMap);
+                // Organization Manager permissions
+                $this->insertRolePermissions($orgRoleIds['org_manager'], $orgManagerPerms, $permissionMap);
 
-                // Manager permissions
-                $this->insertRolePermissions($orgRoleIds['manager'], $managerPerms, $permissionMap);
+                // HR Manager permissions
+                $this->insertRolePermissions($orgRoleIds['hr_manager'], $hrManagerPerms, $permissionMap);
+
+                // Finance Manager permissions
+                $this->insertRolePermissions($orgRoleIds['finance_manager'], $financeManagerPerms, $permissionMap);
 
                 // Employee permissions
                 $this->insertRolePermissions($orgRoleIds['employee'], $employeePerms, $permissionMap);
@@ -473,10 +653,11 @@ class PermissionSeeder extends Seeder
             ->toArray();
 
         $roleDefinitions = [
-            ['name' => 'owner',    'display_name' => 'Owner',    'priority' => 100, 'is_default' => false],
-            ['name' => 'admin',    'display_name' => 'Admin',    'priority' => 75,  'is_default' => false],
-            ['name' => 'manager',  'display_name' => 'Manager',  'priority' => 50,  'is_default' => false],
-            ['name' => 'employee', 'display_name' => 'Employee', 'priority' => 10,  'is_default' => true],
+            ['name' => 'owner',           'display_name' => 'Owner',                'priority' => 100, 'is_default' => false],
+            ['name' => 'org_manager',     'display_name' => 'Organization Manager', 'priority' => 75,  'is_default' => false],
+            ['name' => 'hr_manager',      'display_name' => 'HR Manager',           'priority' => 65,  'is_default' => false],
+            ['name' => 'finance_manager', 'display_name' => 'Finance Manager',      'priority' => 60,  'is_default' => false],
+            ['name' => 'employee',        'display_name' => 'Employee / Member',    'priority' => 10,  'is_default' => true],
         ];
 
         $orgRoleIds = [];
@@ -499,11 +680,14 @@ class PermissionSeeder extends Seeder
 
         // Owner: NO role_permissions rows (bypass in code)
 
-        // Admin permissions
-        $this->insertRolePermissions($orgRoleIds['admin'], $this->getAdminPermissions(), $permissionMap);
+        // Organization Manager permissions
+        $this->insertRolePermissions($orgRoleIds['org_manager'], $this->getOrgManagerPermissions(), $permissionMap);
 
-        // Manager permissions
-        $this->insertRolePermissions($orgRoleIds['manager'], $this->getManagerPermissions(), $permissionMap);
+        // HR Manager permissions
+        $this->insertRolePermissions($orgRoleIds['hr_manager'], $this->getHrManagerPermissions(), $permissionMap);
+
+        // Finance Manager permissions
+        $this->insertRolePermissions($orgRoleIds['finance_manager'], $this->getFinanceManagerPermissions(), $permissionMap);
 
         // Employee permissions
         $this->insertRolePermissions($orgRoleIds['employee'], $this->getEmployeePermissions(), $permissionMap);

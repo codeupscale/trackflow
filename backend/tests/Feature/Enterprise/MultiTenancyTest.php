@@ -26,8 +26,8 @@ class MultiTenancyTest extends TestCase
         $this->orgA = $this->createOrganization(['name' => 'Org A']);
         $this->orgB = $this->createOrganization(['name' => 'Org B']);
 
-        $this->orgAUser = $this->createUser($this->orgA, 'admin');
-        $this->orgBUser = $this->createUser($this->orgB, 'admin');
+        $this->orgAUser = $this->createUser($this->orgA, 'org_manager');
+        $this->orgBUser = $this->createUser($this->orgB, 'org_manager');
     }
 
     public function test_cannot_view_other_org_team(): void

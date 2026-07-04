@@ -28,7 +28,7 @@ class DatabaseSeeder extends Seeder
                 'screenshot_interval' => 5,
                 'blur_screenshots' => false,
                 'idle_timeout' => 5,
-                'timezone' => 'America/New_York',
+                'timezone' => 'Asia/Karachi',
                 'can_add_manual_time' => true,
             ],
         ]);
@@ -40,7 +40,7 @@ class DatabaseSeeder extends Seeder
             'email' => 'owner@acme.com',
             'password' => Hash::make('password'),
             'role' => 'owner',
-            'timezone' => 'America/New_York',
+            'timezone' => 'Asia/Karachi',
             'is_active' => true,
         ]);
 
@@ -51,7 +51,7 @@ class DatabaseSeeder extends Seeder
             'email' => 'admin@acme.com',
             'password' => Hash::make('password'),
             'role' => 'admin',
-            'timezone' => 'America/New_York',
+            'timezone' => 'Asia/Karachi',
             'is_active' => true,
         ]);
 
@@ -69,7 +69,7 @@ class DatabaseSeeder extends Seeder
         // Create employees
         $employees = [];
         $employeeData = [
-            ['name' => 'Alice Developer', 'email' => 'alice@acme.com', 'timezone' => 'America/New_York'],
+            ['name' => 'Alice Developer', 'email' => 'alice@acme.com', 'timezone' => 'Asia/Karachi'],
             ['name' => 'Bob Designer', 'email' => 'bob@acme.com', 'timezone' => 'America/Los_Angeles'],
             ['name' => 'Carol QA', 'email' => 'carol@acme.com', 'timezone' => 'Europe/London'],
             ['name' => 'Dave Backend', 'email' => 'dave@acme.com', 'timezone' => 'Asia/Kolkata'],

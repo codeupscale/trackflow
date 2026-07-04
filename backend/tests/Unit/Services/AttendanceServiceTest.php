@@ -396,7 +396,8 @@ class AttendanceServiceTest extends TestCase
         $result = $this->service->getAttendance($user->id, $org->id, ['status' => 'present']);
 
         $this->assertEquals(1, $result->total());
-        $this->assertEquals('present', $result->first()->status);
+        // getAttendance now returns serialized rows (arrays), not Eloquent models.
+        $this->assertEquals('present', $result->first()['status']);
     }
 
     // ── Get Team Attendance ─────────────────────────────
@@ -406,7 +407,7 @@ class AttendanceServiceTest extends TestCase
         $org = $this->createOrganization();
         $user1 = $this->createUser($org, 'employee');
         $user2 = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         AttendanceRecord::factory()->create([
@@ -421,10 +422,16 @@ class AttendanceServiceTest extends TestCase
             'date' => '2026-03-18',
         ]);
 
-        $result = $this->service->getTeamAttendance($org->id, []);
+        // Roster-merge: every active employee gets a row for the day. user1 + user2
+        // have real records; admin is synthesised as absent → full roster of 3.
+        $result = $this->service->getTeamAttendance($org->id, [
+            'start_date' => '2026-03-18',
+            'end_date' => '2026-03-18',
+        ]);
 
-        $this->assertEquals(2, $result->total());
-        $this->assertTrue($result->first()->relationLoaded('user'));
+        $this->assertEquals(3, $result->total());
+        $this->assertArrayHasKey('user', $result->items()[0]);
+        $this->assertArrayHasKey('name', $result->items()[0]['user']);
     }
 
     public function test_get_team_attendance_filters_by_user_id(): void
@@ -432,7 +439,7 @@ class AttendanceServiceTest extends TestCase
         $org = $this->createOrganization();
         $user1 = $this->createUser($org, 'employee');
         $user2 = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         AttendanceRecord::factory()->create([
@@ -447,9 +454,14 @@ class AttendanceServiceTest extends TestCase
             'date' => '2026-03-18',
         ]);
 
-        $result = $this->service->getTeamAttendance($org->id, ['user_id' => $user1->id]);
+        $result = $this->service->getTeamAttendance($org->id, [
+            'user_id' => $user1->id,
+            'start_date' => '2026-03-18',
+            'end_date' => '2026-03-18',
+        ]);
 
         $this->assertEquals(1, $result->total());
+        $this->assertEquals($user1->id, $result->items()[0]['user_id']);
     }
 
     // ── Get Attendance Summary ──────────────────────────
@@ -536,6 +548,59 @@ class AttendanceServiceTest extends TestCase
         $this->assertEquals(0.5, $summary['overtime_hours']); // 30 min = 0.5 hours
         // Total working days = all - weekend - holiday = 7 - 1 - 1 = 5
         $this->assertEquals(5, $summary['total_working_days']);
+    }
+
+    public function test_get_attendance_summary_counts_check_in_late_and_overtime_sources(): void
+    {
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        // Day 1: late via manual check-in only (legacy late_minutes = 0).
+        AttendanceRecord::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $user->id,
+            'date' => '2026-03-02',
+            'status' => 'present',
+            'late_minutes' => 0,
+            'overtime_minutes' => 0,
+            'check_in_status' => 'late',
+            'check_in_late_minutes' => 20,
+            'check_out_overtime_minutes' => 60,
+        ]);
+
+        // Day 2: late via legacy tracker column only.
+        AttendanceRecord::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $user->id,
+            'date' => '2026-03-03',
+            'status' => 'present',
+            'late_minutes' => 10,
+            'overtime_minutes' => 30,
+            'check_in_status' => 'on_time',
+            'check_in_late_minutes' => 0,
+            'check_out_overtime_minutes' => 0,
+        ]);
+
+        // Day 3: on time, no overtime from either source.
+        AttendanceRecord::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $user->id,
+            'date' => '2026-03-04',
+            'status' => 'present',
+            'late_minutes' => 0,
+            'overtime_minutes' => 0,
+            'check_in_status' => 'on_time',
+            'check_in_late_minutes' => 0,
+            'check_out_overtime_minutes' => 0,
+        ]);
+
+        $summary = $this->service->getAttendanceSummary($user->id, $org->id, 3, 2026);
+
+        // Both late sources counted: check-in late + legacy late = 2 days.
+        $this->assertEquals(2, $summary['late_days']);
+        // Overtime: check-in 60m (tracker 0) + tracker 30m = 90m = 1.5h.
+        $this->assertEquals(1.5, $summary['overtime_hours']);
     }
 
     // ── Request Regularization ──────────────────────────
@@ -662,7 +727,7 @@ class AttendanceServiceTest extends TestCase
     {
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         $attendance = AttendanceRecord::factory()->absent()->create([
@@ -697,7 +762,7 @@ class AttendanceServiceTest extends TestCase
     {
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $this->actingAs($admin, 'sanctum');
 
         $attendance = AttendanceRecord::factory()->absent()->create([

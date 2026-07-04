@@ -27,10 +27,15 @@ class TimesheetController extends Controller
             $tz
         );
 
+        // Exclude `idle` entries — they are audit markers (idle time discarded, or
+        // duplicated alongside a reassigned tracked entry), so counting them
+        // double-counts reassigned windows and counts discarded idle as work.
+        // `tracked` and `manual` entries both represent real worked time and count.
         $totalSeconds = TimeEntry::where('user_id', $user->id)
             ->where('started_at', '>=', $dateFromUtc)
             ->where('started_at', '<', $dateToUtc)
             ->whereNotNull('ended_at')
+            ->where('type', '!=', 'idle')
             ->sum('duration_seconds');
 
         $timesheet = Timesheet::create([

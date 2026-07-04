@@ -65,8 +65,13 @@ export const BLOOD_GROUPS = [
 // ── Interfaces ──
 
 export interface EmployeeListItem {
+  /**
+   * The User id (users.id). The directory endpoint (`GET /hr/employees`) selects
+   * `users.id AS id`, so on a list row `id` IS the user id — this is what the
+   * check-in `user_id` filter param expects. The list does NOT carry a separate
+   * `user_id` field (that only exists on the detail endpoint, see EmployeeDetail).
+   */
   id: string;
-  user_id: string;
   employee_id: string | null;
   name: string;
   email: string;
@@ -83,6 +88,12 @@ export interface EmployeeListItem {
 }
 
 export interface EmployeeDetail extends EmployeeListItem {
+  /**
+   * The User id. On the detail endpoint (`GET /hr/employees/{id}`) the payload is
+   * an EmployeeProfile, so its `id` is the profile id while `user_id` carries the
+   * users.id. (On the list endpoint there is no `user_id` — `id` is the user id.)
+   */
+  user_id: string;
   date_of_confirmation: string | null;
   date_of_exit: string | null;
   probation_end_date: string | null;

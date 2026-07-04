@@ -52,7 +52,7 @@ class EmployeeService
             ]);
 
         // Role-based scoping
-        if ($viewer->hasRole('owner', 'admin')) {
+        if ($viewer->hasRole('owner', 'org_manager', 'hr_manager', 'finance_manager')) {
             // Owner/admin see all employees (no additional filter)
         } elseif ($viewer->isManager()) {
             // Managers see their managed team members + their own department colleagues
@@ -130,7 +130,7 @@ class EmployeeService
             $profile = $this->getOrCreateProfile($userId, $orgId);
 
             // Field-level authorization: employees can only edit personal fields
-            if ($updater->id === $userId && ! $updater->hasRole('owner', 'admin')) {
+            if ($updater->id === $userId && ! $updater->hasRole('owner', 'org_manager', 'hr_manager')) {
                 $data = array_intersect_key($data, array_flip($this->personalFields()));
             }
 
@@ -257,7 +257,7 @@ class EmployeeService
     {
         return EmployeeNote::where('user_id', $userId)
             ->where('organization_id', $orgId)
-            ->when(! $viewer->hasRole('owner', 'admin'), fn ($q) => $q->where('is_confidential', false))
+            ->when(! $viewer->hasRole('owner', 'org_manager', 'hr_manager'), fn ($q) => $q->where('is_confidential', false))
             ->with('author:id,name,email,avatar_url')
             ->orderBy('created_at', 'desc')
             ->paginate(25);

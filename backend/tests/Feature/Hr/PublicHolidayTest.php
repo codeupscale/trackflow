@@ -57,7 +57,7 @@ class PublicHolidayTest extends TestCase
 
     public function test_admin_can_create_public_holiday(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $response = $this->postJson('/api/v1/hr/public-holidays', [
             'name' => 'Australia Day',
@@ -126,7 +126,7 @@ class PublicHolidayTest extends TestCase
 
     public function test_store_validates_required_fields(): void
     {
-        $this->actingAsUser('admin');
+        $this->actingAsUser('org_manager');
 
         $response = $this->postJson('/api/v1/hr/public-holidays', []);
 

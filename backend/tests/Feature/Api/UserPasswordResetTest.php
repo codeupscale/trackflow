@@ -42,7 +42,7 @@ class UserPasswordResetTest extends TestCase
     public function test_admin_can_reset_team_member_password(): void
     {
         $org = $this->createOrganization();
-        $this->actingAsUser('admin', $org);
+        $this->actingAsUser('org_manager', $org);
         $target = User::factory()->create([
             'organization_id' => $org->id,
             'role' => 'employee',
@@ -56,10 +56,10 @@ class UserPasswordResetTest extends TestCase
         $response->assertOk();
     }
 
-    public function test_manager_cannot_reset_team_member_password(): void
+    public function test_employee_cannot_reset_team_member_password(): void
     {
         $org = $this->createOrganization();
-        $this->actingAsUser('manager', $org);
+        $this->actingAsUser('employee', $org);
         $target = User::factory()->create([
             'organization_id' => $org->id,
             'role' => 'employee',
@@ -95,7 +95,7 @@ class UserPasswordResetTest extends TestCase
     {
         $orgA = $this->createOrganization();
         $orgB = $this->createOrganization();
-        $this->actingAsUser('admin', $orgA);
+        $this->actingAsUser('org_manager', $orgA);
         $target = User::factory()->create([
             'organization_id' => $orgB->id,
             'role' => 'employee',
@@ -115,7 +115,7 @@ class UserPasswordResetTest extends TestCase
             'enforce_sso' => true,
             'sso_config' => ['provider' => 'saml'],
         ]);
-        $this->actingAsUser('admin', $org);
+        $this->actingAsUser('org_manager', $org);
         $target = User::factory()->create([
             'organization_id' => $org->id,
             'role' => 'employee',
@@ -133,7 +133,7 @@ class UserPasswordResetTest extends TestCase
     public function test_reset_is_blocked_for_sso_managed_user(): void
     {
         $org = $this->createOrganization();
-        $this->actingAsUser('admin', $org);
+        $this->actingAsUser('org_manager', $org);
         $target = User::factory()->create([
             'organization_id' => $org->id,
             'role' => 'employee',
@@ -153,7 +153,7 @@ class UserPasswordResetTest extends TestCase
     public function test_generate_true_returns_generated_password_once_and_resets_password(): void
     {
         $org = $this->createOrganization();
-        $this->actingAsUser('admin', $org);
+        $this->actingAsUser('org_manager', $org);
         $target = User::factory()->create([
             'organization_id' => $org->id,
             'role' => 'employee',

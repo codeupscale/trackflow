@@ -48,7 +48,7 @@ class LeaveBalanceTest extends TestCase
     public function test_admin_can_view_other_user_balances(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
         $this->actingAs($admin, 'sanctum');
 

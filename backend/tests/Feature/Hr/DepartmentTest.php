@@ -55,7 +55,7 @@ class DepartmentTest extends TestCase
 
     public function test_store_creates_department(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $response = $this->postJson('/api/v1/hr/departments', [
             'name' => 'Engineering',
@@ -75,7 +75,7 @@ class DepartmentTest extends TestCase
 
     public function test_store_validates_required_fields(): void
     {
-        $this->actingAsUser('admin');
+        $this->actingAsUser('org_manager');
 
         $response = $this->postJson('/api/v1/hr/departments', []);
 
@@ -85,7 +85,7 @@ class DepartmentTest extends TestCase
 
     public function test_store_code_unique_per_org(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         Department::factory()->create([
             'organization_id' => $user->organization_id,
@@ -103,7 +103,7 @@ class DepartmentTest extends TestCase
 
         // Same code different org → OK
         $otherOrg = $this->createOrganization();
-        $otherAdmin = $this->createUser($otherOrg, 'admin');
+        $otherAdmin = $this->createUser($otherOrg, 'org_manager');
         $this->actingAs($otherAdmin, 'sanctum');
 
         $response = $this->postJson('/api/v1/hr/departments', [
@@ -140,7 +140,7 @@ class DepartmentTest extends TestCase
 
     public function test_update_department(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $dept = Department::factory()->create([
             'organization_id' => $user->organization_id,

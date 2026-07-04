@@ -469,7 +469,7 @@ class ShiftService
             ]);
 
         // Role-based scoping
-        if ($user->hasRole('owner', 'admin')) {
+        if ($user->hasRole('owner', 'org_manager', 'hr_manager')) {
             // Owner/admin see all org swap requests
         } elseif ($user->isManager()) {
             // Managers see their own + team members' requests

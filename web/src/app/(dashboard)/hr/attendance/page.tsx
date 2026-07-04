@@ -46,18 +46,34 @@ import {
   PaginationPrevious,
 } from '@/components/ui/pagination';
 
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+
 import { AttendanceStatusBadge } from '@/components/hr/AttendanceStatusBadge';
 import { AttendanceSummaryCard } from '@/components/hr/AttendanceSummaryCard';
+import { CheckInCard } from '@/components/hr/CheckInCard';
+import { CheckInStatusBadge, type CheckInBadgeStatus } from '@/components/hr/CheckInStatusBadge';
 import { useAttendance, useAttendanceSummary, useRequestRegularization } from '@/hooks/hr/use-attendance';
+import { useTodayStatus } from '@/hooks/hr/use-check-in';
+import { usePermissionStore } from '@/stores/permission-store';
 import { regularizationSchema, type RegularizationFormData, type AttendanceRecord } from '@/lib/validations/attendance';
 import { cn, formatDate } from '@/lib/utils';
+import {
+  deriveCheckInBadges,
+  formatDuration,
+  formatMinutes,
+  checkInBadgeTooltip,
+} from '@/lib/check-in-time';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
-const STATUS_FILTERS = ['all', 'present', 'absent', 'half_day', 'on_leave'] as const;
+const STATUS_FILTERS = ['all', 'present', 'absent', 'on_leave'] as const;
 
 export default function MyAttendancePage() {
   const now = new Date();
@@ -85,9 +101,25 @@ export default function MyAttendancePage() {
   );
 
   const regularizeMutation = useRequestRegularization();
+  const { hasPermission } = usePermissionStore();
+  const canCheckIn = hasPermission('attendance.check_in');
+
+  // Pull the org policy times (official start / checkout) so the late / early
+  // tooltips can name a concrete anchor ("after the 11:30 AM official start").
+  // The `today` endpoint requires `attendance.check_in`; gate the query on it and
+  // fall back to generic phrasing when the policy isn't available. Shares the query
+  // key with CheckInCard, so no extra request when both are on-screen.
+  const { data: todayStatus } = useTodayStatus({ enabled: canCheckIn });
+  const policyCheckInTime = todayStatus?.policy?.check_in_time;
+  const policyCheckoutTime = todayStatus?.policy?.checkout_time;
 
   const records = attendanceData?.data ?? [];
   const totalPages = attendanceData?.last_page ?? 1;
+
+  // Hide the Shift column entirely when NOT a single row in this result set carries
+  // shift data — an all-"—" column is noise. Rendered with real names when any exists.
+  const hasAnyShift = records.some((r) => Boolean(r.shift_name));
+  const gridCols = hasAnyShift ? 'lg:grid-cols-9' : 'lg:grid-cols-8';
 
   const {
     register,
@@ -189,11 +221,18 @@ export default function MyAttendancePage() {
         </div>
       </div>
 
+      {/* Check-in / Checkout */}
+      {canCheckIn && (
+        <section aria-label="Check in and out">
+          <CheckInCard className="sm:max-w-2xl" />
+        </section>
+      )}
+
       {/* Summary Cards */}
       <section aria-label="Attendance summary">
         {summaryLoading ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-            {Array.from({ length: 6 }).map((_, i) => (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            {Array.from({ length: 5 }).map((_, i) => (
               <Card key={i}>
                 <CardContent className="p-4">
                   <Skeleton className="h-16" />
@@ -202,43 +241,42 @@ export default function MyAttendancePage() {
             ))}
           </div>
         ) : summary ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <AttendanceSummaryCard
               label="Present Days"
               value={summary.present_days}
               subtext={`of ${summary.total_working_days} working days`}
               icon={CheckCircle2}
               variant="green"
+              tooltip="A working day with 4h+ of tracked time, or any physical check-in. Holiday, leave and weekend take priority."
             />
             <AttendanceSummaryCard
               label="Absent Days"
               value={summary.absent_days}
               icon={XCircle}
               variant="red"
+              tooltip="A working day with under 2h of tracked time and no check-in."
             />
             <AttendanceSummaryCard
               label="Late Days"
               value={summary.late_days}
               icon={Clock}
               variant="amber"
-            />
-            <AttendanceSummaryCard
-              label="Half Days"
-              value={summary.half_days}
-              icon={CalendarDays}
-              variant="amber"
+              tooltip="Days your first check-in was after the org late threshold (default 11:45). Late minutes are counted from the official start (default 11:30)."
             />
             <AttendanceSummaryCard
               label="On Leave"
               value={summary.on_leave_days}
               icon={Palmtree}
               variant="blue"
+              tooltip="Days covered by an approved leave request."
             />
             <AttendanceSummaryCard
               label="Overtime Hours"
               value={Number(summary.overtime_hours).toFixed(1)}
               icon={Timer}
               variant="purple"
+              tooltip="Time worked past the org checkout time (default 20:30), totaled across the month."
             />
           </div>
         ) : null}
@@ -307,34 +345,53 @@ export default function MyAttendancePage() {
           <Card>
             <CardContent className="p-0">
               {/* Header row */}
-              <div className="hidden lg:grid lg:grid-cols-9 gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border">
+              <div className={cn('hidden lg:grid gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border', gridCols)}>
                 <span>Date</span>
                 <span>Day</span>
                 <span>Status</span>
-                <span>Shift</span>
+                {hasAnyShift && <span>Shift</span>}
                 <span>Clock In</span>
                 <span>Clock Out</span>
                 <span className="text-right">Hours</span>
-                <span className="text-right">Late (min)</span>
+                <span className="text-right">Late</span>
                 <span className="text-right">Actions</span>
               </div>
 
               {records.map((record, idx) => (
                 <div key={record.id}>
                   {idx > 0 && <Separator />}
-                  <div className="grid grid-cols-2 gap-2 px-4 py-3 lg:grid-cols-9 lg:gap-4 lg:items-center">
+                  <div className={cn('grid grid-cols-2 gap-2 px-4 py-3 lg:gap-4 lg:items-center', gridCols)}>
                     <div className="text-sm font-medium text-foreground">
                       {formatDate(record.date)}
                     </div>
                     <div className="text-sm text-muted-foreground">
                       {record.day}
                     </div>
-                    <div>
+                    <div className="flex flex-wrap items-center gap-1">
                       <AttendanceStatusBadge status={record.status} />
+                      {/* All applicable check-in signals — late AND early-checkout
+                          coexist by design, so each renders its own badge (deterministic
+                          order: Late → Early Checkout → Missing Checkout). The check-ins
+                          list row carries late_minutes but not the early-checkout minute
+                          count, so early_checkout falls back to generic phrasing while
+                          late names the exact "Xh Ym". */}
+                      {deriveCheckInBadges(record).map((s) => (
+                        <CheckInStatusBadge
+                          key={s}
+                          status={s as CheckInBadgeStatus}
+                          tooltip={checkInBadgeTooltip(s, {
+                            lateMinutes: record.late_minutes,
+                            checkInTime: policyCheckInTime,
+                            checkoutTime: policyCheckoutTime,
+                          })}
+                        />
+                      ))}
                     </div>
-                    <div className="text-sm text-muted-foreground">
-                      {record.shift_name || '—'}
-                    </div>
+                    {hasAnyShift && (
+                      <div className="text-sm text-muted-foreground">
+                        {record.shift_name || '—'}
+                      </div>
+                    )}
                     <div className="text-sm text-foreground tabular-nums">
                       {record.clock_in || '—'}
                     </div>
@@ -342,15 +399,33 @@ export default function MyAttendancePage() {
                       {record.clock_out || '—'}
                     </div>
                     <div className="text-sm text-foreground tabular-nums text-right">
-                      {Number(record.total_hours) > 0
-                        ? Number(record.total_hours).toFixed(1)
-                        : '—'}
+                      {(() => {
+                        // Prefer exact worked_seconds when present; fall back to the
+                        // rounded total_hours float (× 3600) for tracker-only rows.
+                        const secs =
+                          record.worked_seconds != null
+                            ? record.worked_seconds
+                            : Number(record.total_hours) * 3600;
+                        return secs > 0 ? formatDuration(secs) : '—';
+                      })()}
                     </div>
                     <div className="text-sm tabular-nums text-right">
                       {record.late_minutes > 0 ? (
-                        <span className="text-amber-600 dark:text-amber-400">
-                          {record.late_minutes}
-                        </span>
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={<span />}
+                            className="cursor-help text-amber-600 dark:text-amber-400"
+                            tabIndex={0}
+                          >
+                            {formatMinutes(record.late_minutes)}
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {checkInBadgeTooltip('late', {
+                              lateMinutes: record.late_minutes,
+                              checkInTime: policyCheckInTime,
+                            })}
+                          </TooltipContent>
+                        </Tooltip>
                       ) : (
                         '—'
                       )}

@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { ArrowLeftRight } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 import {
   useShiftSwaps,
   useCreateShiftSwap,
@@ -53,10 +54,8 @@ const STATUS_TABS = ['all', 'pending', 'approved', 'rejected'] as const;
 
 export default function ShiftSwapsPage() {
   const { user } = useAuthStore();
-  const canManage =
-    user?.role === 'owner' ||
-    user?.role === 'admin' ||
-    user?.role === 'manager';
+  const { hasPermission } = usePermissionStore();
+  const canManage = hasPermission('shifts.manage_swaps');
 
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);

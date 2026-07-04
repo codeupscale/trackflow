@@ -10,7 +10,7 @@ class EmployeeNoteTest extends TestCase
     public function test_admin_can_list_notes(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         EmployeeNote::factory()->count(3)->create([
@@ -48,7 +48,7 @@ class EmployeeNoteTest extends TestCase
     public function test_admin_can_create_note(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $this->actingAs($admin, 'sanctum');
@@ -90,7 +90,7 @@ class EmployeeNoteTest extends TestCase
     public function test_admin_can_delete_own_note(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $note = EmployeeNote::factory()->create([
@@ -109,8 +109,8 @@ class EmployeeNoteTest extends TestCase
     public function test_admin_can_delete_other_admins_note(): void
     {
         $org = $this->createOrganization();
-        $admin1 = $this->createUser($org, 'admin');
-        $admin2 = $this->createUser($org, 'admin');
+        $admin1 = $this->createUser($org, 'org_manager');
+        $admin2 = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $note = EmployeeNote::factory()->create([
@@ -129,7 +129,7 @@ class EmployeeNoteTest extends TestCase
     public function test_employee_cannot_delete_note(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         $note = EmployeeNote::factory()->create([
@@ -150,7 +150,7 @@ class EmployeeNoteTest extends TestCase
     public function test_confidential_notes_visible_to_admin(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
+        $admin = $this->createUser($org, 'org_manager');
         $employee = $this->createUser($org, 'employee');
 
         EmployeeNote::factory()->create([
@@ -175,11 +175,11 @@ class EmployeeNoteTest extends TestCase
         $this->assertEquals(2, $response->json('total'));
     }
 
-    public function test_confidential_notes_hidden_from_manager(): void
+    public function test_confidential_notes_hidden_from_employee(): void
     {
         $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'admin');
-        $manager = $this->createUser($org, 'manager');
+        $admin = $this->createUser($org, 'org_manager');
+        $employee2 = $this->createUser($org, 'employee');
         $employee = $this->createUser($org, 'employee');
 
         EmployeeNote::factory()->create([
@@ -195,9 +195,9 @@ class EmployeeNoteTest extends TestCase
             'is_confidential' => true,
         ]);
 
-        $this->actingAs($manager, 'sanctum');
+        $this->actingAs($employee2, 'sanctum');
 
-        // Manager cannot view notes (admin/owner only via policy)
+        // Employee cannot view notes (admin/owner only via policy)
         $response = $this->getJson("/api/v1/hr/employees/{$employee->id}/notes");
 
         $response->assertStatus(403);
@@ -210,8 +210,8 @@ class EmployeeNoteTest extends TestCase
         $orgA = $this->createOrganization();
         $orgB = $this->createOrganization();
 
-        $adminA = $this->createUser($orgA, 'admin');
-        $adminB = $this->createUser($orgB, 'admin');
+        $adminA = $this->createUser($orgA, 'org_manager');
+        $adminB = $this->createUser($orgB, 'org_manager');
         $employeeB = $this->createUser($orgB, 'employee');
 
         EmployeeNote::factory()->create([

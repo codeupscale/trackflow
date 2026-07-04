@@ -23,7 +23,7 @@ class OrganizationFactory extends Factory
                 'screenshot_interval' => 5,
                 'blur_screenshots' => false,
                 'idle_timeout' => 5,
-                'timezone' => 'America/New_York',
+                'timezone' => 'Asia/Karachi',
                 'can_add_manual_time' => true,
             ],
         ];

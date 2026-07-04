@@ -111,7 +111,7 @@ class ProjectTest extends TestCase
 
     public function test_manager_can_list_and_sync_project_members(): void
     {
-        $manager = $this->createUser($this->org, 'manager');
+        $manager = $this->createUser($this->org, 'org_manager');
         $project = Project::factory()->create([
             'organization_id' => $this->org->id,
             'created_by' => $this->owner->id,

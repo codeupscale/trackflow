@@ -35,7 +35,7 @@ class UpdateEmployeeProfileRequest extends FormRequest
         ];
 
         // Admin/owner fields
-        if ($user->hasRole('owner', 'admin')) {
+        if ($user->hasRole('owner', 'org_manager', 'hr_manager')) {
             return array_merge($personalRules, [
                 'department_id' => [
                     'sometimes', 'nullable', 'uuid',

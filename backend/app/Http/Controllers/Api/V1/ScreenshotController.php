@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\ActivityLog;
 use App\Models\Screenshot;
 use App\Jobs\ProcessScreenshotJob;
+use App\Support\ScreenshotActivity;
+use App\Support\ScreenshotUrl;
 use App\Support\TimezoneAwareDateRange;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -75,7 +77,11 @@ class ScreenshotController extends Controller
         }
 
         $org = $user->organization;
-        $date = \Carbon\Carbon::parse($request->captured_at)->format('Y-m-d');
+        // BUG FIX (timezone-midnight-rolls-to-previous-day, Contributor B): the desktop sends
+        // captured_at as a UTC ISO string. Derive the date-folder in the user's LOCAL timezone
+        // so an early-morning local screenshot is filed under the correct day, not the previous
+        // UTC day. captured_at itself stays UTC.
+        $date = \Carbon\Carbon::parse($request->captured_at)->setTimezone($user->getTimezoneForDates())->format('Y-m-d');
         $filename = time() . '_' . Str::random(8) . '.jpg';
         $s3Key = "{$org->id}/{$user->id}/{$date}/{$filename}";
 
@@ -188,23 +194,24 @@ class ScreenshotController extends Controller
             $request->user()->organization_id
         );
 
-        $disk = $this->disk();
-        $screenshots->getCollection()->transform(function ($screenshot) use ($activityData, $disk) {
-            $screenshot->thumbnail_url = $this->presignedGetUrl($screenshot->thumbnail_key ?? $screenshot->s3_key, $disk, 86400, $screenshot->id, 'thumbnail');
-            $screenshot->url = $this->presignedGetUrl($screenshot->display_key ?? $screenshot->s3_key, $disk, 86400, $screenshot->id, 'display');
-            $screenshot->original_url = $this->presignedGetUrl($screenshot->s3_key, $disk, 86400, $screenshot->id, 'original');
+        $screenshots->getCollection()->transform(function ($screenshot) use ($activityData) {
+            $screenshot->thumbnail_url = ScreenshotUrl::variantUrl($screenshot, 'thumbnail');
+            $screenshot->url = ScreenshotUrl::variantUrl($screenshot, 'display');
+            $screenshot->original_url = ScreenshotUrl::variantUrl($screenshot, 'original');
             $screenshot->user_name = $screenshot->user?->name ?? 'Unknown';
             $screenshot->user_avatar_color = substr(md5($screenshot->user_id ?? ''), 0, 6);
-            $screenshot->activity_score = $screenshot->activity_score_at_capture
-                ?? $screenshot->timeEntry?->activity_score
-                ?? 0;
             $screenshot->project_name = $screenshot->timeEntry?->project?->name ?? null;
             $screenshot->app_name = $screenshot->app_name;
             $screenshot->window_title = $screenshot->window_title;
 
+            // Activity percentage + keyboard/mouse counts must come from the SAME
+            // sampling window as the capture. Use the matched ActivityLog (tight
+            // window) and derive the score from it when the desktop did not send a
+            // capture score — never from the time-entry aggregate (QA mismatch fix).
             $log = $activityData[$screenshot->id] ?? null;
             $screenshot->keyboard_events = $log?->keyboard_events ?? null;
             $screenshot->mouse_events = $log?->mouse_events ?? null;
+            $screenshot->activity_score = ScreenshotActivity::resolveScore($screenshot, $log);
 
             return $screenshot;
         });
@@ -285,9 +292,10 @@ class ScreenshotController extends Controller
             return [];
         }
 
+        $windowSeconds = ScreenshotActivity::MATCH_WINDOW_SECONDS;
         $entryIds = $valid->pluck('time_entry_id')->unique()->values()->all();
-        $minTime  = $valid->min('captured_at')->copy()->subMinutes(10);
-        $maxTime  = $valid->max('captured_at')->copy()->addMinutes(10);
+        $minTime  = $valid->min('captured_at')->copy()->subSeconds($windowSeconds);
+        $maxTime  = $valid->max('captured_at')->copy()->addSeconds($windowSeconds);
 
         $logs = ActivityLog::whereIn('time_entry_id', $entryIds)
             ->where('organization_id', $orgId)
@@ -300,10 +308,12 @@ class ScreenshotController extends Controller
             $entryLogs = $logs->get($ss->time_entry_id, collect());
             $capturedAt = $ss->captured_at;
 
+            // Tight window aligned to the 30s heartbeat interval so a screenshot
+            // is matched to its OWN activity sample, not a distant window.
             $window = $entryLogs->filter(
                 fn ($log) => $log->logged_at->between(
-                    $capturedAt->copy()->subMinutes(10),
-                    $capturedAt->copy()->addMinutes(10)
+                    $capturedAt->copy()->subSeconds($windowSeconds),
+                    $capturedAt->copy()->addSeconds($windowSeconds)
                 )
             );
 
@@ -317,37 +327,8 @@ class ScreenshotController extends Controller
         return $result;
     }
 
-    private function presignedGetUrl(
-        string $s3Key,
-        string $disk,
-        int $ttlSeconds = 86400,
-        string $screenshotId = '',
-        string $variant = 'display'
-    ): string {
-        try {
-            return Storage::disk($disk)->temporaryUrl(
-                "screenshots/{$s3Key}",
-                now()->addSeconds($ttlSeconds)
-            );
-        } catch (\Exception) {
-            // Fallback: serve through signed API endpoint (used on local disk)
-            return $this->getSignedFileUrl($screenshotId, $variant, $ttlSeconds);
-        }
-    }
-
     private static function generateSignature(string $screenshotId, string $variant, int $expires): string
     {
-        return hash_hmac('sha256', "{$screenshotId}:{$variant}:{$expires}", config('app.key'));
-    }
-
-    private function getSignedFileUrl(string $screenshotId, string $variant = 'display', int $ttlSeconds = 7200): string
-    {
-        $expires = time() + $ttlSeconds;
-        $sig = self::generateSignature($screenshotId, $variant, $expires);
-        return url("/api/v1/screenshots/{$screenshotId}/file?" . http_build_query([
-            'variant' => $variant,
-            'expires' => $expires,
-            'sig'     => $sig,
-        ]));
+        return ScreenshotUrl::generateSignature($screenshotId, $variant, $expires);
     }
 }

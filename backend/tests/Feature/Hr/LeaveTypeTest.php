@@ -41,7 +41,7 @@ class LeaveTypeTest extends TestCase
     public function test_admin_can_list_all_leave_types_including_inactive(): void
     {
         // Admins see all types (management page use case)
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         LeaveType::factory()->count(2)->create([
             'organization_id' => $user->organization_id,
@@ -63,7 +63,7 @@ class LeaveTypeTest extends TestCase
 
     public function test_admin_can_create_leave_type(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         $response = $this->postJson('/api/v1/hr/leave-types', [
             'name'           => 'Annual Leave',
@@ -96,7 +96,7 @@ class LeaveTypeTest extends TestCase
 
     public function test_cannot_create_leave_type_with_duplicate_code_in_same_org(): void
     {
-        $user = $this->actingAsUser('admin');
+        $user = $this->actingAsUser('org_manager');
 
         LeaveType::factory()->create([
             'organization_id' => $user->organization_id,
@@ -118,8 +118,8 @@ class LeaveTypeTest extends TestCase
         $orgA = $this->createOrganization();
         $orgB = $this->createOrganization();
 
-        $adminA = $this->createUser($orgA, 'admin');
-        $adminB = $this->createUser($orgB, 'admin');
+        $adminA = $this->createUser($orgA, 'org_manager');
+        $adminB = $this->createUser($orgB, 'org_manager');
 
         LeaveType::factory()->create([
             'organization_id' => $orgA->id,
@@ -158,7 +158,7 @@ class LeaveTypeTest extends TestCase
 
     public function test_store_uses_form_request_validation(): void
     {
-        $this->actingAsUser('admin');
+        $this->actingAsUser('org_manager');
 
         // Missing all required fields
         $response = $this->postJson('/api/v1/hr/leave-types', []);

@@ -401,51 +401,53 @@ export default function ProjectsPage() {
                       <CardTitle className="text-base text-foreground">{project.name}</CardTitle>
                     </div>
                   </div>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      className="inline-flex items-center justify-center rounded-md h-8 w-8 hover:bg-muted text-muted-foreground"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <MoreHorizontal className="h-4 w-4" />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      {canManageMembers && (
-                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openMembers(project); }}>
-                          <Users className="mr-2 h-4 w-4" />
-                          Members
-                        </DropdownMenuItem>
-                      )}
-                      {canUpdateProjects && (
-                        <>
-                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openEdit(project); }}>
-                            <Pencil className="mr-2 h-4 w-4" />
-                            Edit
+                  {(canManageMembers || canUpdateProjects || canDeleteProjects) && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        className="inline-flex items-center justify-center rounded-md h-8 w-8 hover:bg-muted text-muted-foreground"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <MoreHorizontal className="h-4 w-4" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {canManageMembers && (
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openMembers(project); }}>
+                            <Users className="mr-2 h-4 w-4" />
+                            Members
                           </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              updateMutation.mutate({ id: project.id, is_archived: !project.is_archived });
-                            }}
-                          >
-                            <Archive className="mr-2 h-4 w-4" />
-                            {project.is_archived ? 'Unarchive' : 'Archive'}
-                          </DropdownMenuItem>
-                        </>
-                      )}
-                      {canDeleteProjects && (
-                        <>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            variant="destructive"
-                            onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(project.id); }}
-                          >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            Delete
-                          </DropdownMenuItem>
-                        </>
-                      )}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                        )}
+                        {canUpdateProjects && (
+                          <>
+                            <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openEdit(project); }}>
+                              <Pencil className="mr-2 h-4 w-4" />
+                              Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                updateMutation.mutate({ id: project.id, is_archived: !project.is_archived });
+                              }}
+                            >
+                              <Archive className="mr-2 h-4 w-4" />
+                              {project.is_archived ? 'Unarchive' : 'Archive'}
+                            </DropdownMenuItem>
+                          </>
+                        )}
+                        {canDeleteProjects && (
+                          <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              variant="destructive"
+                              onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(project.id); }}
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              Delete
+                            </DropdownMenuItem>
+                          </>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
                 </div>
               </CardHeader>
               <CardContent className="pt-0">

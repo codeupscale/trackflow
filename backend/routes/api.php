@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\DataPrivacyController;
 use App\Http\Controllers\Api\V1\Hr\AttendanceController;
+use App\Http\Controllers\Api\V1\Hr\AttendancePolicyController;
 use App\Http\Controllers\Api\V1\Hr\AttendanceRegularizationController;
 use App\Http\Controllers\Api\V1\Hr\DepartmentController;
 use App\Http\Controllers\Api\V1\Hr\EmployeeController;
@@ -102,14 +103,18 @@ Route::prefix('v1')->group(function () {
         Route::post('timer/stop', [\App\Http\Controllers\Api\V1\TimerController::class, 'stop']);
         Route::post('timer/switch', [\App\Http\Controllers\Api\V1\TimerController::class, 'switch']);
         Route::post('timer/pause', [\App\Http\Controllers\Api\V1\TimerController::class, 'pause']);
+        Route::post('timer/resume', [\App\Http\Controllers\Api\V1\TimerController::class, 'resume']);
         Route::get('timer/status', [\App\Http\Controllers\Api\V1\TimerController::class, 'status']);
         Route::get('timer/today-total', [\App\Http\Controllers\Api\V1\TimerController::class, 'todayTotal']);
         Route::post('timer/heartbeat', [\App\Http\Controllers\Api\V1\TimerController::class, 'heartbeat'])->middleware('throttle:60,1');
         Route::post('timer/idle', [\App\Http\Controllers\Api\V1\TimerController::class, 'idle']);
 
         // Time entries
-        Route::apiResource('time-entries', \App\Http\Controllers\Api\V1\TimeEntryController::class);
-        Route::post('time-entries/{id}/approve', [\App\Http\Controllers\Api\V1\TimeEntryController::class, 'approve']);
+        Route::middleware('permission:time_entries.view')->group(function () {
+            Route::apiResource('time-entries', \App\Http\Controllers\Api\V1\TimeEntryController::class);
+        });
+        Route::post('time-entries/{id}/approve', [\App\Http\Controllers\Api\V1\TimeEntryController::class, 'approve'])
+            ->middleware('permission:time_entries.approve');
 
         // Timesheets
         Route::post('timesheets/submit', [\App\Http\Controllers\Api\V1\TimesheetController::class, 'submit']);
@@ -130,7 +135,8 @@ Route::prefix('v1')->group(function () {
         Route::apiResource('tasks', \App\Http\Controllers\Api\V1\TaskController::class);
 
         // Dashboard
-        Route::get('dashboard', [\App\Http\Controllers\Api\V1\DashboardController::class, 'index']);
+        Route::get('dashboard', [\App\Http\Controllers\Api\V1\DashboardController::class, 'index'])
+            ->middleware('permission:dashboard.view_own_stats');
 
         // Agent (desktop safety — auth:sanctum only)
         Route::get('agent/config', [\App\Http\Controllers\Api\V1\AgentController::class, 'config']);
@@ -138,20 +144,24 @@ Route::prefix('v1')->group(function () {
         Route::post('agent/logs', [\App\Http\Controllers\Api\V1\AgentController::class, 'bulkLogs'])->middleware('throttle:30,1');
 
         // Screenshots
-        Route::get('screenshots/signed-cookies', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'signedCookies']);
+        Route::get('screenshots/signed-cookies', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'signedCookies'])
+            ->middleware('permission:screenshots.view');
         Route::post('screenshots/presign', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'presign'])->middleware('throttle:60,1');
         Route::post('screenshots/confirm', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'confirm'])->middleware('throttle:60,1');
-        Route::apiResource('screenshots', \App\Http\Controllers\Api\V1\ScreenshotController::class)->only(['index', 'destroy']);
+        Route::get('screenshots', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'index'])
+            ->middleware('permission:screenshots.view');
+        Route::delete('screenshots/{screenshot}', [\App\Http\Controllers\Api\V1\ScreenshotController::class, 'destroy'])
+            ->middleware('permission:screenshots.delete');
 
         // Reports
-        Route::prefix('reports')->group(function () {
+        Route::prefix('reports')->middleware('permission:reports.view')->group(function () {
             Route::get('summary', [\App\Http\Controllers\Api\V1\ReportController::class, 'summary']);
             Route::get('team', [\App\Http\Controllers\Api\V1\ReportController::class, 'team']);
             Route::get('projects', [\App\Http\Controllers\Api\V1\ReportController::class, 'projects']);
             Route::get('apps', [\App\Http\Controllers\Api\V1\ReportController::class, 'apps']);
             Route::get('timeline', [\App\Http\Controllers\Api\V1\ReportController::class, 'timeline']);
             Route::post('export', [\App\Http\Controllers\Api\V1\ReportController::class, 'export'])
-                ->middleware('throttle:10,60'); // 10 exports per hour
+                ->middleware(['permission:reports.export', 'throttle:10,60'])->withoutMiddleware('permission:reports.view');
             Route::get('analytics', [\App\Http\Controllers\Api\V1\ReportController::class, 'analytics']);
             Route::get('detailed-logs', [\App\Http\Controllers\Api\V1\ReportController::class, 'detailedLogs']);
             Route::get('activity-by-day', [\App\Http\Controllers\Api\V1\ReportController::class, 'activityByDay']);
@@ -161,7 +171,7 @@ Route::prefix('v1')->group(function () {
         });
 
         // App Usage
-        Route::prefix('app-usage')->group(function () {
+        Route::prefix('app-usage')->middleware('permission:reports.view')->group(function () {
             Route::get('daily', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'daily']);
             Route::get('team', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'team']);
             Route::get('top', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'top']);
@@ -185,7 +195,8 @@ Route::prefix('v1')->group(function () {
             ->middleware(['permission:team.change_role', 'throttle:5,1']);
 
         // Settings
-        Route::get('settings', [\App\Http\Controllers\Api\V1\SettingsController::class, 'show']);
+        Route::get('settings', [\App\Http\Controllers\Api\V1\SettingsController::class, 'show'])
+            ->middleware('permission:settings.view_org');
         Route::put('settings', [\App\Http\Controllers\Api\V1\SettingsController::class, 'update'])->middleware('permission:settings.edit_org');
 
         // Job Monitoring
@@ -228,81 +239,145 @@ Route::prefix('v1')->group(function () {
 
         // HR - Org Structure
         Route::prefix('hr')->group(function () {
-            Route::get('departments/tree', [DepartmentController::class, 'tree']);
-            Route::apiResource('departments', DepartmentController::class);
-            Route::apiResource('positions', PositionController::class);
+            Route::get('departments/tree', [DepartmentController::class, 'tree'])
+                ->middleware('permission:departments.view');
+            Route::apiResource('departments', DepartmentController::class)
+                ->middleware('permission:departments.view');
+            Route::apiResource('positions', PositionController::class)
+                ->middleware('permission:positions.view');
 
             // Leave Management
-            Route::get('leave-calendar', [LeaveCalendarController::class, 'index']);
-            Route::get('leave-balances', [LeaveBalanceController::class, 'index']);
-            Route::get('leave-types', [LeaveTypeController::class, 'index']);
+            Route::get('leave-calendar', [LeaveCalendarController::class, 'index'])
+                ->middleware('permission:leave.view_calendar');
+            Route::get('leave-balances', [LeaveBalanceController::class, 'index'])
+                ->middleware('permission:leave.apply');
+            Route::get('leave-types', [LeaveTypeController::class, 'index'])
+                ->middleware('permission:leave.apply');
             Route::post('leave-types', [LeaveTypeController::class, 'store'])
                 ->middleware('permission:leave.manage_types');
             Route::put('leave-types/{leave_type}', [LeaveTypeController::class, 'update'])
                 ->middleware('permission:leave.manage_types');
-            Route::apiResource('leave-requests', LeaveRequestController::class)->except(['update']);
-            Route::put('leave-requests/{leaveRequest}/approve', [LeaveRequestController::class, 'approve']);
-            Route::put('leave-requests/{leaveRequest}/reject', [LeaveRequestController::class, 'reject']);
-            Route::get('public-holidays', [PublicHolidayController::class, 'index']);
+            Route::apiResource('leave-requests', LeaveRequestController::class)
+                ->except(['update'])
+                ->middleware('permission:leave.apply');
+            Route::put('leave-requests/{leaveRequest}/approve', [LeaveRequestController::class, 'approve'])
+                ->middleware('permission:leave.approve');
+            Route::put('leave-requests/{leaveRequest}/reject', [LeaveRequestController::class, 'reject'])
+                ->middleware('permission:leave.approve');
+            Route::get('public-holidays', [PublicHolidayController::class, 'index'])
+                ->middleware('permission:leave.apply');
             Route::post('public-holidays', [PublicHolidayController::class, 'store'])
                 ->middleware('permission:leave.manage_holidays');
             Route::delete('public-holidays/{public_holiday}', [PublicHolidayController::class, 'destroy'])
                 ->middleware('permission:leave.manage_holidays');
 
             // Attendance
-            Route::get('attendance', [AttendanceController::class, 'index']);
-            Route::get('attendance/team', [AttendanceController::class, 'teamIndex']);
-            Route::get('attendance/summary', [AttendanceController::class, 'summary']);
+            Route::get('attendance', [AttendanceController::class, 'index'])
+                ->middleware('permission:attendance.view');
+            Route::get('attendance/team', [AttendanceController::class, 'teamIndex'])
+                ->middleware('permission:attendance.view,project');
+            Route::get('attendance/summary', [AttendanceController::class, 'summary'])
+                ->middleware('permission:attendance.view');
             Route::post('attendance/generate', [AttendanceController::class, 'store'])
                 ->middleware('permission:attendance.generate');
 
+            // Check-in / Checkout (self-service). STATIC routes MUST be declared
+            // before the attendance/{record}/... wildcard to avoid route-model-binding
+            // collision (e.g. 'check-in' being captured as a {record} id).
+            Route::post('attendance/check-in', [AttendanceController::class, 'checkIn'])
+                ->middleware('permission:attendance.check_in');
+            Route::post('attendance/check-out', [AttendanceController::class, 'checkOut'])
+                ->middleware('permission:attendance.check_in');
+            Route::get('attendance/today', [AttendanceController::class, 'todayStatus'])
+                ->middleware('permission:attendance.check_in');
+            Route::get('attendance/check-ins', [AttendanceController::class, 'checkInsIndex'])
+                ->middleware('permission:attendance.view');
+            Route::get('attendance/check-ins/summary', [AttendanceController::class, 'checkInsSummary'])
+                ->middleware('permission:attendance.view');
+            Route::get('attendance/check-ins/export', [AttendanceController::class, 'checkInsExport'])
+                ->middleware('permission:attendance.export');
+            Route::get('attendance/policy', [AttendancePolicyController::class, 'show'])
+                ->middleware('permission:attendance.view');
+            Route::put('attendance/policy', [AttendancePolicyController::class, 'update'])
+                ->middleware('permission:attendance.manage_policy');
+
             // Attendance Regularizations
-            Route::get('attendance/regularizations', [AttendanceRegularizationController::class, 'index']);
-            Route::post('attendance/{record}/regularize', [AttendanceRegularizationController::class, 'store']);
-            Route::put('attendance/regularizations/{id}/approve', [AttendanceRegularizationController::class, 'approve']);
-            Route::put('attendance/regularizations/{id}/reject', [AttendanceRegularizationController::class, 'reject']);
+            Route::get('attendance/regularizations', [AttendanceRegularizationController::class, 'index'])
+                ->middleware('permission:attendance.view');
+            Route::post('attendance/{record}/regularize', [AttendanceRegularizationController::class, 'store'])
+                ->middleware('permission:attendance.regularize');
+            Route::put('attendance/regularizations/{id}/approve', [AttendanceRegularizationController::class, 'approve'])
+                ->middleware('permission:attendance.approve_regularizations');
+            Route::put('attendance/regularizations/{id}/reject', [AttendanceRegularizationController::class, 'reject'])
+                ->middleware('permission:attendance.approve_regularizations');
 
             // Overtime Rules
-            Route::get('overtime-rules', [OvertimeRuleController::class, 'show']);
+            Route::get('overtime-rules', [OvertimeRuleController::class, 'show'])
+                ->middleware('permission:attendance.view');
             Route::put('overtime-rules', [OvertimeRuleController::class, 'update'])
                 ->middleware('permission:attendance.manage_overtime_rules');
 
             // Employee Directory & Profiles
-            Route::get('employees', [EmployeeController::class, 'index']);
-            Route::get('employees/{employee}', [EmployeeController::class, 'show']);
-            Route::put('employees/{employee}/profile', [EmployeeController::class, 'updateProfile']);
+            Route::get('employees', [EmployeeController::class, 'index'])
+                ->middleware('permission:employees.view_directory');
+            Route::get('employees/{employee}', [EmployeeController::class, 'show'])
+                ->middleware('permission:employees.view_profile');
+            Route::put('employees/{employee}/profile', [EmployeeController::class, 'updateProfile'])
+                ->middleware('permission:employees.edit_profile');
 
             // Employee Documents
-            Route::get('employees/{employee}/documents', [EmployeeDocumentController::class, 'index']);
-            Route::post('employees/{employee}/documents', [EmployeeDocumentController::class, 'store']);
-            Route::delete('employees/{employee}/documents/{document}', [EmployeeDocumentController::class, 'destroy']);
-            Route::put('employees/{employee}/documents/{document}/verify', [EmployeeDocumentController::class, 'verify']);
+            Route::get('employees/{employee}/documents', [EmployeeDocumentController::class, 'index'])
+                ->middleware('permission:employees.manage_documents');
+            Route::post('employees/{employee}/documents', [EmployeeDocumentController::class, 'store'])
+                ->middleware('permission:employees.manage_documents');
+            Route::delete('employees/{employee}/documents/{document}', [EmployeeDocumentController::class, 'destroy'])
+                ->middleware('permission:employees.manage_documents');
+            Route::put('employees/{employee}/documents/{document}/verify', [EmployeeDocumentController::class, 'verify'])
+                ->middleware('permission:employees.manage_documents');
 
             // Employee Notes
-            Route::get('employees/{employee}/notes', [EmployeeNoteController::class, 'index']);
-            Route::post('employees/{employee}/notes', [EmployeeNoteController::class, 'store']);
-            Route::delete('employees/{employee}/notes/{note}', [EmployeeNoteController::class, 'destroy']);
+            Route::get('employees/{employee}/notes', [EmployeeNoteController::class, 'index'])
+                ->middleware('permission:employees.manage_notes');
+            Route::post('employees/{employee}/notes', [EmployeeNoteController::class, 'store'])
+                ->middleware('permission:employees.manage_notes');
+            Route::delete('employees/{employee}/notes/{note}', [EmployeeNoteController::class, 'destroy'])
+                ->middleware('permission:employees.manage_notes');
 
             // Shifts
-            Route::get('shifts', [ShiftController::class, 'index']);
-            Route::post('shifts', [ShiftController::class, 'store']);
-            Route::get('shifts/roster', [ShiftController::class, 'roster']);
-            Route::get('shifts/{shift}', [ShiftController::class, 'show']);
-            Route::put('shifts/{shift}', [ShiftController::class, 'update']);
-            Route::delete('shifts/{shift}', [ShiftController::class, 'destroy']);
+            Route::get('shifts', [ShiftController::class, 'index'])
+                ->middleware('permission:shifts.view');
+            Route::post('shifts', [ShiftController::class, 'store'])
+                ->middleware('permission:shifts.create');
+            Route::get('shifts/roster', [ShiftController::class, 'roster'])
+                ->middleware('permission:shifts.view');
+            Route::get('shifts/{shift}', [ShiftController::class, 'show'])
+                ->middleware('permission:shifts.view');
+            Route::put('shifts/{shift}', [ShiftController::class, 'update'])
+                ->middleware('permission:shifts.edit');
+            Route::delete('shifts/{shift}', [ShiftController::class, 'destroy'])
+                ->middleware('permission:shifts.delete');
 
             // Shift Assignments
-            Route::get('shifts/{shift}/assignments', [ShiftAssignmentController::class, 'index']);
-            Route::post('shifts/{shift}/assign', [ShiftAssignmentController::class, 'assign']);
-            Route::post('shifts/{shift}/unassign', [ShiftAssignmentController::class, 'unassign']);
-            Route::post('shifts/{shift}/bulk-assign', [ShiftAssignmentController::class, 'bulkAssign']);
+            Route::get('shifts/{shift}/assignments', [ShiftAssignmentController::class, 'index'])
+                ->middleware('permission:shifts.manage_assignments');
+            Route::post('shifts/{shift}/assign', [ShiftAssignmentController::class, 'assign'])
+                ->middleware('permission:shifts.manage_assignments');
+            Route::post('shifts/{shift}/unassign', [ShiftAssignmentController::class, 'unassign'])
+                ->middleware('permission:shifts.manage_assignments');
+            Route::post('shifts/{shift}/bulk-assign', [ShiftAssignmentController::class, 'bulkAssign'])
+                ->middleware('permission:shifts.manage_assignments');
 
             // Shift Swaps
-            Route::get('shift-swaps', [ShiftSwapController::class, 'index']);
-            Route::post('shift-swaps', [ShiftSwapController::class, 'store']);
-            Route::put('shift-swaps/{shiftSwapRequest}/approve', [ShiftSwapController::class, 'approve']);
-            Route::put('shift-swaps/{shiftSwapRequest}/reject', [ShiftSwapController::class, 'reject']);
-            Route::delete('shift-swaps/{shiftSwapRequest}', [ShiftSwapController::class, 'destroy']);
+            Route::get('shift-swaps', [ShiftSwapController::class, 'index'])
+                ->middleware('permission:shifts.view');
+            Route::post('shift-swaps', [ShiftSwapController::class, 'store'])
+                ->middleware('permission:shifts.view');
+            Route::put('shift-swaps/{shiftSwapRequest}/approve', [ShiftSwapController::class, 'approve'])
+                ->middleware('permission:shifts.manage_swaps');
+            Route::put('shift-swaps/{shiftSwapRequest}/reject', [ShiftSwapController::class, 'reject'])
+                ->middleware('permission:shifts.manage_swaps');
+            Route::delete('shift-swaps/{shiftSwapRequest}', [ShiftSwapController::class, 'destroy'])
+                ->middleware('permission:shifts.view');
 
             // Payroll — Salary Structures
             Route::get('salary-structures', [SalaryStructureController::class, 'index'])
@@ -345,11 +420,14 @@ Route::prefix('v1')->group(function () {
                 ->middleware('permission:payroll.approve');
 
             // Payroll — Payslips
-            Route::get('payslips', [PayslipController::class, 'index']);
-            Route::get('payslips/{id}', [PayslipController::class, 'show']);
+            Route::get('payslips', [PayslipController::class, 'index'])
+                ->middleware('permission:payroll.view_own');
+            Route::get('payslips/{id}', [PayslipController::class, 'show'])
+                ->middleware('permission:payroll.view_own');
 
             // Payroll — Employee Salary
-            Route::get('employees/{employee}/salary', [EmployeeSalaryController::class, 'show']);
+            Route::get('employees/{employee}/salary', [EmployeeSalaryController::class, 'show'])
+                ->middleware('permission:payroll.view_all');
             Route::post('employees/{employee}/salary', [EmployeeSalaryController::class, 'store'])
                 ->middleware('permission:payroll.manage_structures');
         });

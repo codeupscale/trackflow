@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Services\ReportService;
+use App\Support\ReportExportFormatter;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -45,10 +46,10 @@ class GenerateReportJob implements ShouldQueue
             };
 
             if ($this->format === 'csv') {
-                $content = $this->generateCsv($data);
+                $content = ReportExportFormatter::csv($this->type, $data);
                 $filename = "reports/{$this->orgId}/{$this->jobId}.csv";
             } else {
-                $content = $this->generatePdf($data);
+                $content = ReportExportFormatter::pdf($this->type, $data, $this->dateFrom, $this->dateTo);
                 $filename = "reports/{$this->orgId}/{$this->jobId}.pdf";
             }
 
@@ -63,74 +64,6 @@ class GenerateReportJob implements ShouldQueue
             Cache::put("job:{$this->jobId}:error", $e->getMessage(), 3600);
             throw $e;
         }
-    }
-
-    private function generateCsv(array $data): string
-    {
-        $output = fopen('php://temp', 'r+');
-
-        // Flatten the data into CSV rows
-        if (isset($data['daily'])) {
-            fputcsv($output, ['Date', 'Total Seconds', 'Activity Score', 'Entry Count']);
-            foreach ($data['daily'] as $row) {
-                fputcsv($output, [
-                    $row->date ?? $row['date'] ?? '',
-                    $row->total_seconds ?? $row['total_seconds'] ?? 0,
-                    $row->activity_score_avg ?? $row['activity_score_avg'] ?? 0,
-                    $row->entry_count ?? $row['entry_count'] ?? 0,
-                ]);
-            }
-        } elseif (isset($data['team'])) {
-            fputcsv($output, ['Name', 'Email', 'Total Seconds', 'Activity Score', 'Entries']);
-            foreach ($data['team'] as $row) {
-                fputcsv($output, [
-                    $row['user']['name'],
-                    $row['user']['email'],
-                    $row['total_seconds'],
-                    $row['avg_activity'],
-                    $row['entry_count'],
-                ]);
-            }
-        } elseif (isset($data['payroll'])) {
-            fputcsv($output, ['Name', 'Email', 'Total Hours', 'Billable Hours', 'Earnings']);
-            foreach ($data['payroll'] as $row) {
-                fputcsv($output, [
-                    $row['user']['name'],
-                    $row['user']['email'],
-                    $row['total_hours'],
-                    $row['billable_hours'],
-                    $row['earnings'],
-                ]);
-            }
-        } elseif (!empty($data)) {
-            // Generic: encode as JSON rows
-            $firstRow = reset($data);
-            fputcsv($output, array_keys(is_array($firstRow) ? $firstRow : (array)$firstRow));
-            foreach ($data as $row) {
-                fputcsv($output, is_array($row) ? $row : (array)$row);
-            }
-        }
-
-        rewind($output);
-        $csv = stream_get_contents($output);
-        fclose($output);
-        return $csv;
-    }
-
-    private function generatePdf(array $data): string
-    {
-        if (class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
-            $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('reports.generic', [
-                'type' => $this->type,
-                'data' => $data,
-                'dateFrom' => $this->dateFrom,
-                'dateTo' => $this->dateTo,
-            ]);
-            return $pdf->output();
-        }
-
-        // Fallback: simple HTML to text
-        return json_encode($data, JSON_PRETTY_PRINT);
     }
 
     public function backoff(): array

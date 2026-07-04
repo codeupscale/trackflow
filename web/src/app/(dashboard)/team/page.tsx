@@ -81,7 +81,7 @@ interface TeamMember {
     id: string;
     name: string;
     email: string;
-    role: "owner" | "admin" | "manager" | "employee";
+    role: string;
     is_active: boolean;
     avatar_url: string | null;
     last_active_at: string | null;
@@ -99,7 +99,7 @@ interface BillingUsage {
 interface Invitation {
     id: string;
     email: string;
-    role: "admin" | "manager" | "employee";
+    role: string;
     token: string;
     expires_at: string;
     created_at: string;
@@ -127,8 +127,9 @@ const parsePositiveInt = (value: string | null, fallback: number) => {
 
 const roleBadgeVariant: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
     owner: "default",
-    admin: "secondary",
-    manager: "outline",
+    org_manager: "secondary",
+    hr_manager: "outline",
+    finance_manager: "outline",
     employee: "outline",
 };
 
@@ -667,15 +668,24 @@ export default function TeamPage() {
                                             <SelectValue placeholder="Select role" />
                                         </SelectTrigger>
                                         <SelectContent>
-                                            <SelectItem value="employee">
-                                                Employee
-                                            </SelectItem>
-                                            <SelectItem value="manager">
-                                                Manager
-                                            </SelectItem>
-                                            <SelectItem value="admin">
-                                                Admin
-                                            </SelectItem>
+                                            {orgRoles
+                                                ? orgRoles
+                                                    .filter((r) =>
+                                                        r.priority < 100 ||
+                                                        (r.priority >= 100 && user?.role === 'owner')
+                                                    )
+                                                    .sort((a, b) => b.priority - a.priority)
+                                                    .map((r) => (
+                                                        <SelectItem key={r.id} value={r.name}>
+                                                            {r.display_name}
+                                                        </SelectItem>
+                                                    ))
+                                                : (
+                                                    <SelectItem value="" disabled>
+                                                        Loading roles…
+                                                    </SelectItem>
+                                                )
+                                            }
                                         </SelectContent>
                                     </Select>
                                     {inviteErrors.role && (
@@ -1022,10 +1032,14 @@ export default function TeamPage() {
                             </SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="all">All Roles</SelectItem>
-                                <SelectItem value="owner">Owner</SelectItem>
-                                <SelectItem value="admin">Admin</SelectItem>
-                                <SelectItem value="manager">Manager</SelectItem>
-                                <SelectItem value="employee">Employee</SelectItem>
+                                {orgRoles
+                                    ?.slice()
+                                    .sort((a, b) => b.priority - a.priority)
+                                    .map((r) => (
+                                        <SelectItem key={r.id} value={r.name}>
+                                            {r.display_name}
+                                        </SelectItem>
+                                    ))}
                             </SelectContent>
                         </Select>
                         <Select value={statusFilter} onValueChange={(val) => setStatusFilter(val ?? "all")}>
@@ -1131,9 +1145,9 @@ export default function TeamPage() {
                                                 <TableCell>
                                                     <Badge
                                                         variant={roleBadgeVariant[member.role] || "outline"}
-                                                        className="text-xs capitalize"
+                                                        className="text-xs"
                                                     >
-                                                        {member.role}
+                                                        {orgRoles?.find((r) => r.name === member.role)?.display_name ?? member.role}
                                                     </Badge>
                                                 </TableCell>
                                                 <TableCell>
@@ -1180,7 +1194,10 @@ export default function TeamPage() {
                                                                         </DropdownMenuLabel>
                                                                         <DropdownMenuSeparator />
                                                                         {orgRoles
-                                                                            .filter((r) => r.priority < 100)
+                                                                            .filter((r) =>
+                                                                                r.priority < 100 ||
+                                                                                (r.priority >= 100 && user?.role === 'owner')
+                                                                            )
                                                                             .sort((a, b) => b.priority - a.priority)
                                                                             .map((r) => (
                                                                                 <DropdownMenuItem

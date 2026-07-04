@@ -49,8 +49,8 @@ import { useAuthGuard } from '@/hooks/use-auth-guard';
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const { isAuthenticated } = useAuthGuard();
-  const { user, logout } = useAuthStore();
-  const { hasPermission, hasPermissionWithScope } = usePermissionStore();
+  const { user, logout, fetchUser } = useAuthStore();
+  const { hasPermission, hasPermissionWithScope, permissions } = usePermissionStore();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -73,6 +73,18 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       queryClient.invalidateQueries({ queryKey: ['time-entries-dashboard'] });
     }
   }, [isTimerRunning, queryClient]);
+
+  // If the permission store is empty (e.g. stale localStorage hydration, first load, or a
+  // transient /auth/me failure that left the session intact), re-fetch the current user so
+  // setPermissions() repopulates the nav. Keyed on the empty condition too, so the sidebar
+  // self-heals whenever permissions go empty while still authenticated — not only on mount.
+  const permissionsEmpty = Object.keys(permissions).length === 0;
+  useEffect(() => {
+    if (isAuthenticated && permissionsEmpty) {
+      fetchUser();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, permissionsEmpty]);
 
   const handleLogout = async () => {
     useTimerStore.getState().resetState();

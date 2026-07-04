@@ -218,10 +218,19 @@ export default function SettingsPage() {
 
   const updateProfileMutation = useMutation({
     mutationFn: async (payload: { timezone: string }) => {
-      return api.patch('/auth/me', payload);
+      const res = await api.patch('/auth/me', payload);
+      return res.data;
     },
-    onSuccess: async () => {
-      await fetchUser();
+    onSuccess: (data, variables) => {
+      // A timezone change cannot affect permissions or org, so merge locally instead of a
+      // full /auth/me re-fetch — avoids the fetchUser() round-trip (and its failure modes)
+      // entirely. Prefer the server's returned user; fall back to a local merge.
+      const current = useAuthStore.getState().user;
+      if (data?.user) {
+        useAuthStore.getState().setUser(data.user);
+      } else if (current) {
+        useAuthStore.getState().setUser({ ...current, timezone: variables.timezone });
+      }
       toast.success('Your timezone has been updated');
     },
     onError: () => toast.error('Failed to update timezone'),

@@ -3,8 +3,10 @@
 .env
 .env.backup
 .env.production
+.env.testing
 .phpactor.json
 .phpunit.result.cache
+backend/phpunit.local.xml
 /.fleet
 /.idea
 /.nova
@@ -38,3 +40,6 @@ web/out
 docs
 temp_auto_push.bat
 temp_interactive_push.bat
+
+# Local scratch / testing
+testing_dump/

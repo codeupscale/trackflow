@@ -6,8 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Jobs\SendEmailNotificationJob;
 use App\Models\Invitation;
 use App\Models\Organization;
+use App\Models\Role;
 use App\Models\User;
 use App\Services\BillingService;
+use App\Services\RbacBootstrapService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -69,11 +71,31 @@ class InvitationController extends Controller
     {
         $request->validate([
             'email' => ['required', 'email', 'max:255'],
-            'role' => ['required', 'in:admin,manager,employee'],
+            'role' => ['required', 'string'],
         ]);
 
         $user = $request->user();
         $email = Str::lower(trim((string) $request->email));
+
+        // Validate that the role exists in this organization
+        $roleModel = Role::where('organization_id', $user->organization_id)
+            ->where('name', $request->role)
+            ->first();
+
+        if (! $roleModel) {
+            return response()->json([
+                'message' => 'The selected role does not exist.',
+                'errors' => ['role' => ['The selected role does not exist in your organization.']],
+            ], 422);
+        }
+
+        // Only owners can invite other owners
+        if ($roleModel->name === 'owner' && $user->role !== 'owner') {
+            return response()->json([
+                'message' => 'Only owners can assign the owner role.',
+                'errors' => ['role' => ['Only owners can invite another owner.']],
+            ], 403);
+        }
 
         // Enforce seat limit at invite time to avoid sending invites that can't be accepted.
         $usage = $this->billingService->getUsage($user->organization);
@@ -117,7 +139,7 @@ class InvitationController extends Controller
             'email' => $email,
             'role' => $request->role,
             'token' => Str::random(64),
-            'expires_at' => now()->addDays(7),
+            'expires_at' => now()->addDays(config('security.invitation_ttl_days')),
             'created_by' => $user->id,
         ]);
 
@@ -141,7 +163,7 @@ class InvitationController extends Controller
         }
 
         // Extend expiry on resend
-        $invitation->update(['expires_at' => now()->addDays(7)]);
+        $invitation->update(['expires_at' => now()->addDays(config('security.invitation_ttl_days'))]);
 
         $this->sendInvitationEmail($invitation->fresh(), $user->loadMissing('organization'));
 
@@ -196,7 +218,7 @@ class InvitationController extends Controller
             ], 402);
         }
 
-        $user = DB::transaction(function () use ($request, $invitation) {
+        $user = DB::transaction(function () use ($request, $invitation, $org) {
             $existing = User::withoutGlobalScopes()
                 ->where('organization_id', $invitation->organization_id)
                 ->where('email', $invitation->email)
@@ -211,16 +233,20 @@ class InvitationController extends Controller
                 'email' => $invitation->email,
                 'password' => $request->password,
                 'role' => $invitation->role,
+                'timezone' => User::defaultTimezoneForOrg($org),
                 'email_verified_at' => now(),
             ]);
 
             $invitation->update(['accepted_at' => now()]);
 
+            // Ensure system roles exist for this org and assign the user to their role
+            app(RbacBootstrapService::class)->bootstrapOrgAndAssignUser($user, $invitation->role);
+
             return $user;
         });
 
-        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+        $token = $user->createToken('access_token', ['*'], now()->addMinutes(config('security.tokens.access_ttl')));
+        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addMinutes(config('security.tokens.refresh_ttl')));
 
         return response()->json([
             'user' => [
@@ -229,6 +255,7 @@ class InvitationController extends Controller
                 'email' => $user->email,
                 'role' => $user->role,
                 'organization_id' => $user->organization_id,
+                'permissions' => $user->getPermissionMap(),
             ],
             'access_token' => $token->plainTextToken,
             'refresh_token' => $refreshToken->plainTextToken,

@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 interface PermissionState {
-  permissions: Record<string, string>; // e.g. { 'time_entries.view': 'team' }
+  permissions: Record<string, string>; // e.g. { 'time_entries.view': 'project' }
   setPermissions: (perms: Record<string, string>) => void;
   clearPermissions: () => void;
 
@@ -15,7 +15,7 @@ interface PermissionState {
 
 const SCOPE_HIERARCHY: Record<string, number> = {
   own: 1,
-  team: 2,
+  project: 2,
   organization: 3,
   none: 3, // non-scoped permissions (e.g. boolean toggles)
 };
@@ -35,6 +35,9 @@ export const usePermissionStore = create<PermissionState>()(
       hasPermissionWithScope: (key, requiredScope) => {
         const granted = get().permissions[key];
         if (!granted) return false;
+        // 'none' means non-scoped (org-wide boolean toggle) — it does NOT
+        // satisfy hierarchical scope requirements (own / project / organization).
+        if (granted === 'none' && requiredScope !== 'none') return false;
         return (SCOPE_HIERARCHY[granted] ?? 0) >= (SCOPE_HIERARCHY[requiredScope] ?? 0);
       },
 

@@ -23,7 +23,7 @@ class InvitationTest extends TestCase
         ]);
 
         $this->owner = $this->createUser($this->org, 'owner');
-        $this->manager = $this->createUser($this->org, 'manager');
+        $this->manager = $this->createUser($this->org, 'org_manager');
     }
 
     public function test_owner_can_create_invitation(): void

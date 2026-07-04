@@ -1,10 +1,14 @@
-// Timer Manager — timer start/stop/sync, tray timer tick (H2 refactor)
-// Stub module — timer logic remains in index.js for now due to deep coupling
-// with IPC handlers and tray logic. This file serves as the extraction target.
+/**
+ * Timer Manager — extraction target for start/stop/sync logic from index.js.
+ * Phase 5: re-exports pure helpers; full IPC/tray extraction remains incremental.
+ */
 
-const AppState = require('./app-state');
+const timerState = require('./timer-state');
+const PowerManager = require('./power-manager');
 
 module.exports = {
-  // Placeholder — timer logic is still in index.js
-  // Future: extract startTimer, stopTimer, startTimerSync, tray timer here
+  ...timerState,
+  PowerManager,
+  // Full startTimer/stopTimer/reconcileTimerState remain in index.js until
+  // tray/IPC coupling is untangled in a follow-up refactor.
 };

@@ -2,13 +2,16 @@
 
 namespace App\Services;
 
+use App\Models\AttendancePolicy;
 use App\Models\AttendanceRecord;
 use App\Models\AttendanceRegularization;
+use App\Models\CheckInSession;
 use App\Models\LeaveRequest;
 use App\Models\OvertimeRule;
 use App\Models\PublicHoliday;
 use App\Models\TimeEntry;
 use App\Models\User;
+use App\Support\TimezoneAwareDateRange;
 use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
@@ -50,16 +53,28 @@ class AttendanceService
                 // Get the user's active shift for this date
                 $shift = $user->shifts->first();
 
-                // Query time entries for this user on this date
-                $dayStart = $carbonDate->copy()->startOfDay();
-                $dayEnd = $carbonDate->copy()->endOfDay();
+                // Query time entries for this user on this date.
+                // BUG FIX (attendance-present-marked-absent-utc-bucketing): the day
+                // boundary must be the user's LOCAL calendar day, converted to UTC bounds,
+                // not a raw UTC startOfDay()/endOfDay(). Otherwise early-morning local hours
+                // fall into the previous UTC day and a present employee is marked absent.
+                // started_at is stored in UTC; the bounds are [start, nextDayStart) — use <.
+                $userTz = $user->getTimezoneForDates();
+                $dayStart = TimezoneAwareDateRange::startOfDayUtc($date, $userTz);
+                $dayEnd = TimezoneAwareDateRange::endOfDayUtc($date, $userTz); // exclusive
 
+                // Exclude `idle` entries from attendance hours and the clock-in/out
+                // span. They are audit markers (discarded idle, or a duplicate
+                // alongside a reassigned tracked entry); counting them inflates worked
+                // hours and can flip the Present/Half-Day/Absent status. `tracked` and
+                // `manual` entries are real worked time and count.
                 $timeEntries = TimeEntry::withoutGlobalScopes()
                     ->where('organization_id', $orgId)
                     ->where('user_id', $user->id)
                     ->where('started_at', '>=', $dayStart)
-                    ->where('started_at', '<=', $dayEnd)
+                    ->where('started_at', '<', $dayEnd)
                     ->whereNotNull('ended_at')
+                    ->where('type', '!=', 'idle')
                     ->orderBy('started_at')
                     ->get();
 
@@ -116,9 +131,29 @@ class AttendanceService
                     }
                 }
 
-                // Convert datetime to time strings for the time columns
-                $firstSeenTime = $firstSeen ? Carbon::parse($firstSeen)->format('H:i:s') : null;
-                $lastSeenTime = $lastSeen ? Carbon::parse($lastSeen)->format('H:i:s') : null;
+                // Convert datetime to time strings for the time columns.
+                // Render in the user's local timezone so a 09:00 local start shows as 09:00:00,
+                // not the UTC wall-clock (e.g. 04:00:00 for PKT).
+                $firstSeenTime = $firstSeen ? Carbon::parse($firstSeen)->setTimezone($userTz)->format('H:i:s') : null;
+                $lastSeenTime = $lastSeen ? Carbon::parse($lastSeen)->setTimezone($userTz)->format('H:i:s') : null;
+
+                // Check-in reconciliation: if the employee physically checked in (via the
+                // check-in/checkout feature) but has little/no tracked time, the nightly
+                // computation would mark them absent/half_day and hide the fact they were
+                // present. Elevate to 'present' so the check-in is honoured. The
+                // updateOrCreate payload below deliberately excludes every check-in column,
+                // so check_in_at/check_out_at/worked_seconds are never clobbered here.
+                $existingRecord = AttendanceRecord::withoutGlobalScopes()
+                    ->where('organization_id', $orgId)
+                    ->where('user_id', $user->id)
+                    ->where('date', $date)
+                    ->first();
+
+                if ($existingRecord
+                    && $existingRecord->check_in_at !== null
+                    && in_array($status, ['absent', 'half_day'], true)) {
+                    $status = 'present';
+                }
 
                 AttendanceRecord::withoutGlobalScopes()->updateOrCreate(
                     [
@@ -166,15 +201,7 @@ class AttendanceService
         }
 
         // 2. On approved leave
-        $onLeave = LeaveRequest::withoutGlobalScopes()
-            ->where('organization_id', $orgId)
-            ->where('user_id', $user->id)
-            ->where('status', 'approved')
-            ->where('start_date', '<=', $date->toDateString())
-            ->where('end_date', '>=', $date->toDateString())
-            ->exists();
-
-        if ($onLeave) {
+        if ($this->isOnApprovedLeave($user, $date->toDateString())) {
             return 'on_leave';
         }
 
@@ -202,13 +229,56 @@ class AttendanceService
     }
 
     /**
+     * Whether the given org-local date is a public holiday for the organization.
+     * Shared by AttendanceService and CheckInService so the two never diverge.
+     */
+    public function isHoliday(string $orgId, string $date): bool
+    {
+        return PublicHoliday::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->whereDate('date', $date)
+            ->exists();
+    }
+
+    /**
+     * Whether the user has an approved leave request covering the given date.
+     * Shared by AttendanceService and CheckInService so the two never diverge.
+     */
+    public function isOnApprovedLeave(User $user, string $date): bool
+    {
+        return LeaveRequest::withoutGlobalScopes()
+            ->where('organization_id', $user->organization_id)
+            ->where('user_id', $user->id)
+            ->where('status', 'approved')
+            ->where('start_date', '<=', $date)
+            ->where('end_date', '>=', $date)
+            ->exists();
+    }
+
+    /**
+     * Whether the given date is a non-working day for the user: a public holiday
+     * or a weekend (Saturday/Sunday). Used to flag check-ins made on off days.
+     */
+    public function isOffDay(User $user, string $date): bool
+    {
+        if ($this->isHoliday($user->organization_id, $date)) {
+            return true;
+        }
+
+        $dayOfWeek = strtolower(Carbon::parse($date)->format('l'));
+
+        return in_array($dayOfWeek, ['saturday', 'sunday'], true);
+    }
+
+    /**
      * Get attendance records for a specific user (paginated, filterable by date range and status).
      */
     public function getAttendance(string $userId, string $orgId, array $filters): LengthAwarePaginator
     {
         $query = AttendanceRecord::where('organization_id', $orgId)
             ->where('user_id', $userId)
-            ->with('shift:id,name,start_time,end_time');
+            ->with('shift:id,name,start_time,end_time')
+            ->withCount(['sessions as open_sessions_count' => fn ($q) => $q->whereNull('check_out_at')]);
 
         if (!empty($filters['start_date'])) {
             $query->where('date', '>=', $filters['start_date']);
@@ -222,41 +292,379 @@ class AttendanceService
             $query->where('status', $filters['status']);
         }
 
-        return $query->orderByDesc('date')->paginate($filters['per_page'] ?? 25);
+        $paginator = $query->orderByDesc('date')->paginate($filters['per_page'] ?? 25);
+
+        // Serialize into the shape the web table expects (clock_in/clock_out/day/
+        // shift_name/hours/late), reconciling tracker-derived and check-in fields.
+        $tz = $this->orgTimezone($orgId);
+        $paginator->getCollection()->transform(fn (AttendanceRecord $r) => $this->serializeRecord($r, $tz));
+
+        return $paginator;
     }
 
     /**
      * Get team attendance: paginated, filterable by department, user, date range, status.
-     * Returns records with user name/email.
+     *
+     * Returns a COMPLETE roster: every active employee gets a row for each day in the
+     * range. Where a generated attendance_record exists it is used verbatim (so present /
+     * half-day / late / overtime stay accurate); where one is missing the row is
+     * synthesised with a derived non-worked status (holiday > on_leave > weekend > absent).
+     *
+     * This guarantees absent staff always appear, independent of whether the daily
+     * GenerateDailyAttendanceJob has run for the date yet (e.g. the current day, or
+     * environments where the scheduler is disabled).
      */
     public function getTeamAttendance(string $orgId, array $filters): LengthAwarePaginator
     {
-        $query = AttendanceRecord::where('organization_id', $orgId)
-            ->with(['user:id,name,email,avatar_url', 'shift:id,name,start_time,end_time']);
+        $perPage = (int) ($filters['per_page'] ?? 25);
+        $page = \Illuminate\Pagination\LengthAwarePaginator::resolveCurrentPage();
+
+        // Resolve range (default to today). Cap span to avoid runaway synthesis.
+        $end = !empty($filters['end_date']) ? Carbon::parse($filters['end_date']) : Carbon::now();
+        $start = !empty($filters['start_date']) ? Carbon::parse($filters['start_date']) : $end->copy();
+        if ($start->gt($end)) {
+            $start = $end->copy();
+        }
+        $maxDays = 92;
+        if ($start->diffInDays($end) > $maxDays) {
+            $start = $end->copy()->subDays($maxDays);
+        }
+        $startDate = $start->toDateString();
+        $endDate = $end->toDateString();
+
+        // Active employees (filtered by user / department).
+        $usersQuery = User::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->where('is_active', true);
 
         if (!empty($filters['user_id'])) {
-            $query->where('user_id', $filters['user_id']);
+            $usersQuery->where('id', $filters['user_id']);
         }
 
         if (!empty($filters['department_id'])) {
-            $query->whereHas('user.employeeProfile', function ($q) use ($filters) {
+            $usersQuery->whereHas('employeeProfile', function ($q) use ($filters) {
                 $q->where('department_id', $filters['department_id']);
             });
         }
 
-        if (!empty($filters['start_date'])) {
-            $query->where('date', '>=', $filters['start_date']);
+        $users = $usersQuery->orderBy('name')->get(['id', 'name', 'email', 'avatar_url']);
+        $userIds = $users->pluck('id');
+
+        if ($userIds->isEmpty()) {
+            return new \Illuminate\Pagination\LengthAwarePaginator([], 0, $perPage, $page, [
+                'path' => \Illuminate\Pagination\LengthAwarePaginator::resolveCurrentPath(),
+            ]);
         }
 
-        if (!empty($filters['end_date'])) {
-            $query->where('date', '<=', $filters['end_date']);
+        // Existing generated records in range, keyed by "user_id|YYYY-MM-DD".
+        $existing = AttendanceRecord::where('organization_id', $orgId)
+            ->whereIn('user_id', $userIds)
+            ->whereBetween('date', [$startDate, $endDate])
+            ->with(['user:id,name,email,avatar_url', 'shift:id,name,start_time,end_time'])
+            ->withCount(['sessions as open_sessions_count' => fn ($q) => $q->whereNull('check_out_at')])
+            ->get()
+            ->keyBy(fn ($r) => $r->user_id . '|' . Carbon::parse($r->date)->toDateString());
+
+        // Prefetch holidays (set of date strings) and approved leaves overlapping the range.
+        $holidays = PublicHoliday::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->whereBetween('date', [$startDate, $endDate])
+            ->get()
+            ->map(fn ($h) => Carbon::parse($h->date)->toDateString())
+            ->flip();
+
+        $leaves = LeaveRequest::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->whereIn('user_id', $userIds)
+            ->where('status', 'approved')
+            ->where('start_date', '<=', $endDate)
+            ->where('end_date', '>=', $startDate)
+            ->get(['user_id', 'start_date', 'end_date'])
+            ->groupBy('user_id');
+
+        // Enumerate dates in range.
+        $dates = [];
+        for ($d = $start->copy(); $d->lte($end); $d->addDay()) {
+            $dates[] = $d->toDateString();
         }
 
+        $tz = $this->orgTimezone($orgId);
+
+        $rows = [];
+        foreach ($users as $u) {
+            foreach ($dates as $dateStr) {
+                $record = $existing->get($u->id . '|' . $dateStr);
+                if ($record) {
+                    $rows[] = $this->serializeRecord($record, $tz) + ['is_synthetic' => false];
+                    continue;
+                }
+
+                $rows[] = [
+                    'id' => "synthetic-{$u->id}-{$dateStr}",
+                    'organization_id' => $orgId,
+                    'user_id' => $u->id,
+                    'date' => $dateStr,
+                    'day' => Carbon::parse($dateStr)->format('D'),
+                    'shift_id' => null,
+                    'shift_name' => null,
+                    'expected_start' => null,
+                    'expected_end' => null,
+                    'first_seen' => null,
+                    'last_seen' => null,
+                    'clock_in' => null,
+                    'clock_out' => null,
+                    'total_hours' => 0,
+                    'status' => $this->deriveAbsentStatus($u->id, $dateStr, $holidays, $leaves),
+                    'late_minutes' => 0,
+                    'early_departure_minutes' => 0,
+                    'overtime_minutes' => 0,
+                    'overtime_hours' => 0,
+                    'is_regularized' => false,
+                    // Check-in signal columns — always absent on a synthesised row.
+                    'check_in_at' => null,
+                    'check_out_at' => null,
+                    'worked_seconds' => null,
+                    'worked_hhmm' => null,
+                    'check_in_status' => null,
+                    'check_in_late_minutes' => 0,
+                    'is_early_checkout' => false,
+                    'missing_checkout' => false,
+                    'check_in_flags' => null,
+                    'is_synthetic' => true,
+                    'user' => [
+                        'id' => $u->id,
+                        'name' => $u->name,
+                        'email' => $u->email,
+                        'avatar_url' => $u->avatar_url,
+                    ],
+                    'shift' => null,
+                ];
+            }
+        }
+
+        // Optional status filter applied across both real and synthesised rows.
         if (!empty($filters['status'])) {
-            $query->where('status', $filters['status']);
+            $rows = array_values(array_filter($rows, fn ($r) => $r['status'] === $filters['status']));
         }
 
-        return $query->orderByDesc('date')->paginate($filters['per_page'] ?? 25);
+        // Sort by date desc, then employee name asc.
+        usort($rows, function ($a, $b) {
+            $cmp = strcmp($b['date'], $a['date']);
+            if ($cmp !== 0) {
+                return $cmp;
+            }
+            return strcmp($a['user']['name'] ?? '', $b['user']['name'] ?? '');
+        });
+
+        $total = count($rows);
+        $items = array_slice($rows, ($page - 1) * $perPage, $perPage);
+
+        return new \Illuminate\Pagination\LengthAwarePaginator($items, $total, $perPage, $page, [
+            'path' => \Illuminate\Pagination\LengthAwarePaginator::resolveCurrentPath(),
+        ]);
+    }
+
+    /**
+     * Derive the non-worked status for a day with no attendance record.
+     * Synthesised rows have zero worked hours, so they can only be
+     * holiday / on_leave / weekend / absent (never present or half-day).
+     */
+    private function deriveAbsentStatus(string $userId, string $dateStr, $holidays, $leavesByUser): string
+    {
+        if ($holidays->has($dateStr)) {
+            return 'holiday';
+        }
+
+        $userLeaves = $leavesByUser->get($userId);
+        if ($userLeaves) {
+            foreach ($userLeaves as $leave) {
+                $from = Carbon::parse($leave->start_date)->toDateString();
+                $to = Carbon::parse($leave->end_date)->toDateString();
+                if ($dateStr >= $from && $dateStr <= $to) {
+                    return 'on_leave';
+                }
+            }
+        }
+
+        $dow = strtolower(Carbon::parse($dateStr)->format('l'));
+        if (in_array($dow, ['saturday', 'sunday'])) {
+            return 'weekend';
+        }
+
+        return 'absent';
+    }
+
+    /**
+     * Serialize an attendance record into the shape the web dashboard consumes.
+     *
+     * Reconciles the two attendance signals into single display columns:
+     *   - clock_in / clock_out  ← physical check-in/checkout instant (rendered in the
+     *     org policy timezone) when present, else the tracker-derived first/last-seen
+     *     wall-clock. Only filled from check-in data when it exists, so tracker-only
+     *     orgs are unaffected.
+     *   - total_hours           ← tracked hours, else the check-in worked_seconds.
+     *   - late_minutes          ← check_in_late_minutes when the user checked in,
+     *     else the tracker/shift late figure.
+     * The raw check-in signal columns are also passed through so the row can render
+     * the on-time / late / early-checkout / missing-checkout badge.
+     */
+    private function serializeRecord(AttendanceRecord $record, string $tz): array
+    {
+        $date = $record->date instanceof Carbon
+            ? $record->date->toDateString()
+            : Carbon::parse((string) $record->date)->toDateString();
+
+        $checkInAt = $record->check_in_at;   // Carbon|null (UTC) — first session's check-in
+        $checkOutAt = $record->check_out_at; // Carbon|null (UTC) — LAST CLOSED session's checkout
+
+        // Post multi-session redesign, check_out_at is the last CLOSED session's checkout,
+        // so "check_out_at IS NULL" no longer means "still working" — a record can hold a
+        // closed checkout AND a later open session. Derive the live state from an actual
+        // open-session existence check so we never render a stale checkout while a later
+        // session is running.
+        $hasOpenSession = $this->recordHasOpenSession($record);
+
+        $clockIn = $checkInAt
+            ? $checkInAt->copy()->setTimezone($tz)->format('g:i A')
+            : $this->trimTime($record->first_seen);
+
+        if ($hasOpenSession) {
+            // Still checked in — no checkout to display yet.
+            $clockOut = null;
+            $checkOutAt = null;
+        } else {
+            $clockOut = $checkOutAt
+                ? $checkOutAt->copy()->setTimezone($tz)->format('g:i A')
+                : $this->trimTime($record->last_seen);
+        }
+
+        // Hours: tracked time wins; otherwise the check-in session length (set on checkout).
+        $totalHours = (float) $record->total_hours;
+        if ($totalHours <= 0 && $record->worked_seconds !== null) {
+            $totalHours = round($record->worked_seconds / 3600, 2);
+        }
+
+        // Late: the physical check-in figure wins whenever the employee checked in.
+        $lateMinutes = $checkInAt !== null
+            ? (int) ($record->check_in_late_minutes ?? 0)
+            : (int) $record->late_minutes;
+
+        // Overtime: tracker OT, else the checkout overtime.
+        $overtimeMinutes = (int) $record->overtime_minutes;
+        if ($overtimeMinutes <= 0) {
+            $overtimeMinutes = (int) ($record->check_out_overtime_minutes ?? 0);
+        }
+
+        $data = [
+            'id' => $record->id,
+            'organization_id' => $record->organization_id,
+            'user_id' => $record->user_id,
+            'date' => $date,
+            'day' => Carbon::parse($date)->format('D'),
+            'status' => $record->status,
+            'shift_id' => $record->shift_id,
+            'shift_name' => $record->shift?->name,
+            'expected_start' => $record->expected_start,
+            'expected_end' => $record->expected_end,
+            'first_seen' => $record->first_seen,
+            'last_seen' => $record->last_seen,
+            'clock_in' => $clockIn,
+            'clock_out' => $clockOut,
+            'total_hours' => $totalHours,
+            'late_minutes' => $lateMinutes,
+            'early_departure_minutes' => (int) $record->early_departure_minutes,
+            'overtime_minutes' => $overtimeMinutes,
+            'overtime_hours' => round($overtimeMinutes / 60, 2),
+            'is_regularized' => (bool) $record->is_regularized,
+            // Check-in / checkout signal columns (drive the row badge + clock display).
+            'check_in_at' => $checkInAt?->toIso8601String(),
+            'check_out_at' => $checkOutAt?->toIso8601String(),
+            'worked_seconds' => $record->worked_seconds,
+            'worked_hhmm' => $this->formatHhmm($record->worked_seconds),
+            'check_in_status' => $record->check_in_status,
+            'check_in_late_minutes' => (int) ($record->check_in_late_minutes ?? 0),
+            'is_early_checkout' => (bool) $record->is_early_checkout,
+            'missing_checkout' => (bool) $record->missing_checkout,
+            'check_in_flags' => $record->check_in_flags,
+            'shift' => $record->shift ? [
+                'id' => $record->shift->id,
+                'name' => $record->shift->name,
+                'start_time' => $record->shift->start_time,
+                'end_time' => $record->shift->end_time,
+            ] : null,
+        ];
+
+        if ($record->relationLoaded('user') && $record->user) {
+            $data['user'] = [
+                'id' => $record->user->id,
+                'name' => $record->user->name,
+                'email' => $record->user->email,
+                'avatar_url' => $record->user->avatar_url,
+            ];
+        }
+
+        return $data;
+    }
+
+    /**
+     * Does this record currently have an open check-in session (checked in, not yet
+     * out)? Prefers the eager-loaded `open_sessions_count` (set via withCount at the
+     * query sites) to avoid an N+1; falls back to a single org-scoped existence query.
+     */
+    private function recordHasOpenSession(AttendanceRecord $record): bool
+    {
+        if (array_key_exists('open_sessions_count', $record->getAttributes())) {
+            return (int) $record->open_sessions_count > 0;
+        }
+
+        return CheckInSession::withoutGlobalScopes()
+            ->where('organization_id', $record->organization_id)
+            ->where('attendance_record_id', $record->id)
+            ->open()
+            ->exists();
+    }
+
+    /**
+     * The org's check-in policy timezone, used to render check-in instants as
+     * org-local wall-clock. Falls back to the app timezone when no policy exists
+     * (an org with no policy has no check-in data, so the fallback is never applied
+     * to a real check-in instant).
+     */
+    private function orgTimezone(string $orgId): string
+    {
+        return AttendancePolicy::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->value('timezone') ?? (string) config('app.timezone', 'UTC');
+    }
+
+    /**
+     * Render a stored H:i:s wall-clock string as a 12-hour display time
+     * (e.g. "09:00:00" → "9:00 AM"). Kept consistent with the check_in_at /
+     * check_out_at 'g:i A' formatting so both the physical check-in and the
+     * tracker-derived fallback render the same way. Null-safe.
+     */
+    private function trimTime(?string $time): ?string
+    {
+        if ($time === null || $time === '') {
+            return null;
+        }
+
+        return Carbon::createFromFormat('H:i:s', substr($time, 0, 8))->format('g:i A');
+    }
+
+    /**
+     * Format a second count as HH:MM (mirrors CheckInService::formatHhmm). Null-safe.
+     */
+    private function formatHhmm(?int $seconds): ?string
+    {
+        if ($seconds === null) {
+            return null;
+        }
+
+        $hours = intdiv($seconds, 3600);
+        $minutes = intdiv($seconds % 3600, 60);
+
+        return sprintf('%02d:%02d', $hours, $minutes);
     }
 
     /**
@@ -275,9 +683,24 @@ class AttendanceService
         $presentDays = $records->where('status', 'present')->count();
         $absentDays = $records->where('status', 'absent')->count();
         $halfDays = $records->where('status', 'half_day')->count();
-        $lateDays = $records->where('late_minutes', '>', 0)->count();
+        // Lateness has two independent sources that must both count: the legacy
+        // tracker-era `late_minutes` column and the manual check-in
+        // `check_in_late_minutes` (marked `check_in_status = late`). A day is late
+        // when EITHER signal fires — see detailRowGenerator() for the same rule.
+        $lateDays = $records->filter(function ($record) {
+            return (int) $record->late_minutes > 0
+                || (int) ($record->check_in_late_minutes ?? 0) > 0
+                || $record->check_in_status === 'late';
+        })->count();
         $onLeaveDays = $records->where('status', 'on_leave')->count();
-        $overtimeMinutes = $records->sum('overtime_minutes');
+        // Overtime likewise has two sources: tracker `overtime_minutes`, falling
+        // back to the manual checkout `check_out_overtime_minutes` when the tracker
+        // recorded none — mirrors detailRowGenerator().
+        $overtimeMinutes = $records->sum(function ($record) {
+            $tracker = (int) $record->overtime_minutes;
+
+            return $tracker > 0 ? $tracker : (int) ($record->check_out_overtime_minutes ?? 0);
+        });
 
         // Total working days = days that aren't weekends or holidays
         $totalWorkingDays = $records->whereNotIn('status', ['weekend', 'holiday'])->count();

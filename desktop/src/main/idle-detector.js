@@ -23,7 +23,12 @@
 const { powerMonitor } = require('electron');
 
 const DEFAULT_IDLE_TIMEOUT_MIN = 5;
-const DEFAULT_IDLE_CHECK_INTERVAL_SEC = 10;
+const DEFAULT_IDLE_CHECK_INTERVAL_SEC = 2;
+/** Hard upper bound for idle auto-stop (minutes). Guards against a misconfigured
+ *  org setting producing an absurd countdown / never-auto-stopping timer. */
+const MAX_AUTO_STOP_MIN = 240; // 4 hours
+/** Schedule a one-shot fire when within this many seconds of the threshold. */
+const BOUNDARY_LEAD_SEC = 20;
 
 const IDLE_STATE = Object.freeze({
   STOPPED: 'STOPPED',
@@ -53,6 +58,7 @@ class IdleDetector {
     // Callbacks — set by main process
     this._onIdleDetected = null;   // (idleSeconds, idleStartedAt, actionId) => void
     this._onAutoStop = null;       // (totalIdleSeconds, actionId) => void
+    this._boundaryTimer = null;
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -84,6 +90,20 @@ class IdleDetector {
   start() {
     if (!this.enabled) return;
     const previousState = this._state;
+
+    // BUG B FIX: Never clobber an in-progress idle cycle. A spurious start()
+    // from the timer sync loop / reconcile (e.g. a transient `status.running &&
+    // !isTimerRunning` tick) used to reset idleStartedAt/alertShownAt to null and
+    // clear the auto-stop interval while the alert was DETECTED or ALERTING. If
+    // showIdleAlert() was mid-`await loadProjects()`, isIdleActive() then flipped
+    // to false and its guard swallowed the popup → the alert "sometimes doesn't
+    // appear". Treat start() as a no-op while an alert is live; the current cycle
+    // resolves through resolveIdle()/auto-stop and re-arms itself afterward.
+    if (previousState === IDLE_STATE.DETECTED || previousState === IDLE_STATE.ALERTING) {
+      console.warn(`[IdleDetector] start() called in active state ${previousState} — ignoring to preserve live alert`);
+      return;
+    }
+
     // Allow start from STOPPED or RESOLVED (re-arm after action)
     if (previousState !== IDLE_STATE.STOPPED && previousState !== IDLE_STATE.RESOLVED) {
       console.warn(`[IdleDetector] start() called in state ${previousState} — stopping first`);
@@ -247,7 +267,11 @@ class IdleDetector {
   _applyConfig(config) {
     const timeout = config.idle_timeout != null ? config.idle_timeout : DEFAULT_IDLE_TIMEOUT_MIN;
     this.idleTimeoutSec = timeout > 0 ? timeout * 60 : 0;
-    const autoStopMin = config.idle_alert_auto_stop_min != null ? config.idle_alert_auto_stop_min : 10;
+    const rawAutoStopMin = config.idle_alert_auto_stop_min != null ? config.idle_alert_auto_stop_min : 10;
+    // Clamp to [0, MAX_AUTO_STOP_MIN]. A misconfigured org setting (e.g. 8600 min
+    // ≈ 6 days) otherwise produced an absurd countdown ("auto-stop in 8597:40")
+    // and a timer that effectively never auto-stopped.
+    const autoStopMin = Math.min(Math.max(0, rawAutoStopMin), MAX_AUTO_STOP_MIN);
     this.alertAutoStopSec = autoStopMin > 0 ? autoStopMin * 60 : 0;
     const checkSec = config.idle_check_interval_sec != null ? config.idle_check_interval_sec : DEFAULT_IDLE_CHECK_INTERVAL_SEC;
     this.checkIntervalMs = Math.min(60, Math.max(1, checkSec)) * 1000;
@@ -259,6 +283,19 @@ class IdleDetector {
       clearInterval(this.checkInterval);
       this.checkInterval = null;
     }
+    if (this._boundaryTimer) {
+      clearTimeout(this._boundaryTimer);
+      this._boundaryTimer = null;
+    }
+  }
+
+  _scheduleBoundaryFire(remainingSec) {
+    if (this._boundaryTimer) return;
+    const ms = Math.max(50, Math.floor(remainingSec * 1000));
+    this._boundaryTimer = setTimeout(() => {
+      this._boundaryTimer = null;
+      this._check();
+    }, ms);
   }
 
   /**
@@ -297,6 +334,7 @@ class IdleDetector {
     }
 
     if (systemIdleSec >= this.idleTimeoutSec) {
+      this._clearBoundaryOnly();
       // Idle threshold crossed — transition to DETECTED
       this._state = IDLE_STATE.DETECTED;
       this._actionId++;
@@ -317,6 +355,18 @@ class IdleDetector {
       if (this.alertAutoStopSec > 0) {
         this.checkInterval = setInterval(() => this._checkAutoStop(), this.checkIntervalMs);
       }
+    } else if (
+      systemIdleSec >= this.idleTimeoutSec - BOUNDARY_LEAD_SEC
+      && systemIdleSec < this.idleTimeoutSec
+    ) {
+      this._scheduleBoundaryFire(this.idleTimeoutSec - systemIdleSec);
+    }
+  }
+
+  _clearBoundaryOnly() {
+    if (this._boundaryTimer) {
+      clearTimeout(this._boundaryTimer);
+      this._boundaryTimer = null;
     }
   }
 

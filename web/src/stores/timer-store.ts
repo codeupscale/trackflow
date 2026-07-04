@@ -14,6 +14,7 @@ import { useAuthStore } from '@/stores/auth-store';
 
 interface TimerState {
   isRunning: boolean;
+  isPaused: boolean;
   entryId: string | null;
   projectId: string | null;
   projectName: string | null;
@@ -33,6 +34,8 @@ interface TimerState {
   echoOrgId: string | null;
   /** Handler reference for visibilitychange cleanup. */
   _visibilityHandler: (() => void) | null;
+  /** Handler reference for the window 'online' resync listener. */
+  _onlineHandler: (() => void) | null;
   /** BroadcastChannel for multi-tab sync. */
   _broadcastChannel: BroadcastChannel | null;
 
@@ -49,6 +52,7 @@ interface TimerState {
 
 export const useTimerStore = create<TimerState>()((set, get) => ({
   isRunning: false,
+  isPaused: false,
   entryId: null,
   projectId: null,
   projectName: null,
@@ -62,6 +66,7 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   pollId: null,
   echoOrgId: null,
   _visibilityHandler: null,
+  _onlineHandler: null,
   _broadcastChannel: null,
 
   fetchStatus: async () => {
@@ -71,7 +76,40 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
       const todayTotal = res.data.today_total || 0;
       const projectTodayTotal = res.data.project_today_total || 0;
 
-      if (res.data.running) {
+      const isPaused = res.data.state === 'paused' || res.data.paused === true;
+
+      if (isPaused && res.data.entry) {
+        const currentElapsed = res.data.elapsed_seconds || 0;
+        const runningProjectId = res.data.entry?.project_id ?? null;
+        const runningProjectName = res.data.entry?.project?.name ?? null;
+        const base = Math.max(0, todayTotal - currentElapsed);
+        const projectBase = Math.max(0, projectTodayTotal - currentElapsed);
+
+        if (get().intervalId) {
+          get().stopTicking();
+        }
+
+        const newState = {
+          isRunning: false,
+          isPaused: true,
+          entryId: res.data.entry?.id,
+          projectId: runningProjectId,
+          projectName: runningProjectName,
+          startedAt: res.data.entry?.started_at,
+          elapsedSeconds: currentElapsed,
+          todayTotalSeconds: todayTotal,
+          todayTotalBase: base,
+          projectTodayTotalSeconds: projectTodayTotal,
+          projectTodayTotalBase: projectBase,
+        };
+
+        set(newState);
+        get()._broadcastChannel?.postMessage({
+          type: 'trackflow-timer-update',
+          nonce: 'trackflow-v1',
+          state: newState,
+        });
+      } else if (res.data.running) {
         const currentElapsed = res.data.elapsed_seconds || 0;
         const runningProjectId = res.data.entry?.project_id ?? null;
         const runningProjectName = res.data.entry?.project?.name ?? null;
@@ -81,6 +119,7 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
 
         const newState = {
           isRunning: true,
+          isPaused: false,
           entryId: res.data.entry?.id,
           projectId: runningProjectId,
           projectName: runningProjectName,
@@ -111,6 +150,7 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
 
         const newState = {
           isRunning: false,
+          isPaused: false,
           entryId: null,
           projectId: null,
           projectName: null,
@@ -144,6 +184,16 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
 
     // Also subscribe to real-time WebSocket events for instant updates
     get().setupWebSocket();
+
+    // Resync immediately when connectivity returns (don't wait up to 10s for the
+    // next poll) so the frozen-while-offline counter jumps straight to the server
+    // truth — which reflects whatever the desktop did offline (idle kept/discarded,
+    // stopped, or still running).
+    if (typeof window !== 'undefined' && !get()._onlineHandler) {
+      const onlineHandler = () => { get().fetchStatus(); };
+      window.addEventListener('online', onlineHandler);
+      set({ _onlineHandler: onlineHandler });
+    }
 
     // Set up BroadcastChannel for multi-tab sync
     if (typeof window !== 'undefined' && !get()._broadcastChannel) {
@@ -188,6 +238,13 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
       clearInterval(id);
       set({ pollId: null });
     }
+    if (typeof window !== 'undefined') {
+      const onlineHandler = get()._onlineHandler;
+      if (onlineHandler) {
+        window.removeEventListener('online', onlineHandler);
+        set({ _onlineHandler: null });
+      }
+    }
     get().teardownWebSocket();
   },
 
@@ -208,7 +265,14 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
           // Immediately fetch fresh status instead of waiting for next poll
           get().fetchStatus();
         })
-        .listen('TimerStopped', () => {
+        .listen('TimerStopped', (e: { entry_id?: string } | undefined) => {
+          // If this stop is for the entry we're currently ticking, freeze the
+          // counter instantly (don't wait for the fetchStatus round-trip), then
+          // reconcile totals/state from the server.
+          if (e?.entry_id && e.entry_id === get().entryId) {
+            get().stopTicking();
+            set({ isRunning: false, isPaused: false });
+          }
           get().fetchStatus();
         });
 
@@ -234,6 +298,14 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   },
 
   tick: () => {
+    // Freeze the live counter while the browser is offline. The web portal is a
+    // read-only viewer — it cannot confirm the desktop is still tracking (the user
+    // may have gone idle or stopped), so ticking up blind would show unverified
+    // time. The next fetchStatus (poll or the 'online' resync) corrects it on
+    // reconnect from the server's authoritative elapsed.
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return;
+    }
     const { startedAt, todayTotalBase, projectTodayTotalBase } = get();
     if (startedAt) {
       const currentElapsed = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
@@ -302,6 +374,7 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
 
     set({
       isRunning: false,
+      isPaused: false,
       entryId: null,
       projectId: null,
       projectName: null,
@@ -313,6 +386,7 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
       projectTodayTotalBase: 0,
       echoOrgId: null,
       _visibilityHandler: null,
+      _onlineHandler: null,
       _broadcastChannel: null,
     });
   },

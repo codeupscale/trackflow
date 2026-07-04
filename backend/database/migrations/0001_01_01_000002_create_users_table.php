@@ -15,7 +15,7 @@ return new class extends Migration
             $table->string('email', 255);
             $table->string('password', 255);
             $table->enum('role', ['owner', 'admin', 'manager', 'employee'])->default('employee');
-            $table->string('timezone', 64)->default('America/New_York');
+            $table->string('timezone', 64)->default('Asia/Karachi');
             $table->string('avatar_url', 255)->nullable();
             $table->boolean('is_active')->default(true);
             $table->timestamp('last_active_at')->nullable();

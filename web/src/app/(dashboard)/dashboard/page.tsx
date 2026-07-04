@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subDays, subWeeks, subMonths, isToday, isSameDay, addDays } from 'date-fns';
 import {
   Clock,
@@ -54,6 +54,7 @@ import api from '@/lib/api';
 import { formatDuration } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
+import { useTimerStore } from '@/stores/timer-store';
 import { DateFilter } from '@/components/date-filter';
 
 // ─── Types ────────────────────────────────────────────────────────
@@ -307,6 +308,19 @@ export default function DashboardPage() {
     refetchInterval: 30000,
   });
 
+  // Refresh "Today's Hours" + timesheet the instant the timer starts/stops, instead
+  // of waiting up to 30s for the next poll. Without this the card lags the live
+  // timer chip after a stop (the "card shows 12m while the timer reads 6m" gap).
+  const queryClient = useQueryClient();
+  const isTimerRunning = useTimerStore((s) => s.isRunning);
+  const prevTimerRunningRef = useRef(isTimerRunning);
+  useEffect(() => {
+    if (prevTimerRunningRef.current === isTimerRunning) return;
+    prevTimerRunningRef.current = isTimerRunning;
+    queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    queryClient.invalidateQueries({ queryKey: ['time-entries-dashboard'] });
+  }, [isTimerRunning, queryClient]);
+
   const stats = data?.stats;
   const team = data?.team || [];
   const isEmployeeView = data?.isEmployeeView ?? isEmployee;
@@ -337,12 +351,36 @@ export default function DashboardPage() {
   }>;
 
   // ── Live tick for running entries (so duration counts up in real time) ──
+  // The displayed duration is DERIVED from started_at in getDisplayDuration() on
+  // every render — this interval only forces re-renders, it never accumulates a
+  // counter. Background tabs throttle/pause setInterval, so on refocus we force an
+  // immediate re-render via visibilitychange/focus; because the value is derived,
+  // that render snaps straight to the correct time with no visible jump.
   const [, setTick] = useState(0);
   const hasRunningEntry = timeEntries.some((e) => !e.ended_at);
   useEffect(() => {
     if (!hasRunningEntry) return;
     const id = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
+    const onFocusOrVisible = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        setTick((t) => t + 1);
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onFocusOrVisible);
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', onFocusOrVisible);
+    }
+    return () => {
+      clearInterval(id);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onFocusOrVisible);
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', onFocusOrVisible);
+      }
+    };
   }, [hasRunningEntry]);
 
   /** Display duration: for running entries, compute elapsed from started_at */

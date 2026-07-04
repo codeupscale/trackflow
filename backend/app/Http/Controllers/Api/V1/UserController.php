@@ -4,9 +4,12 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\PermissionService;
+use App\Services\RbacBootstrapService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Facades\DB;
 
 class UserController extends Controller
 {
@@ -89,7 +92,29 @@ class UserController extends Controller
             $this->authorize('manageRoles', User::class);
         }
 
+        $roleChanged = $request->has('role') && $request->input('role') !== $user->getRawOriginal('role');
+
         $user->update($request->only(['name', 'role', 'timezone', 'is_active']));
+
+        // When the role changes, update the user_roles pivot to match and invalidate the permission cache
+        if ($roleChanged) {
+            $newRole = $request->input('role');
+            $rbac = app(RbacBootstrapService::class);
+
+            DB::transaction(function () use ($user, $newRole, $rbac) {
+                // Remove existing role assignments for this org's system roles
+                DB::table('user_roles')
+                    ->where('user_id', $user->id)
+                    ->delete();
+
+                // Re-assign to the new system role (bootstraps org roles if missing)
+                $rbac->bootstrapOrgAndAssignUser($user, $newRole);
+            });
+
+            // Bust the permission cache so the next request picks up new permissions immediately
+            app(PermissionService::class)->invalidateUser($user->id);
+        }
+
         return response()->json(['user' => $user->fresh()]);
     }
 

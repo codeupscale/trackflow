@@ -25,7 +25,7 @@ class SettingsController extends Controller
 
     public function update(Request $request): JsonResponse
     {
-        if (!$request->user()->hasRole('owner', 'admin')) {
+        if (!$request->user()->hasRole('owner', 'org_manager')) {
             return response()->json(['message' => 'Unauthorized.'], 403);
         }
 
@@ -39,7 +39,7 @@ class SettingsController extends Controller
             // Clamp via validation; job also defensively clamps.
             'settings.idle_alert_email_cooldown_min' => 'sometimes|integer|min:5|max:1440',
             'settings.keep_idle_time' => 'sometimes|string|in:prompt,always,never',
-            'settings.idle_alert_auto_stop_min' => 'sometimes|integer|min:1|max:10080',
+            'settings.idle_alert_auto_stop_min' => 'sometimes|integer|min:1|max:240',
             'settings.screenshot_capture_immediate_after_idle' => 'sometimes|boolean',
             'settings.screenshot_first_capture_delay_min' => 'sometimes|integer|min:0|max:60',
             'settings.idle_check_interval_sec' => 'sometimes|integer|min:1|max:60',

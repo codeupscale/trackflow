@@ -1,0 +1,388 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# TrackFlow — Dev Environment Build & Deploy Pipeline
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Builds Docker images tagged :dev on GitHub Actions runners (NOT on the server),
+# pushes to GHCR, then deploys to the dev environment via SSH.
+#
+# Dev deploys are intentionally lean — no test gates (tests run on PRs via
+# tests.yml). Push to `develop` → fast deploy to dev.codeupscale.com.
+#
+# Triggers:
+#   - Push to develop (paths: backend/**, web/**, marketing/**)
+#   - Manual dispatch (workflow_dispatch)
+#
+# Required secrets (GitHub environment: "production"):
+#   DEPLOY_HOST          — Dev/prod server IP or hostname
+#   DEPLOY_USER          — SSH user on server (e.g. ubuntu)
+#   DEPLOY_SSH_KEY       — SSH private key for server access
+#   GITHUB_TOKEN         — Auto-provided by GitHub Actions for GHCR auth
+#
+# Optional secrets:
+#   SLACK_WEBHOOK_URL    — Slack notifications (shared with production)
+#
+# Zero-downtime strategy:
+#   1. Build :dev Docker images on GitHub Actions runner
+#   2. Push images to ghcr.io with :dev tag
+#   3. SSH to server: docker compose pull dev services
+#   4. Recreate dev containers (--force-recreate --no-deps)
+#   5. Run migrations
+#   6. Health check + rollback on failure
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: Build & Deploy (Dev)
+
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - 'backend/**'
+      - 'web/**'
+      - 'marketing/**'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  API_IMAGE: ghcr.io/codeupscale/trackflow-api
+  WEB_IMAGE: ghcr.io/codeupscale/trackflow-web
+
+# Only one dev deploy at a time — queue, don't cancel.
+concurrency:
+  group: deploy-development
+  cancel-in-progress: false
+
+jobs:
+
+  # ─── CHANGE DETECTION ─────────────────────────────────────────────────────
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            web:
+              - 'web/**'
+
+  # ─── BUILD BACKEND :dev IMAGE ─────────────────────────────────────────────
+  build-api:
+    name: Build API image (:dev)
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: >-
+      always() && (needs.changes.result == 'skipped' || needs.changes.outputs.backend == 'true')
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push API image (:dev)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile.production
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:dev
+            ${{ env.API_IMAGE }}:dev-${{ github.sha }}
+          platforms: linux/amd64
+          cache-from: type=gha,scope=api-dev
+          cache-to: type=gha,mode=max,scope=api-dev
+
+  # ─── BUILD WEB :dev IMAGE ─────────────────────────────────────────────────
+  build-web:
+    name: Build Web image (:dev)
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: >-
+      always() && (needs.changes.result == 'skipped' || needs.changes.outputs.web == 'true')
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Web image (:dev)
+        uses: docker/build-push-action@v6
+        with:
+          context: web
+          file: web/Dockerfile.production
+          push: true
+          tags: |
+            ${{ env.WEB_IMAGE }}:dev
+            ${{ env.WEB_IMAGE }}:dev-${{ github.sha }}
+          platforms: linux/amd64
+          build-args: |
+            NEXT_PUBLIC_API_URL=https://dev.trackflow.codeupscale.com/api/v1
+            NEXT_PUBLIC_REVERB_APP_KEY=trackflow-key
+            NEXT_PUBLIC_REVERB_HOST=dev.trackflow.codeupscale.com
+            NEXT_PUBLIC_REVERB_PORT=8084
+            NEXT_PUBLIC_POSTHOG_KEY=${{ secrets.NEXT_PUBLIC_POSTHOG_KEY }}
+            NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+            NEXT_PUBLIC_GOOGLE_CLIENT_ID=${{ secrets.NEXT_PUBLIC_GOOGLE_CLIENT_ID }}
+          cache-from: type=gha,scope=web-dev
+          cache-to: type=gha,mode=max,scope=web-dev
+
+  # ─── DEPLOY TO DEV ────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to dev
+    runs-on: ubuntu-latest
+    needs: [changes, build-api, build-web]
+    if: >-
+      always() &&
+      (needs.build-api.result == 'success' || needs.build-api.result == 'skipped') &&
+      (needs.build-web.result == 'success' || needs.build-web.result == 'skipped') &&
+      !(needs.build-api.result == 'skipped' && needs.build-web.result == 'skipped')
+    environment: production
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          DEPLOY_API: ${{ needs.build-api.result == 'success' && 'true' || 'false' }}
+          DEPLOY_WEB: ${{ needs.build-web.result == 'success' && 'true' || 'false' }}
+          GH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: DEPLOY_API,DEPLOY_WEB,GH_ACTOR,GH_TOKEN,COMMIT_SHA
+          command_timeout: 15m
+          script: |
+            set -euo pipefail
+            cd /home/ubuntu/infra
+
+            echo "==> Logging in to GitHub Container Registry"
+            echo "${GH_TOKEN}" | docker login ghcr.io -u "${GH_ACTOR}" --password-stdin
+
+            # ── 0. ENSURE SHARED INFRASTRUCTURE IS HEALTHY ──
+            echo "==> Ensuring postgres and redis are running"
+            docker compose up -d postgres redis
+            echo "==> Waiting for postgres (up to 60s)..."
+            timeout 60 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-postgres-1 2>/dev/null | grep -q healthy; do sleep 2; done' \
+              || { echo "FATAL: postgres not healthy after 60s"; docker compose logs postgres --tail 20; exit 1; }
+            echo "==> Waiting for redis (up to 30s)..."
+            timeout 30 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-redis-1 2>/dev/null | grep -q healthy; do sleep 2; done' \
+              || { echo "FATAL: redis not healthy after 30s"; docker compose logs redis --tail 20; exit 1; }
+            echo "==> Shared infrastructure is healthy"
+
+            # ── 1. SNAPSHOT: Record current image digests for rollback ──
+            API_OLD_DIGEST=""
+            WEB_OLD_DIGEST=""
+            if [ "${DEPLOY_API}" = "true" ]; then
+              API_OLD_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/codeupscale/trackflow-api:dev 2>/dev/null || echo "")
+              echo "==> Current dev API digest: ${API_OLD_DIGEST:-none}"
+            fi
+            if [ "${DEPLOY_WEB}" = "true" ]; then
+              WEB_OLD_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/codeupscale/trackflow-web:dev 2>/dev/null || echo "")
+              echo "==> Current dev Web digest: ${WEB_OLD_DIGEST:-none}"
+            fi
+
+            # ── 2. PULL: Download new :dev images ──
+            if [ "${DEPLOY_API}" = "true" ]; then
+              echo "==> Pulling dev API image (sha: ${COMMIT_SHA:0:8})"
+              docker pull ghcr.io/codeupscale/trackflow-api:dev
+            fi
+            if [ "${DEPLOY_WEB}" = "true" ]; then
+              echo "==> Pulling dev Web image (sha: ${COMMIT_SHA:0:8})"
+              docker pull ghcr.io/codeupscale/trackflow-web:dev
+            fi
+
+            # ── 3. ROLLING RESTART: Recreate only changed dev containers ──
+            if [ "${DEPLOY_API}" = "true" ]; then
+              echo "==> Rolling restart: tf-dev-app"
+              docker compose up -d --no-deps --force-recreate tf-dev-app
+
+              echo "==> Waiting for tf-dev-app to be healthy (up to 120s)..."
+              timeout 120 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-tf-dev-app-1 2>/dev/null | grep -q healthy; do sleep 3; done' \
+                || { echo "FATAL: tf-dev-app did not become healthy"; docker compose logs tf-dev-app --tail 20; exit 1; }
+
+              echo "==> Running dev migrations"
+              if ! docker exec infra-tf-dev-app-1 php artisan migrate --force; then
+                echo "!!! MIGRATION FAILED — aborting dev deploy !!!"
+                docker compose logs tf-dev-app --tail 30
+                if [ -n "${API_OLD_DIGEST}" ]; then
+                  echo "==> Rolling back tf-dev-app"
+                  docker pull "${API_OLD_DIGEST}" 2>/dev/null || true
+                  docker tag "${API_OLD_DIGEST}" ghcr.io/codeupscale/trackflow-api:dev 2>/dev/null || true
+                  docker compose up -d --no-deps --force-recreate tf-dev-app
+                fi
+                exit 1
+              fi
+
+              echo "==> Draining tf-dev-horizon queue..."
+              docker exec infra-tf-dev-horizon-1 php artisan horizon:terminate 2>/dev/null || true
+              sleep 5
+              echo "==> Rolling restart: tf-dev-horizon"
+              docker compose up -d --no-deps --force-recreate tf-dev-horizon
+
+              echo "==> Rolling restart: tf-dev-scheduler"
+              docker compose up -d --no-deps --force-recreate tf-dev-scheduler
+
+              echo "==> Rolling restart: tf-dev-reverb"
+              docker compose up -d --no-deps --force-recreate tf-dev-reverb
+            fi
+
+            if [ "${DEPLOY_WEB}" = "true" ]; then
+              echo "==> Rolling restart: tf-dev-web"
+              docker compose up -d --no-deps --force-recreate tf-dev-web
+            fi
+
+            # ── 3.5. SAFETY NET: ensure all dev services are running ──
+            echo "==> Safety net: ensuring all dev services are up"
+            docker compose up -d --no-deps \
+              tf-dev-app tf-dev-web tf-dev-reverb tf-dev-horizon tf-dev-scheduler 2>/dev/null || true
+
+            # ── 4. HEALTH CHECK GATE ──
+            echo "==> Waiting for dev containers to become healthy (timeout: 150s)..."
+            HEALTH_OK=true
+
+            for svc in tf-dev-app tf-dev-web tf-dev-reverb tf-dev-horizon tf-dev-scheduler; do
+              if ! docker inspect "infra-${svc}-1" > /dev/null 2>&1; then
+                continue
+              fi
+              echo "  Checking health: ${svc}..."
+              ATTEMPTS=0
+              MAX_ATTEMPTS=30
+              while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
+                HAS_HEALTH=$(docker inspect --format='{{if .State.Health}}yes{{else}}no{{end}}' "infra-${svc}-1" 2>/dev/null || echo "no")
+                if [ "${HAS_HEALTH}" = "no" ]; then
+                  RUNNING=$(docker inspect --format='{{.State.Running}}' "infra-${svc}-1" 2>/dev/null || echo "false")
+                  if [ "${RUNNING}" = "true" ]; then
+                    echo "  [OK] ${svc} is running (no healthcheck)"
+                    break
+                  fi
+                else
+                  STATUS=$(docker inspect --format='{{.State.Health.Status}}' "infra-${svc}-1" 2>/dev/null || echo "unknown")
+                  if [ "${STATUS}" = "healthy" ]; then
+                    echo "  [OK] ${svc} is healthy"
+                    break
+                  fi
+                fi
+                ATTEMPTS=$((ATTEMPTS + 1))
+                if [ $ATTEMPTS -ge $MAX_ATTEMPTS ]; then
+                  FINAL_STATUS=$(docker inspect --format='{{.State.Health.Status}}' "infra-${svc}-1" 2>/dev/null || echo "unknown")
+                  echo "  [FAIL] ${svc} did not become healthy within 150s (status: ${FINAL_STATUS})"
+                  HEALTH_OK=false
+                fi
+                sleep 5
+              done
+            done
+
+            # ── 5. ROLLBACK on health check failure ──
+            if [ "${HEALTH_OK}" != "true" ]; then
+              echo ""
+              echo "!!! HEALTH CHECK FAILED — INITIATING DEV ROLLBACK !!!"
+              echo ""
+
+              docker compose up -d postgres redis
+              timeout 30 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-postgres-1 2>/dev/null | grep -q healthy; do sleep 2; done' || true
+              timeout 15 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-redis-1 2>/dev/null | grep -q healthy; do sleep 2; done' || true
+
+              if [ "${DEPLOY_API}" = "true" ] && [ -n "${API_OLD_DIGEST}" ]; then
+                echo "==> Rolling back dev API to: ${API_OLD_DIGEST}"
+                docker pull "${API_OLD_DIGEST}" 2>/dev/null || true
+                docker tag "${API_OLD_DIGEST}" ghcr.io/codeupscale/trackflow-api:dev 2>/dev/null || true
+                docker compose up -d --no-deps tf-dev-app tf-dev-horizon tf-dev-scheduler tf-dev-reverb
+              fi
+
+              if [ "${DEPLOY_WEB}" = "true" ] && [ -n "${WEB_OLD_DIGEST}" ]; then
+                echo "==> Rolling back dev Web to: ${WEB_OLD_DIGEST}"
+                docker pull "${WEB_OLD_DIGEST}" 2>/dev/null || true
+                docker tag "${WEB_OLD_DIGEST}" ghcr.io/codeupscale/trackflow-web:dev 2>/dev/null || true
+                docker compose up -d --no-deps tf-dev-web
+              fi
+
+              echo "==> Dev rollback complete."
+              echo "!!! DEV DEPLOY FAILED — ROLLED BACK !!!"
+              exit 1
+            fi
+
+            # ── 6. SMOKE TEST ──
+            if [ "${DEPLOY_API}" = "true" ]; then
+              echo "==> Smoke test: dev API health endpoint..."
+              SMOKE_OK=false
+              for i in 1 2 3; do
+                if curl -sf https://dev.trackflow.codeupscale.com/api/v1/health/live > /dev/null 2>&1; then
+                  SMOKE_OK=true
+                  echo "  [OK] Dev API responding on attempt ${i}"
+                  break
+                fi
+                sleep 5
+              done
+              if [ "${SMOKE_OK}" != "true" ]; then
+                echo "  [WARN] Dev API smoke test failed — but continuing (dev env)"
+              fi
+            fi
+
+            # ── 7. SUCCESS ──
+            echo ""
+            echo "==> Dev deploy successful! Container status:"
+            docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}" | grep "tf-dev"
+
+            echo ""
+            echo "==> Dev resource usage:"
+            docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" | grep "tf-dev" || true
+
+            # ── 8. CLEANUP ──
+            echo ""
+            echo "==> Pruning dangling images"
+            docker image prune -f
+
+            echo ""
+            echo "==> Dev deploy complete (commit: ${COMMIT_SHA:0:8})"
+
+      - name: Notify Slack on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          [ -z "$SLACK_WEBHOOK_URL" ] && exit 0
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H 'Content-type: application/json' \
+            --data "{\"text\":\"🚨 *TrackFlow DEV deploy FAILED* on \`${{ github.ref_name }}\`\nCommit: \`${{ github.sha }}\`\nTriggered by: ${{ github.actor }}\nSee: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+            2>/dev/null || true
+
+      - name: Notify Slack on success
+        if: success()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          [ -z "$SLACK_WEBHOOK_URL" ] && exit 0
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H 'Content-type: application/json' \
+            --data "{\"text\":\"✅ *TrackFlow DEV deployed successfully* on \`${{ github.ref_name }}\`\nCommit: \`${{ github.sha }}\`\nTriggered by: ${{ github.actor }}\nhttps://dev.trackflow.codeupscale.com\"}" \
+            2>/dev/null || true

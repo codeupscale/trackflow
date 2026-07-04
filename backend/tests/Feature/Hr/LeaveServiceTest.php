@@ -191,7 +191,7 @@ class LeaveServiceTest extends TestCase
     {
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
-        $approver = $this->createUser($org, 'admin');
+        $approver = $this->createUser($org, 'org_manager');
         $this->actingAs($approver, 'sanctum');
 
         $leaveType = LeaveType::factory()->create(['organization_id' => $org->id]);
@@ -236,7 +236,7 @@ class LeaveServiceTest extends TestCase
     {
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
-        $approver = $this->createUser($org, 'admin');
+        $approver = $this->createUser($org, 'org_manager');
         $this->actingAs($approver, 'sanctum');
 
         $leaveType = LeaveType::factory()->create(['organization_id' => $org->id]);

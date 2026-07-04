@@ -53,6 +53,7 @@ import {
 } from '@/components/ui/chart';
 import api from '@/lib/api';
 import { cn, formatDuration } from '@/lib/utils';
+import { triggerDownload, readBlobError } from '@/lib/download';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
 
@@ -186,15 +187,17 @@ function transformReportResponse(type: ReportType, raw: Record<string, unknown>)
     case 'summary': {
       const daily = (raw.daily || []) as Record<string, unknown>[];
       return {
-        columns: ['date', 'total_seconds', 'activity_score_avg', 'entry_count'],
+        // "Time Utilized" = tracked working time (idle shown separately).
+        columns: ['date', 'tracked_seconds', 'idle_seconds', 'activity_score_avg', 'entry_count'],
         rows: daily.map((d) => ({
           date: String(d.date ?? ''),
-          total_seconds: Number(d.total_seconds ?? 0),
+          tracked_seconds: Number(d.tracked_seconds ?? d.total_seconds ?? 0),
+          idle_seconds: Number(d.idle_seconds ?? 0),
           activity_score_avg: Number(d.activity_score_avg ?? 0),
           entry_count: Number(d.entry_count ?? 0),
         })),
         summary: {
-          total_hours: Number(raw.total_seconds ?? 0) / 3600,
+          total_hours: Number(raw.total_seconds_tracked ?? raw.total_seconds ?? 0) / 3600,
           average_activity: Math.round(Number(raw.avg_activity ?? 0)),
           total_amount: Number(raw.total_earnings ?? 0),
           idle_hours: Number(raw.idle_hours ?? 0),
@@ -312,6 +315,13 @@ export default function ReportsPage() {
   const [dateFrom, setDateFrom] = useState(() => getDateRange('7days').from);
   const [dateTo, setDateTo] = useState(() => getDateRange('7days').to);
   const [logsPage, setLogsPage] = useState(1);
+
+  // Gate date-dependent rendering until after mount to avoid SSR/client
+  // hydration mismatches from timezone-sensitive date initialization.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Reset logsPage when date range changes
   useEffect(() => {
@@ -437,20 +447,14 @@ export default function ReportsPage() {
         },
         { responseType: 'blob' }
       );
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute(
-        'download',
-        `report-${reportType}-${builderDateFrom}-to-${builderDateTo}.${exportFormat}`
+      triggerDownload(
+        res.data,
+        `report-${reportType}-${builderDateFrom}-to-${builderDateTo}.${exportFormat}`,
+        exportFormat === 'pdf' ? 'application/pdf' : 'text/csv'
       );
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
       toast.success(`Report exported as ${exportFormat.toUpperCase()}`);
-    } catch {
-      toast.error('Failed to export report');
+    } catch (err) {
+      toast.error((await readBlobError(err)) ?? 'Failed to export report');
     } finally {
       setIsExporting(null);
     }
@@ -469,17 +473,10 @@ export default function ReportsPage() {
         },
         { responseType: 'blob' }
       );
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `report-${dateFrom}-to-${dateTo}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
+      triggerDownload(res.data, `report-${dateFrom}-to-${dateTo}.csv`, 'text/csv');
       toast.success('Report exported as CSV');
-    } catch {
-      toast.error('Failed to export report');
+    } catch (err) {
+      toast.error((await readBlobError(err)) ?? 'Failed to export report');
     } finally {
       setIsExporting(null);
     }
@@ -507,6 +504,17 @@ export default function ReportsPage() {
   };
 
   const formatColumnName = (key: string) => {
+    const labels: Record<string, string> = {
+      tracked_seconds: 'Time Utilized',
+      total_seconds: 'Time Utilized',
+      idle_seconds: 'Idle Time',
+      duration_seconds: 'Duration',
+      estimated_seconds: 'Est. Time',
+      activity_score_avg: 'Activity',
+      avg_activity: 'Activity',
+      entry_count: 'Entries',
+    };
+    if (labels[key]) return labels[key];
     return key
       .replace(/_/g, ' ')
       .replace(/\b\w/g, (c) => c.toUpperCase());
@@ -520,6 +528,19 @@ export default function ReportsPage() {
 
   // ── Early return for employees ──
   if (isEmployee) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="size-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  // Date state is seeded from `new Date()`, which the SSR pass evaluates in the
+  // server timezone (UTC) and the browser re-evaluates in the user's timezone.
+  // Near midnight those produce different date strings, causing a hydration
+  // mismatch (React #418). Render a stable placeholder until mounted so the
+  // server HTML and the first client render are identical.
+  if (!mounted) {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 className="size-8 animate-spin text-muted-foreground" />
@@ -813,8 +834,8 @@ export default function ReportsPage() {
           <CardContent>
             {analyticsLoading ? (
               <div className="flex items-end gap-2 h-[280px] pb-8">
-                {Array.from({ length: 7 }).map((_, i) => (
-                  <Skeleton key={i} className="flex-1 rounded" style={{ height: `${40 + Math.random() * 60}%` }} />
+                {[65, 85, 50, 95, 70, 45, 80].map((h, i) => (
+                  <Skeleton key={i} className="flex-1 rounded" style={{ height: `${h}%` }} />
                 ))}
               </div>
             ) : analyticsError ? (

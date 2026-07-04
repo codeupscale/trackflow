@@ -103,7 +103,7 @@ class Organization extends Model
             // Idle handling behavior: prompt | always | never
             // Production default: prompt user to keep/discard idle time (Hubstaff-like).
             'keep_idle_time' => 'prompt',
-            'timezone' => 'America/New_York',
+            'timezone' => 'Asia/Karachi',
             'can_add_manual_time' => true,
             'employees_see_all_projects' => false, // if false, employees see only projects they are assigned to
             // Idle alert auto-stop (only relevant in "prompt" mode).
@@ -113,7 +113,7 @@ class Organization extends Model
             // Delay (minutes) before first screenshot when timer starts. 0 = immediate.
             'screenshot_first_capture_delay_min' => 1,
             // How often (seconds) desktop checks OS idle time.
-            'idle_check_interval_sec' => 10,
+            'idle_check_interval_sec' => 2,
             // Only capture screenshots when app window is visible (reduces permission prompts when hidden).
             'capture_only_when_visible' => false,
             // Capture all monitors and composite into one image.

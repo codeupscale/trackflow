@@ -121,7 +121,7 @@ export default function TimePage() {
   const { hasPermission, hasPermissionWithScope } = usePermissionStore();
   const canApprove = hasPermission('time_entries.approve');
 
-  const isManagerOrAbove = hasPermissionWithScope('time_entries.view', 'team');
+  const isManagerOrAbove = hasPermissionWithScope('time_entries.view', 'project');
 
   const [dateFrom, setDateFrom] = useState(() => searchParams.get('from') || format(new Date(), 'yyyy-MM-dd'));
   const [dateTo, setDateTo] = useState(() => searchParams.get('to') || format(new Date(), 'yyyy-MM-dd'));
@@ -189,13 +189,37 @@ export default function TimePage() {
     total: entriesData.total!,
   } : undefined);
 
-  // Live tick for running entries so duration counts up in real time
+  // Live tick for running entries so duration counts up in real time.
+  // NOTE: the displayed duration is DERIVED from started_at in getDisplayDuration()
+  // on every render — this interval only forces re-renders, it never accumulates a
+  // counter. Background tabs throttle setInterval (and pause it), so on refocus we
+  // also force an immediate re-render via visibilitychange/focus. Because the value
+  // is derived, that next render snaps straight to the correct time with no jump.
   const [, setTick] = useState(0);
   const hasRunningEntry = entries.some((e) => !e.ended_at);
   useEffect(() => {
     if (!hasRunningEntry) return;
     const id = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
+    const onFocusOrVisible = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        setTick((t) => t + 1);
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onFocusOrVisible);
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', onFocusOrVisible);
+    }
+    return () => {
+      clearInterval(id);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onFocusOrVisible);
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', onFocusOrVisible);
+      }
+    };
   }, [hasRunningEntry]);
 
   function getDisplayDuration(entry: { started_at: string; ended_at: string | null; duration_seconds: number }): number {

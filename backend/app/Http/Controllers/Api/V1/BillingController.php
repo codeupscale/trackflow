@@ -24,7 +24,7 @@ class BillingController extends Controller
 
         $user = $request->user();
 
-        if (!$user->hasRole('owner', 'admin')) {
+        if (!$user->hasRole('owner', 'finance_manager')) {
             return response()->json(['message' => 'Only owners/admins can manage billing.'], 403);
         }
 
@@ -49,7 +49,7 @@ class BillingController extends Controller
 
         $user = $request->user();
 
-        if (!$user->hasRole('owner', 'admin')) {
+        if (!$user->hasRole('owner', 'finance_manager')) {
             return response()->json(['message' => 'Only owners/admins can manage billing.'], 403);
         }
 
@@ -71,7 +71,7 @@ class BillingController extends Controller
     {
         $user = $request->user();
 
-        if (!$user->hasRole('owner', 'admin')) {
+        if (!$user->hasRole('owner', 'finance_manager')) {
             return response()->json(['message' => 'Only owners/admins can manage billing.'], 403);
         }
 

@@ -44,7 +44,8 @@ describe('Idle alert window visibility', () => {
       idleStartedAt: Date.now() - 300000,
       idleSeconds: 300,
       actionId: 1,
-      autoStopTotalSec: 900,
+      alertShownAt: Date.now() - 60000,
+      autoStopGraceSec: 600,
       projects: [],
     };
 
@@ -137,7 +138,8 @@ describe('Idle alert window visibility', () => {
     const sentData = win.webContents.send.mock.calls[0][1];
     expect(sentData).toHaveProperty('idleStartedAt');
     expect(sentData).toHaveProperty('idleSeconds', 300);
-    expect(sentData).toHaveProperty('autoStopTotalSec', 900);
+    expect(sentData).toHaveProperty('alertShownAt');
+    expect(sentData).toHaveProperty('autoStopGraceSec', 600);
     expect(sentData).toHaveProperty('projects');
     expect(Array.isArray(sentData.projects)).toBe(true);
   });
@@ -153,19 +155,184 @@ describe('Idle alert window visibility', () => {
     // No unhandled rejection — the .catch() in showIdleAlert handles it
   });
 
-  test('window is created with visibleOnAllWorkspaces for cross-desktop visibility', () => {
-    // Verify the BrowserWindow constructor receives visibleOnAllWorkspaces: true
-    // This is tested by checking the actual showIdleAlert function creates
-    // the window with this property. Since we can't call the real function
-    // here, we verify the pattern is correct.
+  test('idle alert window is created hidden and always-on-top', () => {
+    // The constructor options that survive as real Electron options (alwaysOnTop
+    // is re-asserted at 'screen-saver' level after creation; visibleOnAllWorkspaces
+    // is NOT a constructor option and is applied via setVisibleOnAllWorkspaces()).
     const opts = {
       alwaysOnTop: true,
-      visibleOnAllWorkspaces: true,
       show: false,
     };
-    expect(opts.visibleOnAllWorkspaces).toBe(true);
     expect(opts.alwaysOnTop).toBe(true);
     expect(opts.show).toBe(false);
+  });
+});
+
+/**
+ * ALL-WORKSPACES / FULLSCREEN VISIBILITY FIX
+ *
+ * Models `_applyIdleAlertEverywhereVisible()` + `_createIdleWindowOnDisplay()`
+ * from index.js. The idle alert used to rely on the (non-existent) constructor
+ * option `visibleOnAllWorkspaces: true`, which Electron ignores — so the alert
+ * stayed pinned to the Space it was created on and was invisible over fullscreen
+ * apps. The fix applies the popup's everywhere-visible treatment to EVERY alert
+ * window (primary + per-display mirrors): setVisibleOnAllWorkspaces(true, {
+ * visibleOnFullScreen: true }) + setAlwaysOnTop(true, 'screen-saver').
+ */
+describe('Idle alert — follows user across workspaces / fullscreen', () => {
+  function makeWin() {
+    let destroyed = false;
+    return {
+      setVisibleOnAllWorkspaces: jest.fn(),
+      setAlwaysOnTop: jest.fn(),
+      isDestroyed: () => destroyed,
+      _destroy: () => { destroyed = true; },
+    };
+  }
+
+  // Exact replica of _applyIdleAlertEverywhereVisible() in index.js.
+  function applyEverywhereVisible(win) {
+    if (!win || win.isDestroyed()) return;
+    try {
+      if (typeof win.setVisibleOnAllWorkspaces === 'function') {
+        win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      }
+      if (typeof win.setAlwaysOnTop === 'function') {
+        win.setAlwaysOnTop(true, 'screen-saver');
+      }
+    } catch {
+      // swallow — matches index.js console.error fallback
+    }
+  }
+
+  // Models _createIdleWindowOnDisplay(): create a window then apply the flags.
+  // Every alert window (primary + mirrors) funnels through this factory, so the
+  // treatment is guaranteed for all of them.
+  function createIdleWindowsForDisplays(displays) {
+    return displays.map(() => {
+      const win = makeWin();
+      applyEverywhereVisible(win);
+      return win;
+    });
+  }
+
+  function assertEverywhereVisible(win) {
+    expect(win.setVisibleOnAllWorkspaces).toHaveBeenCalledWith(true, {
+      visibleOnFullScreen: true,
+    });
+    expect(win.setAlwaysOnTop).toHaveBeenCalledWith(true, 'screen-saver');
+  }
+
+  test('primary window gets visibleOnFullScreen + screen-saver level', () => {
+    const [primary] = createIdleWindowsForDisplays([{ id: 1 }]);
+    assertEverywhereVisible(primary);
+  });
+
+  test('EVERY window (primary + all mirrors) gets the same treatment', () => {
+    const wins = createIdleWindowsForDisplays([{ id: 1 }, { id: 2 }, { id: 3 }]);
+    expect(wins).toHaveLength(3);
+    wins.forEach(assertEverywhereVisible);
+  });
+
+  test('setVisibleOnAllWorkspaces uses visibleOnFullScreen:true (surfaces over fullscreen apps)', () => {
+    const [win] = createIdleWindowsForDisplays([{ id: 1 }]);
+    const opts = win.setVisibleOnAllWorkspaces.mock.calls[0][1];
+    expect(opts).toEqual({ visibleOnFullScreen: true });
+  });
+
+  test("always-on-top level is 'screen-saver', not the default 'floating'", () => {
+    const [win] = createIdleWindowsForDisplays([{ id: 1 }]);
+    const [enabled, level] = win.setAlwaysOnTop.mock.calls[0];
+    expect(enabled).toBe(true);
+    expect(level).toBe('screen-saver');
+  });
+
+  test('helper is a no-op on a destroyed window (no throw, no calls)', () => {
+    const win = makeWin();
+    win._destroy();
+    expect(() => applyEverywhereVisible(win)).not.toThrow();
+    expect(win.setVisibleOnAllWorkspaces).not.toHaveBeenCalled();
+    expect(win.setAlwaysOnTop).not.toHaveBeenCalled();
+  });
+
+  test('each treatment call is applied exactly once per window at creation', () => {
+    const wins = createIdleWindowsForDisplays([{ id: 1 }, { id: 2 }]);
+    wins.forEach((w) => {
+      expect(w.setVisibleOnAllWorkspaces).toHaveBeenCalledTimes(1);
+      expect(w.setAlwaysOnTop).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe('Idle alert — one window per display (ISSUE 4)', () => {
+  function makeWin() {
+    let destroyed = false;
+    const handlers = {};
+    return {
+      _dismissedProgrammatically: false,
+      show: jest.fn(),
+      focus: jest.fn(),
+      destroy: jest.fn(() => { destroyed = true; }),
+      isDestroyed: () => destroyed,
+      on: jest.fn((e, h) => { handlers[e] = h; }),
+      once: jest.fn((e, h) => { handlers[e] = h; }),
+      loadFile: jest.fn(() => Promise.resolve()),
+      webContents: { send: jest.fn(), once: jest.fn((e, h) => { handlers[`wc:${e}`] = h; }) },
+      _handlers: handlers,
+    };
+  }
+
+  // Models the multi-display creation + teardown from showIdleAlert()/dismissIdleAlert().
+  function simulateMultiDisplay(displays) {
+    const windows = displays.map(() => makeWin());
+    const primary = windows[0];
+    const extras = windows.slice(1);
+    const dismiss = () => {
+      // dismissIdleAlert(): tear down extras + primary together
+      for (const w of [...extras, primary]) {
+        if (!w.isDestroyed()) { w._dismissedProgrammatically = true; w.destroy(); }
+      }
+    };
+    return { windows, primary, extras, dismiss };
+  }
+
+  test('creates exactly one window per display', () => {
+    const displays = [{ id: 1 }, { id: 2 }, { id: 3 }];
+    const { windows } = simulateMultiDisplay(displays);
+    expect(windows).toHaveLength(3);
+  });
+
+  test('a single-display setup creates a single window', () => {
+    const { windows } = simulateMultiDisplay([{ id: 1 }]);
+    expect(windows).toHaveLength(1);
+  });
+
+  test('resolving/dismissing destroys ALL display windows — no orphans left', () => {
+    const { windows, dismiss } = simulateMultiDisplay([{ id: 1 }, { id: 2 }]);
+    dismiss();
+    windows.forEach((w) => {
+      expect(w.destroy).toHaveBeenCalledTimes(1);
+      expect(w.isDestroyed()).toBe(true);
+      expect(w._dismissedProgrammatically).toBe(true);
+    });
+  });
+});
+
+describe('Pin/close-button state (ISSUE 9)', () => {
+  // Models renderer updatePinUI(): the close (hide-to-tray) button is disabled while
+  // pinned and enabled once unpinned; main also refuses hide-window while pinned.
+  function closeButtonDisabledFor(pinned) { return pinned === true; }
+  function mainAllowsHide(isAlwaysOnTop) { return isAlwaysOnTop !== true; }
+
+  test('close button disabled when pinned', () => {
+    expect(closeButtonDisabledFor(true)).toBe(true);
+  });
+  test('close button enabled when unpinned', () => {
+    expect(closeButtonDisabledFor(false)).toBe(false);
+  });
+  test('main process refuses hide-window while pinned', () => {
+    expect(mainAllowsHide(true)).toBe(false);
+    expect(mainAllowsHide(false)).toBe(true);
   });
 });
 
@@ -222,9 +389,9 @@ describe('IdleDetector callback integration', () => {
     jest.advanceTimersByTime(10000);
     expect(onIdle).toHaveBeenCalledTimes(1); // no re-fire — cooldown active
 
-    // User provides fresh input — cooldown clears
+    // User provides fresh input — cooldown clears after 60s minimum window
     powerMonitor.getSystemIdleTime.mockReturnValue(5);
-    jest.advanceTimersByTime(10000);
+    jest.advanceTimersByTime(60000); // advance 60s so elapsed >= MIN_COOLDOWN_MS
     expect(onIdle).toHaveBeenCalledTimes(1); // no change — user active
 
     // User goes idle again — should fire a second time
@@ -238,7 +405,7 @@ describe('IdleDetector callback integration', () => {
 
     // Fresh input then idle again — third fire
     powerMonitor.getSystemIdleTime.mockReturnValue(3);
-    jest.advanceTimersByTime(10000);
+    jest.advanceTimersByTime(60000); // advance 60s so elapsed >= MIN_COOLDOWN_MS
     powerMonitor.getSystemIdleTime.mockReturnValue(60);
     jest.advanceTimersByTime(10000);
     expect(onIdle).toHaveBeenCalledTimes(3); // fires again

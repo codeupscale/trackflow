@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { UserCog, Plus, Users, Trash2, Loader2 } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth-store';
+import { usePermissionStore } from '@/stores/permission-store';
 import {
   useShiftAssignments,
   useUnassignShift,
@@ -29,11 +30,8 @@ import {
 import { formatDate } from '@/lib/utils';
 
 export default function ShiftAssignmentsPage() {
-  const { user } = useAuthStore();
-  const canManage =
-    user?.role === 'owner' ||
-    user?.role === 'admin' ||
-    user?.role === 'manager';
+  const { hasPermission } = usePermissionStore();
+  const canManage = hasPermission('shifts.manage_assignments');
 
   const [selectedShiftId, setSelectedShiftId] = useState<string>('');
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);

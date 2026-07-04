@@ -16,7 +16,7 @@ class PermissionService
      */
     private const SCOPE_HIERARCHY = [
         'own' => 1,
-        'team' => 2,
+        'project' => 2,
         'organization' => 3,
         'none' => 3,
     ];
@@ -45,7 +45,7 @@ class PermissionService
      * Check if a user has a specific permission, optionally requiring a minimum scope.
      *
      * @param string      $permissionKey  e.g. 'time_entries.view'
-     * @param string|null $requiredScope  e.g. 'team' — the user must have team or higher scope
+     * @param string|null $requiredScope  e.g. 'project' — the user must have project or higher scope
      */
     public function hasPermission(User $user, string $permissionKey, ?string $requiredScope = null): bool
     {
@@ -73,28 +73,45 @@ class PermissionService
     }
 
     /**
-     * Get IDs of users in this user's "team" for scope filtering.
+     * Get IDs of users in this user's "project scope" for permission filtering.
      *
      * Includes:
      * - The user's own ID
-     * - Members of projects where this user is the manager
+     * - All members of any project the user belongs to (as member OR manager)
      *
      * @return string[] Array of user UUIDs
      */
-    public function getTeamUserIds(User $user): array
+    public function getProjectUserIds(User $user): array
     {
-        $teamIds = collect([$user->id]);
+        $projectIds = collect();
 
-        // Members of projects where this user is the manager
-        $projectMemberIds = DB::table('project_user')
+        // Projects where this user is a member (via project_user pivot)
+        $memberProjectIds = DB::table('project_user')
             ->join('projects', 'projects.id', '=', 'project_user.project_id')
-            ->where('projects.manager_id', $user->id)
+            ->where('project_user.user_id', $user->id)
             ->where('projects.organization_id', $user->organization_id)
-            ->pluck('project_user.user_id');
+            ->where('projects.is_archived', false)
+            ->pluck('project_user.project_id');
 
-        $teamIds = $teamIds->merge($projectMemberIds)->unique()->values()->all();
+        // Projects where this user is the manager
+        $managedProjectIds = DB::table('projects')
+            ->where('manager_id', $user->id)
+            ->where('organization_id', $user->organization_id)
+            ->where('is_archived', false)
+            ->pluck('id');
 
-        return $teamIds;
+        $projectIds = $projectIds->merge($memberProjectIds)->merge($managedProjectIds)->unique();
+
+        // Collect all members of those projects
+        $projectMemberIds = DB::table('project_user')
+            ->whereIn('project_id', $projectIds)
+            ->pluck('user_id');
+
+        return collect([$user->id])
+            ->merge($projectMemberIds)
+            ->unique()
+            ->values()
+            ->all();
     }
 
     /**
@@ -258,7 +275,7 @@ class PermissionService
     /**
      * Check if a granted scope satisfies a required scope.
      *
-     * Hierarchy: own (1) < team (2) < organization (3)
+     * Hierarchy: own (1) < project (2) < organization (3)
      * 'none' is treated as organization-level (non-scoped permissions).
      */
     private function scopeSatisfies(string $granted, string $required): bool

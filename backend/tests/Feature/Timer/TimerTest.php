@@ -2,10 +2,13 @@
 
 namespace Tests\Feature\Timer;
 
+use App\Events\TimerStarted;
+use App\Events\TimerStopped;
 use App\Models\Organization;
 use App\Models\Project;
 use App\Models\TimeEntry;
 use App\Models\User;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
 use Tests\TestCase;
 
@@ -17,6 +20,10 @@ class TimerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // Prevent Horizon's StoreJob listener from calling Redis::connection('horizon')
+        // when TimerStarted/TimerStopped events are dispatched inside the service.
+        Event::fake([TimerStarted::class, TimerStopped::class]);
+
         $this->org = Organization::factory()->create();
         $this->user = User::factory()->create([
             'organization_id' => $this->org->id,

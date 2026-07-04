@@ -3,6 +3,14 @@ const axios = require('axios');
 // Production API — change this when deploying to a new server
 const API_BASE = process.env.TRACKFLOW_API_URL || 'https://trackflow.codeupscale.com/api/v1';
 
+function getDesktopDeviceId() {
+  try {
+    return require('./keychain').getDeviceId();
+  } catch {
+    return null;
+  }
+}
+
 class ApiClient {
   constructor(token, refreshToken = null) {
     this.refreshToken = refreshToken;
@@ -29,6 +37,8 @@ class ApiClient {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         'X-Agent-Version': agentVersion,
+        'X-TrackFlow-Client': 'desktop',
+        ...(getDesktopDeviceId() ? { 'X-Device-Id': getDesktopDeviceId() } : {}),
       },
       timeout: 15000, // Default timeout; overridden per-call where needed
     });
@@ -99,6 +109,8 @@ class ApiClient {
       headers: {
         'Authorization': `Bearer ${this.refreshToken}`,
         'Accept': 'application/json',
+        'X-TrackFlow-Client': 'desktop',
+        ...(getDesktopDeviceId() ? { 'X-Device-Id': getDesktopDeviceId() } : {}),
       },
       timeout: 15000,
     });
@@ -171,18 +183,60 @@ class ApiClient {
     return res.data;
   }
 
-  async startTimer(projectId = null, idempotencyKey = null) {
+  /**
+   * Start a timer.
+   *
+   * BUG 1 FIX: `startedAt` (ISO8601) is the REAL local start time from the SQLite
+   * `timer_sessions` row (the local source of truth). It MUST be sent on every
+   * start — both the live start and reconcile/offline start passes — so the
+   * server records the true start instead of defaulting to now() at reconcile
+   * time (which silently loses the offline hours). The backend honors it
+   * (validated: <= now+5min, >= now-24h). 200 and 201 are both success.
+   */
+  async startTimer(projectId = null, idempotencyKey = null, startedAt = null) {
     const payload = { project_id: projectId };
     if (idempotencyKey) payload.idempotency_key = idempotencyKey;
+    if (startedAt) payload.started_at = startedAt;
     const res = await this.client.post('/timer/start', payload, {
       timeout: 10000, // Timer operations: 10s timeout
     });
     return res.data;
   }
 
+  /**
+   * Stop a timer.
+   *
+   * BUG 3 FIX: `data.time_entry_id` (server uuid) MUST be sent on every
+   * reconcile/offline stop so the server closes the INTENDED entry and never a
+   * newer (live) session opened after this one. Optional `started_at`/`ended_at`
+   * (ISO8601) are offline overrides; `idempotency_key` makes lost-response
+   * replays safe. Caller treats 404 (entry not found) as already-synced success.
+   */
   async stopTimer(data = {}) {
     const res = await this.client.post('/timer/stop', data, {
       timeout: 10000, // Timer operations: 10s timeout
+    });
+    return res.data;
+  }
+
+  /**
+   * Pause the running timer (freeze elapsed on server; entry stays open).
+   */
+  async pauseTimer({ pausedAt = null, reason = 'idle' } = {}) {
+    const payload = { pause_reason: reason };
+    if (pausedAt) payload.paused_at = pausedAt;
+    const res = await this.client.post('/timer/pause', payload, {
+      timeout: 10000,
+    });
+    return res.data;
+  }
+
+  /**
+   * Resume a paused timer.
+   */
+  async resumeTimer() {
+    const res = await this.client.post('/timer/resume', {}, {
+      timeout: 10000,
     });
     return res.data;
   }

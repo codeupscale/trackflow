@@ -9,22 +9,30 @@ use App\Http\Requests\Auth\RegisterRequest;
 use App\Models\Invitation;
 use App\Models\Organization;
 use App\Models\User;
+use App\Services\AuditService;
+use App\Services\AuthTokenService;
+use App\Services\RbacBootstrapService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
-use App\Services\AuditService;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
+    public function __construct(
+        private readonly AuthTokenService $authTokens,
+    ) {}
+
     /** AUTH-01: Register new organization + owner */
     public function register(RegisterRequest $request): JsonResponse
     {
-        $user = DB::transaction(function () use ($request) {
+        $rbac = app(RbacBootstrapService::class);
+
+        $user = DB::transaction(function () use ($request, $rbac) {
             $org = Organization::create([
                 'name' => $request->company_name,
                 'slug' => Str::slug($request->company_name) . '-' . Str::random(6),
@@ -32,29 +40,33 @@ class AuthController extends Controller
                 'trial_ends_at' => now()->addDays(14),
                 'settings' => array_merge(
                     (new \App\Models\Organization)->getDefaultSettings(),
-                    ['timezone' => $request->timezone ?? 'America/New_York']
+                    ['timezone' => $request->timezone ?? 'Asia/Karachi']
                 ),
             ]);
 
-            return User::create([
+            $user = User::create([
                 'organization_id' => $org->id,
                 'name' => $request->name,
                 'email' => $request->email,
                 'password' => $request->password,
                 'role' => 'owner',
-                'timezone' => $request->timezone ?? 'America/New_York',
+                'timezone' => User::defaultTimezoneForOrg($org, $request->timezone),
             ]);
+
+            // Bootstrap system roles for the new org and assign the owner
+            $rbac->bootstrapOrgAndAssignUser($user, 'owner');
+
+            return $user;
         });
 
-        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+        $tokens = $this->authTokens->issueTokenPair($user);
 
         AuditService::log('auth.register', $user, [], $user);
 
         return response()->json([
             'user' => $this->userResponse($user),
-            'access_token' => $token->plainTextToken,
-            'refresh_token' => $refreshToken->plainTextToken,
+            'access_token' => $tokens['access_token'],
+            'refresh_token' => $tokens['refresh_token'],
             'token_type' => 'Bearer',
         ], 201);
     }
@@ -211,14 +223,20 @@ class AuthController extends Controller
             return response()->json(['message' => 'No active account found in the selected organization.'], 404);
         }
 
-        // Delete only the current token (preserve other device sessions)
-        $request->user()->currentAccessToken()->delete();
+        $currentToken = $request->user()->currentAccessToken();
+        $client = AuthTokenService::clientFromRequest($request);
+        $deviceId = $client === AuthTokenService::CLIENT_DESKTOP
+            ? $this->authTokens->tokenDeviceId($currentToken)
+            : null;
 
-        // Issue new tokens for the target org's user row
-        $targetUser->tokens()->where('expires_at', '<', now())->delete();
+        $currentToken->delete();
 
-        $token = $targetUser->createToken('access_token', ['*'], now()->addHours(24));
-        $refreshToken = $targetUser->createToken('refresh_token', ['refresh'], now()->addDays(30));
+        $tokens = $this->authTokens->issueTokenPair(
+            $targetUser,
+            $client,
+            replaceClientSessions: false,
+            deviceId: $deviceId,
+        );
 
         $targetUser->update(['last_active_at' => now()]);
         AuditService::log('auth.switch_org', $targetUser, [
@@ -228,8 +246,8 @@ class AuthController extends Controller
 
         return response()->json([
             'user' => $this->userResponse($targetUser),
-            'access_token' => $token->plainTextToken,
-            'refresh_token' => $refreshToken->plainTextToken,
+            'access_token' => $tokens['access_token'],
+            'refresh_token' => $tokens['refresh_token'],
             'token_type' => 'Bearer',
         ]);
     }
@@ -244,18 +262,11 @@ class AuthController extends Controller
             return response()->json(['message' => 'Invalid refresh token.'], 401);
         }
 
-        // Delete only the current refresh token (not all tokens — preserve other device sessions)
-        $user->currentAccessToken()->delete();
-
-        // Clean up expired tokens
-        $user->tokens()->where('expires_at', '<', now())->delete();
-
-        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+        $tokens = $this->authTokens->rotateCurrentSession($user);
 
         return response()->json([
-            'access_token' => $token->plainTextToken,
-            'refresh_token' => $refreshToken->plainTextToken,
+            'access_token' => $tokens['access_token'],
+            'refresh_token' => $tokens['refresh_token'],
             'token_type' => 'Bearer',
         ]);
     }
@@ -409,16 +420,19 @@ class AuthController extends Controller
             ->get();
 
         if ($pendingInvitations->isNotEmpty()) {
+            $rbac = app(RbacBootstrapService::class);
+
             // Auto-accept pending invitations: create User rows in each invited org
-            $createdUsers = DB::transaction(function () use ($pendingInvitations, $name, $email, $googleId, $avatarUrl) {
+            $createdUsers = DB::transaction(function () use ($pendingInvitations, $name, $email, $googleId, $avatarUrl, $rbac) {
                 $users = [];
                 foreach ($pendingInvitations as $invitation) {
-                    $users[] = User::create([
+                    $u = User::create([
                         'organization_id' => $invitation->organization_id,
                         'name' => $name,
                         'email' => $email,
                         'password' => Str::random(32),
                         'role' => $invitation->role,
+                        'timezone' => User::defaultTimezoneForOrg($invitation->organization),
                         'sso_provider' => 'google',
                         'sso_provider_id' => $googleId,
                         'avatar_url' => $avatarUrl,
@@ -426,12 +440,14 @@ class AuthController extends Controller
                     ]);
 
                     $invitation->update(['accepted_at' => now()]);
+                    $rbac->bootstrapOrgAndAssignUser($u, $invitation->role);
+                    $users[] = $u;
                 }
                 return collect($users);
             });
 
             // Also create a personal org so the user always has one
-            $personalUser = DB::transaction(function () use ($name, $email, $googleId, $avatarUrl) {
+            $personalUser = DB::transaction(function () use ($name, $email, $googleId, $avatarUrl, $rbac) {
                 $org = Organization::create([
                     'name' => $name . "'s Organization",
                     'slug' => Str::slug($name) . '-' . Str::random(6),
@@ -440,17 +456,22 @@ class AuthController extends Controller
                     'settings' => (new Organization)->getDefaultSettings(),
                 ]);
 
-                return User::create([
+                $u = User::create([
                     'organization_id' => $org->id,
                     'name' => $name,
                     'email' => $email,
                     'password' => Str::random(32),
                     'role' => 'owner',
+                    'timezone' => User::defaultTimezoneForOrg($org),
                     'sso_provider' => 'google',
                     'sso_provider_id' => $googleId,
                     'avatar_url' => $avatarUrl,
                     'email_verified_at' => now(),
                 ]);
+
+                $rbac->bootstrapOrgAndAssignUser($u, 'owner');
+
+                return $u;
             });
 
             $allUsers = $createdUsers->push($personalUser);
@@ -478,7 +499,8 @@ class AuthController extends Controller
         }
 
         // Step 4: No invitations — auto-register as a new org owner
-        $user = DB::transaction(function () use ($name, $email, $googleId, $avatarUrl) {
+        $rbac = app(RbacBootstrapService::class);
+        $user = DB::transaction(function () use ($name, $email, $googleId, $avatarUrl, $rbac) {
             $org = Organization::create([
                 'name' => $name . "'s Organization",
                 'slug' => Str::slug($name) . '-' . Str::random(6),
@@ -487,17 +509,22 @@ class AuthController extends Controller
                 'settings' => (new Organization)->getDefaultSettings(),
             ]);
 
-            return User::create([
+            $u = User::create([
                 'organization_id' => $org->id,
                 'name' => $name,
                 'email' => $email,
                 'password' => Str::random(32),
                 'role' => 'owner',
+                'timezone' => User::defaultTimezoneForOrg($org),
                 'sso_provider' => 'google',
                 'sso_provider_id' => $googleId,
                 'avatar_url' => $avatarUrl,
                 'email_verified_at' => now(),
             ]);
+
+            $rbac->bootstrapOrgAndAssignUser($u, 'owner');
+
+            return $u;
         });
 
         AuditService::log('auth.register', $user, ['method' => 'google'], $user);
@@ -550,17 +577,18 @@ class AuthController extends Controller
         ])->save();
 
         // Revoke all tokens (web + desktop) and return fresh tokens so current session stays logged in.
-        $user->tokens()->delete();
-
-        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+        $this->authTokens->revokeAllTokens($user);
+        $tokens = $this->authTokens->issueTokenPair(
+            $user,
+            AuthTokenService::clientFromRequest($request)
+        );
 
         AuditService::log('auth.password_changed', $user, [], $user);
 
         return response()->json([
             'message' => 'Password updated successfully.',
-            'access_token' => $token->plainTextToken,
-            'refresh_token' => $refreshToken->plainTextToken,
+            'access_token' => $tokens['access_token'],
+            'refresh_token' => $tokens['refresh_token'],
             'token_type' => 'Bearer',
         ]);
     }
@@ -625,18 +653,33 @@ class AuthController extends Controller
     /** Issue access + refresh tokens and return a standard login response. */
     private function issueTokensAndRespond(User $user, bool $isNewUser = false, string $method = 'email'): JsonResponse
     {
-        $user->tokens()->where('expires_at', '<', now())->delete();
+        $client = AuthTokenService::clientFromRequest();
+        $deviceId = null;
 
-        $token = $user->createToken('access_token', ['*'], now()->addHours(24));
-        $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addDays(30));
+        if ($client === AuthTokenService::CLIENT_DESKTOP) {
+            $deviceId = $this->authTokens->requireDeviceIdFromRequest();
+            // Last-login-wins: terminate previous desktop sessions and close any
+            // timer orphaned by a crash / uninstall (its phantom tail is discarded).
+            $this->authTokens->terminatePreviousDesktopSessions($user);
+        }
+
+        $tokens = $this->authTokens->issueTokenPair(
+            $user,
+            $client,
+            replaceClientSessions: true,
+            deviceId: $deviceId,
+        );
 
         $user->update(['last_active_at' => now()]);
-        AuditService::log($isNewUser ? 'auth.register' : 'auth.login', $user, ['method' => $method], $user);
+        AuditService::log($isNewUser ? 'auth.register' : 'auth.login', $user, [
+            'method' => $method,
+            'client' => AuthTokenService::clientFromRequest(),
+        ], $user);
 
         return response()->json([
             'user' => $this->userResponse($user),
-            'access_token' => $token->plainTextToken,
-            'refresh_token' => $refreshToken->plainTextToken,
+            'access_token' => $tokens['access_token'],
+            'refresh_token' => $tokens['refresh_token'],
             'token_type' => 'Bearer',
         ], $isNewUser ? 201 : 200);
     }

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - develop
     paths:
       - 'desktop/**'
   workflow_dispatch:
@@ -27,34 +28,78 @@ permissions:
   contents: write
 
 jobs:
-  # ── Preflight: resolve version, skip if tag already exists ───────────────────
+  # ── Preflight: resolve version + channel ─────────────────────────────────────
+  # main    → production release  v<version>           (skipped if it already exists)
+  # develop → dev PRERELEASE      v<version>-dev.<run>  (unique per run, never collides)
   preflight:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.resolve.outputs.version }}
+      channel: ${{ steps.resolve.outputs.channel }}
       should_release: ${{ steps.resolve.outputs.should_release }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve version and check for existing release
+      - name: Resolve version and channel
         id: resolve
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Base version: explicit dispatch input wins, else desktop/package.json
           if [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
+            BASE="${{ inputs.version }}"
           else
-            VERSION=$(node -p 'require("./desktop/package.json").version')
+            BASE=$(node -p 'require("./desktop/package.json").version')
           fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-          # Skip the build if this version tag already has a published release
-          if gh release view "v${VERSION}" --repo ${{ github.repository }} > /dev/null 2>&1; then
-            echo "Release v${VERSION} already exists — skipping build."
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            # Production: tag v<base>. Skip if already released so we never silently
+            # republish a shipped version.
+            CHANNEL="production"
+            VERSION="${BASE}"
+            if gh release view "v${VERSION}" --repo ${{ github.repository }} > /dev/null 2>&1; then
+              echo "Release v${VERSION} already exists — skipping."
+              SHOULD=false
+            else
+              SHOULD=true
+            fi
           else
-            echo "No release found for v${VERSION} — proceeding with build."
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            # Non-main (develop, etc.): publish a PRERELEASE with a unique -dev.<run>
+            # suffix. Distinct tag = never collides with or replaces production v<base>.
+            CHANNEL="dev"
+            VERSION="${BASE}-dev.${{ github.run_number }}"
+            SHOULD=true
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
+          echo "should_release=${SHOULD}" >> "$GITHUB_OUTPUT"
+          echo "Resolved → channel=${CHANNEL} version=${VERSION} should_release=${SHOULD}"
+
+      # Pre-create the release ONCE here so the three parallel platform builds only
+      # ever UPLOAD assets to it — they never race to create the same release, which
+      # previously caused HTTP 422 "Published releases must have a valid tag" on the
+      # losing jobs. Dev channel is created as a prerelease.
+      - name: Create or reuse the GitHub release
+        if: steps.resolve.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.resolve.outputs.version }}"
+          if gh release view "$TAG" --repo ${{ github.repository }} >/dev/null 2>&1; then
+            echo "Release $TAG already exists — platform builds will upload to it."
+          else
+            PRERELEASE_FLAG=""
+            if [ "${{ steps.resolve.outputs.channel }}" = "dev" ]; then
+              PRERELEASE_FLAG="--prerelease"
+            fi
+            gh release create "$TAG" \
+              --repo ${{ github.repository }} \
+              --target "${{ github.sha }}" \
+              --title "TrackFlow Desktop ${{ steps.resolve.outputs.version }}" \
+              --notes "Automated ${{ steps.resolve.outputs.channel }} build of ${{ steps.resolve.outputs.version }}." \
+              $PRERELEASE_FLAG
+            echo "Created release $TAG (channel=${{ steps.resolve.outputs.channel }})."
           fi
 
   # ── macOS build ───────────────────────────────────────────────────────────────
@@ -81,9 +126,8 @@ jobs:
         run: npm ci
 
       - name: Set version
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.version != '' }}
         working-directory: desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: npm version ${{ needs.preflight.outputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Create .env for desktop build
         working-directory: desktop
@@ -95,12 +139,21 @@ jobs:
           POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
           POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
         run: |
-          echo "TRACKFLOW_API_URL=${TRACKFLOW_API_URL:-https://trackflow.codeupscale.com/api/v1}" > .env
-          echo "TRACKFLOW_WEB_URL=${TRACKFLOW_WEB_URL:-https://trackflow.codeupscale.com}" >> .env
+          # Pick the backend by channel so develop builds hit the DEV server, never production.
+          if [ "${{ needs.preflight.outputs.channel }}" = "dev" ]; then
+            API_URL="https://dev.trackflow.codeupscale.com/api/v1"
+            WEB_URL="https://dev.trackflow.codeupscale.com"
+          else
+            API_URL="${TRACKFLOW_API_URL:-https://trackflow.codeupscale.com/api/v1}"
+            WEB_URL="${TRACKFLOW_WEB_URL:-https://trackflow.codeupscale.com}"
+          fi
+          echo "TRACKFLOW_API_URL=${API_URL}" > .env
+          echo "TRACKFLOW_WEB_URL=${WEB_URL}" >> .env
           echo "TRACKFLOW_GOOGLE_CLIENT_ID=${TRACKFLOW_GOOGLE_CLIENT_ID}" >> .env
           echo "TRACKFLOW_GOOGLE_CLIENT_SECRET=${TRACKFLOW_GOOGLE_CLIENT_SECRET}" >> .env
           echo "POSTHOG_KEY=${POSTHOG_KEY}" >> .env
           echo "POSTHOG_HOST=${POSTHOG_HOST:-https://us.i.posthog.com}" >> .env
+          echo "Desktop build → channel=${{ needs.preflight.outputs.channel }} API=${API_URL}"
 
       - name: Build and publish macOS
         working-directory: desktop
@@ -121,7 +174,7 @@ jobs:
           path: |
             desktop/dist/*.dmg
             desktop/dist/*.zip
-            desktop/dist/latest-mac.yml
+            desktop/dist/*.yml
           retention-days: 5
 
   # ── Windows build ─────────────────────────────────────────────────────────────
@@ -148,9 +201,8 @@ jobs:
         run: npm ci
 
       - name: Set version
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.version != '' }}
         working-directory: desktop
-        run: npm version ${{ inputs.version }} --no-git-tag-version --allow-same-version
+        run: npm version ${{ needs.preflight.outputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Create .env for desktop build
         working-directory: desktop
@@ -163,12 +215,21 @@ jobs:
           POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
           POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
         run: |
-          echo "TRACKFLOW_API_URL=${TRACKFLOW_API_URL:-https://trackflow.codeupscale.com/api/v1}" > .env
-          echo "TRACKFLOW_WEB_URL=${TRACKFLOW_WEB_URL:-https://trackflow.codeupscale.com}" >> .env
+          # Pick the backend by channel so develop builds hit the DEV server, never production.
+          if [ "${{ needs.preflight.outputs.channel }}" = "dev" ]; then
+            API_URL="https://dev.trackflow.codeupscale.com/api/v1"
+            WEB_URL="https://dev.trackflow.codeupscale.com"
+          else
+            API_URL="${TRACKFLOW_API_URL:-https://trackflow.codeupscale.com/api/v1}"
+            WEB_URL="${TRACKFLOW_WEB_URL:-https://trackflow.codeupscale.com}"
+          fi
+          echo "TRACKFLOW_API_URL=${API_URL}" > .env
+          echo "TRACKFLOW_WEB_URL=${WEB_URL}" >> .env
           echo "TRACKFLOW_GOOGLE_CLIENT_ID=${TRACKFLOW_GOOGLE_CLIENT_ID}" >> .env
           echo "TRACKFLOW_GOOGLE_CLIENT_SECRET=${TRACKFLOW_GOOGLE_CLIENT_SECRET}" >> .env
           echo "POSTHOG_KEY=${POSTHOG_KEY}" >> .env
           echo "POSTHOG_HOST=${POSTHOG_HOST:-https://us.i.posthog.com}" >> .env
+          echo "Desktop build → channel=${{ needs.preflight.outputs.channel }} API=${API_URL}"
 
       - name: Build and publish Windows
         working-directory: desktop
@@ -185,7 +246,7 @@ jobs:
           name: windows-builds
           path: |
             desktop/dist/*.exe
-            desktop/dist/latest.yml
+            desktop/dist/*.yml
           retention-days: 5
 
   # ── Linux build ───────────────────────────────────────────────────────────────
@@ -207,9 +268,27 @@ jobs:
           cache: 'npm'
           cache-dependency-path: desktop/package-lock.json
 
+      # uiohook-napi is compiled from source against Electron 42 during
+      # install-app-deps and needs the X11 dev headers (X11/keysym.h, etc.).
+      # The ubuntu-latest runner ships without them, so install before npm ci.
+      - name: Install X11 build dependencies
+        run: |
+          sudo apt-get update
+          # Full set libuiohook needs to compile its X11 backend: Xtst, Xinerama,
+          # Xrandr, XInput2, Xkb, etc. Installed comprehensively so the native
+          # build doesn't fail one missing header at a time.
+          sudo apt-get install -y \
+            libx11-dev libxtst-dev libxt-dev libxinerama-dev \
+            libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev libxkbfile-dev \
+            libxrandr-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev
+
       - name: Install dependencies
         working-directory: desktop
         run: npm ci
+
+      - name: Set version
+        working-directory: desktop
+        run: npm version ${{ needs.preflight.outputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Create .env for desktop build
         working-directory: desktop
@@ -221,12 +300,21 @@ jobs:
           POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
           POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
         run: |
-          echo "TRACKFLOW_API_URL=${TRACKFLOW_API_URL:-https://trackflow.codeupscale.com/api/v1}" > .env
-          echo "TRACKFLOW_WEB_URL=${TRACKFLOW_WEB_URL:-https://trackflow.codeupscale.com}" >> .env
+          # Pick the backend by channel so develop builds hit the DEV server, never production.
+          if [ "${{ needs.preflight.outputs.channel }}" = "dev" ]; then
+            API_URL="https://dev.trackflow.codeupscale.com/api/v1"
+            WEB_URL="https://dev.trackflow.codeupscale.com"
+          else
+            API_URL="${TRACKFLOW_API_URL:-https://trackflow.codeupscale.com/api/v1}"
+            WEB_URL="${TRACKFLOW_WEB_URL:-https://trackflow.codeupscale.com}"
+          fi
+          echo "TRACKFLOW_API_URL=${API_URL}" > .env
+          echo "TRACKFLOW_WEB_URL=${WEB_URL}" >> .env
           echo "TRACKFLOW_GOOGLE_CLIENT_ID=${TRACKFLOW_GOOGLE_CLIENT_ID}" >> .env
           echo "TRACKFLOW_GOOGLE_CLIENT_SECRET=${TRACKFLOW_GOOGLE_CLIENT_SECRET}" >> .env
           echo "POSTHOG_KEY=${POSTHOG_KEY}" >> .env
           echo "POSTHOG_HOST=${POSTHOG_HOST:-https://us.i.posthog.com}" >> .env
+          echo "Desktop build → channel=${{ needs.preflight.outputs.channel }} API=${API_URL}"
 
       - name: Build and publish Linux
         working-directory: desktop
@@ -241,13 +329,15 @@ jobs:
           path: |
             desktop/dist/*.AppImage
             desktop/dist/*.deb
-            desktop/dist/latest-linux.yml
+            desktop/dist/*.yml
           retention-days: 5
 
   # ── Update release notes + marketing version ─────────────────────────────────
   update-release-notes:
     needs: [preflight, build-mac, build-windows, build-linux]
-    if: always() && (needs.build-mac.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
+    # Production (main) only — this job pushes to main and edits the production
+    # release notes. Dev prereleases from develop must not touch main.
+    if: always() && needs.preflight.outputs.channel == 'production' && (needs.build-mac.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -393,3 +483,21 @@ jobs:
           - Windows: \`%APPDATA%/trackflow-agent/trackflow.log\`
           - Linux: \`~/.config/trackflow-agent/trackflow.log\`
           "
+
+  # ── Finalize dev prerelease ──────────────────────────────────────────────────
+  # Dev channel only. The release is pre-created as a prerelease in preflight, but
+  # electron-builder (releaseType=release) can flip the flag while uploading. This
+  # job re-asserts prerelease=true after the builds so dev releases never show up
+  # as "Latest". Runs if at least one platform produced artifacts.
+  finalize-dev-prerelease:
+    needs: [preflight, build-mac, build-windows, build-linux]
+    if: always() && needs.preflight.outputs.channel == 'dev' && (needs.build-mac.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce prerelease flag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "v${{ needs.preflight.outputs.version }}" \
+            --repo ${{ github.repository }} \
+            --prerelease --draft=false
