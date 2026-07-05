@@ -584,16 +584,22 @@ class TimerServiceTest extends TestCase
 
     // ─── pause() ─────────────────────────────────────────────────────
 
-    public function test_pause_stops_timer_without_creating_idle_entry(): void
+    public function test_pause_freezes_timer_without_creating_idle_entry(): void
     {
         $project = Project::factory()->create(['organization_id' => $this->org->id]);
         $project->members()->attach($this->user->id);
 
         $this->service->start(['project_id' => $project->id]);
 
-        $stoppedEntry = $this->service->pause();
+        $pausedEntry = $this->service->pause();
 
-        $this->assertNotNull($stoppedEntry->ended_at);
+        // pause() is a soft pause: the entry stays OPEN (no ended_at) and the timer is
+        // marked 'paused' in Redis so elapsed freezes. resume() then continues the same
+        // entry (see test_pause_freezes_elapsed_and_resume_restores_running).
+        $this->assertNull($pausedEntry->ended_at);
+
+        $meta = json_decode(Redis::get("timer:{$this->user->id}"), true);
+        $this->assertSame('paused', $meta['state']);
 
         // Verify no idle entry was created (zero-duration idle entries were removed
         // because they corrupted duration totals and reports)

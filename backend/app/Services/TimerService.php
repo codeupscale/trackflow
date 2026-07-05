@@ -1070,17 +1070,29 @@ class TimerService
 
         $total = (int) $query->sum('duration_seconds');
 
-        // If timer is running and entry is for this project, add current elapsed
+        // Add the live timer's current elapsed, but ONLY when a Redis timer key exists.
+        // The Redis key is the authoritative "running" signal: an open DB entry with NO
+        // Redis key is an orphan (crashed/evicted session) and must not inflate today's
+        // total — resurrecting it here via a DB self-heal would add up to
+        // MAX_ENTRY_DURATION of phantom time. status()/stop() still self-heal Redis from
+        // the DB (they own that repair), but a pure read like todayTotal must not.
+        // Regression guard: TimerServiceTest::test_today_total_excludes_running_entries_without_ended_at.
         $redisKey = "timer:{$user->id}";
-        $entry = $this->findOpenRunningEntry($user, $redisKey);
-        if ($entry && ($projectId === null || $projectId === '' || (string) $entry->project_id === (string) $projectId)) {
-            $meta = $this->getRedisTimerMeta($redisKey);
-            $isPaused = ($meta['state'] ?? 'running') === 'paused';
-            $frozenAt = $isPaused && ! empty($meta['paused_at'])
-                ? Carbon::parse($meta['paused_at'])
-                : null;
-            $elapsed = $this->computeOpenEntryElapsed($entry, $frozenAt);
-            $total += $elapsed;
+        $meta = $this->getRedisTimerMeta($redisKey);
+        if ($meta !== null && ! empty($meta['entry_id'])) {
+            $entry = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                ->where('user_id', $user->id)
+                ->whereNull('ended_at')
+                ->find($meta['entry_id']);
+
+            if ($entry && ($projectId === null || $projectId === '' || (string) $entry->project_id === (string) $projectId)) {
+                $isPaused = ($meta['state'] ?? 'running') === 'paused';
+                $frozenAt = $isPaused && ! empty($meta['paused_at'])
+                    ? Carbon::parse($meta['paused_at'])
+                    : null;
+                $elapsed = $this->computeOpenEntryElapsed($entry, $frozenAt);
+                $total += $elapsed;
+            }
         }
 
         return $total;
