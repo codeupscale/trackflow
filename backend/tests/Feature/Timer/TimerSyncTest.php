@@ -350,6 +350,12 @@ class TimerSyncTest extends TestCase
         $entry = $this->service->start([]);
         $startedAt = $entry->started_at->copy();
 
+        // Advance the clock so elapsed is deterministically non-zero. elapsed_seconds is
+        // whole seconds (fractional seconds are truncated by design), so a start→status
+        // in the same tick would legitimately report 0 — travel makes the assertion below
+        // meaningful without depending on wall-clock timing.
+        $this->travel(5)->seconds();
+
         Redis::del("timer:{$this->user->id}");
 
         $status = $this->service->status();
