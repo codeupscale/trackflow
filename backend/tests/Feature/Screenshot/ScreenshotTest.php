@@ -293,6 +293,13 @@ class ScreenshotTest extends TestCase
             $this->markTestSkipped('Screenshot index uses PostgreSQL EXTRACT(EPOCH FROM ...) syntax not supported by SQLite.');
         }
 
+        // Pin the clock to a safe mid-day UTC instant (10:00 UTC = 15:00 PKT) before any
+        // data setup. The test user's timezone is Asia/Karachi (UTC+5); when the suite runs
+        // between 19:00–24:00 UTC the PKT "today" is a day ahead of the UTC clock, so the
+        // UTC-serialized captured_at and the date-range filter land on different days and the
+        // count assertion skews. A mid-day instant keeps both zones on the same calendar day.
+        $this->travelTo(\Illuminate\Support\Carbon::create(2026, 7, 6, 10, 0, 0, 'UTC'));
+
         $today = now();
         $yesterday = now()->subDay();
 

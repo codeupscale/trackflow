@@ -46,6 +46,7 @@ Two tests are **wall-clock / timezone date-boundary flakes**, unrelated to this 
 - They fail **identically on original code** and in **pristine single-method isolation** — so not pollution and not caused by this fix.
 - Root cause: `UserFactory`/`OrganizationFactory` default timezone `Asia/Karachi` (UTC+5). When the suite runs while UTC time is in the ~19:00–24:00 window (it was `22:41 UTC` / `03:41 PKT` during this fix), the user's local "today" is a day ahead of UTC, so `now()->subHours(4)` and UTC-serialized `captured_at` land in the "wrong" day and the date assertions skew. CI passed them by running at a safe UTC hour — which is exactly why they were never in the CI failure list.
 - **Recommended fix (separate change):** pin the clock in these two tests (`Carbon::setTestNow(<fixed non-boundary instant>)` with a `tearDown` reset, matching the CheckIn test pattern) so they are deterministic at any hour.
+- **✅ RESOLVED 2026-07-06** (branch `fix/timer-screenshot-wallclock-flakes` → merged `develop`): both tests pinned via `$this->travelTo(Carbon::create(2026,7,6,10,0,0,'UTC'))` (10:00 UTC = 15:00 PKT — mid-day in both zones) before any data setup, plus the same pin on 9 sibling `today_total`/date-boundary tests in `TimerServiceTest` (via a `freezeMidday()` helper); Laravel `TestCase::tearDown()` auto-resets `Carbon::setTestNow()`. Verified green at the dangerous hour (`22:51 UTC` / `03:51 PKT`): both classes previously red now pass — `ScreenshotTest` 14/14, `TimerServiceTest` 36/36. Test-only change; no production code touched.
 
 ## Prevention
 
