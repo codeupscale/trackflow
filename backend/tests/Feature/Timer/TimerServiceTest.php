@@ -34,6 +34,20 @@ class TimerServiceTest extends TestCase
         parent::tearDown();
     }
 
+    /**
+     * Pin the clock to a safe mid-day UTC instant (10:00 UTC = 15:00 PKT) before any data
+     * setup. The test user's timezone is Asia/Karachi (UTC+5); todayTotal()/status() compute
+     * day boundaries in that zone. When the suite runs between 19:00–24:00 UTC, the PKT "today"
+     * is a day ahead of the UTC clock, so entries created at now()->subHours(N) drift into
+     * "yesterday PKT" and the exact today_total assertions flake. A mid-day instant keeps
+     * subHours(1..5) safely inside the same PKT day. Laravel's TestCase::tearDown() resets
+     * Carbon::setTestNow() automatically, so no manual teardown is needed.
+     */
+    private function freezeMidday(): void
+    {
+        $this->travelTo(\Illuminate\Support\Carbon::create(2026, 7, 6, 10, 0, 0, 'UTC'));
+    }
+
     // ─── start() ──────────────────────────────────────────────────────
 
     public function test_start_creates_time_entry_and_sets_redis(): void
@@ -236,6 +250,8 @@ class TimerServiceTest extends TestCase
 
     public function test_status_includes_completed_entries_in_today_total(): void
     {
+        $this->freezeMidday();
+
         // Create a completed entry for today
         TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
@@ -253,6 +269,8 @@ class TimerServiceTest extends TestCase
 
     public function test_status_with_project_filter(): void
     {
+        $this->freezeMidday();
+
         $project = Project::factory()->create([
             'organization_id' => $this->org->id,
         ]);
@@ -292,6 +310,8 @@ class TimerServiceTest extends TestCase
 
     public function test_status_stopped_with_project_returns_scoped_today_total_but_global_all_projects_total(): void
     {
+        $this->freezeMidday();
+
         $project = Project::factory()->create(['organization_id' => $this->org->id]);
 
         // 1h on the selected project
@@ -329,6 +349,8 @@ class TimerServiceTest extends TestCase
 
     public function test_status_stopped_without_project_has_equal_today_and_all_projects_totals(): void
     {
+        $this->freezeMidday();
+
         $project = Project::factory()->create(['organization_id' => $this->org->id]);
 
         TimeEntry::factory()->create([
@@ -349,6 +371,8 @@ class TimerServiceTest extends TestCase
 
     public function test_status_running_all_projects_total_is_global_and_includes_elapsed(): void
     {
+        $this->freezeMidday();
+
         $projectA = Project::factory()->create(['organization_id' => $this->org->id]);
         $projectB = Project::factory()->create(['organization_id' => $this->org->id]);
         $projectA->members()->attach($this->user->id);
@@ -417,6 +441,8 @@ class TimerServiceTest extends TestCase
 
     public function test_today_total_sums_completed_entries(): void
     {
+        $this->freezeMidday();
+
         TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
             'user_id' => $this->user->id,
@@ -441,6 +467,8 @@ class TimerServiceTest extends TestCase
 
     public function test_today_total_includes_running_entry_elapsed(): void
     {
+        $this->freezeMidday();
+
         // Create a completed entry
         TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
@@ -462,6 +490,8 @@ class TimerServiceTest extends TestCase
 
     public function test_today_total_excludes_idle_entries(): void
     {
+        $this->freezeMidday();
+
         TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
             'user_id' => $this->user->id,
@@ -486,6 +516,8 @@ class TimerServiceTest extends TestCase
 
     public function test_today_total_with_project_filter(): void
     {
+        $this->freezeMidday();
+
         $project = Project::factory()->create(['organization_id' => $this->org->id]);
 
         TimeEntry::factory()->create([
@@ -748,6 +780,8 @@ class TimerServiceTest extends TestCase
 
     public function test_today_total_excludes_yesterday_entries(): void
     {
+        $this->freezeMidday();
+
         // Create entry from yesterday
         TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
