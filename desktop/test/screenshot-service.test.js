@@ -1,5 +1,13 @@
-const { desktopCapturer, Notification, screen, systemPreferences, powerMonitor, dialog } = require('electron');
+const { desktopCapturer, screen, systemPreferences, powerMonitor, dialog } = require('electron');
 const ScreenshotService = require('../src/main/screenshot-service');
+
+jest.mock('../src/main/system-notifications', () => ({
+  showSystemNotification: jest.fn(() => ({
+    close: jest.fn(),
+    show: jest.fn(),
+  })),
+  formatTimeShortLocal: jest.fn(() => '14:05'),
+}));
 
 // Mock sharp
 jest.mock('sharp', () => {
@@ -955,20 +963,27 @@ describe('ScreenshotService', () => {
   // ═════════════════════════════════════════════════════════════════
 
   describe('_showNotification()', () => {
+    const { showSystemNotification } = require('../src/main/system-notifications');
+
     test('shows notification after successful capture', async () => {
       service.currentEntryId = 'entry-1';
       await service.capture();
-      expect(Notification).toHaveBeenCalledWith(expect.objectContaining({
+      expect(showSystemNotification).toHaveBeenCalledWith(expect.objectContaining({
         title: 'TrackFlow',
-        body: 'Screenshot captured',
+        body: 'Screenshot captured at 14:05',
+        silent: true,
+        durationMs: 5000,
       }));
+      expect(showSystemNotification.mock.calls[0][0].id).toMatch(/^screenshot-\d+$/);
     });
 
-    test('closes previous notification before showing new one', () => {
-      const mockNotif = { close: jest.fn(), show: jest.fn() };
-      service._lastNotification = mockNotif;
+    test('delegates notification display to showSystemNotification', () => {
       service._showNotification();
-      expect(mockNotif.close).toHaveBeenCalled();
+      expect(showSystemNotification).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'TrackFlow',
+        silent: true,
+        durationMs: 5000,
+      }));
     });
   });
 

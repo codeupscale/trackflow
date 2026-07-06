@@ -108,6 +108,7 @@ const {
 } = require("./keychain");
 const posthog = require("./posthog");
 const { getTrayIcon, warmIconCache } = require("./tray-icons");
+const { initSystemNotifications } = require("./system-notifications");
 const PowerManager = require("./power-manager");
 
 const WEB_DASHBOARD_URL =
@@ -1426,6 +1427,7 @@ app.on("second-instance", (_event, argv) => {
 
 app.on("ready", async () => {
     console.log("app.ready fired — initializing...");
+    initSystemNotifications();
     await initializeApp();
     console.log("initializeApp() complete");
     // In dev mode, auto-show the popup so CDP remote debugging can connect to it
