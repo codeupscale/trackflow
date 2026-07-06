@@ -6,6 +6,7 @@ const app = {
   isPackaged: false,
   requestSingleInstanceLock: jest.fn(() => true),
   setLoginItemSettings: jest.fn(),
+  setAppUserModelId: jest.fn(),
   on: jest.fn(),
   dock: { hide: jest.fn(), show: jest.fn() },
 };
@@ -79,6 +80,7 @@ const dialog = {
 const Notification = jest.fn().mockImplementation(() => ({
   show: jest.fn(),
   close: jest.fn(),
+  on: jest.fn(),
 }));
 Notification.isSupported = jest.fn(() => true);
 

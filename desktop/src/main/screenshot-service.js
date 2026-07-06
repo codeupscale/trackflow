@@ -24,7 +24,8 @@
 //      This matches how Hubstaff and Time Doctor handle multi-monitor setups
 //      and allows the web dashboard to show per-display screenshots.
 
-const { desktopCapturer, Notification, screen, systemPreferences, shell, dialog, BrowserWindow, powerMonitor, ipcMain } = require('electron');
+const { desktopCapturer, screen, systemPreferences, shell, dialog, BrowserWindow, powerMonitor, ipcMain } = require('electron');
+const { showSystemNotification, formatTimeShortLocal } = require('./system-notifications');
 const crypto = require('crypto');
 const FormData = require('form-data');
 
@@ -889,27 +890,15 @@ class ScreenshotService {
   // ── Notification ──────────────────────────────────────────────────
 
   _showNotification() {
-    try {
-      if (!Notification.isSupported()) return;
-      this._closeNotification();
-
-      const notification = new Notification({
-        title: 'TrackFlow',
-        body: 'Screenshot captured',
-        silent: true,
-        timeoutType: 'default',
-      });
-      notification.show();
-      this._lastNotification = notification;
-
-      const ref = notification;
-      setTimeout(() => {
-        try { ref.close(); } catch {}
-        if (this._lastNotification === ref) this._lastNotification = null;
-      }, 3000);
-    } catch (e) {
-      console.warn('[SS] Could not show notification:', e.message);
-    }
+    const timeLabel = formatTimeShortLocal();
+    const notification = showSystemNotification({
+      title: 'TrackFlow',
+      body: `Screenshot captured at ${timeLabel}`,
+      silent: true,
+      durationMs: 5000,
+      id: `screenshot-${Date.now()}`,
+    });
+    this._lastNotification = notification;
   }
 
   _closeNotification() {
