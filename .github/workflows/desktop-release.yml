@@ -27,10 +27,21 @@ on:
 permissions:
   contents: write
 
+# Serialize runs per branch: the dev channel's per-version -dev.<n> counter is
+# derived from existing tags, so two concurrent develop runs must not resolve
+# the same number. Queued, never cancelled — every push still gets its build.
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # ── Preflight: resolve version + channel ─────────────────────────────────────
-  # main    → production release  v<version>           (skipped if it already exists)
-  # develop → dev PRERELEASE      v<version>-dev.<run>  (unique per run, never collides)
+  # main    → production release  v<version>            (skipped if it already exists)
+  # develop → dev PRERELEASE      v<next-version>-dev.<n> — if package.json's version
+  #           has already shipped to production, the patch is auto-bumped so dev builds
+  #           sort AFTER the release (semver: 1.0.42-dev.N < 1.0.42 < 1.0.43-dev.1),
+  #           and <n> is a per-version counter starting at 1 (next after the highest
+  #           existing v<version>-dev.* tag).
   preflight:
     runs-on: ubuntu-latest
     outputs:
@@ -64,10 +75,29 @@ jobs:
               SHOULD=true
             fi
           else
-            # Non-main (develop, etc.): publish a PRERELEASE with a unique -dev.<run>
-            # suffix. Distinct tag = never collides with or replaces production v<base>.
+            # Non-main (develop, etc.): publish a PRERELEASE with a -dev.<n> suffix.
+            # Distinct tag = never collides with or replaces production v<base>.
             CHANNEL="dev"
-            VERSION="${BASE}-dev.${{ github.run_number }}"
+
+            # If BASE has already shipped as a production release, this dev build
+            # contains post-<BASE> code — auto-bump the patch until we reach an
+            # unreleased version so dev builds sort AFTER the shipped release
+            # (semver: 1.0.42-dev.N < 1.0.42 < 1.0.43-dev.1). Removes the manual
+            # "bump package.json after every prod release" chore.
+            while gh release view "v${BASE}" --repo ${{ github.repository }} > /dev/null 2>&1; do
+              echo "v${BASE} already shipped to production — bumping patch."
+              BASE=$(echo "${BASE}" | awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}')
+            done
+
+            # Per-version counter: next after the highest existing v<BASE>-dev.<n>
+            # tag (1 if none). Tag-derived instead of github.run_number so numbering
+            # restarts at -dev.1 for every new version. The workflow-level
+            # concurrency group serializes runs, so two builds can't race to the
+            # same number.
+            LAST=$(gh api "repos/${{ github.repository }}/git/matching-refs/tags/v${BASE}-dev." --jq '.[].ref' 2>/dev/null \
+              | sed 's/.*-dev\.//' | grep -E '^[0-9]+$' | sort -n | tail -1 || true)
+            N=$(( ${LAST:-0} + 1 ))
+            VERSION="${BASE}-dev.${N}"
             SHOULD=true
           fi
 
