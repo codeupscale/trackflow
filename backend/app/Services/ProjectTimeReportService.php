@@ -13,8 +13,8 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  * Project-manager time report: per-entry breakdown for one or more projects /
  * resources over a week, month or custom range, with CSV + PDF export.
  *
- * Only APPROVED, TRACKED time is reported (manual entries pending approval and
- * rejected time never appear). Every query is org-scoped and further narrowed by
+ * Only APPROVED tracked and manual time is reported (pending/rejected manual
+ * entries and idle markers never appear). Every query is org-scoped and further
  * the actor's reports.view scope (organization / project / own).
  */
 class ProjectTimeReportService
@@ -97,7 +97,7 @@ class ProjectTimeReportService
 
             // Column header.
             fputcsv($out, [
-                'Resource', 'Project', 'Task', 'Date',
+                'Resource', 'Project', 'Task', 'Type', 'Date', 'Start', 'End',
                 'Duration (h)', 'Activity %', 'Billable', 'Billable Amount',
             ]);
 
@@ -107,7 +107,10 @@ class ProjectTimeReportService
                     $this->neutralizeCsv($row['user_name']),
                     $this->neutralizeCsv($row['project_name']),
                     $this->neutralizeCsv($row['task_name']),
-                    $this->neutralizeCsv($row['started_at']),
+                    $this->neutralizeCsv($row['type']),
+                    $this->neutralizeCsv($row['date']),
+                    $this->neutralizeCsv($row['start_time']),
+                    $this->neutralizeCsv($row['end_time']),
                     $this->neutralizeCsv(number_format($row['duration_seconds'] / 3600, 2)),
                     $this->neutralizeCsv((string) $row['activity_score']),
                     $this->neutralizeCsv($row['billable'] ? 'Yes' : 'No'),
@@ -166,7 +169,7 @@ class ProjectTimeReportService
             ->leftJoin('projects as p', 'te.project_id', '=', 'p.id')
             ->leftJoin('tasks as t', 'te.task_id', '=', 't.id')
             ->where('te.organization_id', $actor->organization_id)
-            ->where('te.type', 'tracked')
+            ->whereIn('te.type', ['tracked', 'manual'])
             ->where('te.approval_status', 'approved')
             // Raw DB::table bypasses the SoftDeletes global scope — exclude
             // soft-deleted entries explicitly (also matches the idx_te_pending /
@@ -214,8 +217,10 @@ class ProjectTimeReportService
                 'p.billable',
                 'p.hourly_rate',
                 't.name as task_name',
+                'te.type',
                 'te.activity_score',
                 'te.started_at',
+                'te.ended_at',
             ])
             ->selectRaw("{$dur} as duration_seconds")
             ->selectRaw("CASE WHEN p.billable = true THEN ROUND({$dur} / 3600.0 * p.hourly_rate, 2) ELSE 0 END as billable_amount")
@@ -249,12 +254,21 @@ class ProjectTimeReportService
 
     private function mapRow(object $row, string $tz): array
     {
+        $started = Carbon::parse($row->started_at)->setTimezone($tz);
+        $ended = $row->ended_at ? Carbon::parse($row->ended_at)->setTimezone($tz) : null;
+
         return [
             'id' => $row->id,
             'user_name' => $row->user_name,
             'project_name' => $row->project_name ?? '—',
             'task_name' => $row->task_name ?? '—',
-            'started_at' => Carbon::parse($row->started_at)->setTimezone($tz)->format('Y-m-d H:i'),
+            'type' => $row->type === 'manual' ? 'Manual' : 'Tracked',
+            'date' => $started->format('Y-m-d'),
+            'start_time' => $started->format('H:i'),
+            'end_time' => $ended?->format('H:i') ?? '—',
+            // Back-compat for existing API consumers.
+            'started_at' => $started->format('Y-m-d H:i'),
+            'ended_at' => $ended?->format('Y-m-d H:i'),
             'duration_seconds' => (int) $row->duration_seconds,
             'activity_score' => (int) ($row->activity_score ?? 0),
             'billable' => (bool) $row->billable,

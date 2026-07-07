@@ -21,6 +21,7 @@ class ReportExportFormatter
             'summary' => self::summaryCsv($out, $data),
             'team' => self::teamCsv($out, $data),
             'projects' => self::projectsCsv($out, $data),
+            'apps' => self::appsCsv($out, $data),
             'payroll' => self::payrollCsv($out, $data),
             'attendance' => self::attendanceCsv($out, $data),
             default => null,
@@ -172,8 +173,22 @@ class ReportExportFormatter
 
         foreach ($data as $row) {
             fputcsv($out, [
-                $row['name'] ?? '',
+                $row['name'] ?? $row['project_name'] ?? '',
                 $row['total_hours'] ?? self::hours($row['total_seconds'] ?? 0),
+            ]);
+        }
+    }
+
+    private static function appsCsv($out, array $data): void
+    {
+        fputcsv($out, ['Employee', 'Application', 'Time Utilized (h)', 'Days Used']);
+
+        foreach ($data as $row) {
+            fputcsv($out, [
+                self::neutralizeCsv($row['user_name'] ?? ''),
+                self::neutralizeCsv($row['active_app'] ?? ''),
+                self::hours($row['duration_seconds'] ?? 0),
+                $row['days_used'] ?? 0,
             ]);
         }
     }

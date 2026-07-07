@@ -216,6 +216,11 @@ class DatabaseSeeder extends Seeder
             }
         }
 
+        // Full RBAC catalog (63+ permissions) + system roles per org. Migrations only
+        // insert payroll/shifts/check-in permissions incrementally; without this,
+        // Owner's bypass (Permission::all()) exposes only those partial rows.
+        $this->call(PermissionSeeder::class);
+
         $this->command->info('✓ Demo data seeded successfully!');
         $this->command->info('');
         $this->command->info('  Login credentials (password: "password" for all):');

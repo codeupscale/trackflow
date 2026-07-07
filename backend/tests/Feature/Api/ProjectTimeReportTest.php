@@ -14,7 +14,7 @@ use Tests\TestCase;
 /**
  * Feature B — Project-manager time report + CSV/PDF export.
  *
- * The report surfaces ONLY type='tracked' + approval_status='approved' rows,
+ * The report surfaces approved tracked + manual rows (pending/rejected manual and
  * org-scoped and further narrowed by the actor's reports.view scope
  * (organization / project / own). Export streams CSV (formula-injection
  * neutralized) or renders PDF (row-capped at 5000).
@@ -71,12 +71,19 @@ class ProjectTimeReportTest extends TestCase
         $this->assertEquals(7200, $response->json('meta.summary.total_seconds'));
     }
 
-    public function test_index_only_includes_approved_tracked_entries(): void
+    public function test_index_only_includes_approved_tracked_and_manual_entries(): void
     {
         $project = $this->project();
         $tracked = $this->trackedEntry($this->employee, $project);
 
-        // A pending manual entry, a rejected one, and an idle marker — none count.
+        $approvedManual = TimeEntry::factory()->manual()->create([
+            'organization_id' => $this->org->id, 'user_id' => $this->employee->id,
+            'project_id' => $project->id, 'approval_status' => 'approved', 'is_approved' => true,
+            'started_at' => Carbon::parse(self::AT), 'ended_at' => Carbon::parse(self::AT_END),
+            'duration_seconds' => 3600,
+        ]);
+
+        // Pending manual, rejected manual, and idle markers never count.
         TimeEntry::factory()->manual()->create([
             'organization_id' => $this->org->id, 'user_id' => $this->employee->id,
             'project_id' => $project->id, 'approval_status' => 'pending', 'is_approved' => false,
@@ -94,8 +101,8 @@ class ProjectTimeReportTest extends TestCase
         $response = $this->getJson($this->url());
 
         $ids = collect($response->json('data'))->pluck('id')->all();
-        $this->assertEquals([$tracked->id], $ids);
-        $this->assertEquals(1, $response->json('meta.summary.entry_count'));
+        $this->assertEqualsCanonicalizing([$tracked->id, $approvedManual->id], $ids);
+        $this->assertEquals(2, $response->json('meta.summary.entry_count'));
     }
 
     public function test_project_id_filter_narrows_results(): void

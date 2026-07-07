@@ -43,7 +43,10 @@
                 <th>Resource</th>
                 <th>Project</th>
                 <th>Task</th>
+                <th>Type</th>
                 <th>Date</th>
+                <th>Start</th>
+                <th>End</th>
                 <th class="right">Duration (h)</th>
                 <th class="right">Activity %</th>
                 <th>Billable</th>
@@ -56,14 +59,17 @@
                     <td>{{ $row['user_name'] }}</td>
                     <td>{{ $row['project_name'] }}</td>
                     <td>{{ $row['task_name'] }}</td>
-                    <td>{{ $row['started_at'] }}</td>
+                    <td>{{ $row['type'] }}</td>
+                    <td>{{ $row['date'] }}</td>
+                    <td>{{ $row['start_time'] }}</td>
+                    <td>{{ $row['end_time'] }}</td>
                     <td class="right">{{ number_format($row['duration_seconds'] / 3600, 2) }}</td>
                     <td class="right">{{ $row['activity_score'] }}%</td>
                     <td>{{ $row['billable'] ? 'Yes' : 'No' }}</td>
                     <td class="right">${{ number_format($row['billable_amount'], 2) }}</td>
                 </tr>
             @empty
-                <tr><td colspan="8">No time entries match the selected filters.</td></tr>
+                <tr><td colspan="11">No time entries match the selected filters.</td></tr>
             @endforelse
         </tbody>
     </table>

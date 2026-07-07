@@ -9,7 +9,7 @@ use Illuminate\Support\Str;
 class PermissionSeeder extends Seeder
 {
     /**
-     * All 63 permissions in the system.
+     * All permissions in the system (synced from dev DB snapshot, 2026-07-07).
      * Format: [key, module, action, description, has_scope]
      */
     public function getPermissions(): array
@@ -74,14 +74,14 @@ class PermissionSeeder extends Seeder
             ['leave.manage_balances', 'leave', 'manage_balances', 'Adjust leave balances manually',        false],
             ['leave.manage_holidays', 'leave', 'manage_holidays', 'Create, edit, delete public holidays',  false],
 
-            // --- attendance (7) ---
+            // --- attendance (9) ---
             ['attendance.view',                     'attendance', 'view',                     'View attendance records',              true],
             ['attendance.generate',                 'attendance', 'generate',                 'Trigger daily attendance generation',  false],
             ['attendance.regularize',               'attendance', 'regularize',               'Submit regularization requests',       false],
             ['attendance.approve_regularizations',  'attendance', 'approve_regularizations',  'Approve or reject regularizations',   true],
             ['attendance.manage_overtime_rules',    'attendance', 'manage_overtime_rules',    'Configure overtime rules',            false],
-            ['attendance.check_in',                 'attendance', 'check_in',                 'Check in / out for oneself',           false],
-            ['attendance.manage_policy',            'attendance', 'manage_policy',            'Configure the check-in attendance policy', false],
+            ['attendance.check_in',                 'attendance', 'check_in',                 'Check in and check out for the day',           false],
+            ['attendance.manage_policy',            'attendance', 'manage_policy',            'Configure attendance check-in policy',       false],
             ['attendance.view_all',                 'attendance', 'view_all',                 'View all employees check-in records org-wide', false],
             ['attendance.export',                   'attendance', 'export',                   'Export attendance / check-in reports', false],
 
@@ -327,9 +327,6 @@ class PermissionSeeder extends Seeder
 
             // audit_logs
             'audit_logs.view' => 'none',
-
-            // roles — view only (needed for invite dialog role picker)
-            'roles.view' => 'none',
         ];
     }
 
