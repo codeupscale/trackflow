@@ -22,6 +22,60 @@ const idleTimeEl = document.getElementById("idleTime");
 let idleStartMs = Date.now();
 let tickInterval = null;
 
+// ── In-renderer alert sound (Bug A1) ────────────────────────────────────────
+// The ONLY previous sound path was a raw Electron Notification (silent:false) in
+// the main process. macOS Focus/DND, Windows Action Center dedup, and Linux
+// libnotify frequently drop that sound with no fallback, so a user on another
+// screen / virtual desktop never heard the idle alert. This WebAudio beep fires
+// the moment ANY alert window becomes visible (first idle-data) or is re-shown
+// after sleep (playSound flag) — independent of OS notification policy. It needs
+// NO external resource, so the strict CSP (default-src 'none'; script-src 'self')
+// is satisfied with no change. The system Notification is kept as a secondary.
+let _audioCtx = null;
+let _hasBeeped = false;
+
+function playIdleBeep() {
+    try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        if (!_audioCtx) _audioCtx = new AC();
+        // Autoplay policy may leave the context suspended without a user gesture;
+        // resume() is best-effort. If it stays suspended, the OS Notification and
+        // the visible window are the fallbacks — we never depend on sound alone.
+        if (_audioCtx.state === "suspended") _audioCtx.resume().catch(() => {});
+        const now = _audioCtx.currentTime;
+        // Two short rising tones — distinctive but not jarring.
+        [880, 1180].forEach((freq, i) => {
+            const osc = _audioCtx.createOscillator();
+            const gain = _audioCtx.createGain();
+            osc.type = "sine";
+            osc.frequency.value = freq;
+            const t0 = now + i * 0.18;
+            gain.gain.setValueAtTime(0.0001, t0);
+            gain.gain.exponentialRampToValueAtTime(0.25, t0 + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.16);
+            osc.connect(gain).connect(_audioCtx.destination);
+            osc.start(t0);
+            osc.stop(t0 + 0.18);
+        });
+    } catch (e) {
+        // WebAudio unavailable — the system Notification / visible window are the
+        // fallbacks. Never let a sound failure break the alert.
+    }
+}
+
+// Beep on the FIRST idle-data of this renderer (fresh window becoming visible)
+// or whenever the main process explicitly requests a replay (playSound:true —
+// e.g. re-showing the SAME window after wake). Project-refresh idle-data (no
+// playSound) never re-beeps.
+function maybeBeep(data) {
+    if (data && data.playSound === false) return;
+    if (!_hasBeeped || (data && data.playSound === true)) {
+        _hasBeeped = true;
+        playIdleBeep();
+    }
+}
+
 // The idle detector action ID for the current idle cycle.
 // Passed back to the main process on resolve to prevent stale actions.
 let currentActionId = null;
@@ -97,6 +151,10 @@ function startTicking() {
 let projects = [];
 
 window.trackflow.onIdleData((data) => {
+    // Bug A1: guarantee an audible alert the moment this window is visible,
+    // independent of OS notification policy (Focus/DND, Action Center dedup).
+    maybeBeep(data);
+
     const parsedIdleStart = toTimestampMs(data.idleStartedAt);
     if (parsedIdleStart != null) idleStartMs = parsedIdleStart;
     if (data.actionId != null) currentActionId = data.actionId;
