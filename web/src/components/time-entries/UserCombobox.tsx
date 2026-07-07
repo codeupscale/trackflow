@@ -31,6 +31,8 @@ interface UserComboboxProps {
   disabled?: boolean;
   /** Only fetch the user list when the picker is actually usable. */
   enabled?: boolean;
+  /** User ids to omit from the list (e.g. prevent self-selection as manager). */
+  excludeUserIds?: string[];
 }
 
 /**
@@ -45,6 +47,7 @@ export function UserCombobox({
   placeholder = 'Select member',
   disabled = false,
   enabled = true,
+  excludeUserIds = [],
 }: UserComboboxProps) {
   const [open, setOpen] = useState(false);
 
@@ -59,6 +62,8 @@ export function UserCombobox({
   });
 
   const selected = users?.find((u) => u.id === value) ?? null;
+  const exclude = new Set(excludeUserIds);
+  const visibleUsers = users?.filter((u) => !exclude.has(u.id)) ?? [];
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -105,7 +110,7 @@ export function UserCombobox({
           <CommandList>
             <CommandEmpty>{isLoading ? 'Loading...' : 'No members found.'}</CommandEmpty>
             <CommandGroup>
-              {users?.map((u) => (
+              {visibleUsers.map((u) => (
                 <CommandItem
                   key={u.id}
                   value={`${u.name} ${u.email}`}

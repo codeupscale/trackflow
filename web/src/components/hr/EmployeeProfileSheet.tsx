@@ -34,6 +34,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { DepartmentSelect } from '@/components/hr/DepartmentSelect';
 import { PositionSelect } from '@/components/hr/PositionSelect';
+import { UserCombobox } from '@/components/time-entries/UserCombobox';
 import { useUpdateEmployeeProfile } from '@/hooks/hr/use-employees';
 import { usePermissionStore } from '@/stores/permission-store';
 import {
@@ -197,6 +198,28 @@ export function EmployeeProfileSheet({
                           onChange={field.onChange}
                           departmentId={watchDepartmentId ?? undefined}
                           placeholder="Select position"
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="reporting_manager_id"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Reporting Manager</FormLabel>
+                      <FormControl>
+                        <UserCombobox
+                          value={field.value ?? null}
+                          onChange={(v) => field.onChange(v)}
+                          placeholder="No manager"
+                          enabled={open}
+                          excludeUserIds={
+                            employee?.user_id ? [employee.user_id] : undefined
+                          }
                         />
                       </FormControl>
                       <FormMessage />
