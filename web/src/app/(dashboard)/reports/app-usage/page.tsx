@@ -352,7 +352,7 @@ function TopAppsChart({ entries }: { entries: TopAppEntry[] }) {
 
 export default function AppUsagePage() {
   const { user } = useAuthStore();
-  const { hasPermission, hasPermissionWithScope } = usePermissionStore();
+  const { hasPermissionWithScope } = usePermissionStore();
 
   const today = format(new Date(), 'yyyy-MM-dd');
   const sevenDaysAgo = format(subDays(new Date(), 7), 'yyyy-MM-dd');
@@ -361,9 +361,7 @@ export default function AppUsagePage() {
   const [startDate, setStartDate] = useState(sevenDaysAgo);
   const [endDate, setEndDate] = useState(today);
 
-  const isManagerOrAdmin =
-    hasPermissionWithScope('reports.view', 'project') ||
-    hasPermission('reports.view_all');
+  const isManagerOrAdmin = hasPermissionWithScope('reports.view', 'project');
 
   const myUsage = useMyAppUsage(myDate);
   const teamUsage = useTeamAppUsage(startDate, endDate);

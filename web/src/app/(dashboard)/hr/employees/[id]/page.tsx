@@ -90,10 +90,12 @@ export default function EmployeeDetailPage() {
   const router = useRouter();
   const { user } = useAuthStore();
 
-  const { hasPermission } = usePermissionStore();
-  const isAdmin = hasPermission('employees.edit_all_fields');
-  const isManager = hasPermission('employees.view_directory') && !isAdmin;
-  const canManage = isAdmin || isManager;
+  const { hasPermission, hasPermissionWithScope } = usePermissionStore();
+  const canEditAllFields = hasPermissionWithScope('employees.edit_profile', 'organization');
+  const canManageDocumentsOrg = hasPermissionWithScope('employees.manage_documents', 'organization');
+  const canManageNotes = hasPermission('employees.manage_notes');
+  const isManager = hasPermissionWithScope('employees.view_directory', 'project') && !canEditAllFields;
+  const canManage = canEditAllFields || isManager;
 
   const employeeId = params.id;
   const { data: employeeData, isLoading, isError } = useEmployee(employeeId);
@@ -215,13 +217,13 @@ export default function EmployeeDetailPage() {
     );
   }
 
-  const canEdit = isAdmin || isSelf;
-  const canUploadDoc = isAdmin || isSelf;
-  const canVerifyDoc = isAdmin;
-  const canDeleteDoc = isAdmin;
+  const canEdit = canEditAllFields || isSelf;
+  const canUploadDoc = hasPermission('employees.manage_documents') || isSelf;
+  const canVerifyDoc = canManageDocumentsOrg;
+  const canDeleteDoc = canManageDocumentsOrg;
   // Notes are admin/owner only — matches EmployeeNotePolicy (managers cannot access)
-  const canViewNotes = isAdmin;
-  const canCreateNotes = isAdmin;
+  const canViewNotes = canManageNotes;
+  const canCreateNotes = canManageNotes;
 
   return (
     <div className="flex flex-col gap-6">
@@ -395,7 +397,7 @@ export default function EmployeeDetailPage() {
             </Card>
 
             {/* Financial Info (admin or self only) */}
-            {(isAdmin || isSelf) && (
+            {(canEditAllFields || isSelf) && (
               <Card>
                 <CardHeader>
                   <CardTitle className="text-base">Financial Information</CardTitle>
@@ -659,7 +661,7 @@ export default function EmployeeDetailPage() {
                               {note.content}
                             </p>
                           </div>
-                          {isAdmin && (
+                          {canManageNotes && (
                             <Button
                               variant="ghost"
                               size="sm"

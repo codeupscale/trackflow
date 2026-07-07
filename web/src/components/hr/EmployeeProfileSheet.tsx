@@ -75,8 +75,8 @@ export function EmployeeProfileSheet({
   onOpenChange,
   employee,
 }: EmployeeProfileSheetProps) {
-  const { hasPermission } = usePermissionStore();
-  const isAdmin = hasPermission('employees.edit_all_fields');
+  const { hasPermissionWithScope } = usePermissionStore();
+  const canEditAllFields = hasPermissionWithScope('employees.edit_profile', 'organization');
   const updateMutation = useUpdateEmployeeProfile();
 
   const form = useForm<EmployeeProfileInput>({
@@ -97,7 +97,7 @@ export function EmployeeProfileSheet({
     if (!employee) return;
 
     // If not admin, strip admin-only fields
-    const payload = isAdmin
+    const payload = canEditAllFields
       ? data
       : {
           gender: data.gender,
@@ -141,7 +141,7 @@ export function EmployeeProfileSheet({
             className="flex flex-col flex-1 gap-6 p-6"
           >
             {/* Employment Section (admin only) */}
-            {isAdmin && (
+            {canEditAllFields && (
               <>
                 <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
                   Employment
