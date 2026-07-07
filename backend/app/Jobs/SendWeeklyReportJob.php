@@ -89,6 +89,7 @@ class SendWeeklyReportJob implements ShouldQueue, ShouldBeUnique
             ->where('time_entries.started_at', '>=', $weekStart)
             ->where('time_entries.started_at', '<', Carbon::parse($weekEnd)->addDay()->toDateString())
             ->whereNotNull('time_entries.ended_at')
+            ->where('time_entries.approval_status', 'approved')
             ->select(
                 'users.name',
                 DB::raw('SUM(time_entries.duration_seconds) as total_seconds')

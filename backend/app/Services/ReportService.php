@@ -38,8 +38,41 @@ class ReportService
     private function cacheKey(string $orgId, string $type, string $period, ?string $userId = null): string
     {
         $userHash = $userId ? md5($userId) : 'all';
+        // Embed the org's cache generation so flushForOrg() can invalidate every
+        // cached report for an org in one shot (store-agnostic — the default
+        // database cache driver cannot flush by tag).
+        $ver = $this->orgCacheVersion($orgId);
         // Include period in hash to ensure different date ranges get different cache entries
-        return "report:{$orgId}:{$type}:" . md5("{$period}:{$userHash}");
+        return "report:{$orgId}:v{$ver}:{$type}:" . md5("{$period}:{$userHash}");
+    }
+
+    /**
+     * Current report-cache generation for an org (0 when never flushed).
+     */
+    private function orgCacheVersion(string $orgId): int
+    {
+        return (int) Cache::get("report_ver:{$orgId}", 0);
+    }
+
+    /**
+     * Invalidate every cached report for an org by bumping its cache generation.
+     *
+     * Called whenever a manual entry's approval state changes (create/approve/
+     * reject) so pending/rejected time never lingers in a cached total. Existing
+     * report:* keys embed the previous generation and expire naturally within
+     * the 900s TTL. Works with the database cache driver, which has no tag flush.
+     */
+    public function flushForOrg(string $orgId): void
+    {
+        $key = "report_ver:{$orgId}";
+
+        if (Cache::get($key) === null) {
+            Cache::forever($key, 1);
+
+            return;
+        }
+
+        Cache::increment($key);
     }
 
     // REPT-01: Summary report
@@ -53,7 +86,10 @@ class ReportService
                 ->where('organization_id', $orgId)
                 ->where('started_at', '>=', $dateFrom)
                 ->where('started_at', '<', $dateTo)
-                ->whereNotNull('ended_at');
+                ->whereNotNull('ended_at')
+                // Exclude pending/rejected manual entries. Default is 'approved',
+                // so tracked/idle and every historical row are unaffected.
+                ->where('approval_status', 'approved');
 
             if ($userId) {
                 $query->where('user_id', $userId);
@@ -100,6 +136,7 @@ class ReportService
                     ->where('time_entries.started_at', '<', $dateTo)
                     ->whereNotNull('time_entries.ended_at')
                     ->where('time_entries.type', 'tracked')
+                    ->where('time_entries.approval_status', 'approved')
                     ->join('projects', 'time_entries.project_id', '=', 'projects.id')
                     ->where('projects.billable', true);
 
@@ -131,7 +168,8 @@ class ReportService
                 ->where('started_at', '>=', $prevFrom)
                 ->where('started_at', '<', $prevTo)
                 ->whereNotNull('ended_at')
-                ->where('type', 'tracked');
+                ->where('type', 'tracked')
+                ->where('approval_status', 'approved');
 
             if ($userId) {
                 $prevQuery->where('user_id', $userId);
@@ -149,6 +187,7 @@ class ReportService
                     ->where('time_entries.started_at', '<', $prevTo)
                     ->whereNotNull('time_entries.ended_at')
                     ->where('time_entries.type', 'tracked')
+                    ->where('time_entries.approval_status', 'approved')
                     ->join('projects', 'time_entries.project_id', '=', 'projects.id')
                     ->where('projects.billable', true);
 
@@ -195,6 +234,7 @@ class ReportService
                 ->where('started_at', '>=', $dateFrom)
                 ->where('started_at', '<', $dateTo)
                 ->whereNotNull('ended_at')
+                ->where('approval_status', 'approved')
                 ->selectRaw("
                     user_id,
                     COALESCE(SUM({$dur}), 0) as total_seconds,
@@ -260,6 +300,7 @@ class ReportService
                 ->whereNotNull('time_entries.ended_at')
                 ->whereNotNull('time_entries.project_id')
                 ->where('time_entries.type', 'tracked')
+                ->where('time_entries.approval_status', 'approved')
                 ->join('projects', 'time_entries.project_id', '=', 'projects.id')
                 ->selectRaw("
                     projects.id as project_id,
@@ -321,6 +362,7 @@ class ReportService
                 ->where('organization_id', $orgId)
                 ->where('user_id', $userId)
                 ->whereDate('started_at', $date)
+                ->where('approval_status', 'approved')
                 ->orderBy('started_at')
                 ->get(['id', 'started_at', 'ended_at', 'project_id', 'type', 'activity_score']);
 
@@ -352,7 +394,7 @@ class ReportService
                 ->where('time_entries.started_at', '>=', $dateFrom)
                 ->where('time_entries.started_at', '<', $dateTo)
                 ->whereNotNull('time_entries.ended_at')
-                ->where('time_entries.is_approved', true)
+                ->where('time_entries.approval_status', 'approved')
                 ->leftJoin('projects', 'time_entries.project_id', '=', 'projects.id')
                 ->selectRaw("
                     time_entries.user_id,
@@ -399,7 +441,8 @@ class ReportService
                 $q->where('te.organization_id', $orgId)
                   ->where('te.started_at', '>=', $dateFrom)
                   ->where('te.started_at', '<', $dateTo)
-                  ->whereNotNull('te.ended_at');
+                  ->whereNotNull('te.ended_at')
+                  ->where('te.approval_status', 'approved');
                 if ($userId) {
                     $q->where('te.user_id', $userId);
                 }
@@ -424,6 +467,7 @@ class ReportService
                 ->where('te.started_at', '<', $prevTo)
                 ->whereNotNull('te.ended_at')
                 ->where('te.type', 'tracked')
+                ->where('te.approval_status', 'approved')
                 ->when($userId, fn ($q) => $q->where('te.user_id', $userId))
                 ->selectRaw("COALESCE(SUM({$dur}), 0) as total_seconds")
                 ->first();
@@ -465,6 +509,7 @@ class ReportService
                 ->where('te.started_at', '>=', $prevFrom)
                 ->where('te.started_at', '<', $prevTo)
                 ->whereNotNull('te.ended_at')
+                ->where('te.approval_status', 'approved')
                 ->where('p.billable', true)
                 ->when($userId, fn ($q) => $q->where('te.user_id', $userId))
                 ->selectRaw("COALESCE(SUM({$dur} / 3600.0 * p.hourly_rate), 0) as total_budget")
@@ -573,7 +618,8 @@ class ReportService
                 ->where('te.organization_id', $orgId)
                 ->where('te.started_at', '>=', $dateFrom)
                 ->where('te.started_at', '<', $dateTo)
-                ->whereNotNull('te.ended_at');
+                ->whereNotNull('te.ended_at')
+                ->where('te.approval_status', 'approved');
 
             if ($userId) {
                 $baseQuery->where('te.user_id', $userId);
@@ -690,7 +736,8 @@ class ReportService
             ->where('time_entries.organization_id', $orgId)
             ->where('time_entries.started_at', '>=', $dateFrom)
             ->where('time_entries.started_at', '<', $dateTo)
-            ->whereNotNull('time_entries.ended_at');
+            ->whereNotNull('time_entries.ended_at')
+            ->where('time_entries.approval_status', 'approved');
 
         if ($userId) {
             $query->where('time_entries.user_id', $userId);

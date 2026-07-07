@@ -75,6 +75,8 @@ class AttendanceService
                     ->where('started_at', '<', $dayEnd)
                     ->whereNotNull('ended_at')
                     ->where('type', '!=', 'idle')
+                    // Only approved worked time counts toward attendance hours.
+                    ->where('approval_status', 'approved')
                     ->orderBy('started_at')
                     ->get();
 

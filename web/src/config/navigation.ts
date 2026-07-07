@@ -51,6 +51,8 @@ export const navigationConfig: NavGroup[] = [
     items: [
       { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, requiredPermission: 'dashboard.view_own_stats' },
       { name: 'Time Entries', href: '/time', icon: Clock, requiredPermission: 'time_entries.view' },
+      // Manual time approvals — managers/admins only (time_entries.approve)
+      { name: 'Time Approvals', href: '/time-entries/approvals', icon: ClipboardCheck, requiredPermission: 'time_entries.approve' },
       { name: 'Screenshots', href: '/screenshots', icon: Camera, requiredPermission: 'screenshots.view' },
     ],
   },
@@ -58,6 +60,8 @@ export const navigationConfig: NavGroup[] = [
     label: 'Analytics',
     items: [
       { name: 'Reports', href: '/reports', icon: BarChart3, requiredPermission: 'reports.view' },
+      // Project-manager time report (per-entry breakdown + CSV/PDF export)
+      { name: 'Project Time', href: '/reports/project-time', icon: FileBarChart2, requiredPermission: 'reports.view' },
       { name: 'App Usage', href: '/reports/app-usage', icon: Monitor, requiredPermission: 'reports.view' },
       { name: 'Projects', href: '/projects', icon: FolderOpen, requiredPermission: 'projects.view' },
     ],
