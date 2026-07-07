@@ -29,6 +29,9 @@ class TimeEntry extends Model
         'is_approved',
         'approved_by',
         'approved_at',
+        'approval_status',
+        'submitted_by',
+        'rejection_reason',
     ];
 
     protected function casts(): array
@@ -61,6 +64,38 @@ class TimeEntry extends Model
     public function approver(): BelongsTo
     {
         return $this->belongsTo(User::class, 'approved_by');
+    }
+
+    /**
+     * Who created this (manual) entry. May differ from user_id when an
+     * authorised user logs time on another employee's behalf.
+     */
+    public function submitter(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'submitted_by');
+    }
+
+    /**
+     * Only entries that count toward reports/aggregates.
+     *
+     * approval_status is the authoritative state and defaults to 'approved' —
+     * tracked/idle entries and every historical row are 'approved', so this
+     * scope is a no-op for them. is_approved is kept in sync with
+     * (approval_status === 'approved') by the write paths for backward
+     * compatibility with older consumers still reading the boolean.
+     */
+    public function scopeApproved($query)
+    {
+        return $query->where('approval_status', 'approved');
+    }
+
+    /**
+     * Only entries awaiting a manager decision (manual entries submitted by an
+     * employee whose approve scope does not cover themselves).
+     */
+    public function scopePending($query)
+    {
+        return $query->where('approval_status', 'pending');
     }
 
     public function screenshots(): HasMany

@@ -21,6 +21,10 @@ let _autoStopResetTimer = null;
  * @param {object} callbacks
  * @param {() => boolean} callbacks.isTimerRunning
  * @param {() => Promise<void>} callbacks.autoStopForPowerEvent - async (reason, endedAtMs)
+ * @param {() => void} [callbacks.onSuspendCleanup] - tear down / preserve idle state on suspend
+ * @param {() => boolean} [callbacks.shouldAutoStopOnSuspend] - return false to SKIP the hard
+ *   auto-stop for this suspend (Bug B: an idle decision is pending and the timer must stay
+ *   server-paused, not stopped). Defaults to auto-stopping when omitted.
  * @param {() => void} callbacks.onResumeAfterSleep - optional; timer already stopped on suspend
  * @param {() => void} callbacks.removeListeners - unregister power handlers (logout)
  */
@@ -71,6 +75,21 @@ async function handleSuspend(reason) {
   }
 
   if (!_callbacks?.isTimerRunning?.()) return;
+
+  // Bug B: when an idle decision is genuinely pending, PRESERVE it across sleep
+  // instead of hard-stopping. onSuspendCleanup already moved the detector to
+  // SUSPENDED and hid the alert; the timer stays server-paused at idleStartedAt,
+  // and onResumeAfterSleep re-shows the alert so the user can still Keep/Discard/
+  // Reassign the full away duration. Only this idle case skips the auto-stop — the
+  // normal non-idle lid-close (predicate true/omitted) still hard-stops below.
+  // Checked BEFORE the _autoStopInFlight guard so we never arm coalescing for a
+  // suspend we are deliberately not stopping.
+  if (_callbacks?.shouldAutoStopOnSuspend?.() === false) {
+    console.log(
+      `[power] ${reason} — idle alert active; preserving idle state (no hard auto-stop)`,
+    );
+    return;
+  }
 
   // A lid-close fires 'lock-screen' + 'suspend' back-to-back. isTimerRunning() is
   // still true when the second event arrives (it only flips deep inside the async

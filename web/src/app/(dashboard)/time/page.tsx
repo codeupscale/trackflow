@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
-import { CheckCircle, ChevronsUpDown, Clock, Info, Loader2 } from 'lucide-react';
+import { CheckCircle, ChevronsUpDown, Clock, Info, Loader2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -60,6 +60,8 @@ import api from '@/lib/api';
 import { formatDuration, getActivityColor } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
+import { ApprovalStatusBadge } from '@/components/time-entries/ApprovalStatusBadge';
+import { ManualTimeEntryDialog } from '@/components/time-entries/ManualTimeEntryDialog';
 
 interface TimeEntry {
   id: string;
@@ -72,6 +74,8 @@ interface TimeEntry {
   type?: 'tracked' | 'manual' | 'idle';
   activity_score: number;
   status: 'pending' | 'approved' | 'rejected';
+  approval_status?: 'pending' | 'approved' | 'rejected';
+  rejection_reason?: string | null;
   project?: {
     id: string;
     name: string;
@@ -132,6 +136,7 @@ export default function TimePage() {
   const [page, setPage] = useState(1);
   const [projectComboboxOpen, setProjectComboboxOpen] = useState(false);
   const [memberComboboxOpen, setMemberComboboxOpen] = useState(false);
+  const [manualEntryOpen, setManualEntryOpen] = useState(false);
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ['projects-list'],
@@ -174,7 +179,9 @@ export default function TimePage() {
       if (data.data) {
         data.data = data.data.map((entry: Record<string, unknown>) => ({
           ...entry,
-          status: entry.is_approved ? 'approved' : 'pending',
+          // Prefer the authoritative approval_status; fall back to the legacy
+          // is_approved boolean for tracked entries that predate the field.
+          status: entry.approval_status ?? (entry.is_approved ? 'approved' : 'pending'),
         }));
       }
       return data;
@@ -260,10 +267,22 @@ export default function TimePage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Time Entries</h1>
-        <p className="text-muted-foreground text-sm mt-1">Track and manage your work hours</p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Time Entries</h1>
+          <p className="text-muted-foreground text-sm mt-1">Track and manage your work hours</p>
+        </div>
+        <Button onClick={() => setManualEntryOpen(true)} className="shrink-0">
+          <Plus data-icon="inline-start" />
+          Log Time
+        </Button>
       </div>
+
+      <ManualTimeEntryDialog
+        open={manualEntryOpen}
+        onOpenChange={setManualEntryOpen}
+        canLogOnBehalf={canApprove}
+      />
 
       {/* Filters */}
       <Card className="border-border bg-card">
@@ -604,15 +623,10 @@ export default function TimePage() {
                         </div>
                       </TableCell>
                       <TableCell className="text-center">
-                        <Badge variant={
-                          entry.status === 'approved'
-                            ? 'default'
-                            : entry.status === 'rejected'
-                            ? 'destructive'
-                            : 'secondary'
-                        }>
-                          {entry.status.charAt(0).toUpperCase() + entry.status.slice(1)}
-                        </Badge>
+                        <ApprovalStatusBadge
+                          status={entry.approval_status ?? entry.status}
+                          rejectionReason={entry.rejection_reason}
+                        />
                       </TableCell>
                     </TableRow>
                   ))}

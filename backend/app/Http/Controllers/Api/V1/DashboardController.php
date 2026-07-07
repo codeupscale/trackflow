@@ -111,6 +111,7 @@ class DashboardController extends Controller
             ->where('started_at', '<', $dateTo)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked')
+            ->where('approval_status', 'approved')
             ->selectRaw('user_id, SUM(duration_seconds) as total_seconds')
             ->groupBy('user_id')
             ->get()
@@ -229,6 +230,7 @@ class DashboardController extends Controller
             ->where('started_at', '<', $dateTo)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked')
+            ->where('approval_status', 'approved')
             ->sum('duration_seconds');
 
         $now = Carbon::now();
@@ -270,6 +272,7 @@ class DashboardController extends Controller
             ->where('started_at', '<', $weekEndUtc)
             ->whereNotNull('ended_at')
             ->where('type', 'tracked')
+            ->where('approval_status', 'approved')
             ->sum('duration_seconds');
 
         // Include current running timer in weekly total only if it started within this week.
@@ -300,6 +303,7 @@ class DashboardController extends Controller
                 ->where('started_at', '<', $dayEndUtc)
                 ->whereNotNull('ended_at')
                 ->where('type', 'tracked')
+                ->where('approval_status', 'approved')
                 ->sum('duration_seconds');
 
             // Add running timer elapsed to today's bar

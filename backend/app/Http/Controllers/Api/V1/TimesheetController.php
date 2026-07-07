@@ -36,6 +36,8 @@ class TimesheetController extends Controller
             ->where('started_at', '<', $dateToUtc)
             ->whereNotNull('ended_at')
             ->where('type', '!=', 'idle')
+            // Exclude pending/rejected manual entries from the submitted total.
+            ->where('approval_status', 'approved')
             ->sum('duration_seconds');
 
         $timesheet = Timesheet::create([

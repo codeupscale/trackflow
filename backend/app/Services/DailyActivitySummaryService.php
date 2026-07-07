@@ -51,6 +51,7 @@ class DailyActivitySummaryService
             ->where('started_at', '>=', $dateStart)
             ->where('started_at', '<=', $dateEnd)
             ->whereNotNull('ended_at')
+            ->where('approval_status', 'approved')
             ->selectRaw("
                 COALESCE(SUM({$dur}), 0) as total_seconds,
                 COALESCE(SUM(CASE WHEN type = 'tracked' THEN {$dur} ELSE 0 END), 0) as tracked_seconds,
@@ -92,6 +93,7 @@ class DailyActivitySummaryService
             ->where('time_entries.started_at', '<=', $dateEnd)
             ->whereNotNull('time_entries.ended_at')
             ->whereNotNull('time_entries.project_id')
+            ->where('time_entries.approval_status', 'approved')
             ->join('projects', 'time_entries.project_id', '=', 'projects.id')
             ->selectRaw("
                 projects.name as name,

@@ -21,7 +21,9 @@ const BrowserWindow = jest.fn().mockImplementation(() => ({
   isDestroyed: jest.fn(() => false),
   isVisible: jest.fn(() => true),
   moveTop: jest.fn(),
+  flashFrame: jest.fn(),
   setVisibleOnAllWorkspaces: jest.fn(),
+  setAlwaysOnTop: jest.fn(),
   on: jest.fn(),
   once: jest.fn(),
   webContents: {

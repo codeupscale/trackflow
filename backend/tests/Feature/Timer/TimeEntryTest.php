@@ -84,9 +84,13 @@ class TimeEntryTest extends TestCase
 
     public function test_can_approve_time_entry(): void
     {
-        $entry = TimeEntry::factory()->create([
+        // A manual entry submitted by the employee sits in the pending queue until
+        // a manager approves it (only approval_status='pending' entries are approvable).
+        $entry = TimeEntry::factory()->manual()->create([
             'organization_id' => $this->org->id,
             'user_id' => $this->employee->id,
+            'submitted_by' => $this->employee->id,
+            'approval_status' => 'pending',
             'is_approved' => false,
         ]);
 
