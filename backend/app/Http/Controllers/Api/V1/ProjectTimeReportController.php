@@ -67,6 +67,7 @@ class ProjectTimeReportController extends Controller
             'start_date' => ['nullable', 'required_if:period,custom', 'date_format:Y-m-d'],
             'end_date' => ['nullable', 'required_if:period,custom', 'date_format:Y-m-d', 'after_or_equal:start_date'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'group_by_day' => ['nullable', 'boolean'],
         ]);
 
         // A single-uuid project_id is allowed too; validate it when not an array.

@@ -59,7 +59,7 @@ class ProjectTimeReportTest extends TestCase
             ->assertJsonStructure([
                 'data' => [['id', 'user_name', 'project_name', 'duration_seconds', 'billable_amount']],
                 'meta' => [
-                    'current_page', 'last_page', 'per_page', 'total',
+                    'current_page', 'last_page', 'per_page', 'total', 'group_by_day',
                     'summary' => [
                         'total_seconds', 'billable_amount',
                         'entry_count', 'resource_count', 'project_count',
@@ -69,6 +69,67 @@ class ProjectTimeReportTest extends TestCase
 
         $this->assertEquals(1, $response->json('meta.summary.entry_count'));
         $this->assertEquals(7200, $response->json('meta.summary.total_seconds'));
+        $this->assertFalse($response->json('meta.group_by_day'));
+    }
+
+    public function test_index_group_by_day_sums_entries_per_resource_project_and_day(): void
+    {
+        $project = $this->project();
+        $otherProject = Project::factory()->billable(50)->create([
+            'organization_id' => $this->org->id,
+            'created_by' => $this->owner->id,
+            'name' => 'Other Project',
+        ]);
+
+        TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->employee->id,
+            'project_id' => $project->id,
+            'type' => 'tracked',
+            'approval_status' => 'approved',
+            'is_approved' => true,
+            'started_at' => Carbon::parse('2026-06-17 09:00:00'),
+            'ended_at' => Carbon::parse('2026-06-17 10:00:00'),
+            'duration_seconds' => 3600,
+        ]);
+        TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->employee->id,
+            'project_id' => $project->id,
+            'type' => 'manual',
+            'approval_status' => 'approved',
+            'is_approved' => true,
+            'started_at' => Carbon::parse('2026-06-17 14:00:00'),
+            'ended_at' => Carbon::parse('2026-06-17 15:30:00'),
+            'duration_seconds' => 5400,
+        ]);
+        TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->employee->id,
+            'project_id' => $otherProject->id,
+            'type' => 'tracked',
+            'approval_status' => 'approved',
+            'is_approved' => true,
+            'started_at' => Carbon::parse('2026-06-17 16:00:00'),
+            'ended_at' => Carbon::parse('2026-06-17 17:00:00'),
+            'duration_seconds' => 3600,
+        ]);
+
+        $this->actingAs($this->owner, 'sanctum');
+        $response = $this->getJson($this->url(['group_by_day' => 1]));
+
+        $response->assertOk()
+            ->assertJsonPath('meta.group_by_day', true)
+            ->assertJsonCount(2, 'data')
+            ->assertJsonPath('meta.summary.entry_count', 3)
+            ->assertJsonPath('meta.summary.total_seconds', 12600);
+
+        $rows = collect($response->json('data'))->keyBy('project_name');
+        $this->assertEquals(9000, $rows[$project->name]['duration_seconds']);
+        $this->assertEquals(2, $rows[$project->name]['entry_count']);
+        $this->assertEquals('Mixed', $rows[$project->name]['type']);
+        $this->assertEquals(3600, $rows['Other Project']['duration_seconds']);
+        $this->assertEquals(1, $rows['Other Project']['entry_count']);
     }
 
     public function test_index_only_includes_approved_tracked_and_manual_entries(): void

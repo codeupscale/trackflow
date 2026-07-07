@@ -50,11 +50,14 @@ class ProjectTimeReportService
     {
         $tz = $actor->getTimezoneForDates();
         $perPage = min((int) ($filters['per_page'] ?? 25), 100);
+        $groupByDay = $this->isGroupByDay($filters);
 
-        $paginator = $this->rowQuery($actor, $filters)->paginate($perPage);
+        $paginator = $groupByDay
+            ? $this->dailyRowQuery($actor, $filters)->paginate($perPage)
+            : $this->rowQuery($actor, $filters)->paginate($perPage);
 
         $data = collect($paginator->items())
-            ->map(fn ($row) => $this->mapRow($row, $tz))
+            ->map(fn ($row) => $groupByDay ? $this->mapDailyRow($row, $tz) : $this->mapRow($row, $tz))
             ->all();
 
         return [
@@ -65,6 +68,7 @@ class ProjectTimeReportService
                 'per_page' => $paginator->perPage(),
                 'total' => $paginator->total(),
                 'summary' => $this->summary($actor, $filters),
+                'group_by_day' => $groupByDay,
             ],
         ];
     }
@@ -78,11 +82,14 @@ class ProjectTimeReportService
     {
         $tz = $actor->getTimezoneForDates();
         $meta = $this->metaHeader($actor, $filters);
-        $query = $this->rowQuery($actor, $filters);
+        $groupByDay = $this->isGroupByDay($filters);
+        $query = $groupByDay
+            ? $this->dailyRowQuery($actor, $filters)
+            : $this->rowQuery($actor, $filters);
 
         $filename = 'project-time-report-' . now()->format('Ymd-His') . '.csv';
 
-        return new StreamedResponse(function () use ($query, $meta, $tz) {
+        return new StreamedResponse(function () use ($query, $meta, $tz, $groupByDay) {
             $out = fopen('php://output', 'w');
             // UTF-8 BOM so Excel renders accented characters correctly.
             fwrite($out, "\xEF\xBB\xBF");
@@ -91,19 +98,24 @@ class ProjectTimeReportService
             fputcsv($out, [$this->neutralizeCsv('Project(s)'), $this->neutralizeCsv($meta['projects'])]);
             fputcsv($out, [$this->neutralizeCsv('Resource(s)'), $this->neutralizeCsv($meta['resources'])]);
             fputcsv($out, [$this->neutralizeCsv('Date Range'), $this->neutralizeCsv($meta['date_range'])]);
+            fputcsv($out, [$this->neutralizeCsv('View'), $this->neutralizeCsv($groupByDay ? 'Daily totals per resource and project' : 'Per entry')]);
             fputcsv($out, [$this->neutralizeCsv('Exported At'), $this->neutralizeCsv($meta['exported_at'])]);
             fputcsv($out, [$this->neutralizeCsv('Exported By'), $this->neutralizeCsv($meta['exported_by'])]);
             fputcsv($out, []);
 
             // Column header.
-            fputcsv($out, [
+            $headers = [
                 'Resource', 'Project', 'Task', 'Type', 'Date', 'Start', 'End',
                 'Duration (h)', 'Activity %', 'Billable', 'Billable Amount',
-            ]);
+            ];
+            if ($groupByDay) {
+                array_splice($headers, 7, 0, ['Entries']);
+            }
+            fputcsv($out, $headers);
 
             foreach ($query->cursor() as $raw) {
-                $row = $this->mapRow($raw, $tz);
-                fputcsv($out, [
+                $row = $groupByDay ? $this->mapDailyRow($raw, $tz) : $this->mapRow($raw, $tz);
+                $cells = [
                     $this->neutralizeCsv($row['user_name']),
                     $this->neutralizeCsv($row['project_name']),
                     $this->neutralizeCsv($row['task_name']),
@@ -115,7 +127,11 @@ class ProjectTimeReportService
                     $this->neutralizeCsv((string) $row['activity_score']),
                     $this->neutralizeCsv($row['billable'] ? 'Yes' : 'No'),
                     $this->neutralizeCsv(number_format($row['billable_amount'], 2)),
-                ]);
+                ];
+                if ($groupByDay) {
+                    array_splice($cells, 7, 0, [$this->neutralizeCsv((string) ($row['entry_count'] ?? 1))]);
+                }
+                fputcsv($out, $cells);
             }
 
             fclose($out);
@@ -131,15 +147,22 @@ class ProjectTimeReportService
     public function pdf(User $actor, array $filters): \Illuminate\Http\Response
     {
         $tz = $actor->getTimezoneForDates();
+        $groupByDay = $this->isGroupByDay($filters);
 
-        $count = (clone $this->baseQuery($actor, $filters))->count('te.id');
+        $count = $groupByDay
+            ? $this->dailyRowCount($actor, $filters)
+            : (clone $this->baseQuery($actor, $filters))->count('te.id');
+
         if ($count > self::PDF_ROW_CAP) {
             abort(422, 'Too many rows for PDF, narrow the filter or use CSV.');
         }
 
-        $rows = $this->rowQuery($actor, $filters)
-            ->get()
-            ->map(fn ($row) => $this->mapRow($row, $tz))
+        $rawRows = $groupByDay
+            ? $this->dailyRowQuery($actor, $filters)->get()
+            : $this->rowQuery($actor, $filters)->get();
+
+        $rows = $rawRows
+            ->map(fn ($row) => $groupByDay ? $this->mapDailyRow($row, $tz) : $this->mapRow($row, $tz))
             ->all();
 
         $meta = $this->metaHeader($actor, $filters);
@@ -151,6 +174,7 @@ class ProjectTimeReportService
             'rows' => $rows,
             'meta' => $meta,
             'summary' => $summary,
+            'group_by_day' => $groupByDay,
         ])->download($filename);
     }
 
@@ -228,6 +252,93 @@ class ProjectTimeReportService
     }
 
     /**
+     * Aggregated rows: one line per resource + project + calendar day (org timezone).
+     */
+    private function dailyRowQuery(User $actor, array $filters)
+    {
+        $tz = $actor->getTimezoneForDates();
+        $dur = self::durationExpr('te');
+        $workDate = $this->localDateExpr('te.started_at', $tz);
+        $projectKey = "COALESCE(te.project_id, '00000000-0000-0000-0000-000000000000')";
+
+        if (DB::connection()->getDriverName() === 'sqlite') {
+            return $this->baseQuery($actor, $filters)
+                ->select([
+                    DB::raw("te.user_id || '|' || {$workDate} || '|' || {$projectKey} as id"),
+                    'te.user_id',
+                    'te.project_id',
+                    'u.name as user_name',
+                    DB::raw("MAX(COALESCE(p.name, '—')) as project_name"),
+                    DB::raw('COUNT(te.id) as entry_count'),
+                    DB::raw("CASE WHEN COUNT(DISTINCT te.type) > 1 THEN 'mixed' ELSE MAX(te.type) END as entry_type"),
+                    DB::raw("{$workDate} as work_date"),
+                    DB::raw('MIN(te.started_at) as min_started_at'),
+                    DB::raw('MAX(te.ended_at) as max_ended_at'),
+                ])
+                ->selectRaw("SUM({$dur}) as duration_seconds")
+                ->selectRaw("SUM(CASE WHEN te.activity_score > 0 THEN te.activity_score * {$dur} ELSE 0 END) as weighted_activity")
+                ->selectRaw("SUM(CASE WHEN te.activity_score > 0 THEN {$dur} ELSE 0 END) as activity_weight")
+                ->selectRaw("SUM(CASE WHEN p.billable = 1 THEN ROUND({$dur} / 3600.0 * p.hourly_rate, 2) ELSE 0 END) as billable_amount")
+                ->selectRaw('MAX(CASE WHEN p.billable = 1 THEN 1 ELSE 0 END) as is_billable')
+                ->groupBy('te.user_id', 'u.name', 'te.project_id', DB::raw($workDate))
+                ->orderByDesc(DB::raw($workDate))
+                ->orderBy('u.name')
+                ->orderBy('project_name');
+        }
+
+        return $this->baseQuery($actor, $filters)
+            ->select([
+                DB::raw("te.user_id::text || '|' || {$workDate}::text || '|' || {$projectKey} as id"),
+                'te.user_id',
+                'te.project_id',
+                'u.name as user_name',
+                DB::raw("MAX(COALESCE(p.name, '—')) as project_name"),
+                DB::raw('COUNT(te.id)::int as entry_count'),
+                DB::raw("CASE WHEN COUNT(DISTINCT te.type) > 1 THEN 'mixed' ELSE MAX(te.type) END as entry_type"),
+                DB::raw("{$workDate} as work_date"),
+                DB::raw('MIN(te.started_at) as min_started_at'),
+                DB::raw('MAX(te.ended_at) as max_ended_at'),
+            ])
+            ->selectRaw("COALESCE(SUM({$dur}), 0)::int as duration_seconds")
+            ->selectRaw("COALESCE(SUM(CASE WHEN te.activity_score > 0 THEN te.activity_score * {$dur} ELSE 0 END), 0) as weighted_activity")
+            ->selectRaw("COALESCE(SUM(CASE WHEN te.activity_score > 0 THEN {$dur} ELSE 0 END), 0) as activity_weight")
+            ->selectRaw("COALESCE(SUM(CASE WHEN p.billable = true THEN ROUND({$dur} / 3600.0 * p.hourly_rate, 2) ELSE 0 END), 0) as billable_amount")
+            ->selectRaw('BOOL_OR(p.billable = true) as is_billable')
+            ->groupBy('te.user_id', 'u.name', 'te.project_id', DB::raw($workDate))
+            ->orderByDesc(DB::raw($workDate))
+            ->orderBy('u.name')
+            ->orderBy('project_name');
+    }
+
+    private function isGroupByDay(array $filters): bool
+    {
+        return filter_var($filters['group_by_day'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    }
+
+    private function dailyRowCount(User $actor, array $filters): int
+    {
+        $tz = $actor->getTimezoneForDates();
+        $workDate = $this->localDateExpr('te.started_at', $tz);
+
+        return $this->baseQuery($actor, $filters)
+            ->select('te.user_id', 'te.project_id')
+            ->groupBy('te.user_id', 'te.project_id', DB::raw($workDate))
+            ->get()
+            ->count();
+    }
+
+    private function localDateExpr(string $column, string $tz): string
+    {
+        if (DB::connection()->getDriverName() === 'sqlite') {
+            return "DATE({$column})";
+        }
+
+        $escapedTz = str_replace("'", "''", $tz);
+
+        return "({$column} AT TIME ZONE '{$escapedTz}')::date";
+    }
+
+    /**
      * Summary aggregate over the FULL filtered set.
      */
     private function summary(User $actor, array $filters): array
@@ -273,6 +384,46 @@ class ProjectTimeReportService
             'activity_score' => (int) ($row->activity_score ?? 0),
             'billable' => (bool) $row->billable,
             'billable_amount' => (float) $row->billable_amount,
+        ];
+    }
+
+    private function mapDailyRow(object $row, string $tz): array
+    {
+        $started = Carbon::parse($row->min_started_at)->setTimezone($tz);
+        $ended = $row->max_ended_at ? Carbon::parse($row->max_ended_at)->setTimezone($tz) : null;
+        $activityWeight = (int) ($row->activity_weight ?? 0);
+        $weightedActivity = (float) ($row->weighted_activity ?? 0);
+        $entryType = $row->entry_type ?? 'tracked';
+
+        $typeLabel = match ($entryType) {
+            'mixed' => 'Mixed',
+            'manual' => 'Manual',
+            default => 'Tracked',
+        };
+
+        $workDate = $row->work_date ?? $started->format('Y-m-d');
+        if ($workDate instanceof \DateTimeInterface) {
+            $workDate = $workDate->format('Y-m-d');
+        }
+
+        return [
+            'id' => (string) ($row->id ?? "{$row->user_id}|{$workDate}"),
+            'user_name' => $row->user_name,
+            'project_name' => $row->project_name ?? '—',
+            'task_name' => ((int) ($row->entry_count ?? 1)) > 1 ? '—' : '—',
+            'type' => $typeLabel,
+            'date' => (string) $workDate,
+            'start_time' => $started->format('H:i'),
+            'end_time' => $ended?->format('H:i') ?? '—',
+            'started_at' => $started->format('Y-m-d H:i'),
+            'ended_at' => $ended?->format('Y-m-d H:i'),
+            'duration_seconds' => (int) $row->duration_seconds,
+            'activity_score' => $activityWeight > 0
+                ? (int) round($weightedActivity / $activityWeight)
+                : 0,
+            'billable' => (bool) ($row->is_billable ?? false),
+            'billable_amount' => round((float) ($row->billable_amount ?? 0), 2),
+            'entry_count' => (int) ($row->entry_count ?? 1),
         ];
     }
 

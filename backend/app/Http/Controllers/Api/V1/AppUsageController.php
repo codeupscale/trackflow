@@ -5,12 +5,17 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\AppUsageSummary;
 use App\Services\AppUsageService;
+use App\Services\PermissionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
 
 class AppUsageController extends Controller
 {
-    public function __construct(private AppUsageService $service) {}
+    public function __construct(
+        private AppUsageService $service,
+        private PermissionService $permissions,
+    ) {}
 
     /**
      * GET /api/v1/app-usage/daily?date=&user_id=
@@ -84,5 +89,41 @@ class AppUsageController extends Controller
                 (int) $request->query('limit', 10)
             )
         );
+    }
+
+    /**
+     * GET /api/v1/app-usage/export?format=csv|pdf&view=my|team|top&...
+     */
+    public function export(Request $request): Response
+    {
+        abort_unless(
+            $this->permissions->hasPermission($request->user(), 'reports.export'),
+            403,
+            'You do not have permission to export reports.'
+        );
+
+        $validated = $request->validate([
+            'format' => ['required', 'in:csv,pdf'],
+            'view' => ['required', 'in:my,team,top'],
+            'date' => ['nullable', 'date', 'required_if:view,my'],
+            'user_id' => ['nullable', 'uuid'],
+            'start_date' => ['nullable', 'date', 'required_unless:view,my'],
+            'end_date' => ['nullable', 'date', 'required_unless:view,my', 'after_or_equal:start_date'],
+        ]);
+
+        $view = $validated['view'];
+        if ($view === 'my') {
+            $this->authorize('viewDaily', [AppUsageSummary::class, $request->query('user_id')]);
+        } elseif ($view === 'team') {
+            $this->authorize('viewTeam', AppUsageSummary::class);
+        } else {
+            $this->authorize('viewTop', AppUsageSummary::class);
+        }
+
+        $actor = $request->user();
+
+        return $validated['format'] === 'pdf'
+            ? $this->service->pdf($actor, $validated)
+            : $this->service->csv($actor, $validated);
     }
 }

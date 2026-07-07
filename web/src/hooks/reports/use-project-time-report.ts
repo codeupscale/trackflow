@@ -11,6 +11,7 @@ export interface ProjectTimeFilters {
     month: string; // YYYY-MM
     start_date: string; // YYYY-MM-DD (custom)
     end_date: string; // YYYY-MM-DD (custom)
+    group_by_day: boolean;
     page: number;
     per_page: number;
 }
@@ -30,6 +31,7 @@ export interface ProjectTimeRow {
     activity_score: number;
     billable: boolean;
     billable_amount: number;
+    entry_count?: number;
 }
 
 export interface ProjectTimeSummary {
@@ -46,6 +48,7 @@ export interface ProjectTimeResponse {
         current_page: number;
         last_page: number;
         total: number;
+        group_by_day?: boolean;
         summary: ProjectTimeSummary;
     };
 }
@@ -73,6 +76,10 @@ export function buildProjectTimeParams(
     } else {
         params.start_date = filters.start_date;
         params.end_date = filters.end_date;
+    }
+
+    if (filters.group_by_day) {
+        params.group_by_day = 1;
     }
 
     if (filters.page) params.page = filters.page;
@@ -111,6 +118,7 @@ export function useProjectTimeReport(
                     current_page: meta.current_page ?? 1,
                     last_page: meta.last_page ?? 1,
                     total: meta.total ?? raw.data?.length ?? 0,
+                    group_by_day: meta.group_by_day ?? false,
                     summary: {
                         total_seconds: meta.summary?.total_seconds ?? 0,
                         billable_amount: meta.summary?.billable_amount ?? 0,

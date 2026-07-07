@@ -62,6 +62,7 @@ function defaultFilters(): ProjectTimeFilters {
         month: format(today, "yyyy-MM"),
         start_date: format(startOfMonth(today), "yyyy-MM-dd"),
         end_date: format(today, "yyyy-MM-dd"),
+        group_by_day: false,
         page: 1,
         per_page: 25,
     };
@@ -117,6 +118,7 @@ export default function ProjectTimeReportPage() {
     const rows = data?.data ?? [];
     const meta = data?.meta;
     const summary = meta?.summary;
+    const groupByDay = meta?.group_by_day ?? filters.group_by_day;
     const totalPages = meta?.last_page ?? 1;
 
     const handleExport = async (fmt: "csv" | "pdf") => {
@@ -182,6 +184,8 @@ export default function ProjectTimeReportPage() {
 
     return (
         <div className="flex flex-col gap-6">
+            <ReportsSectionNav />
+
             <PageHeader
                 title="Project Time Report"
                 description="Per-entry breakdown by employee and project. Includes approved tracked and manual time."
@@ -226,8 +230,6 @@ export default function ProjectTimeReportPage() {
                     </div>
                 }
             />
-
-            <ReportsSectionNav />
 
             <ProjectTimeFilterBar filters={filters} onChange={patch} />
 
@@ -298,6 +300,11 @@ export default function ProjectTimeReportPage() {
                                         <TableHead>Type</TableHead>
                                         <TableHead>Date</TableHead>
                                         <TableHead>Time</TableHead>
+                                        {groupByDay ? (
+                                            <TableHead className="text-right">
+                                                Entries
+                                            </TableHead>
+                                        ) : null}
                                         <TableHead className="text-right">
                                             Duration
                                         </TableHead>
@@ -348,12 +355,31 @@ export default function ProjectTimeReportPage() {
                                                 )}
                                             </TableCell>
                                             <TableCell className="font-mono text-sm tabular-nums text-foreground">
-                                                {row.start_time}
-                                                {row.end_time &&
-                                                row.end_time !== "—"
-                                                    ? ` – ${row.end_time}`
-                                                    : ""}
+                                                {groupByDay ? (
+                                                    <span
+                                                        title={`${row.start_time} – ${row.end_time}`}
+                                                    >
+                                                        {row.start_time}
+                                                        {row.end_time &&
+                                                        row.end_time !== "—"
+                                                            ? ` – ${row.end_time}`
+                                                            : ""}
+                                                    </span>
+                                                ) : (
+                                                    <>
+                                                        {row.start_time}
+                                                        {row.end_time &&
+                                                        row.end_time !== "—"
+                                                            ? ` – ${row.end_time}`
+                                                            : ""}
+                                                    </>
+                                                )}
                                             </TableCell>
+                                            {groupByDay ? (
+                                                <TableCell className="text-right text-sm tabular-nums text-muted-foreground">
+                                                    {row.entry_count ?? 1}
+                                                </TableCell>
+                                            ) : null}
                                             <TableCell className="text-right font-mono text-sm tabular-nums">
                                                 {formatDuration(
                                                     row.duration_seconds,

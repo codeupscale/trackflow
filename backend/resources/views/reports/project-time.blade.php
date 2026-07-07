@@ -25,6 +25,7 @@
         <div>Project(s): <span>{{ $meta['projects'] }}</span></div>
         <div>Resource(s): <span>{{ $meta['resources'] }}</span></div>
         <div>Date Range: <span>{{ $meta['date_range'] }}</span></div>
+        <div>View: <span>{{ !empty($group_by_day) ? 'Daily totals per resource and project' : 'Per entry' }}</span></div>
         <div>Exported At: <span>{{ $meta['exported_at'] }}</span></div>
         <div>Exported By: <span>{{ $meta['exported_by'] }}</span></div>
     </div>
@@ -47,6 +48,9 @@
                 <th>Date</th>
                 <th>Start</th>
                 <th>End</th>
+                @if(!empty($group_by_day))
+                    <th class="right">Entries</th>
+                @endif
                 <th class="right">Duration (h)</th>
                 <th class="right">Activity %</th>
                 <th>Billable</th>
@@ -63,6 +67,9 @@
                     <td>{{ $row['date'] }}</td>
                     <td>{{ $row['start_time'] }}</td>
                     <td>{{ $row['end_time'] }}</td>
+                    @if(!empty($group_by_day))
+                        <td class="right">{{ $row['entry_count'] ?? 1 }}</td>
+                    @endif
                     <td class="right">{{ number_format($row['duration_seconds'] / 3600, 2) }}</td>
                     <td class="right">{{ $row['activity_score'] }}%</td>
                     <td>{{ $row['billable'] ? 'Yes' : 'No' }}</td>

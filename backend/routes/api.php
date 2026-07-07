@@ -188,6 +188,9 @@ Route::prefix('v1')->group(function () {
             Route::get('daily', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'daily']);
             Route::get('team', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'team']);
             Route::get('top', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'top']);
+            Route::get('export', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'export'])
+                ->middleware(['permission:reports.export', 'throttle:10,60'])
+                ->withoutMiddleware('permission:reports.view');
         });
 
         // Report Subscriptions

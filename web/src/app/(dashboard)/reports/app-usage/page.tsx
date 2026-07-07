@@ -1,12 +1,20 @@
 "use client";
 
 import { format, subDays } from "date-fns";
-import { AlertCircle, AppWindow, Monitor } from "lucide-react";
+import {
+    AlertCircle,
+    AppWindow,
+    Download,
+    FileText,
+    Loader2,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import { Bar, BarChart, Cell, XAxis, YAxis } from "recharts";
+import { toast } from "sonner";
 
 import { ReportsSectionNav } from "@/components/reports/ReportsSectionNav";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
     Card,
     CardContent,
@@ -40,8 +48,12 @@ import {
     type TeamAppUsageEntry,
     type TopAppEntry,
 } from "@/hooks/reports/use-app-usage";
+import api from "@/lib/api";
+import { readBlobError, triggerDownload } from "@/lib/download";
 import { useAuthStore } from "@/stores/auth-store";
 import { usePermissionStore } from "@/stores/permission-store";
+
+type AppUsageView = "my-usage" | "team" | "top-apps";
 
 // ─── Helpers ──────────────────────────────────────────────────────
 
@@ -479,16 +491,20 @@ function TopAppsChart({ entries }: { entries: TopAppEntry[] }) {
 
 export default function AppUsagePage() {
     const { user } = useAuthStore();
-    const { hasPermissionWithScope } = usePermissionStore();
+    const { hasPermissionWithScope, hasPermission } = usePermissionStore();
 
     const today = format(new Date(), "yyyy-MM-dd");
     const sevenDaysAgo = format(subDays(new Date(), 7), "yyyy-MM-dd");
 
+    const [activeView, setActiveView] = useState<AppUsageView>("my-usage");
     const [myDate, setMyDate] = useState(today);
     const [startDate, setStartDate] = useState(sevenDaysAgo);
     const [endDate, setEndDate] = useState(today);
+    const [exporting, setExporting] = useState<"csv" | "pdf" | null>(null);
 
     const isManagerOrAdmin = hasPermissionWithScope("reports.view", "project");
+    const isOrgViewer = hasPermissionWithScope("reports.view", "organization");
+    const canExport = hasPermission("reports.export");
 
     const myUsage = useMyAppUsage(myDate);
     const teamUsage = useTeamAppUsage(startDate, endDate);
@@ -503,24 +519,93 @@ export default function AppUsagePage() {
         [myUsage.data],
     );
 
-    const defaultTab = "my-usage";
+    const exportView = useMemo(() => {
+        if (activeView === "my-usage") return "my" as const;
+        if (activeView === "top-apps") return "top" as const;
+        return "team" as const;
+    }, [activeView]);
+
+    const handleExport = async (fmt: "csv" | "pdf") => {
+        setExporting(fmt);
+        try {
+            const params: Record<string, string> = {
+                format: fmt,
+                view: exportView,
+            };
+            if (exportView === "my") {
+                params.date = myDate;
+                if (user?.id) params.user_id = user.id;
+            } else {
+                params.start_date = startDate;
+                params.end_date = endDate;
+            }
+
+            const res = await api.get("/app-usage/export", {
+                params,
+                responseType: "blob",
+            });
+            const label =
+                exportView === "my"
+                    ? `my-${myDate}`
+                    : `${exportView}-${startDate}_${endDate}`;
+            triggerDownload(
+                res.data,
+                `app-usage-${label}.${fmt}`,
+                fmt === "pdf" ? "application/pdf" : "text/csv",
+            );
+            toast.success(`Report exported as ${fmt.toUpperCase()}`);
+        } catch (err) {
+            toast.error((await readBlobError(err)) ?? "Export failed");
+        } finally {
+            setExporting(null);
+        }
+    };
 
     return (
         <div className="flex flex-col gap-6">
-            {/* Page Header */}
-            <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                    <Monitor className="size-6 text-primary" />
-                    <h1 className="text-2xl font-bold tracking-tight">
-                        App Usage
-                    </h1>
-                </div>
-                <p className="text-muted-foreground">
-                    Track application usage across your team
-                </p>
-            </div>
-
             <ReportsSectionNav />
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between -mt-2">
+                <p className="text-sm text-muted-foreground">
+                    Track application usage across your team.
+                </p>
+                {canExport && (
+                    <div className="flex items-center gap-2">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleExport("csv")}
+                            disabled={exporting !== null}
+                        >
+                            {exporting === "csv" ? (
+                                <Loader2
+                                    className="animate-spin"
+                                    data-icon="inline-start"
+                                />
+                            ) : (
+                                <Download data-icon="inline-start" />
+                            )}
+                            CSV
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleExport("pdf")}
+                            disabled={exporting !== null}
+                        >
+                            {exporting === "pdf" ? (
+                                <Loader2
+                                    className="animate-spin"
+                                    data-icon="inline-start"
+                                />
+                            ) : (
+                                <FileText data-icon="inline-start" />
+                            )}
+                            PDF
+                        </Button>
+                    </div>
+                )}
+            </div>
 
             {/* Date Range Controls */}
             <Card>
@@ -541,17 +626,33 @@ export default function AppUsagePage() {
                 </CardContent>
             </Card>
 
-            {/* Tabs */}
-            <Tabs defaultValue={defaultTab}>
-                <TabsList className="bg-muted/50">
-                    <TabsTrigger value="my-usage">My Usage</TabsTrigger>
-                    {isManagerOrAdmin && (
-                        <TabsTrigger value="team">Team</TabsTrigger>
-                    )}
-                    {isManagerOrAdmin && (
-                        <TabsTrigger value="top-apps">Top Apps</TabsTrigger>
-                    )}
-                </TabsList>
+            {/* Usage views */}
+            <Tabs
+                value={activeView}
+                onValueChange={(value) => {
+                    if (
+                        value === "my-usage" ||
+                        value === "team" ||
+                        value === "top-apps"
+                    ) {
+                        setActiveView(value);
+                    }
+                }}
+            >
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Show
+                    </span>
+                    <TabsList className="bg-muted/50 h-9">
+                        <TabsTrigger value="my-usage">My Usage</TabsTrigger>
+                        {isManagerOrAdmin && (
+                            <TabsTrigger value="team">Team</TabsTrigger>
+                        )}
+                        {isOrgViewer && (
+                            <TabsTrigger value="top-apps">Top Apps</TabsTrigger>
+                        )}
+                    </TabsList>
+                </div>
 
                 {/* My Usage Tab */}
                 <TabsContent value="my-usage" className="mt-6">

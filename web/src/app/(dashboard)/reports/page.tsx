@@ -701,6 +701,8 @@ export default function ReportsPage() {
 
     return (
         <div className="flex flex-col gap-6">
+            <ReportsSectionNav />
+
             {/* ── Section 1: Page Header ── */}
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div>
@@ -773,8 +775,6 @@ export default function ReportsPage() {
                     />
                 </div>
             )}
-
-            <ReportsSectionNav />
 
             {/* ── Section 2: KPI Cards ── */}
             {analyticsLoading ? (
