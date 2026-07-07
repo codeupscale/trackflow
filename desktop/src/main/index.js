@@ -639,7 +639,9 @@ function loadPopupSize() {
 function savePopupSize(width, height) {
     if (!IS_POPUP_RESIZABLE) return;
     try {
-        saveUserPrefsPatch({ popupSize: PopupSize.clampPopupSize(width, height) });
+        saveUserPrefsPatch({
+            popupSize: PopupSize.clampPopupSize(width, height),
+        });
     } catch (e) {
         console.error("Failed to save popup size:", e.message);
     }
@@ -744,7 +746,8 @@ function refreshProjectsOnOpen(onUpdated) {
 // ISSUE 4 FIX: every live idle-alert window (primary + per-display mirrors).
 function _getAllIdleAlertWindows() {
     const all = [];
-    if (idleAlertWindow && !idleAlertWindow.isDestroyed()) all.push(idleAlertWindow);
+    if (idleAlertWindow && !idleAlertWindow.isDestroyed())
+        all.push(idleAlertWindow);
     for (const w of _idleAlertExtraWindows) {
         if (w && !w.isDestroyed()) all.push(w);
     }
@@ -922,7 +925,7 @@ function syncOpenTimerFromServerStatus(status, { notify = "auto" } = {}) {
     if (isTimerPaused) {
         activityMonitor?.stop();
         screenshotService?.stop();
-        if (!idleDetector?.isIdleActive()) idleDetector?.stop();
+        if (!isIdleAlertActive()) idleDetector?.stop();
         stopTrayTimer();
         updateTrayIcon(true);
         const shouldNotify =
@@ -956,6 +959,7 @@ function syncOpenTimerFromServerStatus(status, { notify = "auto" } = {}) {
 /** True when server says stopped but local SQLite / idle state says keep running. */
 function shouldPreserveLocalRunningWhenServerStopped() {
     if (isTimerPaused) return true;
+    if (isIdleAlertActive()) return true;
     if (idleDetector?.isIdleActive()) return true;
     const localActive = getActiveLocalTimer();
     if (isTimerRunning && localActive && !localActive.synced_start) return true;
@@ -1014,7 +1018,10 @@ async function pauseTimerForIdle(idleStartedAtIso) {
         entry: currentEntry,
         todayTotal: todayTotalCurrentProject,
         elapsed: _cachedStartedAtMs
-            ? Math.max(0, Math.floor((pauseAnchorMs - _cachedStartedAtMs) / 1000))
+            ? Math.max(
+                  0,
+                  Math.floor((pauseAnchorMs - _cachedStartedAtMs) / 1000),
+              )
             : 0,
     });
 }
@@ -1191,7 +1198,10 @@ function getActiveLocalTimer() {
                 .get() || null;
         if (row && row.started_at) {
             const ageMs = Date.now() - new Date(row.started_at).getTime();
-            if (!Number.isFinite(ageMs) || ageMs > MAX_PLAUSIBLE_OPEN_SESSION_MS) {
+            if (
+                !Number.isFinite(ageMs) ||
+                ageMs > MAX_PLAUSIBLE_OPEN_SESSION_MS
+            ) {
                 // Stale/garbage open session — close it instead of restoring it live.
                 console.warn(
                     `[LocalTimerDb] Discarding stale open session ${row.id} (age ${Math.round(ageMs / 3600000)}h) — not restoring as a live timer`,
@@ -1234,7 +1244,10 @@ function clearLocalTimerSessions() {
     try {
         db.prepare("DELETE FROM timer_sessions").run();
     } catch (e) {
-        console.error("[LocalTimerDb] clearLocalTimerSessions failed:", e.message);
+        console.error(
+            "[LocalTimerDb] clearLocalTimerSessions failed:",
+            e.message,
+        );
     }
 }
 
@@ -1251,7 +1264,8 @@ function resolveServerEntryIdForQueue(meta) {
     if (!db) return null;
     const localId =
         meta && meta.time_entry_id != null ? String(meta.time_entry_id) : null;
-    const idemKey = meta && meta.idempotency_key ? String(meta.idempotency_key) : null;
+    const idemKey =
+        meta && meta.idempotency_key ? String(meta.idempotency_key) : null;
     try {
         let row = null;
         if (localId) {
@@ -1268,11 +1282,18 @@ function resolveServerEntryIdForQueue(meta) {
                 )
                 .get(idemKey);
         }
-        if (row && row.server_entry_id && !String(row.server_entry_id).startsWith("local-")) {
+        if (
+            row &&
+            row.server_entry_id &&
+            !String(row.server_entry_id).startsWith("local-")
+        ) {
             return String(row.server_entry_id);
         }
     } catch (e) {
-        console.warn("[LocalTimerDb] resolveServerEntryIdForQueue failed:", e.message);
+        console.warn(
+            "[LocalTimerDb] resolveServerEntryIdForQueue failed:",
+            e.message,
+        );
     }
     return null;
 }
@@ -1646,7 +1667,9 @@ function startSelfRemovalWatcher() {
         return; // dev tree / unknown path — nothing meaningful to watch
     }
 
-    console.log(`[Uninstall] Watching install path for removal: ${watchTarget}`);
+    console.log(
+        `[Uninstall] Watching install path for removal: ${watchTarget}`,
+    );
     _selfRemovalWatcher = setInterval(() => {
         let pathExists = true;
         try {
@@ -1793,7 +1816,8 @@ async function initializeApp() {
     activityMonitor.getCurrentEntryMeta = () =>
         currentEntry
             ? {
-                  time_entry_id: currentEntry._localId || currentEntry.id || null,
+                  time_entry_id:
+                      currentEntry._localId || currentEntry.id || null,
                   idempotency_key: currentEntry.idempotency_key || null,
               }
             : null;
@@ -2117,22 +2141,15 @@ async function initializeApp() {
         }
     } catch {}
 
-    // ── Sleep / Wake / Lock — hard auto-stop (timer does not count while asleep) ─
+    // ── Sleep / Wake / Lock — pause capture; timer keeps running ─────────────
     PowerManager.registerPowerHandlers({
         isTimerRunning: () => isTimerRunning,
         autoStopForPowerEvent: autoStopTimerForPowerEvent,
-        // Bug B: suppress the hard auto-stop ONLY while an idle decision is
-        // genuinely pending. The timer is already server-paused at idleStartedAt;
-        // stopping it here would silently discard the paused [idleStartedAt..now]
-        // interval and rob the user of the Keep/Discard/Reassign choice. The normal
-        // non-idle lid-close (predicate false) still hard-stops.
-        shouldAutoStopOnSuspend: () => !isIdleAlertActive(),
-        // On suspend/lock: if an idle alert is live, PRESERVE it across sleep —
-        // suspend() the detector (keeps idleStartedAt, clears the auto-stop
-        // interval → SUSPENDED) and HIDE (not destroy) the windows so onResume can
-        // re-enter ALERTING on the full away duration. Otherwise fall back to the
-        // FIX D5 teardown so a detached/armed detector can never survive sleep and
-        // fire a spurious auto-stop / bogus idle_discard on wake.
+        // Hard auto-stop on sleep is opt-in only (legacy/tests). Normal lid-close /
+        // lock keeps the timer running so elapsed time spans the sleep gap.
+        shouldAutoStopOnSuspend: () => false,
+        // On suspend/lock: preserve idle alert across sleep, or pause capture while
+        // the timer keeps running. Tear down idle detector only when timer is off.
         onSuspendCleanup: () => {
             if (isIdleAlertActive()) {
                 // Capture the snapshot exactly once — a lid-close fires paired
@@ -2149,6 +2166,11 @@ async function initializeApp() {
                     };
                 }
                 hideIdleAlertWindows();
+            } else if (isTimerRunning) {
+                touchLastActiveAt(new Date().toISOString());
+                screenshotService?.stop();
+                activityMonitor?.stop();
+                stopTrayTimer();
             } else {
                 idleDetector?.stop();
                 dismissIdleAlert();
@@ -2193,6 +2215,18 @@ async function initializeApp() {
                     idleDetector?.stop();
                     dismissIdleAlert();
                 }
+            } else if (isTimerRunning && !isIdleAlertActive()) {
+                activityMonitor?.start();
+                if (currentEntry) {
+                    screenshotService?.start(currentEntry.id, {
+                        immediateCapture:
+                            config.screenshot_capture_immediate_after_idle ===
+                            true,
+                    });
+                }
+                startTrayTimer();
+                updateTrayIcon(true);
+                updateTrayTitle();
             }
             if (networkMonitor?.isOnline && offlineQueue && apiClient) {
                 setImmediate(() => {
@@ -2254,10 +2288,9 @@ async function initializeApp() {
                     !isServerTimerOpen(status) &&
                     (isTimerRunning || isTimerPaused)
                 ) {
-                    // BUG-2 FIX: Don't override local state while idle alert is showing
-                    if (idleDetector?.isIdleActive()) {
+                    if (shouldPreserveLocalRunningWhenServerStopped()) {
                         console.log(
-                            "[ImmediateSync] Server says stopped but idle alert is active — keeping local state",
+                            "[ImmediateSync] Server says stopped but local idle/paused/unsynced state preserved — keeping local state",
                         );
                         return;
                     }
@@ -2677,7 +2710,11 @@ function showPopup() {
         // macOS/Linux loadPopupSize() returns the fixed design size, so this is
         // identical to the previous behaviour there.
         const showSize = loadPopupSize();
-        _repositionToPrimaryDisplay(popupWindow, showSize.width, showSize.height);
+        _repositionToPrimaryDisplay(
+            popupWindow,
+            showSize.width,
+            showSize.height,
+        );
         if (typeof popupWindow.moveTop === "function") {
             // Windows: moveTop() while a native <select> is open dismisses the
             // dropdown; only re-assert z-order on macOS where the tray popup
@@ -3917,7 +3954,8 @@ async function stopTimer(options = {}) {
             // local total; if the server stop returned nothing AND getTodayTotal fails
             // (flaky network), `?? 0` here would overwrite the correct stopped total
             // with 00:00:00 in the popup. Keep the local total instead.
-            let todayTotalForPopup = result?.today_total ?? localStoppedProjectTotal;
+            let todayTotalForPopup =
+                result?.today_total ?? localStoppedProjectTotal;
             try {
                 const serverTotal =
                     await apiClient.getTodayTotal(stoppedProjectId);
@@ -3989,7 +4027,7 @@ async function reconcileTimerState() {
         console.log("[Reconcile] Skipping — idle action in progress");
         return;
     }
-    if (idleDetector?.isIdleActive()) {
+    if (isIdleAlertActive()) {
         console.log("[Reconcile] Skipping — idle alert active");
         return;
     }
@@ -4355,15 +4393,14 @@ function startTimerSync() {
                 !isServerTimerOpen(status) &&
                 (isTimerRunning || isTimerPaused)
             ) {
-                // BUG-2 FIX: Don't override local state while idle alert is showing — the server may show
-                // timer as stopped because idle-discard split the entry, but locally we're still
-                // in the idle flow and the user hasn't responded yet.
-                if (idleDetector?.isIdleActive()) {
+                // Don't kill a live idle decision (ALERTING/SUSPENDED/hidden window),
+                // a server-paused idle timer, or an unsynced local-first start.
+                if (shouldPreserveLocalRunningWhenServerStopped()) {
                     console.log(
-                        "[TimerSync] Server says stopped but idle alert is active — keeping local state",
+                        "[TimerSync] Server says stopped but local idle/paused/unsynced state preserved — keeping local state",
                     );
                     _isSyncing = false;
-                    _timerStateMutationInProgress = false; // BUG 3 FIX: release shared guard on early return
+                    _timerStateMutationInProgress = false;
                     return;
                 }
                 // BUG FIX (phantom-stop-local-first-desync): a local-first start that has not
@@ -4538,7 +4575,10 @@ function startTrayTimer() {
                 // (derived from the local started_at anchor, the source of truth).
                 todayTotalGlobalLive:
                     todayTotalGlobal +
-                    Math.max(0, currentElapsed - _pendingOfflineReassignIdleSec),
+                    Math.max(
+                        0,
+                        currentElapsed - _pendingOfflineReassignIdleSec,
+                    ),
                 activityScore: activityMonitor
                     ? activityMonitor.getCurrentScore()
                     : 0,
@@ -4666,10 +4706,13 @@ function isIdleAlertActive() {
         idleDetector &&
         typeof idleDetector.isIdleActive === "function" &&
         idleDetector.isIdleActive();
+    const detectorSuspended =
+        idleDetector?.state === "SUSPENDED" ||
+        (_idleSuspendState && _idleSuspendState.isIdle);
     const windowLive =
         (idleAlertWindow && !idleAlertWindow.isDestroyed()) ||
         _idleAlertExtraWindows.some((w) => w && !w.isDestroyed());
-    return !!(detectorIdle || windowLive);
+    return !!(detectorIdle || detectorSuspended || windowLive);
 }
 
 /** Hide every idle-alert window WITHOUT destroying it, so the same windows can
@@ -4841,7 +4884,8 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     const orderedDisplays = [];
     if (primaryDisplay) orderedDisplays.push(primaryDisplay);
     for (const d of displays) {
-        if (!primaryDisplay || d.id !== primaryDisplay.id) orderedDisplays.push(d);
+        if (!primaryDisplay || d.id !== primaryDisplay.id)
+            orderedDisplays.push(d);
     }
     if (orderedDisplays.length === 0) orderedDisplays.push(null);
 
