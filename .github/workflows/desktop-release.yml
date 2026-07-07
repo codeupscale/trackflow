@@ -49,7 +49,7 @@ jobs:
       channel: ${{ steps.resolve.outputs.channel }}
       should_release: ${{ steps.resolve.outputs.should_release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Resolve version and channel
         id: resolve
@@ -143,9 +143,9 @@ jobs:
       )
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: 'npm'
@@ -198,7 +198,7 @@ jobs:
         run: npx electron-builder --mac --x64 --arm64 --publish always
 
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: mac-builds
           path: |
@@ -218,9 +218,9 @@ jobs:
       )
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: 'npm'
@@ -271,7 +271,7 @@ jobs:
         run: npx electron-builder --win --x64 --publish always
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: windows-builds
           path: |
@@ -290,9 +290,9 @@ jobs:
       )
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: 'npm'
@@ -353,7 +353,7 @@ jobs:
         run: npx electron-builder --linux --x64 --publish always
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: linux-builds
           path: |
@@ -370,7 +370,7 @@ jobs:
     if: always() && needs.preflight.outputs.channel == 'production' && (needs.build-mac.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
