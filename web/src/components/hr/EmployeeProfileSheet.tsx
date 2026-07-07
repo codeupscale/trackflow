@@ -760,6 +760,11 @@ export function EmployeeProfileSheet({
   );
 }
 
+function toDateInputValue(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return value.slice(0, 10);
+}
+
 function getDefaults(
   employee: EmployeeDetail | null
 ): EmployeeProfileInput {
@@ -770,10 +775,10 @@ function getDefaults(
     reporting_manager_id: employee?.reporting_manager?.id ?? null,
     employment_status: employee?.employment_status ?? null,
     employment_type: employee?.employment_type ?? null,
-    date_of_joining: employee?.date_of_joining ?? null,
-    date_of_confirmation: employee?.date_of_confirmation ?? null,
-    date_of_exit: employee?.date_of_exit ?? null,
-    probation_end_date: employee?.probation_end_date ?? null,
+    date_of_joining: toDateInputValue(employee?.date_of_joining),
+    date_of_confirmation: toDateInputValue(employee?.date_of_confirmation),
+    date_of_exit: toDateInputValue(employee?.date_of_exit),
+    probation_end_date: toDateInputValue(employee?.probation_end_date),
     notice_period_days: employee?.notice_period_days ?? null,
     work_location: employee?.work_location ?? null,
     gender: (employee?.gender ?? null) as EmployeeProfileInput['gender'],

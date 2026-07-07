@@ -84,7 +84,14 @@ export function useUpdateEmployeeProfile() {
       const res = await api.put(`/hr/employees/${id}/profile`, data);
       return res.data;
     },
-    onSuccess: (_data, variables) => {
+    onSuccess: (response, variables) => {
+      queryClient.setQueryData(
+        ['employees', variables.id],
+        (old: { data: EmployeeDetail } | undefined) => {
+          if (!old?.data) return response;
+          return { data: { ...old.data, ...response.data } };
+        }
+      );
       queryClient.invalidateQueries({ queryKey: ['employees'] });
       queryClient.invalidateQueries({ queryKey: ['employees', variables.id] });
       toast.success('Profile updated successfully');
