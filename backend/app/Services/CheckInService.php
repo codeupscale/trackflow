@@ -34,6 +34,12 @@ class CheckInService
     private const OPEN_SESSION_LOOKBACK_HOURS = 36;
 
     /**
+     * When checkout is requested with no open session, treat a very recent close as
+     * success (double-click / stale UI) instead of a confusing 422.
+     */
+    private const CHECKOUT_IDEMPOTENCY_WINDOW_MINUTES = 5;
+
+    /**
      * Get (or lazily create with defaults) the org's attendance policy.
      */
     public function getPolicy(string $orgId): AttendancePolicy
@@ -189,7 +195,7 @@ class CheckInService
                 ->first();
 
             if (! $session) {
-                abort(422, 'No open check-in found. Please check in first.');
+                return $this->checkoutWhenNoOpenSession($user, $now);
             }
 
             // 2. Lock the parent record FIRST (consistent record → session lock order to
@@ -210,7 +216,7 @@ class CheckInService
                 ->first();
 
             if (! $record || ! $session) {
-                abort(422, 'No open check-in found. Please check in first.');
+                return $this->checkoutWhenNoOpenSession($user, $now);
             }
 
             // 4. Checkout must be strictly after this session's check-in.
@@ -279,7 +285,7 @@ class CheckInService
             }
         }
 
-        $record->update([
+        $payload = [
             'check_in_at' => $first?->check_in_at,
             'check_out_at' => $lastClosedOut,
             'worked_seconds' => $closed->isEmpty() ? null : $worked,
@@ -287,7 +293,13 @@ class CheckInService
             'is_early_checkout' => $isEarly,
             'check_out_early_minutes' => $earlyMinutes,
             'check_out_overtime_minutes' => $overtimeMinutes,
-        ]);
+        ];
+
+        // When every session is closed, the day is complete — clear any stale
+        // missing_checkout flag left by the nightly backstop or a prior open session.
+        $payload = array_merge($payload, $this->missingCheckoutClearance($record, $sessions));
+
+        $record->update($payload);
     }
 
     /**
@@ -381,7 +393,7 @@ class CheckInService
             'is_early_checkout' => (bool) ($record?->is_early_checkout ?? false),
             'check_out_early_minutes' => (int) ($record?->check_out_early_minutes ?? 0),
             'check_out_overtime_minutes' => (int) ($record?->check_out_overtime_minutes ?? 0),
-            'missing_checkout' => (bool) ($record?->missing_checkout ?? false),
+            'missing_checkout' => $this->effectiveMissingCheckout($record, $hasOpenSession),
             // Day worked total = closed sum (null until a session closes). FE adds the
             // live open-session elapsed on top for the running display.
             'worked_seconds' => $record?->worked_seconds,
@@ -450,6 +462,10 @@ class CheckInService
     {
         $policy = $this->getPolicy($orgId);
         $today = now()->setTimezone($policy->timezone)->toDateString();
+
+        // Self-heal rows that still carry missing_checkout even though every session
+        // closed (e.g. checkout after the backstop ran but before the flag was cleared).
+        $this->healStaleMissingCheckoutFlags($orgId);
 
         // Records from a past org-local day that still carry an OPEN session. The session
         // is deliberately left open (no fabricated check_out_at) for regularization; we
@@ -559,7 +575,10 @@ class CheckInService
                 'late_minutes' => (int) $record->check_in_late_minutes,
                 'early_minutes' => (int) $record->check_out_early_minutes,
                 'overtime_minutes' => (int) $record->check_out_overtime_minutes,
-                'missing_checkout' => (bool) $record->missing_checkout,
+                'missing_checkout' => $this->effectiveMissingCheckout(
+                    $record,
+                    $this->recordHasOpenSession($record)
+                ),
             ];
         });
     }
@@ -690,6 +709,154 @@ class CheckInService
         }
 
         return 'present';
+    }
+
+    /**
+     * Checkout with no open session: idempotent success for a very recent close, else 422
+     * with guidance (desktop timer stop ≠ attendance checkout).
+     */
+    private function checkoutWhenNoOpenSession(User $user, Carbon $now): AttendanceRecord
+    {
+        $recent = $this->findRecordFromRecentClosedSession($user, $now);
+        if ($recent) {
+            return $recent;
+        }
+
+        abort(422, $this->checkoutUnavailableMessage($user));
+    }
+
+    /**
+     * Human-readable 422 when checkout cannot proceed (never checked in, or already
+     * checked out earlier without a new check-in after a break).
+     */
+    private function checkoutUnavailableMessage(User $user): string
+    {
+        $policy = $this->getPolicy($user->organization_id);
+        $today = now()->setTimezone($policy->timezone)->toDateString();
+
+        $hasClosedSessionToday = AttendanceRecord::withoutGlobalScopes()
+            ->where('organization_id', $user->organization_id)
+            ->where('user_id', $user->id)
+            ->where('date', $today)
+            ->whereHas('sessions', function ($q) use ($user) {
+                $q->withoutGlobalScopes()
+                    ->where('organization_id', $user->organization_id)
+                    ->whereNotNull('check_out_at');
+            })
+            ->whereDoesntHave('sessions', function ($q) use ($user) {
+                $q->withoutGlobalScopes()
+                    ->where('organization_id', $user->organization_id)
+                    ->open();
+            })
+            ->exists();
+
+        if ($hasClosedSessionToday) {
+            return 'You are already checked out. If you resumed work after a break, tap Check In again when you start — stopping the desktop time tracker does not check you out.';
+        }
+
+        return 'No open check-in found. Check in on this page when you start work. Stopping the desktop time tracker does not check you out.';
+    }
+
+    /**
+     * Idempotent checkout: a session closed within the last few minutes (double-submit
+     * or stale UI after a successful checkout).
+     */
+    private function findRecordFromRecentClosedSession(User $user, Carbon $now): ?AttendanceRecord
+    {
+        $recentClosed = CheckInSession::withoutGlobalScopes()
+            ->where('organization_id', $user->organization_id)
+            ->where('user_id', $user->id)
+            ->whereNotNull('check_out_at')
+            ->where(
+                'check_out_at',
+                '>=',
+                $now->copy()->subMinutes(self::CHECKOUT_IDEMPOTENCY_WINDOW_MINUTES)
+            )
+            ->orderByDesc('check_out_at')
+            ->first();
+
+        if (! $recentClosed) {
+            return null;
+        }
+
+        return AttendanceRecord::withoutGlobalScopes()
+            ->where('organization_id', $user->organization_id)
+            ->whereKey($recentClosed->attendance_record_id)
+            ->first();
+    }
+
+    /**
+     * Whether the day record should surface a missing-checkout signal. The DB flag is
+     * only meaningful while an open session still exists — once every session is closed
+     * (including a late checkout the next morning) the flag is stale.
+     */
+    private function effectiveMissingCheckout(?AttendanceRecord $record, bool $hasOpenSession): bool
+    {
+        if ($record === null) {
+            return false;
+        }
+
+        return (bool) $record->missing_checkout && $hasOpenSession;
+    }
+
+    /**
+     * Clear missing_checkout / auto_closed when the session set is fully closed.
+     *
+     * @param  \Illuminate\Support\Collection<int, CheckInSession>  $sessions
+     * @return array<string, mixed>
+     */
+    private function missingCheckoutClearance(AttendanceRecord $record, $sessions): array
+    {
+        $hasOpen = $sessions->contains(fn (CheckInSession $s) => $s->check_out_at === null);
+        if ($hasOpen) {
+            return [];
+        }
+
+        $flags = $record->check_in_flags ?? [];
+        unset($flags['auto_closed']);
+
+        return [
+            'missing_checkout' => false,
+            'check_in_flags' => $flags === [] ? null : $flags,
+        ];
+    }
+
+    /**
+     * Remove erroneous missing_checkout flags on rows whose sessions are all closed.
+     * Runs at the start of the nightly backstop so production data self-heals.
+     */
+    private function healStaleMissingCheckoutFlags(string $orgId): void
+    {
+        AttendanceRecord::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->where('missing_checkout', true)
+            ->chunkById(200, function ($records) {
+                foreach ($records as $record) {
+                    if ($this->recordHasOpenSession($record)) {
+                        continue;
+                    }
+
+                    $flags = $record->check_in_flags ?? [];
+                    unset($flags['auto_closed']);
+
+                    $record->update([
+                        'missing_checkout' => false,
+                        'check_in_flags' => $flags === [] ? null : $flags,
+                    ]);
+                }
+            });
+    }
+
+    /**
+     * Does this record currently have an open check-in session?
+     */
+    private function recordHasOpenSession(AttendanceRecord $record): bool
+    {
+        return CheckInSession::withoutGlobalScopes()
+            ->where('organization_id', $record->organization_id)
+            ->where('attendance_record_id', $record->id)
+            ->open()
+            ->exists();
     }
 
     /**

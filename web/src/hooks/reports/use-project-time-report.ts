@@ -32,6 +32,7 @@ export interface ProjectTimeRow {
     billable: boolean;
     billable_amount: number;
     entry_count?: number;
+    time_span?: string | null;
 }
 
 export interface ProjectTimeSummary {

@@ -335,7 +335,9 @@ class ProjectTimeReportService
 
         $escapedTz = str_replace("'", "''", $tz);
 
-        return "({$column} AT TIME ZONE '{$escapedTz}')::date";
+        // Naive UTC timestamps (Laravel `timestamp` columns) → org-local calendar date.
+        // Must match Carbon::parse($value)->setTimezone($tz)->toDateString() in mapRow().
+        return "(timezone('{$escapedTz}', timezone('UTC', {$column})))::date";
     }
 
     /**
@@ -410,11 +412,18 @@ class ProjectTimeReportService
             'id' => (string) ($row->id ?? "{$row->user_id}|{$workDate}"),
             'user_name' => $row->user_name,
             'project_name' => $row->project_name ?? '—',
-            'task_name' => ((int) ($row->entry_count ?? 1)) > 1 ? '—' : '—',
+            'task_name' => '—',
             'type' => $typeLabel,
             'date' => (string) $workDate,
-            'start_time' => $started->format('H:i'),
-            'end_time' => $ended?->format('H:i') ?? '—',
+            'start_time' => ((int) ($row->entry_count ?? 1)) > 1
+                ? '—'
+                : $started->format('H:i'),
+            'end_time' => ((int) ($row->entry_count ?? 1)) > 1
+                ? '—'
+                : ($ended?->format('H:i') ?? '—'),
+            'time_span' => ((int) ($row->entry_count ?? 1)) > 1
+                ? $started->format('H:i') . ' – ' . ($ended?->format('H:i') ?? '—')
+                : null,
             'started_at' => $started->format('Y-m-d H:i'),
             'ended_at' => $ended?->format('Y-m-d H:i'),
             'duration_seconds' => (int) $row->duration_seconds,

@@ -47,8 +47,8 @@ import {
     type ProjectTimeFilters,
 } from "@/hooks/reports/use-project-time-report";
 import api from "@/lib/api";
+import { formatDuration } from "@/lib/check-in-time";
 import { readBlobError, triggerDownload } from "@/lib/download";
-import { formatDuration } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import { usePermissionStore } from "@/stores/permission-store";
 
@@ -355,15 +355,17 @@ export default function ProjectTimeReportPage() {
                                                 )}
                                             </TableCell>
                                             <TableCell className="font-mono text-sm tabular-nums text-foreground">
-                                                {groupByDay ? (
+                                                {groupByDay &&
+                                                (row.entry_count ?? 1) > 1 ? (
                                                     <span
-                                                        title={`${row.start_time} – ${row.end_time}`}
+                                                        className="text-muted-foreground"
+                                                        title={
+                                                            row.time_span ??
+                                                            undefined
+                                                        }
                                                     >
-                                                        {row.start_time}
-                                                        {row.end_time &&
-                                                        row.end_time !== "—"
-                                                            ? ` – ${row.end_time}`
-                                                            : ""}
+                                                        {row.entry_count}{" "}
+                                                        entries
                                                     </span>
                                                 ) : (
                                                     <>

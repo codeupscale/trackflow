@@ -155,19 +155,6 @@ class CheckInTest extends TestCase
         $this->assertSame(1, CheckInSession::where('user_id', $user->id)->count());
     }
 
-    // ── Edge 5: checkout without a check-in → 422 ──────────────────────────
-
-    public function test_checkout_without_check_in_returns_422(): void
-    {
-        $org = $this->createOrganization();
-        $user = $this->createUser($org, 'employee');
-        $this->actingAs($user, 'sanctum');
-
-        $this->freezeUtc(self::MONDAY . ' 15:00:00');
-
-        $this->postJson('/api/v1/hr/attendance/check-out')->assertStatus(422);
-    }
-
     // ── Edge 6: early / overtime / exact boundary checkout ─────────────────
 
     public function test_early_checkout_sets_early_minutes(): void
@@ -768,5 +755,161 @@ class CheckInTest extends TestCase
         $response->assertOk()
             ->assertJsonPath('data.check_in_time', '11:30:00')
             ->assertJsonPath('data.timezone', 'Asia/Karachi');
+    }
+
+    public function test_evening_checkout_survives_next_day_backstop(): void
+    {
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        $this->freezeUtc(self::MONDAY . ' 06:40:00');
+        $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(201);
+
+        // Checkout at the official off boundary (20:30 Karachi).
+        $this->freezeUtc(self::MONDAY . ' 15:30:00');
+        $this->postJson('/api/v1/hr/attendance/check-out')->assertOk();
+
+        // Next org-local morning — same moment the prod backstop runs (03:00 UTC).
+        $this->freezeUtc(self::TUESDAY . ' 03:00:00');
+        $closed = $this->checkInService()->autoCloseStaleCheckIns($org->id);
+
+        $this->assertSame(0, $closed);
+
+        $record = AttendanceRecord::where('user_id', $user->id)
+            ->where('date', self::MONDAY)
+            ->first();
+
+        $this->assertFalse((bool) $record->missing_checkout);
+        $this->assertNotNull($record->check_out_at);
+        $this->assertSame(
+            0,
+            CheckInSession::where('attendance_record_id', $record->id)->open()->count()
+        );
+
+        $response = $this->getJson('/api/v1/hr/attendance?start_date=' . self::MONDAY . '&end_date=' . self::MONDAY);
+        $response->assertOk();
+        $this->assertFalse($response->json('data.0.missing_checkout'));
+        $this->assertSame('8:30 PM', $response->json('data.0.clock_out'));
+    }
+
+    public function test_checkout_clears_missing_checkout_after_backstop(): void
+    {
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        $this->freezeUtc(self::MONDAY . ' 06:40:00');
+        $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(201);
+
+        // Forgot to check out — backstop flags the row overnight.
+        $this->freezeUtc(self::TUESDAY . ' 03:00:00');
+        $this->assertSame(1, $this->checkInService()->autoCloseStaleCheckIns($org->id));
+
+        $record = AttendanceRecord::where('user_id', $user->id)
+            ->where('date', self::MONDAY)
+            ->first();
+        $this->assertTrue((bool) $record->missing_checkout);
+
+        // User checks out the stale open session the next morning.
+        $this->freezeUtc(self::TUESDAY . ' 04:00:00');
+        $this->postJson('/api/v1/hr/attendance/check-out')->assertOk();
+
+        $record->refresh();
+        $this->assertFalse((bool) $record->missing_checkout);
+        $this->assertFalse($record->check_in_flags['auto_closed'] ?? false);
+        $this->assertNotNull($record->check_out_at);
+
+        $response = $this->getJson('/api/v1/hr/attendance?start_date=' . self::MONDAY . '&end_date=' . self::MONDAY);
+        $response->assertOk();
+        $this->assertFalse($response->json('data.0.missing_checkout'));
+    }
+
+    public function test_backstop_self_heals_stale_missing_checkout_when_sessions_closed(): void
+    {
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        $this->freezeUtc(self::MONDAY . ' 06:40:00');
+        $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(201);
+
+        $this->freezeUtc(self::MONDAY . ' 15:30:00');
+        $this->postJson('/api/v1/hr/attendance/check-out')->assertOk();
+
+        // Simulate a stale flag left by an older build (all sessions already closed).
+        $record = AttendanceRecord::where('user_id', $user->id)
+            ->where('date', self::MONDAY)
+            ->first();
+        $record->update([
+            'missing_checkout' => true,
+            'check_in_flags' => ['auto_closed' => true],
+        ]);
+
+        $this->freezeUtc(self::TUESDAY . ' 03:00:00');
+        $this->checkInService()->autoCloseStaleCheckIns($org->id);
+
+        $record->refresh();
+        $this->assertFalse((bool) $record->missing_checkout);
+        $this->assertNull($record->check_in_flags);
+    }
+
+    public function test_checkout_is_idempotent_within_five_minutes(): void
+    {
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        $this->freezeUtc(self::MONDAY . ' 06:40:00');
+        $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(201);
+
+        $this->freezeUtc(self::MONDAY . ' 15:30:00');
+        $this->postJson('/api/v1/hr/attendance/check-out')->assertOk();
+
+        // Double-submit / stale UI — not a hard error.
+        $this->postJson('/api/v1/hr/attendance/check-out')
+            ->assertOk()
+            ->assertJsonPath('data.checked_out', true)
+            ->assertJsonPath('data.has_open_session', false);
+    }
+
+    public function test_checkout_after_lunch_without_recheck_in_explains_desktop_timer(): void
+    {
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        $this->freezeUtc(self::MONDAY . ' 06:40:00');
+        $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(201);
+
+        $this->freezeUtc(self::MONDAY . ' 09:00:00');
+        $this->postJson('/api/v1/hr/attendance/check-out')->assertOk();
+
+        // Afternoon: desktop timer only — no HR check-in again.
+        $this->freezeUtc(self::MONDAY . ' 15:30:00');
+        $response = $this->postJson('/api/v1/hr/attendance/check-out');
+
+        $response->assertStatus(422);
+        $response->assertJsonPath(
+            'message',
+            'You are already checked out. If you resumed work after a break, tap Check In again when you start — stopping the desktop time tracker does not check you out.'
+        );
+    }
+
+    public function test_checkout_without_check_in_mentions_desktop_timer(): void
+    {
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        $this->freezeUtc(self::MONDAY . ' 15:00:00');
+
+        $response = $this->postJson('/api/v1/hr/attendance/check-out');
+
+        $response->assertStatus(422);
+        $response->assertJsonPath(
+            'message',
+            'No open check-in found. Check in on this page when you start work. Stopping the desktop time tracker does not check you out.'
+        );
     }
 }
