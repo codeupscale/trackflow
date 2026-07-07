@@ -127,8 +127,9 @@ class CheckInService
             if ($isFirst) {
                 // On-time vs late. Boundary (exactly the late threshold) counts as on-time.
                 $isLate = $local->gt($lateAt);
-                // Late minutes are measured from the OFFICIAL START, not the threshold.
-                $lateMinutes = $isLate ? (int) $officialStart->diffInMinutes($local) : 0;
+                // Late minutes are measured from the LATE THRESHOLD — the grace window
+                // up to the threshold is free, so lateness only counts past it.
+                $lateMinutes = $isLate ? (int) $lateAt->diffInMinutes($local) : 0;
 
                 // Advisory flags (do not block the check-in).
                 $flags = [];
