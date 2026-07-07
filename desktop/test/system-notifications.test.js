@@ -26,10 +26,18 @@ describe('system-notifications', () => {
   });
 
   describe('formatTimeShortLocal()', () => {
-    test('formats hours and minutes as HH:MM', () => {
+    test('formats hours and minutes as h:MM AM/PM', () => {
       withNotificationsModule(({ mod }) => {
         const date = new Date(2026, 6, 6, 14, 5, 30);
-        expect(mod.formatTimeShortLocal(date)).toBe('14:05');
+        expect(mod.formatTimeShortLocal(date)).toBe('2:05 PM');
+      });
+    });
+
+    test('handles midnight, noon, and morning boundaries', () => {
+      withNotificationsModule(({ mod }) => {
+        expect(mod.formatTimeShortLocal(new Date(2026, 6, 6, 0, 0, 0))).toBe('12:00 AM');
+        expect(mod.formatTimeShortLocal(new Date(2026, 6, 6, 12, 0, 0))).toBe('12:00 PM');
+        expect(mod.formatTimeShortLocal(new Date(2026, 6, 6, 9, 7, 0))).toBe('9:07 AM');
       });
     });
   });
@@ -69,7 +77,7 @@ describe('system-notifications', () => {
         const result = mod.showSystemNotification({
           id: 'screenshot-test-1',
           title: 'TrackFlow',
-          body: 'Screenshot captured at 14:05',
+          body: 'Screenshot captured at 2:05 PM',
           silent: true,
           durationMs: 5000,
         });
@@ -77,7 +85,7 @@ describe('system-notifications', () => {
         expect(electron.Notification).toHaveBeenCalledWith(expect.objectContaining({
           id: 'screenshot-test-1',
           title: 'TrackFlow',
-          body: 'Screenshot captured at 14:05',
+          body: 'Screenshot captured at 2:05 PM',
           silent: true,
           icon: expect.anything(),
         }));
