@@ -110,7 +110,7 @@ class CheckInTest extends TestCase
             ->assertJsonPath('data.check_in_late_minutes', 0);
     }
 
-    // ── Edge 3: after threshold is late; minutes from official start ───────
+    // ── Edge 3: after threshold is late; minutes from the late threshold ───
 
     public function test_check_in_after_threshold_is_late_with_minutes(): void
     {
@@ -118,18 +118,18 @@ class CheckInTest extends TestCase
         $user = $this->createUser($org, 'employee');
         $this->actingAs($user, 'sanctum');
 
-        $this->freezeUtc(self::MONDAY . ' 06:50:00'); // 11:50 local — 20 min after 11:30
+        $this->freezeUtc(self::MONDAY . ' 06:50:00'); // 11:50 local — 5 min after the 11:45 threshold
 
         $response = $this->postJson('/api/v1/hr/attendance/check-in');
 
         $response->assertStatus(201)
             ->assertJsonPath('data.check_in_status', 'late')
-            ->assertJsonPath('data.check_in_late_minutes', 20);
+            ->assertJsonPath('data.check_in_late_minutes', 5);
 
         $this->assertDatabaseHas('attendance_records', [
             'user_id' => $user->id,
             'check_in_status' => 'late',
-            'check_in_late_minutes' => 20,
+            'check_in_late_minutes' => 5,
         ]);
     }
 
@@ -241,7 +241,7 @@ class CheckInTest extends TestCase
         $response->assertOk()
             ->assertJsonPath('data.check_in_status', 'late')
             ->assertJsonPath('data.is_early_checkout', true)
-            ->assertJsonPath('data.check_in_late_minutes', 20)
+            ->assertJsonPath('data.check_in_late_minutes', 5)
             ->assertJsonPath('data.check_out_early_minutes', 30);
     }
 
@@ -586,7 +586,7 @@ class CheckInTest extends TestCase
         $user = $this->createUser($org, 'employee');
 
         // Real check-in through the service.
-        $this->freezeUtc(self::MONDAY . ' 06:50:00'); // late by 20 min
+        $this->freezeUtc(self::MONDAY . ' 06:50:00'); // late by 5 min (past 11:45)
         $this->checkInService()->checkIn($user);
 
         $checkInAt = AttendanceRecord::where('user_id', $user->id)->value('check_in_at');
@@ -600,7 +600,7 @@ class CheckInTest extends TestCase
 
         // Check-in columns are untouched by the job.
         $this->assertSame('late', $record->check_in_status);
-        $this->assertSame(20, $record->check_in_late_minutes);
+        $this->assertSame(5, $record->check_in_late_minutes);
         $this->assertSame(
             $checkInAt->utc()->format('Y-m-d H:i:s'),
             $record->check_in_at->utc()->format('Y-m-d H:i:s')
@@ -617,7 +617,7 @@ class CheckInTest extends TestCase
         $user = $this->createUser($org, 'employee');
         $this->actingAs($user, 'sanctum');
 
-        // 11:50 Karachi = 06:50 UTC — late by 20 minutes from the 11:30 official start.
+        // 11:50 Karachi = 06:50 UTC — late by 5 minutes from the 11:45 threshold.
         $this->freezeUtc(self::MONDAY . ' 06:50:00');
         $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(201);
 
@@ -630,7 +630,7 @@ class CheckInTest extends TestCase
         $this->assertSame('11:50 AM', $row['clock_in']);
         $this->assertNull($row['clock_out']);
         // Late minutes come from the check-in signal, not the (zero) tracker figure.
-        $this->assertSame(20, $row['late_minutes']);
+        $this->assertSame(5, $row['late_minutes']);
         $this->assertSame('late', $row['check_in_status']);
         $this->assertSame('present', $row['status']);
         // The check-in instant is passed through so the row can render its badge.

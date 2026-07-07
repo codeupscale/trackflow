@@ -6,7 +6,7 @@ jest.mock('../src/main/system-notifications', () => ({
     close: jest.fn(),
     show: jest.fn(),
   })),
-  formatTimeShortLocal: jest.fn(() => '14:05'),
+  formatTimeShortLocal: jest.fn(() => '2:05 PM'),
 }));
 
 // Mock sharp
@@ -970,7 +970,7 @@ describe('ScreenshotService', () => {
       await service.capture();
       expect(showSystemNotification).toHaveBeenCalledWith(expect.objectContaining({
         title: 'TrackFlow',
-        body: 'Screenshot captured at 14:05',
+        body: 'Screenshot captured at 2:05 PM',
         silent: true,
         durationMs: 5000,
       }));

@@ -43,10 +43,18 @@ describe('PowerManager', () => {
   });
 
   describe('formatTimeShortLocal', () => {
-    test('formats hours and minutes', () => {
+    test('formats hours and minutes in 12-hour format', () => {
       const d = new Date();
       d.setHours(14, 5, 30, 0);
-      expect(PowerManager.formatTimeShortLocal(d)).toBe('14:05');
+      expect(PowerManager.formatTimeShortLocal(d)).toBe('2:05 PM');
+    });
+
+    test('handles midnight and noon boundaries', () => {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      expect(PowerManager.formatTimeShortLocal(d)).toBe('12:00 AM');
+      d.setHours(12, 0, 0, 0);
+      expect(PowerManager.formatTimeShortLocal(d)).toBe('12:00 PM');
     });
   });
 

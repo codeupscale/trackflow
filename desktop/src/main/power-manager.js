@@ -126,9 +126,11 @@ function evaluateStartupGap({ lastActiveAtMs, nowMs, gapThresholdSec, hasOpenSes
 }
 
 function formatTimeShortLocal(date) {
-  const h = date.getHours().toString().padStart(2, '0');
+  const hours24 = date.getHours();
+  const h = hours24 % 12 || 12;
   const m = date.getMinutes().toString().padStart(2, '0');
-  return `${h}:${m}`;
+  const ampm = hours24 >= 12 ? 'PM' : 'AM';
+  return `${h}:${m} ${ampm}`;
 }
 
 function showAutoStopNotification(title, body) {
