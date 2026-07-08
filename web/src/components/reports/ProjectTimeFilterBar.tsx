@@ -147,17 +147,26 @@ export function ProjectTimeFilterBar({
                     <Label>Projects</Label>
                     <ProjectMultiSelect
                         value={filters.project_ids}
-                        onChange={(ids) => onChange({ project_ids: ids })}
+                        onChange={(ids) =>
+                            onChange({
+                                project_ids: ids,
+                                // Resource list is project-scoped — reset so a
+                                // previously picked user isn't left selected after
+                                // they fall out of the new member set.
+                                user_id: null,
+                            })
+                        }
                     />
                 </div>
 
-                {/* Resource */}
+                {/* Resource — members of selected projects only (all users if none) */}
                 <div className="flex w-full flex-col gap-1.5 lg:w-56">
                     <Label>Resource</Label>
                     <UserCombobox
                         value={filters.user_id}
                         onChange={(v) => onChange({ user_id: v })}
                         placeholder="All resources"
+                        projectIds={filters.project_ids}
                     />
                 </div>
 
