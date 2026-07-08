@@ -205,6 +205,51 @@ class EmployeeTest extends TestCase
         ]);
     }
 
+    public function test_reporting_manager_rejects_employees(): void
+    {
+        $org = $this->createOrganization();
+        $admin = $this->createUser($org, 'org_manager');
+        $employee = $this->createUser($org, 'employee');
+        $peer = $this->createUser($org, 'employee');
+
+        EmployeeProfile::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $employee->id,
+        ]);
+
+        $this->actingAs($admin, 'sanctum');
+
+        $this->putJson("/api/v1/hr/employees/{$employee->id}/profile", [
+            'reporting_manager_id' => $peer->id,
+        ])->assertUnprocessable()
+            ->assertJsonValidationErrors(['reporting_manager_id']);
+    }
+
+    public function test_reporting_manager_accepts_owner_and_managers(): void
+    {
+        $org = $this->createOrganization();
+        $owner = $this->createUser($org, 'owner');
+        $manager = $this->createUser($org, 'org_manager');
+        $employee = $this->createUser($org, 'employee');
+
+        EmployeeProfile::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $employee->id,
+        ]);
+
+        $this->actingAs($manager, 'sanctum');
+
+        $this->putJson("/api/v1/hr/employees/{$employee->id}/profile", [
+            'reporting_manager_id' => $owner->id,
+        ])->assertOk()
+            ->assertJsonPath('data.reporting_manager.id', $owner->id);
+
+        $this->putJson("/api/v1/hr/employees/{$employee->id}/profile", [
+            'reporting_manager_id' => $manager->id,
+        ])->assertOk()
+            ->assertJsonPath('data.reporting_manager.id', $manager->id);
+    }
+
     public function test_admin_can_update_all_fields(): void
     {
         $org = $this->createOrganization();

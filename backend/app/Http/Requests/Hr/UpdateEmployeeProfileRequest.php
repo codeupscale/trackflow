@@ -88,7 +88,17 @@ class UpdateEmployeeProfileRequest extends FormRequest
                 ],
                 'reporting_manager_id' => [
                     'sometimes', 'nullable', 'uuid',
-                    Rule::exists('users', 'id')->where('organization_id', $orgId),
+                    Rule::exists('users', 'id')
+                        ->where('organization_id', $orgId)
+                        // Only managerial roles — not employees.
+                        ->whereIn('role', [
+                            'owner',
+                            'org_manager',
+                            'hr_manager',
+                            'finance_manager',
+                            'admin',   // legacy alias of org_manager
+                            'manager', // legacy project manager role
+                        ]),
                 ],
                 'employment_status' => [
                     'sometimes', 'nullable', 'string',
