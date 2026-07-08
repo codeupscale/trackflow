@@ -229,9 +229,12 @@ export function CheckInCard({ className }: { className?: string }) {
           Attendance
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4 @lg/checkin:flex-row @lg/checkin:items-stretch @lg/checkin:gap-6">
+      <CardContent className="flex flex-col gap-4">
+        {/* Tracker warning sits ABOVE the two-region row so it never competes for
+            flex width with the status text / Check In button (that caused the
+            "You haven't checked in today." label to collapse to a character column). */}
         {isTimerRunning && !data.has_open_session && data.can_check_in && (
-          <Alert className="border-amber-500/40 bg-amber-500/5 @lg/checkin:basis-full">
+          <Alert className="border-amber-500/40 bg-amber-500/5">
             <Info className="size-4 text-amber-600" />
             <AlertDescription className="text-sm text-muted-foreground">
               The desktop time tracker is running, but you are not checked in for
@@ -241,117 +244,121 @@ export function CheckInCard({ className }: { className?: string }) {
           </Alert>
         )}
 
-        {/* LEFT region: status line, day total, session list */}
-        <div className="flex min-w-0 flex-1 flex-col gap-4">
-        {/* Status line */}
-        <div className="flex flex-col gap-2">
-          {notCheckedIn ? (
-            <p className="text-sm text-muted-foreground">
-              You haven&apos;t checked in today.
-            </p>
-          ) : (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm text-foreground">
-                {isLive ? 'Currently checked in' : 'Checked out'}
-                {' · '}
-                <span className="tabular-nums">
-                  {data.sessions_count}{' '}
-                  {data.sessions_count === 1 ? 'session' : 'sessions'}
-                </span>
-              </span>
-              {/* Day-level check-in signal badges (first check-in / last checkout).
-                  Each carries a tooltip that converts the raw minute count into
-                  "Xh Ym" and anchors it to the org policy time. */}
-              {data.check_in_status === 'late' && (
-                <CheckInStatusBadge
-                  status="late"
-                  tooltip={checkInBadgeTooltip('late', {
-                    lateMinutes: data.check_in_late_minutes,
-                    checkInTime: data.policy?.check_in_time,
-                  })}
-                />
+        {/* Two-region body: status/total/sessions | action. `@container` scopes the
+            breakpoint to the card width so a narrow dashboard slot still stacks. */}
+        <div className="flex flex-col gap-4 @lg/checkin:flex-row @lg/checkin:items-stretch @lg/checkin:gap-6">
+          {/* LEFT region: status line, day total, session list */}
+          <div className="flex min-w-0 flex-1 flex-col gap-4">
+            {/* Status line */}
+            <div className="flex flex-col gap-2">
+              {notCheckedIn ? (
+                <p className="text-sm text-muted-foreground">
+                  You haven&apos;t checked in today.
+                </p>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm text-foreground">
+                    {isLive ? 'Currently checked in' : 'Checked out'}
+                    {' · '}
+                    <span className="tabular-nums">
+                      {data.sessions_count}{' '}
+                      {data.sessions_count === 1 ? 'session' : 'sessions'}
+                    </span>
+                  </span>
+                  {/* Day-level check-in signal badges (first check-in / last checkout).
+                      Each carries a tooltip that converts the raw minute count into
+                      "Xh Ym" and anchors it to the org policy time. */}
+                  {data.check_in_status === 'late' && (
+                    <CheckInStatusBadge
+                      status="late"
+                      tooltip={checkInBadgeTooltip('late', {
+                        lateMinutes: data.check_in_late_minutes,
+                        checkInTime: data.policy?.check_in_time,
+                      })}
+                    />
+                  )}
+                  {!isLive && data.is_early_checkout && (
+                    <CheckInStatusBadge
+                      status="early_checkout"
+                      tooltip={checkInBadgeTooltip('early_checkout', {
+                        earlyMinutes: data.check_out_early_minutes,
+                        checkoutTime: data.policy?.checkout_time,
+                      })}
+                    />
+                  )}
+                  {!isLive && data.missing_checkout && (
+                    <CheckInStatusBadge
+                      status="missing_checkout"
+                      tooltip={checkInBadgeTooltip('missing_checkout')}
+                    />
+                  )}
+                </div>
               )}
-              {!isLive && data.is_early_checkout && (
-                <CheckInStatusBadge
-                  status="early_checkout"
-                  tooltip={checkInBadgeTooltip('early_checkout', {
-                    earlyMinutes: data.check_out_early_minutes,
-                    checkoutTime: data.policy?.checkout_time,
-                  })}
-                />
-              )}
-              {!isLive && data.missing_checkout && (
-                <CheckInStatusBadge
-                  status="missing_checkout"
-                  tooltip={checkInBadgeTooltip('missing_checkout')}
-                />
+
+              {/* Advisory / warning flags */}
+              {(flags.on_approved_leave || flags.worked_on_off_day) && (
+                <div className="flex flex-wrap items-center gap-2">
+                  {flags.on_approved_leave && (
+                    <CheckInStatusBadge
+                      status="on_approved_leave"
+                      tooltip={checkInBadgeTooltip('on_approved_leave')}
+                    />
+                  )}
+                  {flags.worked_on_off_day && (
+                    <CheckInStatusBadge
+                      status="worked_on_off_day"
+                      tooltip={checkInBadgeTooltip('worked_on_off_day')}
+                    />
+                  )}
+                </div>
               )}
             </div>
-          )}
 
-          {/* Advisory / warning flags */}
-          {(flags.on_approved_leave || flags.worked_on_off_day) && (
-            <div className="flex flex-wrap items-center gap-2">
-              {flags.on_approved_leave && (
-                <CheckInStatusBadge
-                  status="on_approved_leave"
-                  tooltip={checkInBadgeTooltip('on_approved_leave')}
-                />
-              )}
-              {flags.worked_on_off_day && (
-                <CheckInStatusBadge
-                  status="worked_on_off_day"
-                  tooltip={checkInBadgeTooltip('worked_on_off_day')}
-                />
-              )}
-            </div>
-          )}
-        </div>
+            {/* Day total — LIVE ticker (HH:MM:SS) while a session is open, otherwise
+                the frozen total as "Xh Ym". One consistent scheme: clock while live,
+                duration when idle. */}
+            {isLive ? (
+              <div
+                className="text-3xl font-bold tabular-nums text-foreground"
+                aria-live="off"
+                aria-label="Total time worked today"
+              >
+                {liveTotal}
+              </div>
+            ) : (
+              data.sessions_count > 0 && (
+                <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-bold tabular-nums text-foreground">
+                    {frozenTotal}
+                  </span>
+                  <span className="text-xs text-muted-foreground">worked today</span>
+                </div>
+              )
+            )}
 
-        {/* Day total — LIVE ticker (HH:MM:SS) while a session is open, otherwise
-            the frozen total as "Xh Ym". One consistent scheme: clock while live,
-            duration when idle. */}
-        {isLive ? (
-          <div
-            className="text-3xl font-bold tabular-nums text-foreground"
-            aria-live="off"
-            aria-label="Total time worked today"
-          >
-            {liveTotal}
+            {/* Session list (live + idle_can_recheck). Capped at ~5 rows; scrolls
+                (pinned to bottom so the newest / open session is visible by default). */}
+            {sessions.length > 0 && (
+              <ul
+                ref={sessionListRef}
+                className="flex max-h-40 flex-col gap-1.5 overflow-y-auto pr-1"
+              >
+                {sessions.map((session, idx) => (
+                  <li key={session.seq} className="flex flex-col gap-1.5">
+                    {idx > 0 && <Separator />}
+                    <SessionRow session={session} timezone={timezone} />
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-        ) : (
-          data.sessions_count > 0 && (
-            <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-bold tabular-nums text-foreground">
-                {frozenTotal}
-              </span>
-              <span className="text-xs text-muted-foreground">worked today</span>
-            </div>
-          )
-        )}
 
-        {/* Session list (live + idle_can_recheck). Capped at ~5 rows; scrolls
-            (pinned to bottom so the newest / open session is visible by default). */}
-        {sessions.length > 0 && (
-          <ul
-            ref={sessionListRef}
-            className="flex max-h-40 flex-col gap-1.5 overflow-y-auto pr-1"
-          >
-            {sessions.map((session, idx) => (
-              <li key={session.seq} className="flex flex-col gap-1.5">
-                {idx > 0 && <Separator />}
-                <SessionRow session={session} timezone={timezone} />
-              </li>
-            ))}
-          </ul>
-        )}
-        </div>
-
-        {/* RIGHT region: the primary action, visually separated from the session
-            list and vertically centred. On @lg+ it sits in its own column with a
-            divider; below that it stacks under the list as a full-width button. */}
-        <div className="flex flex-col justify-center @lg/checkin:w-52 @lg/checkin:shrink-0 @lg/checkin:border-l @lg/checkin:border-border @lg/checkin:pl-6">
-          {actionButton}
+          {/* RIGHT region: the primary action, visually separated from the session
+              list and vertically centred. On @lg+ it sits in its own column with a
+              divider; below that it stacks under the list as a full-width button. */}
+          <div className="flex flex-col justify-center @lg/checkin:w-52 @lg/checkin:shrink-0 @lg/checkin:border-l @lg/checkin:border-border @lg/checkin:pl-6">
+            {actionButton}
+          </div>
         </div>
       </CardContent>
     </Card>
