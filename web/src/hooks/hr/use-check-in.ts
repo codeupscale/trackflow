@@ -117,6 +117,7 @@ export function useCheckIn() {
 
 export function useCheckOut() {
   const invalidate = useInvalidateAfterCheckAction();
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () => {
       const res = await api.post('/hr/attendance/check-out');
@@ -126,7 +127,8 @@ export function useCheckOut() {
       invalidate();
       toast.success('Checked out successfully');
     },
-    onError: (error: unknown) => {
+    onError: async (error: unknown) => {
+      await queryClient.invalidateQueries({ queryKey: ['attendance', 'today'] });
       toast.error(extractMessage(error, 'Failed to check out'));
     },
   });

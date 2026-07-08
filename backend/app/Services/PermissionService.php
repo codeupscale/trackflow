@@ -206,12 +206,13 @@ class PermissionService
             ->orderByDesc('roles.priority')
             ->first();
 
-        // Check if the user is an owner (priority >= 100 or role column fallback)
+        // Owner: priority >= 100 on user_roles, OR users.role column is 'owner'.
+        // The column check also runs when user_roles exists but was mis-assigned
+        // (common on orgs created before RBAC backfill) so owners keep full access.
         $isOwner = false;
-        if ($primaryRole && $primaryRole->priority >= 100) {
+        if (($user->getRawOriginal('role') ?? 'employee') === 'owner') {
             $isOwner = true;
-        } elseif (! $primaryRole && ($user->getRawOriginal('role') ?? 'employee') === 'owner') {
-            // Fallback: no user_roles row, check raw column
+        } elseif ($primaryRole && $primaryRole->priority >= 100) {
             $isOwner = true;
         }
 

@@ -1,15 +1,18 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Clock, LogIn, LogOut, AlertTriangle, Loader2 } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Clock, LogIn, LogOut, AlertTriangle, Loader2, Info } from 'lucide-react';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { cn } from '@/lib/utils';
 import { CheckInStatusBadge } from '@/components/hr/CheckInStatusBadge';
 import { useTodayStatus, useCheckIn, useCheckOut } from '@/hooks/hr/use-check-in';
+import { useTimerStore } from '@/stores/timer-store';
 import {
   computeClockOffset,
   elapsedSeconds,
@@ -83,9 +86,19 @@ const CHECK_OUT_BUTTON_CLASSES =
   'focus-visible:ring-destructive/30 dark:bg-destructive/60 dark:hover:bg-destructive/70';
 
 export function CheckInCard({ className }: { className?: string }) {
+  const queryClient = useQueryClient();
   const { data, isLoading, isError } = useTodayStatus();
   const checkIn = useCheckIn();
   const checkOut = useCheckOut();
+  const isTimerRunning = useTimerStore((s) => s.isRunning);
+  const prevTimerRunningRef = useRef(isTimerRunning);
+
+  useEffect(() => {
+    if (prevTimerRunningRef.current && !isTimerRunning) {
+      queryClient.invalidateQueries({ queryKey: ['attendance', 'today'] });
+    }
+    prevTimerRunningRef.current = isTimerRunning;
+  }, [isTimerRunning, queryClient]);
 
   // Mounted guard: never read wall-clock time during SSR / first render, so the
   // live clock can't cause a hydration mismatch.
@@ -217,6 +230,17 @@ export function CheckInCard({ className }: { className?: string }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4 @lg/checkin:flex-row @lg/checkin:items-stretch @lg/checkin:gap-6">
+        {isTimerRunning && !data.has_open_session && data.can_check_in && (
+          <Alert className="border-amber-500/40 bg-amber-500/5 @lg/checkin:basis-full">
+            <Info className="size-4 text-amber-600" />
+            <AlertDescription className="text-sm text-muted-foreground">
+              The desktop time tracker is running, but you are not checked in for
+              attendance. Check in here when you start work — stopping the tracker
+              does not check you out.
+            </AlertDescription>
+          </Alert>
+        )}
+
         {/* LEFT region: status line, day total, session list */}
         <div className="flex min-w-0 flex-1 flex-col gap-4">
         {/* Status line */}

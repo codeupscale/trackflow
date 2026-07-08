@@ -12,13 +12,12 @@ class AgentController extends Controller
     public function config(Request $request): JsonResponse
     {
         $org = $request->user()->organization;
-        $idleTimeout = $org->getSetting('idle_timeout', 5);
-        $idleTimeout = $idleTimeout === null ? 0 : (int) $idleTimeout;
+        $idleTimeout = max(1, min(30, (int) ($org->getSetting('idle_timeout', 5) ?? 5)));
 
         return response()->json([
             'screenshot_interval' => $org->getSetting('screenshot_interval', 5),
             'idle_timeout' => $idleTimeout,
-            'idle_detection' => $idleTimeout > 0,
+            'idle_detection' => true,
             'keep_idle_time' => $org->getSetting('keep_idle_time', 'prompt'),
             'blur_screenshots' => $org->getSetting('blur_screenshots', false),
             // Idle alert auto-stop (minutes) for prompt mode

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Models\Project;
 use App\Models\User;
 use App\Services\PermissionService;
 use App\Services\RbacBootstrapService;
@@ -10,6 +11,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
 
 class UserController extends Controller
 {
@@ -38,6 +40,36 @@ class UserController extends Controller
         $query = User::with('teams')
             ->where('organization_id', $request->user()->organization_id);
 
+        // Optional filter: restrict to members of one or more projects (project_user pivot).
+        // Accepts `project_id` as a single UUID or an array (project_id[]=...).
+        if ($request->has('project_id')) {
+            $requestedProjectIds = array_values(array_filter(
+                (array) $request->input('project_id'),
+                static fn ($id) => is_string($id) && $id !== ''
+            ));
+
+            Validator::make(
+                ['project_id' => $requestedProjectIds],
+                ['project_id.*' => ['uuid']],
+                [],
+                ['project_id.*' => 'project']
+            )->validate();
+
+            if ($requestedProjectIds !== []) {
+                // Re-resolve against the actor's org so another org's project ids can
+                // never surface membership (GlobalOrganizationScope enforces org_id).
+                $orgProjectIds = Project::whereIn('id', $requestedProjectIds)
+                    ->pluck('id')
+                    ->all();
+
+                // whereHas emits an EXISTS subquery, so a user assigned to several of
+                // the selected projects is returned exactly once (implicit DISTINCT).
+                $query->whereHas('assignedProjects', function ($q) use ($orgProjectIds) {
+                    $q->whereIn('projects.id', $orgProjectIds);
+                });
+            }
+        }
+
         // Search by name or email
         if ($request->filled('search')) {
             $search = $request->input('search');
@@ -47,9 +79,17 @@ class UserController extends Controller
             });
         }
 
-        // Filter by role
-        if ($request->filled('role') && $request->input('role') !== 'all') {
-            $query->where('role', $request->input('role'));
+        // Filter by role — single value (`role=owner`) or array (`role[]=owner&role[]=org_manager`).
+        // `role=all` / empty keeps the unfiltered list (existing Team page behavior).
+        if ($request->filled('role')) {
+            $roles = array_values(array_filter(
+                (array) $request->input('role'),
+                static fn ($role) => is_string($role) && $role !== '' && $role !== 'all'
+            ));
+
+            if ($roles !== []) {
+                $query->whereIn('role', $roles);
+            }
         }
 
         // Filter by status (active = last_active within 24h, inactive = older or null)

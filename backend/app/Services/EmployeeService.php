@@ -130,7 +130,12 @@ class EmployeeService
             $profile = $this->getOrCreateProfile($userId, $orgId);
 
             // Field-level authorization: employees can only edit personal fields
-            if ($updater->id === $userId && ! $updater->hasRole('owner', 'org_manager', 'hr_manager')) {
+            $canEditEmploymentFields = app(PermissionService::class)->hasPermission(
+                $updater,
+                'employees.edit_profile',
+                'organization'
+            );
+            if ($updater->id === $userId && ! $canEditEmploymentFields) {
                 $data = array_intersect_key($data, array_flip($this->personalFields()));
             }
 

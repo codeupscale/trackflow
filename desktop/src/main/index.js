@@ -108,7 +108,10 @@ const {
 } = require("./keychain");
 const posthog = require("./posthog");
 const { getTrayIcon, warmIconCache } = require("./tray-icons");
-const { initSystemNotifications } = require("./system-notifications");
+const {
+    initSystemNotifications,
+    showSystemNotification,
+} = require("./system-notifications");
 const PowerManager = require("./power-manager");
 
 const WEB_DASHBOARD_URL =
@@ -636,7 +639,9 @@ function loadPopupSize() {
 function savePopupSize(width, height) {
     if (!IS_POPUP_RESIZABLE) return;
     try {
-        saveUserPrefsPatch({ popupSize: PopupSize.clampPopupSize(width, height) });
+        saveUserPrefsPatch({
+            popupSize: PopupSize.clampPopupSize(width, height),
+        });
     } catch (e) {
         console.error("Failed to save popup size:", e.message);
     }
@@ -648,6 +653,11 @@ let idleAlertWindow = null;
 // is the PRIMARY, interactive window (on the display under the cursor); these are the
 // mirror windows shown on the other displays. All are torn down together on resolve.
 let _idleAlertExtraWindows = [];
+// Bug B: snapshot of the idle state preserved across a sleep/lock while an idle
+// alert is genuinely pending. Set in onSuspendCleanup, consumed (and cleared) in
+// onResumeAfterSleep to re-enter ALERTING with the SAME idleStartedAt. null when
+// no idle decision was in flight at suspend (normal hard-auto-stop path).
+let _idleSuspendState = null;
 let apiClient = null;
 let activityMonitor = null;
 let screenshotService = null;
@@ -736,7 +746,8 @@ function refreshProjectsOnOpen(onUpdated) {
 // ISSUE 4 FIX: every live idle-alert window (primary + per-display mirrors).
 function _getAllIdleAlertWindows() {
     const all = [];
-    if (idleAlertWindow && !idleAlertWindow.isDestroyed()) all.push(idleAlertWindow);
+    if (idleAlertWindow && !idleAlertWindow.isDestroyed())
+        all.push(idleAlertWindow);
     for (const w of _idleAlertExtraWindows) {
         if (w && !w.isDestroyed()) all.push(w);
     }
@@ -914,7 +925,7 @@ function syncOpenTimerFromServerStatus(status, { notify = "auto" } = {}) {
     if (isTimerPaused) {
         activityMonitor?.stop();
         screenshotService?.stop();
-        if (!idleDetector?.isIdleActive()) idleDetector?.stop();
+        if (!isIdleAlertActive()) idleDetector?.stop();
         stopTrayTimer();
         updateTrayIcon(true);
         const shouldNotify =
@@ -948,6 +959,7 @@ function syncOpenTimerFromServerStatus(status, { notify = "auto" } = {}) {
 /** True when server says stopped but local SQLite / idle state says keep running. */
 function shouldPreserveLocalRunningWhenServerStopped() {
     if (isTimerPaused) return true;
+    if (isIdleAlertActive()) return true;
     if (idleDetector?.isIdleActive()) return true;
     const localActive = getActiveLocalTimer();
     if (isTimerRunning && localActive && !localActive.synced_start) return true;
@@ -1006,7 +1018,10 @@ async function pauseTimerForIdle(idleStartedAtIso) {
         entry: currentEntry,
         todayTotal: todayTotalCurrentProject,
         elapsed: _cachedStartedAtMs
-            ? Math.max(0, Math.floor((pauseAnchorMs - _cachedStartedAtMs) / 1000))
+            ? Math.max(
+                  0,
+                  Math.floor((pauseAnchorMs - _cachedStartedAtMs) / 1000),
+              )
             : 0,
     });
 }
@@ -1183,7 +1198,10 @@ function getActiveLocalTimer() {
                 .get() || null;
         if (row && row.started_at) {
             const ageMs = Date.now() - new Date(row.started_at).getTime();
-            if (!Number.isFinite(ageMs) || ageMs > MAX_PLAUSIBLE_OPEN_SESSION_MS) {
+            if (
+                !Number.isFinite(ageMs) ||
+                ageMs > MAX_PLAUSIBLE_OPEN_SESSION_MS
+            ) {
                 // Stale/garbage open session — close it instead of restoring it live.
                 console.warn(
                     `[LocalTimerDb] Discarding stale open session ${row.id} (age ${Math.round(ageMs / 3600000)}h) — not restoring as a live timer`,
@@ -1226,7 +1244,10 @@ function clearLocalTimerSessions() {
     try {
         db.prepare("DELETE FROM timer_sessions").run();
     } catch (e) {
-        console.error("[LocalTimerDb] clearLocalTimerSessions failed:", e.message);
+        console.error(
+            "[LocalTimerDb] clearLocalTimerSessions failed:",
+            e.message,
+        );
     }
 }
 
@@ -1243,7 +1264,8 @@ function resolveServerEntryIdForQueue(meta) {
     if (!db) return null;
     const localId =
         meta && meta.time_entry_id != null ? String(meta.time_entry_id) : null;
-    const idemKey = meta && meta.idempotency_key ? String(meta.idempotency_key) : null;
+    const idemKey =
+        meta && meta.idempotency_key ? String(meta.idempotency_key) : null;
     try {
         let row = null;
         if (localId) {
@@ -1260,11 +1282,18 @@ function resolveServerEntryIdForQueue(meta) {
                 )
                 .get(idemKey);
         }
-        if (row && row.server_entry_id && !String(row.server_entry_id).startsWith("local-")) {
+        if (
+            row &&
+            row.server_entry_id &&
+            !String(row.server_entry_id).startsWith("local-")
+        ) {
             return String(row.server_entry_id);
         }
     } catch (e) {
-        console.warn("[LocalTimerDb] resolveServerEntryIdForQueue failed:", e.message);
+        console.warn(
+            "[LocalTimerDb] resolveServerEntryIdForQueue failed:",
+            e.message,
+        );
     }
     return null;
 }
@@ -1638,7 +1667,9 @@ function startSelfRemovalWatcher() {
         return; // dev tree / unknown path — nothing meaningful to watch
     }
 
-    console.log(`[Uninstall] Watching install path for removal: ${watchTarget}`);
+    console.log(
+        `[Uninstall] Watching install path for removal: ${watchTarget}`,
+    );
     _selfRemovalWatcher = setInterval(() => {
         let pathExists = true;
         try {
@@ -1785,7 +1816,8 @@ async function initializeApp() {
     activityMonitor.getCurrentEntryMeta = () =>
         currentEntry
             ? {
-                  time_entry_id: currentEntry._localId || currentEntry.id || null,
+                  time_entry_id:
+                      currentEntry._localId || currentEntry.id || null,
                   idempotency_key: currentEntry.idempotency_key || null,
               }
             : null;
@@ -2109,20 +2141,93 @@ async function initializeApp() {
         }
     } catch {}
 
-    // ── Sleep / Wake / Lock — hard auto-stop (timer does not count while asleep) ─
+    // ── Sleep / Wake / Lock — pause capture; timer keeps running ─────────────
     PowerManager.registerPowerHandlers({
         isTimerRunning: () => isTimerRunning,
         autoStopForPowerEvent: autoStopTimerForPowerEvent,
-        // FIX D5: Deterministically tear down idle state on every suspend/lock so an
-        // armed idle detector (DETECTED/ALERTING with its _checkAutoStop interval) can
-        // never survive sleep and fire a spurious auto-stop / bogus idle_discard on wake.
-        // stopTimer() also stops the detector, but this covers the timer-not-running and
-        // mid-alert paths too. dismissIdleAlert() closes any visible alert window.
+        // Hard auto-stop on sleep is opt-in only (legacy/tests). Normal lid-close /
+        // lock keeps the timer running so elapsed time spans the sleep gap.
+        shouldAutoStopOnSuspend: () => false,
+        // On suspend/lock: preserve idle alert across sleep, or pause capture while
+        // the timer keeps running. Tear down idle detector only when timer is off.
         onSuspendCleanup: () => {
-            idleDetector?.stop();
-            dismissIdleAlert();
+            if (isIdleAlertActive()) {
+                // Capture the snapshot exactly once — a lid-close fires paired
+                // lock-screen + suspend events; the second call finds the detector
+                // already SUSPENDED (isIdle=false) and must NOT clobber the snapshot.
+                if (!_idleSuspendState) {
+                    const snap = idleDetector?.suspend?.();
+                    _idleSuspendState = {
+                        isIdle: true,
+                        idleStartedAt:
+                            (snap && snap.idleStartedAt) ||
+                            idleDetector?.idleStartedAt ||
+                            null,
+                    };
+                }
+                hideIdleAlertWindows();
+            } else if (isTimerRunning) {
+                touchLastActiveAt(new Date().toISOString());
+                screenshotService?.stop();
+                activityMonitor?.stop();
+                stopTrayTimer();
+            } else {
+                idleDetector?.stop();
+                dismissIdleAlert();
+            }
         },
         onResumeAfterSleep: () => {
+            // Bug B: re-surface a preserved idle alert with the SAME idleStartedAt so
+            // getIdleDuration() spans the sleep gap and the user decides on the full
+            // away duration. isTimerPaused stays true throughout (never un-paused
+            // here), so the reconcile resume self-heal remains suppressed during the
+            // idle decision.
+            const preserved = _idleSuspendState;
+            _idleSuspendState = null;
+            if (preserved && preserved.isIdle && preserved.idleStartedAt) {
+                if (isTimerRunning) {
+                    try {
+                        idleDetector?.resume();
+                        const newActionId =
+                            idleDetector?.setAlertState(
+                                preserved.idleStartedAt,
+                            ) ?? idleDetector?.getActionId();
+                        const idleSeconds = Math.max(
+                            0,
+                            Math.floor(
+                                (Date.now() - preserved.idleStartedAt) / 1000,
+                            ),
+                        );
+                        _idleAlertShownAt = Date.now();
+                        reshowIdleAlertAfterResume(
+                            idleSeconds,
+                            preserved.idleStartedAt,
+                            newActionId,
+                        );
+                    } catch (e) {
+                        console.error(
+                            "[power] idle resume re-show failed:",
+                            e.message,
+                        );
+                    }
+                } else {
+                    // Timer no longer running (edge) — do not leave orphan windows.
+                    idleDetector?.stop();
+                    dismissIdleAlert();
+                }
+            } else if (isTimerRunning && !isIdleAlertActive()) {
+                activityMonitor?.start();
+                if (currentEntry) {
+                    screenshotService?.start(currentEntry.id, {
+                        immediateCapture:
+                            config.screenshot_capture_immediate_after_idle ===
+                            true,
+                    });
+                }
+                startTrayTimer();
+                updateTrayIcon(true);
+                updateTrayTitle();
+            }
             if (networkMonitor?.isOnline && offlineQueue && apiClient) {
                 setImmediate(() => {
                     reconcileTimerState()
@@ -2183,10 +2288,9 @@ async function initializeApp() {
                     !isServerTimerOpen(status) &&
                     (isTimerRunning || isTimerPaused)
                 ) {
-                    // BUG-2 FIX: Don't override local state while idle alert is showing
-                    if (idleDetector?.isIdleActive()) {
+                    if (shouldPreserveLocalRunningWhenServerStopped()) {
                         console.log(
-                            "[ImmediateSync] Server says stopped but idle alert is active — keeping local state",
+                            "[ImmediateSync] Server says stopped but local idle/paused/unsynced state preserved — keeping local state",
                         );
                         return;
                     }
@@ -2606,7 +2710,11 @@ function showPopup() {
         // macOS/Linux loadPopupSize() returns the fixed design size, so this is
         // identical to the previous behaviour there.
         const showSize = loadPopupSize();
-        _repositionToPrimaryDisplay(popupWindow, showSize.width, showSize.height);
+        _repositionToPrimaryDisplay(
+            popupWindow,
+            showSize.width,
+            showSize.height,
+        );
         if (typeof popupWindow.moveTop === "function") {
             // Windows: moveTop() while a native <select> is open dismisses the
             // dropdown; only re-assert z-order on macOS where the tray popup
@@ -3846,7 +3954,8 @@ async function stopTimer(options = {}) {
             // local total; if the server stop returned nothing AND getTodayTotal fails
             // (flaky network), `?? 0` here would overwrite the correct stopped total
             // with 00:00:00 in the popup. Keep the local total instead.
-            let todayTotalForPopup = result?.today_total ?? localStoppedProjectTotal;
+            let todayTotalForPopup =
+                result?.today_total ?? localStoppedProjectTotal;
             try {
                 const serverTotal =
                     await apiClient.getTodayTotal(stoppedProjectId);
@@ -3918,7 +4027,7 @@ async function reconcileTimerState() {
         console.log("[Reconcile] Skipping — idle action in progress");
         return;
     }
-    if (idleDetector?.isIdleActive()) {
+    if (isIdleAlertActive()) {
         console.log("[Reconcile] Skipping — idle alert active");
         return;
     }
@@ -4284,15 +4393,14 @@ function startTimerSync() {
                 !isServerTimerOpen(status) &&
                 (isTimerRunning || isTimerPaused)
             ) {
-                // BUG-2 FIX: Don't override local state while idle alert is showing — the server may show
-                // timer as stopped because idle-discard split the entry, but locally we're still
-                // in the idle flow and the user hasn't responded yet.
-                if (idleDetector?.isIdleActive()) {
+                // Don't kill a live idle decision (ALERTING/SUSPENDED/hidden window),
+                // a server-paused idle timer, or an unsynced local-first start.
+                if (shouldPreserveLocalRunningWhenServerStopped()) {
                     console.log(
-                        "[TimerSync] Server says stopped but idle alert is active — keeping local state",
+                        "[TimerSync] Server says stopped but local idle/paused/unsynced state preserved — keeping local state",
                     );
                     _isSyncing = false;
-                    _timerStateMutationInProgress = false; // BUG 3 FIX: release shared guard on early return
+                    _timerStateMutationInProgress = false;
                     return;
                 }
                 // BUG FIX (phantom-stop-local-first-desync): a local-first start that has not
@@ -4467,7 +4575,10 @@ function startTrayTimer() {
                 // (derived from the local started_at anchor, the source of truth).
                 todayTotalGlobalLive:
                     todayTotalGlobal +
-                    Math.max(0, currentElapsed - _pendingOfflineReassignIdleSec),
+                    Math.max(
+                        0,
+                        currentElapsed - _pendingOfflineReassignIdleSec,
+                    ),
                 activityScore: activityMonitor
                     ? activityMonitor.getCurrentScore()
                     : 0,
@@ -4545,6 +4656,77 @@ function _applyIdleAlertEverywhereVisible(win) {
     }
 }
 
+/**
+ * Actually surface an idle-alert window (primary or mirror), defeating the OS
+ * placement quirks that made the alert "sometimes not appear" (Bug A):
+ *   - macOS: re-assert setVisibleOnAllWorkspaces(true,{visibleOnFullScreen:true})
+ *     AFTER show(), mirroring the tray-popup pattern — a fullScreenable:false
+ *     window that re-asserts all-workspaces post-show reliably overlays another
+ *     app's dedicated fullscreen Space.
+ *   - Windows: flashFrame(true) + moveTop() defeat the foreground-lock that
+ *     otherwise opens the window behind the active app, unfocused, with no
+ *     taskbar flash. (Residual: Windows has no per-app "show on all virtual
+ *     desktops" API, so the alert opens on the ACTIVE virtual desktop only.)
+ *   - Linux/Wayland: placement is compositor-owned/advisory (unchanged).
+ * Sets win._shown so the show-race guard (A4) can detect a window that exists
+ * but never actually became visible.
+ */
+function _revealIdleAlertWindow(win) {
+    if (!win || win.isDestroyed()) return;
+    try {
+        win.show();
+        win._shown = true;
+        if (process.platform === "darwin") {
+            if (typeof win.setVisibleOnAllWorkspaces === "function") {
+                win.setVisibleOnAllWorkspaces(true, {
+                    visibleOnFullScreen: true,
+                });
+            }
+        }
+        if (
+            process.platform === "win32" &&
+            typeof win.flashFrame === "function"
+        ) {
+            win.flashFrame(true);
+        }
+        if (typeof win.moveTop === "function") win.moveTop();
+        win.focus();
+    } catch (err) {
+        console.error("[IdleAlert] reveal failed:", err.message);
+    }
+}
+
+/** True while an idle decision is genuinely pending — the detector is DETECTED/
+ * ALERTING/SUSPENDED-with-preserved-idle, or an alert window still exists (even
+ * hidden across sleep). Gates ALL Bug-B sleep-preservation logic so the 'never'
+ * and 'always' idle policies (which never open a window) are untouched, and so
+ * the normal non-idle lid-close still hard-stops. */
+function isIdleAlertActive() {
+    const detectorIdle =
+        idleDetector &&
+        typeof idleDetector.isIdleActive === "function" &&
+        idleDetector.isIdleActive();
+    const detectorSuspended =
+        idleDetector?.state === "SUSPENDED" ||
+        (_idleSuspendState && _idleSuspendState.isIdle);
+    const windowLive =
+        (idleAlertWindow && !idleAlertWindow.isDestroyed()) ||
+        _idleAlertExtraWindows.some((w) => w && !w.isDestroyed());
+    return !!(detectorIdle || detectorSuspended || windowLive);
+}
+
+/** Hide every idle-alert window WITHOUT destroying it, so the same windows can
+ * be re-shown after wake (Bug B). Marks them not-shown so the resume path / show-
+ * race guard force-reveal them. */
+function hideIdleAlertWindows() {
+    for (const w of _getAllIdleAlertWindows()) {
+        try {
+            if (typeof w.hide === "function") w.hide();
+            w._shown = false;
+        } catch {}
+    }
+}
+
 async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     // Capture the actionId at call time; if not provided, read from detector
     const alertActionId = actionId ?? idleDetector?.getActionId() ?? 0;
@@ -4566,12 +4748,27 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     }
 
     if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
-        // Alert already showing — bring the primary to front and update idle data on
+        // Alert already exists — bring the primary to front and update idle data on
         // EVERY display's alert window (ISSUE 4). Keep the _actionId in sync on all of
         // them so whichever window the user acts on resolves the correct idle cycle.
-        idleAlertWindow.focus();
-        if (typeof idleAlertWindow.moveTop === "function") {
-            idleAlertWindow.moveTop();
+        //
+        // A4 show-race guard: if a prior idle window exists but never actually
+        // became visible (its show() never landed — shown stayed false — or the OS
+        // hid it), only calling focus()/moveTop() leaves an INVISIBLE window and the
+        // new detection is swallowed. Force-reveal it (and any mirror) instead.
+        const notVisible =
+            !idleAlertWindow._shown ||
+            (typeof idleAlertWindow.isVisible === "function" &&
+                !idleAlertWindow.isVisible());
+        if (notVisible) {
+            for (const w of _getAllIdleAlertWindows()) {
+                _revealIdleAlertWindow(w);
+            }
+        } else {
+            idleAlertWindow.focus();
+            if (typeof idleAlertWindow.moveTop === "function") {
+                idleAlertWindow.moveTop();
+            }
         }
         for (const w of _getAllIdleAlertWindows()) {
             w._actionId = alertActionId;
@@ -4589,22 +4786,18 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
 
     screenshotService?.stop();
 
-    // Play system notification sound to alert the user they are idle
-    try {
-        if (Notification.isSupported()) {
-            const idleNotification = new Notification({
-                title: "TrackFlow",
-                body: `You've been idle for ${Math.floor(idleSeconds / 60)} minutes`,
-                silent: false, // Enables the default system notification sound
-            });
-            idleNotification.show();
-            setTimeout(() => {
-                try {
-                    idleNotification.close();
-                } catch {}
-            }, 5000);
-        }
-    } catch {}
+    // Notify + sound the user they are idle. Routed through showSystemNotification()
+    // so it gets a UNIQUE toast id (per idle cycle) — without it, Windows Action
+    // Center dedups/suppresses back-to-back idle toasts (Bug A) — plus the branded
+    // icon and AppUserModelID. The in-renderer WebAudio beep (idle-alert.js) is the
+    // primary, OS-policy-independent sound; this Notification is the secondary path.
+    showSystemNotification({
+        title: "TrackFlow — You appear to be idle",
+        body: `You've been idle for ${Math.floor(idleSeconds / 60)} minutes`,
+        silent: false,
+        durationMs: 5000,
+        id: `trackflow-idle-${alertActionId}`,
+    });
 
     // Use cached project list — do not block the idle popup on a network call.
     // Force a background refresh on open (throttled) so a newly assigned project
@@ -4670,6 +4863,15 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
         } else {
             opts.center = true;
         }
+        // macOS (Bug A2): a fullScreenable:true window in Electron 28 frequently
+        // fails to overlay another app's dedicated fullscreen Space even with
+        // setVisibleOnAllWorkspaces({visibleOnFullScreen:true}) — so the alert is
+        // created on the default Space and never surfaces for a user working in a
+        // fullscreen app. fullScreenable:false lets it float over the fullscreen
+        // Space. macOS-only; Windows/Linux ignore this option.
+        if (process.platform === "darwin") {
+            opts.fullScreenable = false;
+        }
         const win = new BrowserWindow(opts);
         // ALL-WORKSPACES FIX: make the alert follow the user everywhere, exactly
         // like the tray popup. Must be applied to EVERY alert window (primary +
@@ -4682,7 +4884,8 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     const orderedDisplays = [];
     if (primaryDisplay) orderedDisplays.push(primaryDisplay);
     for (const d of displays) {
-        if (!primaryDisplay || d.id !== primaryDisplay.id) orderedDisplays.push(d);
+        if (!primaryDisplay || d.id !== primaryDisplay.id)
+            orderedDisplays.push(d);
     }
     if (orderedDisplays.length === 0) orderedDisplays.push(null);
 
@@ -4698,7 +4901,9 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
         const showMirror = () => {
             if (mirrorShown || mirror.isDestroyed()) return;
             mirrorShown = true;
-            mirror.show();
+            // Same platform reveal treatment as the primary (macOS re-assert /
+            // Windows flashFrame+moveTop) so every display's alert surfaces.
+            _revealIdleAlertWindow(mirror);
             mirror.webContents.send(
                 "idle-data",
                 buildIdleAlertPayload(_idleAlertShownAt),
@@ -4736,8 +4941,10 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
         shown = true;
         // FIX D1: Record when the alert was actually shown to exclude dialog wait time
         _idleAlertShownAt = Date.now();
-        win.show();
-        win.focus();
+        // Bug A: reveal with the platform quirks handled (macOS re-assert /
+        // Windows flashFrame+moveTop) instead of a bare show()+focus() that the OS
+        // could leave behind the active app or off the fullscreen Space.
+        _revealIdleAlertWindow(win);
         win.webContents.send(
             "idle-data",
             buildIdleAlertPayload(_idleAlertShownAt),
@@ -4812,6 +5019,10 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
 }
 
 function dismissIdleAlert() {
+    // Any pending sleep-preservation snapshot is moot once the alert is genuinely
+    // torn down (resolve/stop/logout) — clear it so a later resume never re-shows
+    // a stale idle window.
+    _idleSuspendState = null;
     // ISSUE 4 FIX: tear down every display's idle alert together so none is orphaned.
     _destroyIdleAlertExtras();
     if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
@@ -4821,6 +5032,37 @@ function dismissIdleAlert() {
         idleAlertWindow.destroy();
     }
     idleAlertWindow = null;
+}
+
+/**
+ * Bug B — re-surface the idle alert after wake with the SAME idle cycle so the
+ * user can still choose Keep/Discard/Reassign on the FULL away duration (idle +
+ * sleep). Reuses the windows we merely hid on suspend when they survived; rebuilds
+ * a fresh alert if they were lost. Broadcasts fresh idle-data (extended seconds,
+ * new actionId, alertShownAt=now) with playSound:true so the renderer re-beeps.
+ */
+function reshowIdleAlertAfterResume(idleSeconds, idleStartedAt, actionId) {
+    const existing = _getAllIdleAlertWindows();
+    if (existing.length > 0) {
+        for (const w of existing) {
+            w._actionId = actionId;
+            w._dismissedProgrammatically = false;
+            _revealIdleAlertWindow(w);
+        }
+        _broadcastToIdleAlerts("idle-data", {
+            idleStartedAt,
+            idleSeconds,
+            actionId,
+            alertShownAt: _idleAlertShownAt ?? Date.now(),
+            autoStopGraceSec: idleDetector?.alertAutoStopSec ?? 0,
+            projects: cachedProjects || [],
+            playSound: true,
+        });
+    } else {
+        // Windows were destroyed while asleep — rebuild from scratch. A fresh
+        // renderer beeps on its first idle-data (no playSound flag needed).
+        showIdleAlert(idleSeconds, idleStartedAt, actionId);
+    }
 }
 
 /**

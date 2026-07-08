@@ -75,6 +75,8 @@ class AttendanceService
                     ->where('started_at', '<', $dayEnd)
                     ->whereNotNull('ended_at')
                     ->where('type', '!=', 'idle')
+                    // Only approved worked time counts toward attendance hours.
+                    ->where('approval_status', 'approved')
                     ->orderBy('started_at')
                     ->get();
 
@@ -584,7 +586,7 @@ class AttendanceService
             'check_in_status' => $record->check_in_status,
             'check_in_late_minutes' => (int) ($record->check_in_late_minutes ?? 0),
             'is_early_checkout' => (bool) $record->is_early_checkout,
-            'missing_checkout' => (bool) $record->missing_checkout,
+            'missing_checkout' => (bool) $record->missing_checkout && $hasOpenSession,
             'check_in_flags' => $record->check_in_flags,
             'shift' => $record->shift ? [
                 'id' => $record->shift->id,

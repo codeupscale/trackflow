@@ -84,8 +84,20 @@
             <tr><th>Project</th><th>Time Utilized (h)</th></tr>
             @foreach($data as $project)
             <tr>
-                <td style="color: {{ $project['color'] ?? '#333' }}">{{ $project['name'] ?? 'Unknown' }}</td>
+                <td style="color: {{ $project['color'] ?? '#333' }}">{{ $project['name'] ?? $project['project_name'] ?? 'Unknown' }}</td>
                 <td>{{ $project['total_hours'] ?? round(($project['total_seconds'] ?? 0) / 3600, 2) }}</td>
+            </tr>
+            @endforeach
+        </table>
+    @elseif($type === 'apps' && is_array($data))
+        <table>
+            <tr><th>Employee</th><th>Application</th><th>Time Utilized (h)</th><th>Days Used</th></tr>
+            @foreach($data as $row)
+            <tr>
+                <td>{{ $row['user_name'] ?? '' }}</td>
+                <td>{{ $row['active_app'] ?? '' }}</td>
+                <td>{{ round(($row['duration_seconds'] ?? 0) / 3600, 2) }}</td>
+                <td>{{ $row['days_used'] ?? 0 }}</td>
             </tr>
             @endforeach
         </table>

@@ -101,7 +101,50 @@ class ReportTest extends TestCase
         ]));
 
         $response->assertOk()
-            ->assertJsonStructure(['projects']);
+            ->assertJsonStructure(['projects'])
+            ->assertJsonPath('projects.0.project_name', $project->name);
+    }
+
+    public function test_apps_report_returns_per_user_breakdown(): void
+    {
+        $date = now()->toDateString();
+
+        \Illuminate\Support\Facades\DB::table('app_usage_summaries')->insert([
+            [
+                'id' => (string) \Illuminate\Support\Str::uuid(),
+                'organization_id' => $this->org->id,
+                'user_id' => $this->employee->id,
+                'date' => $date,
+                'app_name' => 'powershell',
+                'duration_seconds' => 3600,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'id' => (string) \Illuminate\Support\Str::uuid(),
+                'organization_id' => $this->org->id,
+                'user_id' => $this->owner->id,
+                'date' => $date,
+                'app_name' => 'Code',
+                'duration_seconds' => 1800,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+        ]);
+
+        $this->actingAs($this->owner, 'sanctum');
+
+        $response = $this->getJson('/api/v1/reports/apps?' . http_build_query([
+            'date_from' => $date,
+            'date_to' => $date,
+        ]));
+
+        $response->assertOk()
+            ->assertJsonStructure(['apps' => [['user_name', 'active_app', 'duration_seconds', 'days_used']]]);
+
+        $rows = collect($response->json('apps'));
+        $this->assertTrue($rows->contains(fn ($r) => $r['user_name'] === $this->employee->name && $r['active_app'] === 'powershell'));
+        $this->assertTrue($rows->contains(fn ($r) => $r['user_name'] === $this->owner->name && $r['active_app'] === 'Code'));
     }
 
     public function test_can_export_csv_synchronously(): void

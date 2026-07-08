@@ -205,6 +205,51 @@ class EmployeeTest extends TestCase
         ]);
     }
 
+    public function test_reporting_manager_rejects_employees(): void
+    {
+        $org = $this->createOrganization();
+        $admin = $this->createUser($org, 'org_manager');
+        $employee = $this->createUser($org, 'employee');
+        $peer = $this->createUser($org, 'employee');
+
+        EmployeeProfile::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $employee->id,
+        ]);
+
+        $this->actingAs($admin, 'sanctum');
+
+        $this->putJson("/api/v1/hr/employees/{$employee->id}/profile", [
+            'reporting_manager_id' => $peer->id,
+        ])->assertUnprocessable()
+            ->assertJsonValidationErrors(['reporting_manager_id']);
+    }
+
+    public function test_reporting_manager_accepts_owner_and_managers(): void
+    {
+        $org = $this->createOrganization();
+        $owner = $this->createUser($org, 'owner');
+        $manager = $this->createUser($org, 'org_manager');
+        $employee = $this->createUser($org, 'employee');
+
+        EmployeeProfile::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $employee->id,
+        ]);
+
+        $this->actingAs($manager, 'sanctum');
+
+        $this->putJson("/api/v1/hr/employees/{$employee->id}/profile", [
+            'reporting_manager_id' => $owner->id,
+        ])->assertOk()
+            ->assertJsonPath('data.reporting_manager.id', $owner->id);
+
+        $this->putJson("/api/v1/hr/employees/{$employee->id}/profile", [
+            'reporting_manager_id' => $manager->id,
+        ])->assertOk()
+            ->assertJsonPath('data.reporting_manager.id', $manager->id);
+    }
+
     public function test_admin_can_update_all_fields(): void
     {
         $org = $this->createOrganization();
@@ -232,6 +277,9 @@ class EmployeeTest extends TestCase
             'position_id' => $position->id,
             'employment_status' => 'probation',
             'blood_group' => 'B+',
+            'date_of_joining' => '2024-01-15',
+            'date_of_confirmation' => '2024-07-15',
+            'probation_end_date' => '2024-04-15',
         ]);
 
         $response->assertOk()
@@ -239,6 +287,39 @@ class EmployeeTest extends TestCase
             ->assertJsonPath('data.position_id', $position->id)
             ->assertJsonPath('data.employment_status', 'probation')
             ->assertJsonPath('data.blood_group', 'B+');
+
+        $this->assertDatabaseHas('employee_profiles', [
+            'user_id' => $employee->id,
+            'date_of_joining' => '2024-01-15',
+            'date_of_confirmation' => '2024-07-15',
+            'probation_end_date' => '2024-04-15',
+        ]);
+    }
+
+    public function test_owner_can_update_employment_dates(): void
+    {
+        $user = $this->actingAsUser('owner');
+        $employee = $this->createUser($user->organization, 'employee');
+
+        EmployeeProfile::factory()->create([
+            'organization_id' => $user->organization_id,
+            'user_id' => $employee->id,
+        ]);
+
+        $response = $this->putJson("/api/v1/hr/employees/{$employee->id}/profile", [
+            'date_of_joining' => '2023-06-01',
+            'date_of_confirmation' => '2023-12-01',
+            'probation_end_date' => '2023-09-01',
+        ]);
+
+        $response->assertOk();
+
+        $this->assertDatabaseHas('employee_profiles', [
+            'user_id' => $employee->id,
+            'date_of_joining' => '2023-06-01',
+            'date_of_confirmation' => '2023-12-01',
+            'probation_end_date' => '2023-09-01',
+        ]);
     }
 
     // ── Employee ID Auto-Generation ───────────────────

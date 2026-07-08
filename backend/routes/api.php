@@ -110,10 +110,16 @@ Route::prefix('v1')->group(function () {
         Route::post('timer/idle', [\App\Http\Controllers\Api\V1\TimerController::class, 'idle']);
 
         // Time entries
+        // STATIC route registered BEFORE the apiResource wildcard so 'pending' is
+        // never captured as a {time_entry} id by the show route.
+        Route::get('time-entries/pending', [\App\Http\Controllers\Api\V1\TimeEntryController::class, 'pending'])
+            ->middleware('permission:time_entries.approve');
         Route::middleware('permission:time_entries.view')->group(function () {
             Route::apiResource('time-entries', \App\Http\Controllers\Api\V1\TimeEntryController::class);
         });
         Route::post('time-entries/{id}/approve', [\App\Http\Controllers\Api\V1\TimeEntryController::class, 'approve'])
+            ->middleware('permission:time_entries.approve');
+        Route::post('time-entries/{id}/reject', [\App\Http\Controllers\Api\V1\TimeEntryController::class, 'reject'])
             ->middleware('permission:time_entries.approve');
 
         // Timesheets
@@ -168,6 +174,13 @@ Route::prefix('v1')->group(function () {
             Route::get('time-logs', [\App\Http\Controllers\Api\V1\ReportController::class, 'timeLogs']);
             Route::get('payroll', [\App\Http\Controllers\Api\V1\ReportController::class, 'payroll']);
             Route::get('attendance', [\App\Http\Controllers\Api\V1\ReportController::class, 'attendance']);
+
+            // Project-manager time report (filters + CSV/PDF export). The export
+            // route swaps reports.view for reports.export + a tighter throttle.
+            Route::get('project-time', [\App\Http\Controllers\Api\V1\ProjectTimeReportController::class, 'index']);
+            Route::get('project-time/export', [\App\Http\Controllers\Api\V1\ProjectTimeReportController::class, 'export'])
+                ->middleware(['permission:reports.export', 'throttle:10,60'])
+                ->withoutMiddleware('permission:reports.view');
         });
 
         // App Usage
@@ -175,6 +188,9 @@ Route::prefix('v1')->group(function () {
             Route::get('daily', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'daily']);
             Route::get('team', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'team']);
             Route::get('top', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'top']);
+            Route::get('export', [\App\Http\Controllers\Api\V1\AppUsageController::class, 'export'])
+                ->middleware(['permission:reports.export', 'throttle:10,60'])
+                ->withoutMiddleware('permission:reports.view');
         });
 
         // Report Subscriptions

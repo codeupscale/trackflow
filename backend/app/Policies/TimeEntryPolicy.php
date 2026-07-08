@@ -93,12 +93,31 @@ class TimeEntryPolicy
         return false;
     }
 
-    public function approve(User $user, TimeEntry $entry): bool
+    /**
+     * @param  TimeEntry|string|null  $entry  A TimeEntry for a per-entry check, or the
+     *         class-name / null for a class-level "can approve anything" check (used by
+     *         the pending-approvals list). The service enforces self-approval prevention.
+     */
+    public function approve(User $user, TimeEntry|string|null $entry = null): bool
     {
-        if ($user->organization_id !== $entry->organization_id) {
-            return false;
-        }
+        return $this->canApproveScope($user, $entry);
+    }
 
+    /**
+     * Rejecting a pending entry uses the same scope as approving it.
+     *
+     * @param  TimeEntry|string|null  $entry
+     */
+    public function reject(User $user, TimeEntry|string|null $entry = null): bool
+    {
+        return $this->canApproveScope($user, $entry);
+    }
+
+    /**
+     * Shared approve/reject scope resolution.
+     */
+    private function canApproveScope(User $user, TimeEntry|string|null $entry): bool
+    {
         $service = app(PermissionService::class);
         $scope = $service->getScope($user, 'time_entries.approve');
 
@@ -106,11 +125,21 @@ class TimeEntryPolicy
             return false;
         }
 
+        // Class-level check (pending list): any approve scope is enough. Row-level
+        // narrowing happens in ManualTimeEntryService::listPending().
+        if (! $entry instanceof TimeEntry) {
+            return true;
+        }
+
+        if ($user->organization_id !== $entry->organization_id) {
+            return false;
+        }
+
         if ($scope === 'organization') {
             return true;
         }
 
-        if (($scope === 'project')) {
+        if ($scope === 'project') {
             return in_array($entry->user_id, $service->getProjectUserIds($user));
         }
 

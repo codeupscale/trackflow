@@ -34,12 +34,14 @@ class SettingsController extends Controller
             'settings' => 'sometimes|array',
             'settings.screenshot_interval' => 'sometimes|integer|in:5,10,15',
             'settings.blur_screenshots' => 'sometimes|boolean',
-            'settings.idle_timeout' => 'sometimes|nullable|integer|min:0|max:30',
+            // Idle detection is always on; minimum 1 minute (no disable).
+            'settings.idle_timeout' => 'sometimes|integer|min:1|max:30',
             'settings.idle_alert_email_enabled' => 'sometimes|boolean',
             // Clamp via validation; job also defensively clamps.
             'settings.idle_alert_email_cooldown_min' => 'sometimes|integer|min:5|max:1440',
             'settings.keep_idle_time' => 'sometimes|string|in:prompt,always,never',
-            'settings.idle_alert_auto_stop_min' => 'sometimes|integer|min:1|max:240',
+            // 0 = disabled (idle popup never auto-stops); max 240 min (4 hours) when enabled
+            'settings.idle_alert_auto_stop_min' => 'sometimes|integer|min:0|max:240',
             'settings.screenshot_capture_immediate_after_idle' => 'sometimes|boolean',
             'settings.screenshot_first_capture_delay_min' => 'sometimes|integer|min:0|max:60',
             'settings.idle_check_interval_sec' => 'sometimes|integer|min:1|max:60',

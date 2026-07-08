@@ -111,11 +111,12 @@ class ReportController extends Controller
 
         [$dateFrom, $dateTo] = $this->parseDateRange($request);
 
+        // App usage summaries bucket by org-local calendar date, not UTC instants.
         $data = $this->reportService->apps(
             $request->user()->organization_id,
             $userId,
-            $dateFrom,
-            $dateTo
+            $request->date_from,
+            $request->date_to,
         );
 
         return response()->json(['apps' => $data]);
@@ -148,7 +149,7 @@ class ReportController extends Controller
     public function export(Request $request): Response
     {
         $request->validate([
-            'type' => 'required|in:summary,team,projects,payroll,attendance',
+            'type' => 'required|in:summary,team,projects,apps,payroll,attendance',
             'format' => 'required|in:pdf,csv',
             'date_from' => 'required|date',
             'date_to' => 'required|date|after_or_equal:date_from',
@@ -164,10 +165,17 @@ class ReportController extends Controller
         [$dateFrom, $dateTo] = $this->parseDateRange($request);
 
         // summary is user-scoped; team/projects/payroll/attendance are org-wide.
+        // apps uses calendar dates on app_usage_summaries.
         $data = match ($request->type) {
             'summary' => $this->reportService->summary($orgId, $userId, $dateFrom, $dateTo),
             'team' => $this->reportService->team($orgId, $dateFrom, $dateTo),
             'projects' => $this->reportService->projects($orgId, $dateFrom, $dateTo),
+            'apps' => $this->reportService->apps(
+                $orgId,
+                $userId,
+                $request->date_from,
+                $request->date_to,
+            ),
             'payroll' => $this->reportService->payroll($orgId, $dateFrom, $dateTo),
             'attendance' => $this->reportService->attendance($orgId, $dateFrom, $dateTo),
         };
