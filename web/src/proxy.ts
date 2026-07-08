@@ -1,0 +1,11 @@
+import { NextResponse } from "next/server";
+
+export function proxy() {
+    // Client-side auth check will handle redirects via useAuthGuard hook
+    // This proxy is used for route organization
+    return NextResponse.next();
+}
+
+export const config = {
+    matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+};
