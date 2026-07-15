@@ -891,7 +891,7 @@ class CheckInTest extends TestCase
 
         $response->assertStatus(422);
         $response->assertJsonPath(
-            'message',
+            'error.message',
             'You are already checked out. If you resumed work after a break, tap Check In again when you start — stopping the desktop time tracker does not check you out.'
         );
     }
@@ -908,7 +908,7 @@ class CheckInTest extends TestCase
 
         $response->assertStatus(422);
         $response->assertJsonPath(
-            'message',
+            'error.message',
             'No open check-in found. Check in on this page when you start work. Stopping the desktop time tracker does not check you out.'
         );
     }
