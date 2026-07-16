@@ -23,4 +23,27 @@ return [
 
     'offline_grace_minutes' => (int) env('TIMER_OFFLINE_GRACE_MINUTES', 240), // 4 hours
 
+    /*
+    |--------------------------------------------------------------------------
+    | Minimum Desktop Agent Version
+    |--------------------------------------------------------------------------
+    |
+    | Desktop builds older than this are refused (426) on the timer routes, so
+    | client-side policy — e.g. the removal of the idle "Keep"/"Reassign"
+    | actions — cannot be bypassed by staying on an old build.
+    |
+    | EMPTY = DISABLED (default). Left off until the replacement build is
+    | actually released and rolled out: setting it too early locks every desktop
+    | out of tracking. Set to the first release that carries the policy, e.g.
+    | TIMER_MIN_AGENT_VERSION=1.0.44
+    |
+    | Only affects requests sending `X-TrackFlow-Client: desktop`; the web
+    | dashboard is never gated.
+    |
+    | Used by: App\Http\Middleware\EnforceMinimumAgentVersion
+    |
+    */
+
+    'min_agent_version' => env('TIMER_MIN_AGENT_VERSION', ''),
+
 ];

@@ -416,18 +416,24 @@
       <div class="idle-time" id="idleTime" role="timer" aria-live="polite">00:00:00</div>
     </div>
 
-    <!-- Action buttons -->
-    <div class="actions">
-      <!-- Keep (primary) -->
-      <button class="action-btn btn-keep" id="keepBtn">
-        <span class="action-label">
-          <span class="action-title">Keep Idle Time</span>
-          <span class="action-desc">Idle time counts as work</span>
-        </span>
-        <kbd class="action-kbd">K</kbd>
-      </button>
+    <!--
+      Action buttons.
 
-      <!-- Discard (secondary) — removes idle time AND stops tracking -->
+      "Keep Idle Time" and "Reassign" were REMOVED (2026-07-16, owner request):
+      idle time can no longer be credited as work from this dialog. They are
+      deleted rather than CSS-hidden on purpose — a hidden button is still
+      clickable from devtools, and the requirement is that the path not exist.
+      The K/R keyboard shortcuts are removed with them (idle-alert.js).
+
+      Server-side enforcement is what actually holds this: POST /timer/idle
+      rejects action=reassign, and a minimum-agent-version gate blocks older
+      builds that still ship these buttons. The UI alone is not the guard.
+
+      Genuinely-worked time is recovered through Manual Time Entry, which lands
+      in the manager approval queue (approval_status='pending') for review.
+    -->
+    <div class="actions">
+      <!-- Discard — removes idle time AND stops tracking. The only action. -->
       <button class="action-btn btn-discard" id="discardBtn">
         <span class="action-label">
           <span class="action-title">Discard Idle Time</span>
@@ -435,19 +441,6 @@
         </span>
         <kbd class="action-kbd">D</kbd>
       </button>
-
-      <!-- Reassign row -->
-      <div class="reassign-section">
-        <div class="reassign-select-wrap">
-          <select id="reassignProject" aria-label="Select project to reassign idle time">
-            <option value="">Reassign to project...</option>
-          </select>
-        </div>
-        <button class="action-btn btn-reassign" id="reassignBtn" disabled>
-          Reassign
-          <kbd class="action-kbd">R</kbd>
-        </button>
-      </div>
     </div>
 
     <!-- Auto-stopped state (shown after timer is auto-stopped) -->

@@ -113,21 +113,62 @@ async function handleSuspend(reason) {
     }
 }
 
-function handleResume() {
+async function handleResume() {
     // New sleep/lock cycle begins — clear the paired-event coalescing guard.
     _autoStopInFlight = false;
     if (_autoStopResetTimer) {
         clearTimeout(_autoStopResetTimer);
         _autoStopResetTimer = null;
     }
-    if (_suspendedAt) {
-        const sleepSec = Math.floor((Date.now() - _suspendedAt) / 1000);
-        console.log(
-            `[power] Resumed after ${sleepSec}s — timer continues if it was running`,
-        );
+    const suspendedAtMs = _suspendedAt;
+    let sleepSec = 0;
+    if (suspendedAtMs) {
+        sleepSec = Math.floor((Date.now() - suspendedAtMs) / 1000);
+        console.log(`[power] Resumed after ${sleepSec}s`);
         _suspendedAt = null;
     }
-    _callbacks?.onResumeAfterSleep?.();
+    // The sleep gap is measured HERE and handed to the callback: the suspend
+    // handler cannot know how long a sleep will last, and nothing runs while the
+    // machine is asleep, so resume is the only point at which the gap is known.
+    await _callbacks?.onResumeAfterSleep?.({ sleepSec, suspendedAtMs });
+}
+
+/**
+ * Pure sleep-gap logic (mirrors evaluateStartupGap, for the resume path).
+ *
+ * The idle detector structurally CANNOT catch a sleep: its interval does not run
+ * while the machine is suspended, and the OS idle counter resets on wake because
+ * opening the lid is an input event. Without this backstop an overnight sleep
+ * accrues the whole gap as tracked time.
+ *
+ * Short sleeps (<= threshold: lunch, a meeting, a quick lid close) deliberately
+ * keep running — that is the product policy. Only a gap LONGER than the idle
+ * threshold closes the entry, back-dated to the last real activity so the sleep
+ * gap itself is never credited.
+ *
+ * @returns {{ shouldClose: boolean, stopAtMs: number|null, gapSec: number }}
+ */
+function evaluateSleepGap({
+    sleepSec,
+    gapThresholdSec,
+    lastActiveAtMs,
+    suspendedAtMs,
+    hasOpenSession,
+}) {
+    const gapSec = Number(sleepSec) || 0;
+    if (!hasOpenSession || !(gapThresholdSec > 0)) {
+        return { shouldClose: false, stopAtMs: null, gapSec };
+    }
+    if (gapSec <= gapThresholdSec) {
+        return { shouldClose: false, stopAtMs: null, gapSec };
+    }
+    // Prefer the last real activity; fall back to the suspend instant. Never
+    // fall back to now() — that would credit the entire sleep gap.
+    const stopAtMs = lastActiveAtMs || suspendedAtMs || null;
+    if (!stopAtMs) {
+        return { shouldClose: false, stopAtMs: null, gapSec };
+    }
+    return { shouldClose: true, stopAtMs, gapSec };
 }
 
 /**
@@ -173,6 +214,7 @@ module.exports = {
     registerPowerHandlers,
     unregisterPowerHandlers,
     evaluateStartupGap,
+    evaluateSleepGap,
     showAutoStopNotification,
     formatTimeShortLocal,
     DEFAULT_GAP_THRESHOLD_SEC,
