@@ -5,7 +5,7 @@ export type ProjectTimePeriod = "week" | "month" | "custom";
 
 export interface ProjectTimeFilters {
     project_ids: string[];
-    user_id: string | null;
+    user_ids: string[];
     period: ProjectTimePeriod;
     week_of: string; // YYYY-MM-DD
     month: string; // YYYY-MM
@@ -67,8 +67,10 @@ export function buildProjectTimeParams(
         period: filters.period,
     };
 
+    // Both are sent as repeated `project_id[]` / `user_id[]` params; the API
+    // accepts either a single uuid or an array for each.
     if (filters.project_ids.length) params.project_id = filters.project_ids;
-    if (filters.user_id) params.user_id = filters.user_id;
+    if (filters.user_ids.length) params.user_id = filters.user_ids;
 
     if (filters.period === "week") {
         params.week_of = filters.week_of;

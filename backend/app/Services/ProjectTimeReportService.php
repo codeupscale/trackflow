@@ -203,16 +203,19 @@ class ProjectTimeReportService
             ->where('te.started_at', '>=', $startUtc)
             ->where('te.started_at', '<', $endUtc);
 
-        $projectIds = $this->normalizeProjectIds($filters);
+        $projectIds = $this->normalizeIds($filters, 'project_id');
         if (! empty($projectIds)) {
             $query->whereIn('te.project_id', $projectIds);
         }
 
-        if (! empty($filters['user_id'])) {
-            $query->where('te.user_id', $filters['user_id']);
+        $userIds = $this->normalizeIds($filters, 'user_id');
+        if (! empty($userIds)) {
+            $query->whereIn('te.user_id', $userIds);
         }
 
-        // Role scope narrowing.
+        // Role scope narrowing. Applied AFTER the user_id filter and ANDed with
+        // it, so a requested resource the actor may not see yields no rows
+        // rather than widening the scope.
         $scope = $this->permissions->getScope($actor, 'reports.view');
         if ($scope === 'organization') {
             // Whole org — already constrained by organization_id.
@@ -439,18 +442,20 @@ class ProjectTimeReportService
     // ── Filters / range resolution ────────────────────────────────────────
 
     /**
-     * Accept project_id as a single uuid or an array of uuids.
+     * Accept an id filter (project_id / user_id) as a single uuid or an array
+     * of uuids. Empty values are dropped so a stray `?user_id=` never filters
+     * on an empty string.
      *
      * @return string[]
      */
-    private function normalizeProjectIds(array $filters): array
+    private function normalizeIds(array $filters, string $key): array
     {
-        $raw = $filters['project_id'] ?? null;
+        $raw = $filters[$key] ?? null;
         if (empty($raw)) {
             return [];
         }
 
-        return array_values(array_filter((array) $raw));
+        return array_values(array_unique(array_filter((array) $raw)));
     }
 
     /**
@@ -499,29 +504,19 @@ class ProjectTimeReportService
     {
         $tz = $actor->getTimezoneForDates();
 
-        // Project label.
-        $projectIds = $this->normalizeProjectIds($filters);
-        if (! empty($projectIds)) {
-            $names = DB::table('projects')
-                ->where('organization_id', $actor->organization_id)
-                ->whereIn('id', $projectIds)
-                ->pluck('name')
-                ->all();
-            $projectLabel = $names ? implode(', ', $names) : 'All Projects';
-        } else {
-            $projectLabel = 'All Projects';
-        }
+        $projectLabel = $this->nameLabel(
+            'projects',
+            $this->normalizeIds($filters, 'project_id'),
+            $actor->organization_id,
+            'All Projects'
+        );
 
-        // Resource label.
-        if (! empty($filters['user_id'])) {
-            $name = DB::table('users')
-                ->where('organization_id', $actor->organization_id)
-                ->where('id', $filters['user_id'])
-                ->value('name');
-            $resourceLabel = $name ?: 'All Resources';
-        } else {
-            $resourceLabel = 'All Resources';
-        }
+        $resourceLabel = $this->nameLabel(
+            'users',
+            $this->normalizeIds($filters, 'user_id'),
+            $actor->organization_id,
+            'All Resources'
+        );
 
         // Local date range label.
         [$startUtc, $endUtc] = $this->resolveRange($filters, $tz);
@@ -536,6 +531,29 @@ class ProjectTimeReportService
             'exported_at' => now($tz)->format('Y-m-d H:i') . " ({$tz})",
             'exported_by' => $actor->name,
         ];
+    }
+
+    /**
+     * Comma-joined `name` column for the given ids, or $fallback when nothing is
+     * filtered (or the ids resolve to nothing in this org). Org-scoped — an id
+     * from another tenant can never contribute a name to the export header.
+     *
+     * @param  string[]  $ids
+     */
+    private function nameLabel(string $table, array $ids, string $orgId, string $fallback): string
+    {
+        if (empty($ids)) {
+            return $fallback;
+        }
+
+        $names = DB::table($table)
+            ->where('organization_id', $orgId)
+            ->whereIn('id', $ids)
+            ->orderBy('name')
+            ->pluck('name')
+            ->all();
+
+        return $names ? implode(', ', $names) : $fallback;
     }
 
     /**

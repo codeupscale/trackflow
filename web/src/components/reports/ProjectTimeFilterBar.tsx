@@ -1,10 +1,10 @@
 "use client";
 
-import { Check, ChevronsUpDown, FolderOpen } from "lucide-react";
+import { Check, ChevronsUpDown, FolderOpen, Users } from "lucide-react";
 import { useState } from "react";
 
 import { useProjectList } from "@/components/time-entries/ProjectCombobox";
-import { UserCombobox } from "@/components/time-entries/UserCombobox";
+import { useUserList } from "@/components/time-entries/UserCombobox";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -35,6 +35,29 @@ interface ProjectTimeFilterBarProps {
     onChange: (patch: Partial<ProjectTimeFilters>) => void;
 }
 
+/** Checkbox affordance shared by the project + resource multi-selects. */
+function CheckIndicator({ checked }: { checked: boolean }) {
+    return (
+        <div
+            className={cn(
+                "flex size-4 shrink-0 items-center justify-center rounded-sm border",
+                checked
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-input",
+            )}
+        >
+            {checked && <Check className="size-3" />}
+        </div>
+    );
+}
+
+/** Toggle `id` in/out of `value`, preserving the rest of the selection. */
+function toggleId(value: string[], id: string): string[] {
+    return value.includes(id)
+        ? value.filter((v) => v !== id)
+        : [...value, id];
+}
+
 /** Multi-select project picker (checkbox list in a popover). */
 function ProjectMultiSelect({
     value,
@@ -45,12 +68,6 @@ function ProjectMultiSelect({
 }) {
     const [open, setOpen] = useState(false);
     const { data: projects, isLoading } = useProjectList();
-
-    const toggle = (id: string) => {
-        onChange(
-            value.includes(id) ? value.filter((v) => v !== id) : [...value, id],
-        );
-    };
 
     const label =
         value.length === 0
@@ -92,41 +109,117 @@ function ProjectMultiSelect({
                             {isLoading ? "Loading..." : "No projects found."}
                         </CommandEmpty>
                         <CommandGroup>
-                            {projects?.map((p) => {
-                                const checked = value.includes(p.id);
-                                return (
-                                    <CommandItem
-                                        key={p.id}
-                                        value={p.name}
-                                        onSelect={() => toggle(p.id)}
-                                    >
-                                        <div
-                                            className={cn(
-                                                "flex size-4 items-center justify-center rounded-sm border",
-                                                checked
-                                                    ? "border-primary bg-primary text-primary-foreground"
-                                                    : "border-input",
-                                            )}
-                                        >
-                                            {checked && (
-                                                <Check className="size-3" />
-                                            )}
-                                        </div>
-                                        <span className="ml-2 flex items-center gap-2 truncate">
-                                            <span
-                                                className="size-2 shrink-0 rounded-full"
-                                                style={{
-                                                    backgroundColor:
-                                                        p.color || "#6366f1",
-                                                }}
-                                            />
-                                            <span className="truncate">
-                                                {p.name}
-                                            </span>
+                            {projects?.map((p) => (
+                                <CommandItem
+                                    key={p.id}
+                                    value={p.name}
+                                    onSelect={() =>
+                                        onChange(toggleId(value, p.id))
+                                    }
+                                >
+                                    <CheckIndicator
+                                        checked={value.includes(p.id)}
+                                    />
+                                    <span className="ml-2 flex items-center gap-2 truncate">
+                                        <span
+                                            className="size-2 shrink-0 rounded-full"
+                                            style={{
+                                                backgroundColor:
+                                                    p.color || "#6366f1",
+                                            }}
+                                        />
+                                        <span className="truncate">
+                                            {p.name}
                                         </span>
-                                    </CommandItem>
-                                );
-                            })}
+                                    </span>
+                                </CommandItem>
+                            ))}
+                        </CommandGroup>
+                    </CommandList>
+                </Command>
+            </PopoverContent>
+        </Popover>
+    );
+}
+
+/**
+ * Multi-select resource picker. Mirrors ProjectMultiSelect; the option list is
+ * narrowed to members of `projectIds` (all org members the caller may see when
+ * that is empty), same as the single-select picker it replaced.
+ */
+function ResourceMultiSelect({
+    value,
+    onChange,
+    projectIds,
+}: {
+    value: string[];
+    onChange: (ids: string[]) => void;
+    projectIds: string[];
+}) {
+    const [open, setOpen] = useState(false);
+    const { data: users, isLoading } = useUserList({ projectIds });
+
+    const label =
+        value.length === 0
+            ? "All resources"
+            : value.length === 1
+              ? (users?.find((u) => u.id === value[0])?.name ?? "1 resource")
+              : `${value.length} resources`;
+
+    return (
+        <Popover open={open} onOpenChange={setOpen}>
+            <PopoverTrigger
+                render={
+                    <Button
+                        variant="outline"
+                        role="combobox"
+                        aria-expanded={open}
+                        aria-label="Filter by resource"
+                        className={cn(
+                            "w-full justify-between font-normal",
+                            value.length === 0 && "text-muted-foreground",
+                        )}
+                    />
+                }
+            >
+                <span className="flex min-w-0 items-center gap-2 truncate">
+                    <Users className="size-3.5 shrink-0 opacity-60" />
+                    <span className="truncate">{label}</span>
+                </span>
+                <ChevronsUpDown className="size-3.5 shrink-0 opacity-50" />
+            </PopoverTrigger>
+            <PopoverContent
+                className="w-[var(--anchor-width)] p-0"
+                align="start"
+            >
+                <Command>
+                    <CommandInput placeholder="Search resources..." />
+                    <CommandList>
+                        <CommandEmpty>
+                            {isLoading ? "Loading..." : "No resources found."}
+                        </CommandEmpty>
+                        <CommandGroup>
+                            {users?.map((u) => (
+                                <CommandItem
+                                    key={u.id}
+                                    value={`${u.name} ${u.email}`}
+                                    onSelect={() =>
+                                        onChange(toggleId(value, u.id))
+                                    }
+                                >
+                                    <CheckIndicator
+                                        checked={value.includes(u.id)}
+                                    />
+                                    <div className="ml-2 flex min-w-0 flex-col">
+                                        <span className="truncate">
+                                            {u.name}
+                                        </span>
+                                        <span className="truncate text-xs text-muted-foreground">
+                                            {u.email}
+                                        </span>
+                                    </div>
+                                </CommandItem>
+                            ))}
                         </CommandGroup>
                     </CommandList>
                 </Command>
@@ -150,22 +243,21 @@ export function ProjectTimeFilterBar({
                         onChange={(ids) =>
                             onChange({
                                 project_ids: ids,
-                                // Resource list is project-scoped — reset so a
-                                // previously picked user isn't left selected after
-                                // they fall out of the new member set.
-                                user_id: null,
+                                // Resource list is project-scoped — reset so
+                                // previously picked users aren't left selected
+                                // after they fall out of the new member set.
+                                user_ids: [],
                             })
                         }
                     />
                 </div>
 
-                {/* Resource — members of selected projects only (all users if none) */}
-                <div className="flex w-full flex-col gap-1.5 lg:w-56">
-                    <Label>Resource</Label>
-                    <UserCombobox
-                        value={filters.user_id}
-                        onChange={(v) => onChange({ user_id: v })}
-                        placeholder="All resources"
+                {/* Resource (multi) — members of selected projects only (all users if none) */}
+                <div className="flex w-full flex-col gap-1.5 lg:w-64">
+                    <Label>Resources</Label>
+                    <ResourceMultiSelect
+                        value={filters.user_ids}
+                        onChange={(ids) => onChange({ user_ids: ids })}
                         projectIds={filters.project_ids}
                     />
                 </div>
