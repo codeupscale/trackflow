@@ -56,7 +56,7 @@ function defaultFilters(): ProjectTimeFilters {
     const today = new Date();
     return {
         project_ids: [],
-        user_id: null,
+        user_ids: [],
         period: "month",
         week_of: format(today, "yyyy-MM-dd"),
         month: format(today, "yyyy-MM"),

@@ -60,7 +60,8 @@ class ProjectTimeReportController extends Controller
         $validated = $request->validate([
             'project_id' => ['nullable'],
             'project_id.*' => ['uuid'],
-            'user_id' => ['nullable', 'uuid'],
+            'user_id' => ['nullable'],
+            'user_id.*' => ['uuid'],
             'period' => ['nullable', 'in:week,month,custom'],
             'week_of' => ['nullable', 'date_format:Y-m-d'],
             'month' => ['nullable', 'date_format:Y-m'],
@@ -70,9 +71,18 @@ class ProjectTimeReportController extends Controller
             'group_by_day' => ['nullable', 'boolean'],
         ]);
 
-        // A single-uuid project_id is allowed too; validate it when not an array.
-        if (isset($validated['project_id']) && is_string($validated['project_id'])) {
-            $request->validate(['project_id' => ['uuid']]);
+        // project_id / user_id accept a single uuid as well as an array of them.
+        // The `.*` rules above only cover the array form, so validate the scalar
+        // form here — `uuid` on the top-level key would reject a valid array.
+        $scalarRules = [];
+        foreach (['project_id', 'user_id'] as $key) {
+            if (isset($validated[$key]) && is_string($validated[$key])) {
+                $scalarRules[$key] = ['uuid'];
+            }
+        }
+
+        if ($scalarRules) {
+            $request->validate($scalarRules);
         }
 
         return $validated;
