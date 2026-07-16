@@ -212,6 +212,74 @@ class ProjectTimeReportTest extends TestCase
         $this->assertEquals(1, $response->json('meta.summary.resource_count'));
     }
 
+    public function test_user_id_array_filter_includes_multiple_resources(): void
+    {
+        $a = $this->createUser($this->org, 'employee');
+        $b = $this->createUser($this->org, 'employee');
+        $c = $this->createUser($this->org, 'employee');
+        $project = $this->project();
+        $ea = $this->trackedEntry($a, $project);
+        $eb = $this->trackedEntry($b, $project);
+        $this->trackedEntry($c, $project);
+
+        $this->actingAs($this->owner, 'sanctum');
+        $response = $this->getJson($this->url(['user_id' => [$a->id, $b->id]]));
+
+        $ids = collect($response->json('data'))->pluck('id')->all();
+        $this->assertEqualsCanonicalizing([$ea->id, $eb->id], $ids);
+        $this->assertEquals(2, $response->json('meta.summary.entry_count'));
+        $this->assertEquals(2, $response->json('meta.summary.resource_count'));
+    }
+
+    public function test_user_id_array_combines_with_project_id_array(): void
+    {
+        $a = $this->createUser($this->org, 'employee');
+        $b = $this->createUser($this->org, 'employee');
+        $p1 = $this->project();
+        $p2 = $this->project();
+        $keep = $this->trackedEntry($a, $p1);
+        // Right resource, wrong project — and vice versa. Neither may appear.
+        $this->trackedEntry($a, $p2);
+        $this->trackedEntry($b, $p2);
+
+        $this->actingAs($this->owner, 'sanctum');
+        $response = $this->getJson($this->url([
+            'project_id' => [$p1->id],
+            'user_id' => [$a->id, $b->id],
+        ]));
+
+        $ids = collect($response->json('data'))->pluck('id')->all();
+        $this->assertEquals([$keep->id], $ids);
+        $this->assertEquals(1, $response->json('meta.summary.entry_count'));
+    }
+
+    public function test_user_id_array_never_widens_an_employees_own_scope(): void
+    {
+        $other = $this->createUser($this->org, 'employee');
+        $project = $this->project();
+        $mine = $this->trackedEntry($this->employee, $project);
+        $this->trackedEntry($other, $project);
+
+        // An employee asking for a colleague's rows still only sees their own.
+        $this->actingAs($this->employee, 'sanctum');
+        $response = $this->getJson($this->url([
+            'user_id' => [$this->employee->id, $other->id],
+        ]));
+
+        $ids = collect($response->json('data'))->pluck('id')->all();
+        $this->assertEquals([$mine->id], $ids);
+        $this->assertEquals(1, $response->json('meta.summary.resource_count'));
+    }
+
+    public function test_user_id_array_rejects_a_non_uuid_member(): void
+    {
+        $this->actingAs($this->owner, 'sanctum');
+
+        $this->getJson($this->url(['user_id' => [$this->employee->id, 'not-a-uuid']]))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('user_id.1');
+    }
+
     public function test_custom_period_excludes_entries_outside_range(): void
     {
         $project = $this->project();

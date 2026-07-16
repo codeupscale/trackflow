@@ -21,7 +21,7 @@ import {
 import api from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-interface TeamUser {
+export interface TeamUser {
     id: string;
     name: string;
     email: string;
@@ -36,6 +36,59 @@ export const MANAGER_ROLES = [
     "admin",
     "manager",
 ] as const;
+
+interface UserListOptions {
+    /**
+     * Restrict the list to members of these projects via
+     * `GET /users?project_id[]=...`. Empty/undefined = all org members.
+     */
+    projectIds?: string[];
+    /** Restrict the list to these roles via `GET /users?role[]=...`. */
+    roles?: readonly string[];
+    enabled?: boolean;
+}
+
+/**
+ * Shared team-member list query backed by `GET /users` (scoped server-side to what
+ * the caller may see). Cached under a stable key so the single- and multi-select
+ * pickers for the same project/role slice share one fetch.
+ */
+export function useUserList({
+    projectIds,
+    roles,
+    enabled = true,
+}: UserListOptions = {}) {
+    // Stable sorted keys so parent re-renders with a new array reference don't refetch.
+    const projectKey =
+        projectIds && projectIds.length > 0
+            ? [...projectIds].sort().join(",")
+            : "";
+    const rolesKey =
+        roles && roles.length > 0 ? [...roles].sort().join(",") : "";
+
+    return useQuery<TeamUser[]>({
+        queryKey: ["team-users", projectKey, rolesKey],
+        queryFn: async () => {
+            const params: Record<string, string | number | string[]> = {
+                per_page: 100,
+            };
+            if (projectIds && projectIds.length > 0) {
+                params.project_id = projectIds;
+            }
+            if (roles && roles.length > 0) {
+                params.role = [...roles];
+            }
+            const res = await api.get("/users", { params });
+            return (
+                res.data.users ||
+                res.data.data ||
+                (Array.isArray(res.data) ? res.data : [])
+            );
+        },
+        enabled,
+        staleTime: 5 * 60_000,
+    });
+}
 
 interface UserComboboxProps {
     /** Selected user id, or null for the placeholder / "no selection" state. */
@@ -76,36 +129,10 @@ export function UserCombobox({
     roles,
 }: UserComboboxProps) {
     const [open, setOpen] = useState(false);
-
-    // Stable sorted keys so parent re-renders with a new array reference don't refetch.
-    const projectKey =
-        projectIds && projectIds.length > 0
-            ? [...projectIds].sort().join(",")
-            : "";
-    const rolesKey =
-        roles && roles.length > 0 ? [...roles].sort().join(",") : "";
-
-    const { data: users, isLoading } = useQuery<TeamUser[]>({
-        queryKey: ["team-users", projectKey, rolesKey],
-        queryFn: async () => {
-            const params: Record<string, string | number | string[]> = {
-                per_page: 100,
-            };
-            if (projectIds && projectIds.length > 0) {
-                params.project_id = projectIds;
-            }
-            if (roles && roles.length > 0) {
-                params.role = [...roles];
-            }
-            const res = await api.get("/users", { params });
-            return (
-                res.data.users ||
-                res.data.data ||
-                (Array.isArray(res.data) ? res.data : [])
-            );
-        },
+    const { data: users, isLoading } = useUserList({
+        projectIds,
+        roles,
         enabled,
-        staleTime: 5 * 60_000,
     });
 
     const selected = users?.find((u) => u.id === value) ?? null;
