@@ -69,6 +69,113 @@ class CheckInService
     }
 
     /**
+     * Auto check-in triggered by the desktop starting a timer.
+     *
+     * Records a check-in AT the moment tracking began ($startedAt), for the
+     * org-local day THAT timestamp falls in (not necessarily today — an offline
+     * start replays a past instant). It differs from checkIn() in three ways, all
+     * deliberate:
+     *
+     *   1. Timestamp-driven, not now()-driven, so the check-in reflects the true
+     *      start of work. (checkIn() ignores client time by contract.)
+     *   2. SKIPS the pre-window 422 block — recording an early arrival is the
+     *      entire point; rejecting it would defeat the feature.
+     *   3. NO-OPS (returns null) instead of aborting when the user already has any
+     *      session that day — a manual web check-in, or an earlier auto one, wins.
+     *      This is what makes it idempotent under offline replay / start-stop
+     *      churn and honors "only if the user has not already checked in".
+     *
+     * Lateness is still applied honestly: a $startedAt past the late threshold
+     * marks the day late. Gated by the org setting `auto_check_in_on_track`.
+     *
+     * @return AttendanceRecord|null the record when a check-in was created, or null
+     *                               when skipped (feature off / already checked in).
+     */
+    public function autoCheckInFromTracking(User $user, Carbon $startedAt): ?AttendanceRecord
+    {
+        if (! $user->organization?->getSetting('auto_check_in_on_track', false)) {
+            return null;
+        }
+
+        $policy = $this->getPolicy($user->organization_id);
+        $tz = $policy->timezone;
+
+        $startLocal = $startedAt->copy()->setTimezone($tz); // org-local wall clock of the real start
+        $date = $startLocal->toDateString();                // the day that start falls in
+        $lateAt = Carbon::parse("{$date} {$policy->late_threshold}", $tz);
+
+        return DB::transaction(function () use ($user, $policy, $tz, $startedAt, $startLocal, $date, $lateAt) {
+            // 1. Ensure the day row exists (unique(org,user,date) serializes creation).
+            $record = AttendanceRecord::withoutGlobalScopes()->firstOrCreate(
+                [
+                    'organization_id' => $user->organization_id,
+                    'user_id' => $user->id,
+                    'date' => $date,
+                ],
+                ['status' => $this->checkedInStatus($user, $date)]
+            );
+
+            // 2. Row lock — the transaction's serialization anchor, so a racing
+            //    manual web check-in and this path cannot both create a session.
+            $record = AttendanceRecord::withoutGlobalScopes()
+                ->where('organization_id', $user->organization_id)
+                ->whereKey($record->id)
+                ->lockForUpdate()
+                ->first();
+
+            // 3. Skip if the user already checked in that day — manual web check-in
+            //    OR a prior auto one. Guard on ANY session (not just an OPEN one): a
+            //    user who already checked in and out earlier must not get a second,
+            //    duplicate session from a later timer start.
+            $alreadyCheckedIn = $record->check_in_at !== null
+                || CheckInSession::withoutGlobalScopes()
+                    ->where('organization_id', $user->organization_id)
+                    ->where('attendance_record_id', $record->id)
+                    ->exists();
+
+            if ($alreadyCheckedIn) {
+                return null;
+            }
+
+            // 4. First-check-in-owned fields, computed off the REAL start time. No
+            //    pre-window block — an early start is exactly what we record.
+            $isLate = $startLocal->gt($lateAt);
+            $lateMinutes = $isLate ? (int) $lateAt->diffInMinutes($startLocal) : 0;
+
+            $flags = ['auto_check_in' => true]; // marks this as tracker-created, not manual
+            if ($this->attendanceService->isOnApprovedLeave($user, $date)) {
+                $flags['on_approved_leave'] = true;
+            }
+            if ($this->attendanceService->isOffDay($user, $date)) {
+                $flags['worked_on_off_day'] = true;
+            }
+
+            $record->update([
+                'check_in_status' => $isLate ? 'late' : 'on_time',
+                'check_in_late_minutes' => $lateMinutes,
+                'status' => $this->checkedInStatus($user, $date),
+                'check_in_flags' => $flags,
+            ]);
+
+            // 5. The session, stamped at the true start. seq is always 1 — the
+            //    guard above guarantees no prior session exists.
+            CheckInSession::create([
+                'organization_id' => $user->organization_id,
+                'user_id' => $user->id,
+                'attendance_record_id' => $record->id,
+                'seq' => 1,
+                'check_in_at' => $startedAt,
+                'check_out_at' => null,
+            ]);
+
+            // 6. Roll up (sets check_in_at = the session's start).
+            $this->recomputeRecordRollups($record, $policy);
+
+            return $record->refresh();
+        });
+    }
+
+    /**
      * Check the user in for the current org-local day.
      */
     public function checkIn(User $user): AttendanceRecord

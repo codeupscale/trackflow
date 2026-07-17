@@ -2,10 +2,13 @@
 
 namespace App\Providers;
 
+use App\Events\TimerStarted;
+use App\Listeners\AutoCheckInOnTimerStart;
 use App\Services\PermissionService;
 use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 
@@ -40,5 +43,9 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('auth', function (Request $request) {
             return Limit::perMinute(config('security.rate_limits.auth'))->by($request->ip());
         });
+
+        // Auto check-in on first timer start of the day (per-org opt-in). Registered
+        // explicitly rather than relying on listener auto-discovery.
+        Event::listen(TimerStarted::class, AutoCheckInOnTimerStart::class);
     }
 }
