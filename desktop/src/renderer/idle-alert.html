@@ -419,27 +419,38 @@
     <!--
       Action buttons.
 
-      "Keep Idle Time" and "Reassign" were REMOVED (2026-07-16, owner request):
-      idle time can no longer be credited as work from this dialog. They are
-      deleted rather than CSS-hidden on purpose — a hidden button is still
-      clickable from devtools, and the requirement is that the path not exist.
-      The K/R keyboard shortcuts are removed with them (idle-alert.js).
+      "Keep Idle Time" (credit the idle gap as work) and "Reassign" (move it to
+      another project) were REMOVED 2026-07-16 — idle time can no longer be
+      counted as work. Both remaining buttons DISCARD the idle gap; the only
+      choice is whether tracking continues afterwards:
 
-      Server-side enforcement is what actually holds this: POST /timer/idle
-      rejects action=reassign, and a minimum-agent-version gate blocks older
-      builds that still ship these buttons. The UI alone is not the guard.
+        • Continue Tracking — main action "discard": drop the gap, resume a
+          fresh entry from where you paused. Server: POST /timer/idle
+          action=discard, which opens a new running entry.
+        • Stop Timer — main action "stop": drop the gap and stop; entry closes
+          at the moment idle began. No server split.
 
-      Genuinely-worked time is recovered through Manual Time Entry, which lands
-      in the manager approval queue (approval_status='pending') for review.
+      Neither credits idle time, so server-side enforcement (POST /timer/idle
+      403s keep/reassign) is unaffected. Buttons are DELETED not hidden — a
+      hidden button is still clickable from devtools.
     -->
     <div class="actions">
-      <!-- Discard — removes idle time AND stops tracking. The only action. -->
+      <!-- Continue — discard idle gap, keep tracking (primary). -->
+      <button class="action-btn btn-keep" id="continueBtn">
+        <span class="action-label">
+          <span class="action-title">Continue Tracking</span>
+          <span class="action-desc">Discard idle time, keep working</span>
+        </span>
+        <kbd class="action-kbd">C</kbd>
+      </button>
+
+      <!-- Stop — discard idle gap and stop the timer (secondary). -->
       <button class="action-btn btn-discard" id="discardBtn">
         <span class="action-label">
-          <span class="action-title">Discard Idle Time</span>
-          <span class="action-desc">Remove idle time and stop tracking</span>
+          <span class="action-title">Stop Timer</span>
+          <span class="action-desc">Discard idle time and stop</span>
         </span>
-        <kbd class="action-kbd">D</kbd>
+        <kbd class="action-kbd">S</kbd>
       </button>
     </div>
 

@@ -185,12 +185,20 @@ window.trackflow.onIdleData((data) => {
     }
 });
 
+const ACTION_BUTTON_IDS = ["continueBtn", "discardBtn"];
+
 function disableAllButtons() {
-    document.getElementById("discardBtn").disabled = true;
+    ACTION_BUTTON_IDS.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = true;
+    });
 }
 
 function enableAllButtons() {
-    document.getElementById("discardBtn").disabled = false;
+    ACTION_BUTTON_IDS.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = false;
+    });
 }
 
 function sendAction(action, projectId) {
@@ -200,22 +208,31 @@ function sendAction(action, projectId) {
     window.trackflow.resolveIdle(action, projectId || null, currentActionId);
 }
 
-// "Discard Idle Time" removes the idle period AND stops tracking. This maps to
-// the "stop" action (discard idle, then stop the timer) — NOT the internal
-// "discard" action, which is reserved for the `keep_idle_time: "never"` policy
-// that silently discards idle while CONTINUING to track.
+// Both buttons DISCARD the idle gap; they differ only in what happens next.
+//
+// "Continue Tracking" → main action "discard": the server splits the entry at
+// idle-start, drops the gap, and opens a NEW running entry, so tracking resumes
+// from where it paused. (Same path the `keep_idle_time:"never"` policy uses.)
+// It does NOT credit idle time, so it is not blocked by the keep/reassign 403.
+document
+    .getElementById("continueBtn")
+    .addEventListener("click", () => sendAction("discard"));
+
+// "Stop Timer" → main action "stop": discard the gap and stop; the entry closes
+// at the moment idle began, no server split, no resume.
 document
     .getElementById("discardBtn")
     .addEventListener("click", () => sendAction("stop"));
 
-// Keyboard shortcuts. K (keep) and R (reassign) are GONE along with their
-// buttons — leaving the listeners would have kept both actions fully reachable
-// from the keyboard while the buttons were invisible, which is exactly the
-// bypass this change exists to close.
+// Keyboard shortcuts: C = continue, S = stop. (K/R for the removed Keep/Reassign
+// buttons are intentionally gone — no hidden path back to crediting idle time.)
 document.addEventListener("keydown", (e) => {
     if (e.repeat) return;
     if (actionSent) return;
-    if (e.key.toLowerCase() === "d") {
+    const key = e.key.toLowerCase();
+    if (key === "c") {
+        document.getElementById("continueBtn").click();
+    } else if (key === "s") {
         document.getElementById("discardBtn").click();
     }
 });
