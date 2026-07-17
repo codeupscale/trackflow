@@ -3,6 +3,7 @@
 use App\Http\Middleware\CheckPermission;
 use App\Http\Middleware\CheckSeatLimit;
 use App\Http\Middleware\CheckTrialExpired;
+use App\Http\Middleware\EnforceMinimumAgentVersion;
 use App\Http\Middleware\RequestId;
 use App\Http\Middleware\RoleMiddleware;
 use App\Http\Middleware\SanitizeInput;
@@ -36,6 +37,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'permission' => CheckPermission::class,
             'check.trial' => CheckTrialExpired::class,
             'check.seats' => CheckSeatLimit::class,
+            'min.agent' => EnforceMinimumAgentVersion::class,
         ]);
 
         // Global middleware

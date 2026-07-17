@@ -22,7 +22,8 @@
 
 const { powerMonitor } = require("electron");
 
-const DEFAULT_IDLE_TIMEOUT_MIN = 5;
+// Offline fallback only — the server value (Settings → Idle detection) wins.
+const DEFAULT_IDLE_TIMEOUT_MIN = 10;
 const DEFAULT_IDLE_CHECK_INTERVAL_SEC = 2;
 /** Hard upper bound for idle auto-stop (minutes). Guards against a misconfigured
  *  org setting producing an absurd countdown / never-auto-stopping timer. */
