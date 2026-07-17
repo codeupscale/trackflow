@@ -3,9 +3,11 @@
 namespace Tests\Feature\Timer;
 
 use App\Models\Organization;
+use App\Models\Project;
 use App\Models\TimeEntry;
 use App\Models\User;
 use Illuminate\Support\Facades\Redis;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 /**
@@ -36,10 +38,18 @@ class IdleCreditDisabledTest extends TestCase
         parent::tearDown();
     }
 
+    private function project(): Project
+    {
+        return Project::factory()->create([
+            'organization_id' => $this->org->id,
+            'created_by' => $this->user->id,
+        ]);
+    }
+
     private function idlePayload(array $over = []): array
     {
         return array_merge([
-            'time_entry_id' => (string) \Illuminate\Support\Str::uuid(),
+            'time_entry_id' => (string) Str::uuid(),
             'idle_started_at' => now()->subMinutes(20)->toIso8601String(),
             'idle_ended_at' => now()->subMinutes(5)->toIso8601String(),
             'idle_seconds' => 900,
@@ -56,7 +66,7 @@ class IdleCreditDisabledTest extends TestCase
 
     public function test_reassign_is_refused_with_403_and_creates_no_time(): void
     {
-        $project = $this->createProject($this->org);
+        $project = $this->project();
         $before = TimeEntry::withoutGlobalScopes()->count();
 
         $this->postJson('/api/v1/timer/idle', $this->idlePayload([
@@ -77,7 +87,7 @@ class IdleCreditDisabledTest extends TestCase
         // confusing 422 about the project field.
         $this->postJson('/api/v1/timer/idle', $this->idlePayload([
             'action' => 'reassign',
-            'project_id' => (string) \Illuminate\Support\Str::uuid(),
+            'project_id' => (string) Str::uuid(),
         ]))->assertStatus(422); // unknown project still fails validation first
 
         $this->postJson('/api/v1/timer/idle', $this->idlePayload([
