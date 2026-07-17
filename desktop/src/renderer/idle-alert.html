@@ -416,38 +416,42 @@
       <div class="idle-time" id="idleTime" role="timer" aria-live="polite">00:00:00</div>
     </div>
 
-    <!-- Action buttons -->
+    <!--
+      Action buttons.
+
+      "Keep Idle Time" (credit the idle gap as work) and "Reassign" (move it to
+      another project) were REMOVED 2026-07-16 — idle time can no longer be
+      counted as work. Both remaining buttons DISCARD the idle gap; the only
+      choice is whether tracking continues afterwards:
+
+        • Continue Tracking — main action "discard": drop the gap, resume a
+          fresh entry from where you paused. Server: POST /timer/idle
+          action=discard, which opens a new running entry.
+        • Stop Timer — main action "stop": drop the gap and stop; entry closes
+          at the moment idle began. No server split.
+
+      Neither credits idle time, so server-side enforcement (POST /timer/idle
+      403s keep/reassign) is unaffected. Buttons are DELETED not hidden — a
+      hidden button is still clickable from devtools.
+    -->
     <div class="actions">
-      <!-- Keep (primary) -->
-      <button class="action-btn btn-keep" id="keepBtn">
+      <!-- Continue — discard idle gap, keep tracking (primary). -->
+      <button class="action-btn btn-keep" id="continueBtn">
         <span class="action-label">
-          <span class="action-title">Keep Idle Time</span>
-          <span class="action-desc">Idle time counts as work</span>
+          <span class="action-title">Continue Tracking</span>
+          <span class="action-desc">Discard idle time, keep working</span>
         </span>
-        <kbd class="action-kbd">K</kbd>
+        <kbd class="action-kbd">C</kbd>
       </button>
 
-      <!-- Discard (secondary) — removes idle time AND stops tracking -->
+      <!-- Stop — discard idle gap and stop the timer (secondary). -->
       <button class="action-btn btn-discard" id="discardBtn">
         <span class="action-label">
-          <span class="action-title">Discard Idle Time</span>
-          <span class="action-desc">Remove idle time and stop tracking</span>
+          <span class="action-title">Stop Timer</span>
+          <span class="action-desc">Discard idle time and stop</span>
         </span>
-        <kbd class="action-kbd">D</kbd>
+        <kbd class="action-kbd">S</kbd>
       </button>
-
-      <!-- Reassign row -->
-      <div class="reassign-section">
-        <div class="reassign-select-wrap">
-          <select id="reassignProject" aria-label="Select project to reassign idle time">
-            <option value="">Reassign to project...</option>
-          </select>
-        </div>
-        <button class="action-btn btn-reassign" id="reassignBtn" disabled>
-          Reassign
-          <kbd class="action-kbd">R</kbd>
-        </button>
-      </div>
     </div>
 
     <!-- Auto-stopped state (shown after timer is auto-stopped) -->

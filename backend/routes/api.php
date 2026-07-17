@@ -99,15 +99,33 @@ Route::prefix('v1')->group(function () {
             ->middleware('permission:team.invite');
 
         // Timer (desktop safety — auth:sanctum only)
-        Route::post('timer/start', [\App\Http\Controllers\Api\V1\TimerController::class, 'start']);
-        Route::post('timer/stop', [\App\Http\Controllers\Api\V1\TimerController::class, 'stop']);
-        Route::post('timer/switch', [\App\Http\Controllers\Api\V1\TimerController::class, 'switch']);
+        //
+        // Throttled at 30/min: far above any legitimate use (a human starts and
+        // stops a handful of times an hour, and an offline reconcile pushes one
+        // start + one stop), but it caps how fast a scripted client can mint
+        // back-dated entries. Deliberately generous — a throttle that blocked a
+        // real stop would leave the timer running, which is the worse failure.
+        // 'min.agent' refuses desktop builds older than TIMER_MIN_AGENT_VERSION
+        // (disabled until that env var is set). Gating START is what forces an
+        // upgrade: an old build simply cannot begin a session, so it never
+        // reaches the idle popup at all.
+        //
+        // Deliberately NOT on stop / idle. The desktop's idle catch treats ANY
+        // error from POST /timer/idle as a network error: it queues the payload
+        // and RESUMES the timer, which credits the idle time. Gating those routes
+        // would therefore turn a rejection into "idle time kept" on older builds —
+        // the exact opposite of the policy — and would break the honest Discard
+        // path too. Same reasoning for stop: refusing it strands the entry open
+        // and inflates it.
+        Route::post('timer/start', [\App\Http\Controllers\Api\V1\TimerController::class, 'start'])->middleware(['throttle:30,1', 'min.agent']);
+        Route::post('timer/stop', [\App\Http\Controllers\Api\V1\TimerController::class, 'stop'])->middleware('throttle:30,1');
+        Route::post('timer/switch', [\App\Http\Controllers\Api\V1\TimerController::class, 'switch'])->middleware(['throttle:30,1', 'min.agent']);
         Route::post('timer/pause', [\App\Http\Controllers\Api\V1\TimerController::class, 'pause']);
         Route::post('timer/resume', [\App\Http\Controllers\Api\V1\TimerController::class, 'resume']);
         Route::get('timer/status', [\App\Http\Controllers\Api\V1\TimerController::class, 'status']);
         Route::get('timer/today-total', [\App\Http\Controllers\Api\V1\TimerController::class, 'todayTotal']);
         Route::post('timer/heartbeat', [\App\Http\Controllers\Api\V1\TimerController::class, 'heartbeat'])->middleware('throttle:60,1');
-        Route::post('timer/idle', [\App\Http\Controllers\Api\V1\TimerController::class, 'idle']);
+        Route::post('timer/idle', [\App\Http\Controllers\Api\V1\TimerController::class, 'idle'])->middleware('throttle:30,1');
 
         // Time entries
         // STATIC route registered BEFORE the apiResource wildcard so 'pending' is

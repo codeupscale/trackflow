@@ -177,53 +177,28 @@ window.trackflow.onIdleData((data) => {
 
     startTicking();
 
-    if (Array.isArray(data.projects) && data.projects.length > 0) {
-        const sel = document.getElementById("reassignProject");
-        // idle-data is re-sent while the popup is open (project refresh on show,
-        // the 30-min refresh interval, resume-after-sleep). Rebuilding the <select>
-        // unconditionally wiped the project the user had just picked back to the
-        // placeholder. Only rebuild when the list actually changed, and preserve
-        // the current selection across the rebuild.
-        const sameList =
-            projects.length === data.projects.length &&
-            projects.every((p, i) => p.id === data.projects[i].id);
+    // Reassign was removed (2026-07-16) \u2014 the project list is no longer rendered
+    // into a picker. `projects` is still tracked because the main process keeps
+    // sending it in idle-data; ignoring it here is deliberate.
+    if (Array.isArray(data.projects)) {
         projects = data.projects;
-        if (!sameList || sel.options.length <= 1) {
-            const prevValue = sel.value;
-            sel.innerHTML = '<option value="">Reassign to project\u2026</option>';
-            projects.forEach((p) => {
-                const opt = document.createElement("option");
-                opt.value = p.id;
-                opt.textContent = p.name || p.id;
-                sel.appendChild(opt);
-            });
-            if (prevValue && projects.some((p) => String(p.id) === prevValue)) {
-                sel.value = prevValue;
-            }
-        }
-        document.getElementById("reassignBtn").disabled = !sel.value;
     }
 });
 
-document
-    .getElementById("reassignProject")
-    .addEventListener("change", function () {
-        document.getElementById("reassignBtn").disabled = !this.value;
-    });
+const ACTION_BUTTON_IDS = ["continueBtn", "discardBtn"];
 
 function disableAllButtons() {
-    ["keepBtn", "discardBtn", "reassignBtn"].forEach((id) => {
-        document.getElementById(id).disabled = true;
+    ACTION_BUTTON_IDS.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = true;
     });
 }
 
 function enableAllButtons() {
-    ["keepBtn", "discardBtn"].forEach((id) => {
-        document.getElementById(id).disabled = false;
+    ACTION_BUTTON_IDS.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = false;
     });
-    // Reassign stays disabled unless a project is selected
-    document.getElementById("reassignBtn").disabled =
-        !document.getElementById("reassignProject").value;
 }
 
 function sendAction(action, projectId) {
@@ -233,41 +208,32 @@ function sendAction(action, projectId) {
     window.trackflow.resolveIdle(action, projectId || null, currentActionId);
 }
 
+// Both buttons DISCARD the idle gap; they differ only in what happens next.
+//
+// "Continue Tracking" → main action "discard": the server splits the entry at
+// idle-start, drops the gap, and opens a NEW running entry, so tracking resumes
+// from where it paused. (Same path the `keep_idle_time:"never"` policy uses.)
+// It does NOT credit idle time, so it is not blocked by the keep/reassign 403.
 document
-    .getElementById("keepBtn")
-    .addEventListener("click", () => sendAction("keep"));
-// "Discard Idle Time" removes the idle period AND stops tracking. This maps to
-// the "stop" action (discard idle, then stop the timer) — NOT the internal
-// "discard" action, which is reserved for the `keep_idle_time: "never"` policy
-// that silently discards idle while CONTINUING to track.
+    .getElementById("continueBtn")
+    .addEventListener("click", () => sendAction("discard"));
+
+// "Stop Timer" → main action "stop": discard the gap and stop; the entry closes
+// at the moment idle began, no server split, no resume.
 document
     .getElementById("discardBtn")
     .addEventListener("click", () => sendAction("stop"));
-document.getElementById("reassignBtn").addEventListener("click", () => {
-    const projectId = document.getElementById("reassignProject").value;
-    if (projectId) sendAction("reassign", projectId);
-});
 
-// Keyboard shortcuts
+// Keyboard shortcuts: C = continue, S = stop. (K/R for the removed Keep/Reassign
+// buttons are intentionally gone — no hidden path back to crediting idle time.)
 document.addEventListener("keydown", (e) => {
     if (e.repeat) return;
     if (actionSent) return;
-    // Don't trigger shortcuts when the select dropdown is focused
-    if (document.activeElement && document.activeElement.tagName === "SELECT") {
-        if (e.key.toLowerCase() !== "r") return;
-    }
-    switch (e.key.toLowerCase()) {
-        case "k":
-            document.getElementById("keepBtn").click();
-            break;
-        case "d":
-            document.getElementById("discardBtn").click();
-            break;
-        case "r":
-            const sel = document.getElementById("reassignProject");
-            if (sel.value) document.getElementById("reassignBtn").click();
-            else sel.focus();
-            break;
+    const key = e.key.toLowerCase();
+    if (key === "c") {
+        document.getElementById("continueBtn").click();
+    } else if (key === "s") {
+        document.getElementById("discardBtn").click();
     }
 });
 

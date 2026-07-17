@@ -171,6 +171,9 @@ class TimerController extends Controller
             'idle_started_at' => 'required|date|before_or_equal:now',
             'idle_ended_at' => 'required|date|before_or_equal:now|after:idle_started_at',
             'idle_seconds' => 'required|integer|min:1|max:43200',
+            // 'keep' and 'reassign' are still ACCEPTED by the validator so that
+            // older desktop builds get a purposeful 403 below rather than a
+            // confusing validation error. The route is deliberately kept alive.
             'action' => 'required|in:discard,keep,reassign',
         ];
         if ($request->action === 'reassign') {
@@ -178,12 +181,23 @@ class TimerController extends Controller
         }
         $request->validate($rules);
 
-        if ($request->action === 'reassign') {
-            $request->user()->organization->projects()->findOrFail($request->project_id);
-        }
-
-        if ($request->action === 'keep') {
-            return response()->json(['message' => 'Idle time kept.']);
+        // Idle time may no longer be credited as work (owner policy, 2026-07-16).
+        //
+        // 'reassign' minted brand-new type='tracked' time on another project — the
+        // strongest way to get paid for time away — so it is refused here, at the
+        // server, not merely hidden in the desktop UI. An older build that still
+        // renders the button, or a hand-crafted request with a valid token, hits
+        // this same wall. Genuinely-worked time goes through Manual Time Entry,
+        // which lands in the manager approval queue.
+        //
+        // 'keep' never had a server-side effect (the desktop simply let the entry
+        // keep running), so refusing it changes no data — it exists to give old
+        // clients an explicit, honest answer instead of a silent success.
+        if (in_array($request->action, ['keep', 'reassign'], true)) {
+            return response()->json([
+                'message' => 'Idle time can no longer be kept or reassigned. Discard it, and log any time you actually worked as a manual entry for manager approval.',
+                'code' => 'IDLE_CREDIT_DISABLED',
+            ], 403);
         }
 
         try {

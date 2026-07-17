@@ -191,7 +191,9 @@ const MIN_ENTRY_DURATION_SEC = 5;
 // Default configuration values — single source of truth
 const DEFAULT_CONFIG = {
     screenshot_interval: 5,
-    idle_timeout: 5,
+    // Offline fallback only — the real value comes from GET /agent/config
+    // (Settings → Idle detection) and is re-read every ~5 min.
+    idle_timeout: 10,
     idle_detection: true,
     keep_idle_time: "prompt",
     blur_screenshots: false,
@@ -2176,7 +2178,7 @@ async function initializeApp() {
                 dismissIdleAlert();
             }
         },
-        onResumeAfterSleep: () => {
+        onResumeAfterSleep: async ({ sleepSec, suspendedAtMs } = {}) => {
             // Bug B: re-surface a preserved idle alert with the SAME idleStartedAt so
             // getIdleDuration() spans the sleep gap and the user decides on the full
             // away duration. isTimerPaused stays true throughout (never un-paused
@@ -2216,18 +2218,30 @@ async function initializeApp() {
                     dismissIdleAlert();
                 }
             } else if (isTimerRunning && !isIdleAlertActive()) {
-                activityMonitor?.start();
-                if (currentEntry) {
-                    screenshotService?.start(currentEntry.id, {
-                        immediateCapture:
-                            config.screenshot_capture_immediate_after_idle ===
-                            true,
-                    });
+                // Long-sleep backstop. Must run BEFORE capture restarts: if the
+                // gap exceeded the idle threshold the entry is closed at the last
+                // real activity, so there is nothing left to capture for.
+                const stopped = await autoStopAfterSleepGap(
+                    sleepSec,
+                    suspendedAtMs,
+                );
+                if (!stopped) {
+                    activityMonitor?.start();
+                    if (currentEntry) {
+                        screenshotService?.start(currentEntry.id, {
+                            immediateCapture:
+                                config.screenshot_capture_immediate_after_idle ===
+                                true,
+                        });
+                    }
+                    startTrayTimer();
+                    updateTrayIcon(true);
+                    updateTrayTitle();
                 }
-                startTrayTimer();
-                updateTrayIcon(true);
-                updateTrayTitle();
             }
+            // Reconcile runs only after any gap-stop above has fully settled —
+            // otherwise it would see a still-running local session and push the
+            // stale started_at back to the server, resurrecting the phantom.
             if (networkMonitor?.isOnline && offlineQueue && apiClient) {
                 setImmediate(() => {
                     reconcileTimerState()
@@ -3720,6 +3734,66 @@ async function autoStopTimerForPowerEvent(reason, endedAtMs) {
         "TrackFlow — Timer auto-stopped",
         `Timer stopped at ${label} because your computer ${reasonVerb}. All time tracked before then was saved.`,
     );
+}
+
+/**
+ * Sleep-gap threshold: the same idle window the admin configures in Settings →
+ * Idle detection. One number governs both "away at the desk" and "asleep", so
+ * the promise the product makes ("no activity for N minutes stops the timer")
+ * holds whether the machine stayed awake or not.
+ */
+function getSleepGapThresholdSec() {
+    const min = Number(config?.idle_timeout);
+    if (Number.isFinite(min) && min > 0) return Math.round(min * 60);
+    return PowerManager.DEFAULT_GAP_THRESHOLD_SEC;
+}
+
+/**
+ * Long-sleep backstop, run on resume.
+ *
+ * The idle detector cannot catch a sleep (its interval is frozen while suspended
+ * and the OS idle counter resets on wake), so without this a machine that sleeps
+ * overnight with the timer running accrues the whole gap as tracked time — the
+ * "20 hours tracked" report.
+ *
+ * Short sleeps keep running by design; only a gap longer than the idle threshold
+ * closes the entry, back-dated to the last real activity (stamped by
+ * onSuspendCleanup at the suspend instant) so the sleep itself is never credited.
+ *
+ * @returns {Promise<boolean>} true when the timer was stopped.
+ */
+async function autoStopAfterSleepGap(sleepSec, suspendedAtMs) {
+    if (!isTimerRunning) return false;
+
+    const lastActiveIso = loadLastActiveAt();
+    const { shouldClose, stopAtMs, gapSec } = PowerManager.evaluateSleepGap({
+        sleepSec,
+        gapThresholdSec: getSleepGapThresholdSec(),
+        lastActiveAtMs: lastActiveIso
+            ? new Date(lastActiveIso).getTime()
+            : null,
+        suspendedAtMs,
+        hasOpenSession: isTimerRunning,
+    });
+
+    if (!shouldClose || stopAtMs == null) return false;
+
+    console.log(
+        `[power] Sleep gap ${gapSec}s exceeded threshold — stopping timer at ${new Date(stopAtMs).toISOString()}`,
+    );
+    logToFile(
+        "info",
+        `[TIMER_SLEEP_GAP_STOP] gapSec=${gapSec} stopAt=${new Date(stopAtMs).toISOString()}`,
+    );
+
+    // Tear down capture/idle state first so nothing re-arms against a closed entry.
+    screenshotService?.stop();
+    activityMonitor?.stop();
+    idleDetector?.stop();
+    dismissIdleAlert();
+
+    await autoStopTimerForPowerEvent("sleep-gap", stopAtMs);
+    return true;
 }
 
 /**

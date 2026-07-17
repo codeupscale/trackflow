@@ -42,6 +42,82 @@ describe("PowerManager", () => {
         });
     });
 
+    // Regression cover for the "20 hours tracked" report: laptop slept overnight
+    // with the timer running. The idle detector cannot catch a sleep (frozen
+    // interval; OS idle counter resets on wake), so the resume path is the only
+    // thing standing between an overnight sleep and a 20h entry.
+    describe("evaluateSleepGap", () => {
+        const IDLE_THRESHOLD_SEC = 600; // 10 min, matching Settings → Idle detection
+        const suspendedAt = new Date("2026-07-16T13:00:00.000Z").getTime();
+        const lastActive = new Date("2026-07-16T12:58:00.000Z").getTime();
+
+        const evaluate = (over) =>
+            PowerManager.evaluateSleepGap({
+                sleepSec: 60,
+                gapThresholdSec: IDLE_THRESHOLD_SEC,
+                lastActiveAtMs: lastActive,
+                suspendedAtMs: suspendedAt,
+                hasOpenSession: true,
+                ...over,
+            });
+
+        test("short sleep keeps the timer running (lunch / quick lid close)", () => {
+            // Product policy: sleeps within the idle window are NOT interrupted.
+            const r = evaluate({ sleepSec: IDLE_THRESHOLD_SEC - 1 });
+            expect(r.shouldClose).toBe(false);
+            expect(r.stopAtMs).toBeNull();
+        });
+
+        test("sleep exactly at the threshold keeps running (boundary)", () => {
+            const r = evaluate({ sleepSec: IDLE_THRESHOLD_SEC });
+            expect(r.shouldClose).toBe(false);
+        });
+
+        test("sleep one second past the threshold closes the entry", () => {
+            const r = evaluate({ sleepSec: IDLE_THRESHOLD_SEC + 1 });
+            expect(r.shouldClose).toBe(true);
+            expect(r.stopAtMs).toBe(lastActive);
+        });
+
+        test("overnight sleep back-dates the stop to the last activity, not to wake time", () => {
+            // The actual reported bug: ~20h sleep. The stop must land at 12:58,
+            // NOT at wake — back-dating is what keeps the 20h out of the entry.
+            const twentyHoursSec = 20 * 60 * 60;
+            const r = evaluate({ sleepSec: twentyHoursSec });
+            expect(r.shouldClose).toBe(true);
+            expect(r.stopAtMs).toBe(lastActive);
+            expect(r.gapSec).toBe(twentyHoursSec);
+        });
+
+        test("falls back to the suspend instant when lastActiveAt is missing", () => {
+            const r = evaluate({ sleepSec: 20 * 3600, lastActiveAtMs: null });
+            expect(r.shouldClose).toBe(true);
+            expect(r.stopAtMs).toBe(suspendedAt);
+        });
+
+        test("never closes without an open session", () => {
+            const r = evaluate({ sleepSec: 20 * 3600, hasOpenSession: false });
+            expect(r.shouldClose).toBe(false);
+        });
+
+        test("does not close when no anchor exists at all — never credits the gap", () => {
+            // With no lastActiveAt and no suspend instant there is no honest stop
+            // point. Closing at now() would credit the whole sleep — the bug.
+            const r = evaluate({
+                sleepSec: 20 * 3600,
+                lastActiveAtMs: null,
+                suspendedAtMs: null,
+            });
+            expect(r.shouldClose).toBe(false);
+            expect(r.stopAtMs).toBeNull();
+        });
+
+        test("a zero/unknown threshold never closes", () => {
+            const r = evaluate({ sleepSec: 20 * 3600, gapThresholdSec: 0 });
+            expect(r.shouldClose).toBe(false);
+        });
+    });
+
     describe("formatTimeShortLocal", () => {
         test("formats hours and minutes in 12-hour format", () => {
             const d = new Date();

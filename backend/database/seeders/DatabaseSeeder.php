@@ -27,7 +27,7 @@ class DatabaseSeeder extends Seeder
             'settings' => [
                 'screenshot_interval' => 5,
                 'blur_screenshots' => false,
-                'idle_timeout' => 5,
+                'idle_timeout' => 10,
                 'timezone' => 'Asia/Karachi',
                 'can_add_manual_time' => true,
             ],

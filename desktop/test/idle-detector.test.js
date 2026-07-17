@@ -18,7 +18,7 @@ describe("IdleDetector", () => {
 
     test("should initialize with default config", () => {
         detector = new IdleDetector();
-        expect(detector.idleTimeoutSec).toBe(5 * 60); // 5 min default
+        expect(detector.idleTimeoutSec).toBe(10 * 60); // 10 min default (raised from 5, 2026-07-16)
         expect(detector.alertAutoStopSec).toBe(10 * 60); // 10 min default
         expect(detector.enabled).toBe(true);
         expect(detector.state).toBe(IDLE_STATE.STOPPED);

@@ -95,7 +95,10 @@ class Organization extends Model
         return [
             'screenshot_interval' => 5,
             'blur_screenshots' => false,
-            'idle_timeout' => 5,
+            // Minutes of no keyboard/mouse before the idle alert fires. Also the
+            // sleep-gap threshold the desktop uses on resume — a sleep longer
+            // than this stops the timer, back-dated to the last real activity.
+            'idle_timeout' => 10,
             // Idle alert emails are org-configurable and disabled by default to prevent spam.
             'idle_alert_email_enabled' => false,
             // Cooldown (minutes) between repeated idle alert emails for the same employee.
@@ -106,6 +109,11 @@ class Organization extends Model
             'timezone' => 'Asia/Karachi',
             'can_add_manual_time' => true,
             'employees_see_all_projects' => false, // if false, employees see only projects they are assigned to
+            // When true, the FIRST timer start of the day auto-creates an attendance
+            // check-in at the moment tracking began — unless the user already checked
+            // in (manually via web, or a prior auto check-in). Default OFF: orgs that
+            // treat manual web check-in as the source of truth are unaffected.
+            'auto_check_in_on_track' => false,
             // Idle alert auto-stop (only relevant in "prompt" mode).
             'idle_alert_auto_stop_min' => 10,
             // After user resolves idle alert (or auto-discard), capture one screenshot immediately.
