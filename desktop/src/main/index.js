@@ -45,46 +45,11 @@ const fs = require("fs");
         // Non-fatal — env vars may already be set by the OS or launcher
     }
 })();
-// ── Linux / Wayland: Force X11 mode to prevent per-capture screen picker ──
-//
-// On Ubuntu 22.04+ (GNOME Wayland), desktopCapturer.getSources() triggers the
-// XDG Desktop Portal screen-picker dialog on EVERY call because Wayland requires
-// explicit user consent for each capture session. This makes automated
-// screenshot capture unusable.
-//
-// Fix: append --ozone-platform=x11 BEFORE Chromium initialises so Electron
-// uses XWayland instead of the native Wayland backend. XWayland bypasses the
-// portal entirely and lets desktopCapturer work the same way it does on X11.
-//
-// This must be called before app.requestSingleInstanceLock() / app.whenReady().
-if (process.platform === "linux") {
-    // Force pure X11 mode so desktopCapturer never invokes the XDG Desktop Portal
-    // screen-picker dialog. Two layers of enforcement:
-    //
-    // 1. Unset WAYLAND_DISPLAY before Chromium initialises — prevents Electron from
-    //    detecting a Wayland compositor even when running inside a GNOME/Wayland session
-    //    (Ubuntu 24.04 still triggers the portal for XWayland apps if this is set).
-    //
-    // 2. ELECTRON_OZONE_PLATFORM_HINT=x11 — the Electron 20+ declarative way to force
-    //    X11/XWayland mode (respected before Chromium args are parsed).
-    //
-    // 3. --ozone-platform=x11 Chromium flag — belt-and-suspenders for older Electron.
-    //
-    // Together these prevent the "Share Screen" portal dialog on Ubuntu 22.04–24.04.
-    delete process.env.WAYLAND_DISPLAY;
-    process.env.ELECTRON_OZONE_PLATFORM_HINT = "x11";
-    app.commandLine.appendSwitch("ozone-platform", "x11");
-    // AppImage distributes without setuid-root chrome-sandbox binary, so the
-    // SUID sandbox is unavailable. Disable it to prevent the fatal abort.
-    // Electron's process-level sandbox (seccomp-bpf) still applies.
-    app.commandLine.appendSwitch("no-sandbox");
-    console.log(
-        "[linux] Forcing X11 mode (WAYLAND_DISPLAY unset, ELECTRON_OZONE_PLATFORM_HINT=x11, ozone-platform=x11)",
-    );
-    console.log(
-        "[linux] Disabling SUID sandbox (not available in AppImage without setuid-root)",
-    );
-}
+const { configureLinuxPlatform } = require("./linux-platform");
+
+// Linux/Wayland: stay on native Wayland + PipeWire capture. Do NOT force X11 —
+// deleting WAYLAND_DISPLAY blanks the entire desktop on GNOME/KDE (see linux-platform.js).
+configureLinuxPlatform(app);
 
 const crypto = require("crypto");
 const { autoUpdater } = require("electron-updater");
@@ -2843,11 +2808,6 @@ function showPopup() {
                 popupWindow.moveTop();
             }
         }
-        if (process.platform === "linux") {
-            popupWindow.setVisibleOnAllWorkspaces(true, {
-                visibleOnFullScreen: true,
-            });
-        }
         popupWindow.show();
         popupWindow.focus();
         setImmediate(() => {
@@ -4855,11 +4815,11 @@ function _applyIdleAlertEverywhereVisible(win) {
         if (typeof win.setVisibleOnAllWorkspaces === "function") {
             win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
         }
-        // 'screen-saver' is the highest standard level — it clears fullscreen
-        // apps where plain alwaysOnTop ('floating') does not. Constructor already
-        // set alwaysOnTop:true; this re-asserts it at the stronger level.
+        // Linux/Wayland: avoid 'screen-saver' level — on some compositors it can
+        // paint a fullscreen black layer over the desktop. 'floating' is enough.
         if (typeof win.setAlwaysOnTop === "function") {
-            win.setAlwaysOnTop(true, "screen-saver");
+            const level = process.platform === "linux" ? "floating" : "screen-saver";
+            win.setAlwaysOnTop(true, level);
         }
     } catch (err) {
         console.error(
