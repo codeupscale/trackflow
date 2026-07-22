@@ -1,4 +1,21 @@
 const axios = require('axios');
+const {
+  isAgentUpgradeRequiredError,
+  getAgentUpgradePayload,
+} = require('./agent-upgrade');
+
+function resolveAgentVersion() {
+  try {
+    const { app } = require('electron');
+    return app.getVersion();
+  } catch {
+    try {
+      return require('../../package.json').version;
+    } catch {
+      return '1.0.0';
+    }
+  }
+}
 
 // Production API — change this when deploying to a new server
 const API_BASE = process.env.TRACKFLOW_API_URL || 'https://trackflow.codeupscale.com/api/v1';
@@ -20,16 +37,7 @@ class ApiClient {
     this._onAuthFailed = null; // Callback when token refresh fails (force logout)
 
     // Dynamically resolve agent version from Electron app or package.json
-    let agentVersion = '1.0.0';
-    try {
-      const { app } = require('electron');
-      agentVersion = app.getVersion();
-    } catch {
-      // Fallback: read from package.json if Electron app not available
-      try {
-        agentVersion = require('../../package.json').version;
-      } catch {}
-    }
+    const agentVersion = resolveAgentVersion();
 
     this.client = axios.create({
       baseURL: API_BASE,
@@ -110,6 +118,7 @@ class ApiClient {
         'Authorization': `Bearer ${this.refreshToken}`,
         'Accept': 'application/json',
         'X-TrackFlow-Client': 'desktop',
+        'X-Agent-Version': resolveAgentVersion(),
         ...(getDesktopDeviceId() ? { 'X-Device-Id': getDesktopDeviceId() } : {}),
       },
       timeout: 15000,
@@ -365,3 +374,5 @@ class ApiClient {
 }
 
 module.exports = ApiClient;
+module.exports.isAgentUpgradeRequiredError = isAgentUpgradeRequiredError;
+module.exports.getAgentUpgradePayload = getAgentUpgradePayload;

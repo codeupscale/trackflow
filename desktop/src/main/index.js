@@ -89,6 +89,10 @@ if (process.platform === "linux") {
 const crypto = require("crypto");
 const { autoUpdater } = require("electron-updater");
 const ApiClient = require("./api-client");
+const {
+    isAgentUpgradeRequiredError,
+    getAgentUpgradePayload,
+} = require("./agent-upgrade");
 const ActivityMonitor = require("./activity-monitor");
 const ScreenshotService = require("./screenshot-service");
 const IdleDetector = require("./idle-detector");
@@ -116,6 +120,11 @@ const PowerManager = require("./power-manager");
 
 const WEB_DASHBOARD_URL =
     process.env.TRACKFLOW_WEB_URL || "https://trackflow.codeupscale.com";
+
+const DESKTOP_RELEASES_URL =
+    "https://github.com/codeupscale/trackflow/releases/latest";
+
+let _agentUpgradeDialogShown = false;
 
 // ── File-based logger for packaged macOS builds ───────────────────
 // macOS .app bundles suppress stdout/stderr. This writes to a log
@@ -600,6 +609,93 @@ async function showScreenPermissionOnboarding(options = {}) {
         _screenPermissionDeclinedThisSession = true;
         return "declined";
     }
+}
+
+/**
+ * Show a blocking "update required" dialog. Used when the server rejects this
+ * desktop build (HTTP 426) — must NOT fall back to local-first tracking.
+ */
+async function showAgentUpgradeRequired(error) {
+    if (_agentUpgradeDialogShown) return;
+    _agentUpgradeDialogShown = true;
+
+    const { message, minVersion } = getAgentUpgradePayload(error);
+    const detailLines = [message];
+    if (minVersion) {
+        detailLines.push(`Minimum version required: ${minVersion}`);
+    }
+    detailLines.push(
+        "\nDownload the latest TrackFlow desktop app to continue tracking time.",
+    );
+
+    const result = await dialog.showMessageBox({
+        type: "warning",
+        title: "Update Required",
+        message: "This version of TrackFlow is no longer supported",
+        detail: detailLines.join("\n"),
+        buttons: ["Download Update", "Quit"],
+        defaultId: 0,
+        cancelId: 1,
+    });
+
+    if (result.response === 0) {
+        shell.openExternal(DESKTOP_RELEASES_URL);
+    }
+}
+
+function deleteLocalTimerSession(localId) {
+    if (!localId) return;
+    const db = _getLocalTimerDb();
+    if (!db) return;
+    try {
+        db.prepare("DELETE FROM timer_sessions WHERE id = ?").run(localId);
+    } catch (e) {
+        console.error("[LocalTimerDb] deleteSession failed:", e.message);
+    }
+}
+
+/** Roll back a local-first start when the server refuses this app version. */
+function abortLocalTimerStartDueToUpgrade(localId) {
+    deleteLocalTimerSession(localId);
+
+    if (currentEntry?._localId === localId || currentEntry?.id === localId) {
+        isTimerRunning = false;
+        isTimerPaused = false;
+        currentEntry = null;
+        _cachedStartedAtMs = null;
+        todayTotalCurrentProject = 0;
+        _pendingOfflineReassignIdleSec = 0;
+        screenshotService?.stop();
+        activityMonitor?.stop();
+        idleDetector?.stop();
+        stopTrayTimer();
+        updateTrayTitle();
+        notifyPopup("timer-stopped", {});
+    }
+}
+
+/**
+ * Handle HTTP 426 / AGENT_UPGRADE_REQUIRED. Returns a result object for callers,
+ * or null if this error is not an upgrade rejection.
+ */
+async function handleAgentUpgradeRequired(error, { localId = null } = {}) {
+    if (!isAgentUpgradeRequiredError(error)) return null;
+
+    console.warn("[Upgrade] Server rejected this desktop version — blocking tracking");
+    if (localId) {
+        abortLocalTimerStartDueToUpgrade(localId);
+    }
+
+    const payload = getAgentUpgradePayload(error);
+    setImmediate(() => {
+        showAgentUpgradeRequired(error).catch(() => {});
+    });
+
+    return {
+        error: payload.message,
+        upgradeRequired: true,
+        minVersion: payload.minVersion,
+    };
 }
 
 let tray = null;
@@ -1747,6 +1843,16 @@ async function initializeApp() {
             tokenValid = true;
             break;
         } catch (e) {
+            if (isAgentUpgradeRequiredError(e)) {
+                await deleteToken();
+                isAuthenticated = false;
+                createTray();
+                createLoginWindow();
+                setImmediate(() => {
+                    showAgentUpgradeRequired(e).catch(() => {});
+                });
+                return;
+            }
             const status = e.response?.status;
             // If 401/403 after refresh attempt, token is truly invalid
             if (status === 401 || status === 403) break;
@@ -3500,6 +3606,9 @@ async function switchProject(projectId) {
             todayTotal: todayTotalCurrentProject,
         };
     } catch (e) {
+        const upgradeResult = await handleAgentUpgradeRequired(e);
+        if (upgradeResult) return upgradeResult;
+
         console.error("[switchProject] Failed:", e.message);
         return { error: e.response?.data?.message || e.message };
     }
@@ -3640,6 +3749,13 @@ async function startTimer(projectId = null) {
         } catch (e) {
             const status = e.response?.status;
 
+            const upgradeResult = await handleAgentUpgradeRequired(e, {
+                localId,
+            });
+            if (upgradeResult) {
+                return upgradeResult;
+            }
+
             // 409 = timer already running on server — sync local state
             if (status === 409) {
                 try {
@@ -3676,6 +3792,13 @@ async function startTimer(projectId = null) {
                         todayTotal: todayTotalCurrentProject,
                     };
                 } catch (retryErr) {
+                    const upgradeResult = await handleAgentUpgradeRequired(
+                        retryErr,
+                        { localId },
+                    );
+                    if (upgradeResult) {
+                        return upgradeResult;
+                    }
                     // Still offline or server error — timer is running locally
                     console.warn(
                         "[Timer] 409 retry failed, continuing locally:",
@@ -4174,6 +4297,11 @@ async function reconcileTimerState() {
                         });
                     }
                 } catch (e) {
+                    const upgradeResult = await handleAgentUpgradeRequired(e, {
+                        localId: session.id,
+                    });
+                    if (upgradeResult) return;
+
                     console.warn(
                         `[Reconcile] Session ${session.id} sync failed:`,
                         e.message,
@@ -4212,6 +4340,12 @@ async function reconcileTimerState() {
                     });
                 }
             } catch (startErr) {
+                const upgradeResult = await handleAgentUpgradeRequired(
+                    startErr,
+                    { localId: localActive.id },
+                );
+                if (upgradeResult) return;
+
                 if (startErr.response?.status === 409) {
                     // Server already has a running timer — check if it's ours (idempotency)
                     console.log("[Reconcile] Server has running timer (409)");
@@ -4272,6 +4406,11 @@ async function reconcileTimerState() {
                 // FIX D2: rebind live screenshot capture to the resolved server id.
                 screenshotService?.rebindEntryId(result.entry?.id);
             } catch (e) {
+                const upgradeResult = await handleAgentUpgradeRequired(e, {
+                    localId: currentEntry?._localId,
+                });
+                if (upgradeResult) return;
+
                 console.warn("[Reconcile] Push start failed:", e.message);
             }
         } else if (isServerTimerOpen(serverStatus) && isTimerRunning) {
@@ -5783,6 +5922,9 @@ function createLoginWindow() {
 
 /** Extract a user-friendly error message from a login/auth error. */
 function _friendlyLoginError(e) {
+    if (isAgentUpgradeRequiredError(e)) {
+        return getAgentUpgradePayload(e).message;
+    }
     const serverMsg = e.response?.data?.message;
     if (serverMsg) return serverMsg;
     if (e.code === "ENOTFOUND" || e.code === "ERR_NETWORK")

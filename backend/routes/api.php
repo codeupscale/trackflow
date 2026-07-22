@@ -49,11 +49,12 @@ Route::prefix('v1')->group(function () {
     // Public auth routes (with stricter rate limiting)
     Route::prefix('auth')->middleware('throttle:auth')->group(function () {
         Route::post('register', [AuthController::class, 'register']);
-        Route::post('login', [AuthController::class, 'login']);
+        // 'min.agent' blocks outdated desktop builds at login (when TIMER_MIN_AGENT_VERSION is set).
+        Route::post('login', [AuthController::class, 'login'])->middleware('min.agent');
         Route::post('forgot-password', [AuthController::class, 'forgotPassword']);
         Route::post('reset-password', [AuthController::class, 'resetPassword']);
-        Route::post('google', [AuthController::class, 'googleAuth']);
-        Route::post('select-organization', [AuthController::class, 'selectOrganization']);
+        Route::post('google', [AuthController::class, 'googleAuth'])->middleware('min.agent');
+        Route::post('select-organization', [AuthController::class, 'selectOrganization'])->middleware('min.agent');
     });
 
     // SAML2 SSO endpoints (public — IdP-initiated)
@@ -77,9 +78,9 @@ Route::prefix('v1')->group(function () {
         Route::post('profile/avatar', [ProfileController::class, 'uploadAvatar']);
 
         // Auth
-        Route::post('auth/refresh', [AuthController::class, 'refresh']);
+        Route::post('auth/refresh', [AuthController::class, 'refresh'])->middleware('min.agent');
         Route::post('auth/logout', [AuthController::class, 'logout']);
-        Route::get('auth/me', [AuthController::class, 'me']);
+        Route::get('auth/me', [AuthController::class, 'me'])->middleware('min.agent');
         Route::patch('auth/me', [AuthController::class, 'updateProfile']);
         Route::post('auth/change-password', [AuthController::class, 'changePassword'])->middleware('throttle:10,1');
         Route::get('auth/organizations', [AuthController::class, 'organizations']);
@@ -163,7 +164,7 @@ Route::prefix('v1')->group(function () {
             ->middleware('permission:dashboard.view_own_stats');
 
         // Agent (desktop safety — auth:sanctum only)
-        Route::get('agent/config', [\App\Http\Controllers\Api\V1\AgentController::class, 'config']);
+        Route::get('agent/config', [\App\Http\Controllers\Api\V1\AgentController::class, 'config'])->middleware('min.agent');
         Route::get('agent/my-shift', [\App\Http\Controllers\Api\V1\AgentController::class, 'myShift']);
         Route::post('agent/logs', [\App\Http\Controllers\Api\V1\AgentController::class, 'bulkLogs'])->middleware('throttle:30,1');
 
