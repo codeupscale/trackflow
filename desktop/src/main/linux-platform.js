@@ -5,8 +5,8 @@
  * the XDG screen-picker on every capture. That hijacks the compositor on modern
  * GNOME/KDE Wayland sessions and can blank the entire desktop after install.
  *
- * Correct approach (Ubuntu 22.04+): stay on native Wayland, enable PipeWire
- * capture once per session (portal picker on first capture only).
+ * Correct approach (Ubuntu 22.04+): stay on native Wayland, enable PipeWire,
+ * and reuse one ScreenCast stream per timer session (see wayland-capture-session.js).
  */
 function isWaylandSession(env = process.env) {
   return Boolean(env.WAYLAND_DISPLAY);

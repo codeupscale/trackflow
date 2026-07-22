@@ -1,6 +1,20 @@
 const { desktopCapturer, screen, systemPreferences, powerMonitor, dialog } = require('electron');
 const ScreenshotService = require('../src/main/screenshot-service');
 
+const mockShouldUseWaylandPersistentCapture = jest.fn(() => false);
+const mockWaylandCaptureJpeg = jest.fn().mockResolvedValue(Buffer.alloc(50000, 0x42));
+const mockWaylandOpen = jest.fn().mockResolvedValue({ ok: true, width: 1920, height: 1080 });
+const mockWaylandClose = jest.fn().mockResolvedValue();
+
+jest.mock('../src/main/wayland-capture-session', () => ({
+  shouldUseWaylandPersistentCapture: (...args) => mockShouldUseWaylandPersistentCapture(...args),
+  WaylandCaptureSession: jest.fn().mockImplementation(() => ({
+    open: mockWaylandOpen,
+    captureJpeg: mockWaylandCaptureJpeg,
+    close: mockWaylandClose,
+  })),
+}));
+
 jest.mock('../src/main/system-notifications', () => ({
   showSystemNotification: jest.fn(() => ({
     close: jest.fn(),
@@ -53,6 +67,7 @@ describe('ScreenshotService', () => {
   beforeEach(() => {
     jest.useFakeTimers();
     jest.clearAllMocks();
+    mockShouldUseWaylandPersistentCapture.mockReturnValue(false);
 
     mockApiClient = {
       presignScreenshot: jest.fn().mockResolvedValue({ screenshot_id: 'ss-1', upload_url: 'https://s3.example.com/upload', upload_headers: {} }),
@@ -292,8 +307,9 @@ describe('ScreenshotService', () => {
     test('uploads screenshot on success', async () => {
       service.currentEntryId = 'entry-1';
       await service.capture();
+      const isMac = process.platform === 'darwin';
       expect(desktopCapturer.getSources).toHaveBeenCalledWith({
-        types: ['screen', 'window'],
+        types: isMac ? ['screen', 'window'] : ['screen'],
         thumbnailSize: expect.any(Object),
         fetchWindowIcons: false,
       });
@@ -1045,6 +1061,40 @@ describe('ScreenshotService', () => {
       await service.capture();
       expect(sharp._instance.blur).not.toHaveBeenCalled();
       expect(mockApiClient.presignScreenshot).toHaveBeenCalled();
+    });
+  });
+
+  // ═════════════════════════════════════════════════════════════════
+  // ── Linux Wayland persistent capture ──
+  // ═════════════════════════════════════════════════════════════════
+
+  describe('Wayland persistent capture', () => {
+    test('start() opens a Wayland session when enabled', async () => {
+      mockShouldUseWaylandPersistentCapture.mockReturnValue(true);
+      service.start('entry-1', { immediateCapture: false });
+      await Promise.resolve();
+      expect(mockWaylandOpen).toHaveBeenCalledTimes(1);
+    });
+
+    test('capture() uses persistent stream without getSources on Wayland', async () => {
+      mockShouldUseWaylandPersistentCapture.mockReturnValue(true);
+      service.start('entry-1', { immediateCapture: false });
+      await Promise.resolve();
+
+      service.currentEntryId = 'entry-1';
+      await service.capture();
+
+      expect(mockWaylandCaptureJpeg).toHaveBeenCalledTimes(1);
+      expect(desktopCapturer.getSources).not.toHaveBeenCalled();
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalled();
+    });
+
+    test('stop() closes the Wayland session', async () => {
+      mockShouldUseWaylandPersistentCapture.mockReturnValue(true);
+      service.start('entry-1', { immediateCapture: false });
+      await Promise.resolve();
+      service.stop();
+      expect(mockWaylandClose).toHaveBeenCalledTimes(1);
     });
   });
 
