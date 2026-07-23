@@ -30,6 +30,15 @@ const DEFAULT_IDLE_CHECK_INTERVAL_SEC = 2;
 const MAX_AUTO_STOP_MIN = 240; // 4 hours
 /** Schedule a one-shot fire when within this many seconds of the threshold. */
 const BOUNDARY_LEAD_SEC = 20;
+/**
+ * Absolute safety grace (seconds) applied when the org DISABLED the interactive
+ * idle auto-stop (`idle_alert_auto_stop_min = 0`). Historically that config left
+ * the alert open forever, so a lid-closed / walked-away machine credited hours of
+ * idle — the "12 hours tracked" phantom. The detector now ALWAYS enforces a hard
+ * stop this long after the alert appears, back-dated to the last real activity,
+ * even when the user never responds and even when interactive auto-stop is off.
+ */
+const DEFAULT_HARD_STOP_GRACE_SEC = 10 * 60; // 10 min
 
 const IDLE_STATE = Object.freeze({
     STOPPED: "STOPPED",
@@ -84,18 +93,15 @@ class IdleDetector {
             if (!this.enabled && wasEnabled) {
                 this.stop();
             } else if (this._state === IDLE_STATE.ALERTING) {
-                if (this.alertAutoStopSec <= 0 && this.checkInterval) {
-                    clearInterval(this.checkInterval);
-                    this.checkInterval = null;
-                } else if (this.alertAutoStopSec > 0 && !this.checkInterval) {
+                // ALERTING must ALWAYS keep a check interval running so the
+                // absolute hard-stop cap fires even when interactive auto-stop is
+                // disabled. Start one if missing; restart if the tick changed.
+                if (!this.checkInterval) {
                     this.checkInterval = setInterval(
                         () => this._checkAutoStop(),
                         this.checkIntervalMs,
                     );
-                } else if (
-                    this.checkIntervalMs !== oldCheckIntervalMs &&
-                    this.checkInterval
-                ) {
+                } else if (this.checkIntervalMs !== oldCheckIntervalMs) {
                     clearInterval(this.checkInterval);
                     this.checkInterval = setInterval(
                         () => this._checkAutoStop(),
@@ -246,13 +252,13 @@ class IdleDetector {
         this.idleStartedAt = idleStartedAt;
         this.alertShownAt = Date.now();
 
-        // Start check interval so auto-stop can fire while alert is showing
-        if (this.alertAutoStopSec > 0) {
-            this.checkInterval = setInterval(
-                () => this._checkAutoStop(),
-                this.checkIntervalMs,
-            );
-        }
+        // ALWAYS run the check interval so BOTH the interactive auto-stop AND the
+        // absolute hard-stop cap can fire while the (re-shown, post-sleep) alert is
+        // up — even when interactive auto-stop is disabled.
+        this.checkInterval = setInterval(
+            () => this._checkAutoStop(),
+            this.checkIntervalMs,
+        );
 
         return this._actionId;
     }
@@ -361,6 +367,26 @@ class IdleDetector {
             MAX_AUTO_STOP_MIN,
         );
         this.alertAutoStopSec = autoStopMin > 0 ? autoStopMin * 60 : 0;
+        // Absolute hard-stop grace: the max REAL-TIME the idle alert may sit
+        // unanswered (measured from alertShownAt) before a hard auto-stop MUST
+        // fire — regardless of whether interactive auto-stop is enabled or the
+        // alert was ever answered. Guarantees ALERTING always terminates, closing
+        // the "12h phantom" hole where idle_alert_auto_stop_min = 0 left the timer
+        // running forever.
+        //
+        // DECOUPLED from alertAutoStopSec on purpose: the interactive countdown
+        // may be configured up to MAX_AUTO_STOP_MIN (4h), but this absolute safety
+        // net must NOT scale with it — otherwise a clamshell laptop under an org
+        // with a 4h countdown could sit open ~4h. It is a FIXED, tight bound so
+        // worst-case idle exposure is bounded regardless of org config. When the
+        // interactive countdown is shorter than this grace it still fires first
+        // (user-facing); when it is longer, this cap wins and bounds the loss.
+        //
+        // Measured from alertShownAt (not idleStartedAt) so a preserved idle alert
+        // re-shown after a long sleep still gives the user the grace window from
+        // the moment it re-appears, instead of hard-stopping on the first tick.
+        // Billing is bounded either way — the stop back-dates to idleStartedAt.
+        this.hardStopGraceSec = DEFAULT_HARD_STOP_GRACE_SEC;
         const checkSec =
             config.idle_check_interval_sec != null
                 ? config.idle_check_interval_sec
@@ -452,15 +478,16 @@ class IdleDetector {
                 );
             }
 
-            // Transition to ALERTING after callback (caller should show alert)
-            // Start auto-stop check interval
+            // Transition to ALERTING after callback (caller should show alert).
+            // ALWAYS run the check interval — even when interactive auto-stop is
+            // disabled (alertAutoStopSec === 0) — so the absolute hard-stop cap
+            // (hardStopIdleSec) is enforced and the alert can never sit unanswered
+            // forever (the "12h phantom" hole).
             this._state = IDLE_STATE.ALERTING;
-            if (this.alertAutoStopSec > 0) {
-                this.checkInterval = setInterval(
-                    () => this._checkAutoStop(),
-                    this.checkIntervalMs,
-                );
-            }
+            this.checkInterval = setInterval(
+                () => this._checkAutoStop(),
+                this.checkIntervalMs,
+            );
         } else if (
             systemIdleSec >= this.idleTimeoutSec - BOUNDARY_LEAD_SEC &&
             systemIdleSec < this.idleTimeoutSec
@@ -490,10 +517,6 @@ class IdleDetector {
      * ever seeing the idle alert.
      */
     _checkAutoStop() {
-        if (this.alertAutoStopSec <= 0) {
-            return;
-        }
-
         if (this._state !== IDLE_STATE.ALERTING) {
             this._clearInterval();
             return;
@@ -505,10 +528,28 @@ class IdleDetector {
         }
 
         const alertDurationSec = (Date.now() - this.alertShownAt) / 1000;
-        if (alertDurationSec >= this.alertAutoStopSec) {
-            const totalIdleDuration = this.idleStartedAt
-                ? Math.floor((Date.now() - this.idleStartedAt) / 1000)
-                : Math.floor(alertDurationSec);
+        const totalIdleSec = this.idleStartedAt
+            ? Math.floor((Date.now() - this.idleStartedAt) / 1000)
+            : Math.floor(alertDurationSec);
+
+        // Interactive auto-stop: fires alertAutoStopSec after the alert appeared
+        // (measured from alertShownAt, NOT idleStartedAt — a long sleep must not
+        // auto-stop before the user has a chance to see the re-shown popup).
+        const interactiveFire =
+            this.alertAutoStopSec > 0 &&
+            alertDurationSec >= this.alertAutoStopSec;
+
+        // Absolute hard-stop cap: fires once the alert has sat unanswered for the
+        // fixed grace, regardless of interactive auto-stop being disabled/
+        // misconfigured. Measured from alertShownAt (same clock as interactive) so
+        // a preserved sleep re-show still honors the grace window, and so the cap
+        // is decoupled from the org's interactive countdown length. This is what
+        // makes ALERTING deterministically terminate and closes the "12h phantom"
+        // hole (idle_alert_auto_stop_min = 0).
+        const hardCapFire = alertDurationSec >= this.hardStopGraceSec;
+
+        if (interactiveFire || hardCapFire) {
+            const totalIdleDuration = totalIdleSec;
             const actionId = this._actionId;
             // Fire auto-stop BEFORE resolving, so the callback can read idleStartedAt
             if (this._onAutoStop) {

@@ -80,6 +80,8 @@ const { getTrayIcon, warmIconCache } = require("./tray-icons");
 const {
     initSystemNotifications,
     showSystemNotification,
+    buildTrackingStateNotification,
+    shouldNotifyTrackingState,
 } = require("./system-notifications");
 const PowerManager = require("./power-manager");
 
@@ -1628,7 +1630,13 @@ function cleanupOnExit() {
 // Called from both forceLogout and performLogout to prevent stale callback crashes.
 function removeSessionListeners() {
     PowerManager.unregisterPowerHandlers();
+    stopIdleWatchdog();
     app.removeAllListeners("browser-window-focus");
+    // Reset tracking-state notification dedup so the NEXT login always re-notifies
+    // (and no post-logout resume can suppress a fresh state notif).
+    _lastStateNotifAt = 0;
+    _lastNotifiedTracking = null;
+    _lastAutoStopNotifAt = 0;
 }
 
 // Force logout — called when token refresh fails (password changed, tokens revoked).
@@ -2067,6 +2075,9 @@ async function initializeApp() {
                 n.show();
             }
         } catch {}
+        // This IS the state message for an idle auto-stop — suppress the generic
+        // "not tracking" notif a subsequent resume/unlock would otherwise fire.
+        markAutoStopNotified();
     });
 
     // Keep dock icon visible on macOS — the app has both tray and dock presence
@@ -2161,6 +2172,8 @@ async function initializeApp() {
                     if (result.success) {
                         console.log("[RestartState] Auto-resume successful");
                         showPopup();
+                        // Auto-resumed a valid session — confirm tracking is active.
+                        notifyTrackingState("startup-auto-resume");
                     } else {
                         console.warn(
                             "[RestartState] Auto-resume failed:",
@@ -2320,8 +2333,20 @@ async function initializeApp() {
                         .catch(() => {});
                 });
             }
+            // Tell the user their CURRENT state on wake/unlock. Self-suppresses if
+            // the sleep-gap/watchdog just auto-stopped (markAutoStopNotified ran
+            // above) or if an idle alert is being re-shown — one message, no
+            // contradiction. The debounce coalesces the paired resume+unlock.
+            notifyTrackingState("wake");
         },
     });
+
+    // ── Idle hard-stop watchdog (clamshell / never-sleeps backstop) ──────────
+    // Always-on interval that self-gates on isTimerRunning. Independent of the
+    // idle-detection feature toggle and the idle detector's state, so it stops a
+    // 12h phantom even when idle detection is off or the alert never showed.
+    // Torn down in removeSessionListeners() (both logout paths).
+    startIdleWatchdog();
 
     // ── Instant sync on focus / unlock ──────────────────────────────────────
     // When the user returns to the app (unlock, focus), trigger an immediate
@@ -2405,6 +2430,13 @@ async function initializeApp() {
 
     // Start periodic sync between desktop and server
     startTimerSync();
+
+    // Transition #3: login / startup. Tell the user their current tracking state
+    // once the session is established and any server-open timer has been adopted
+    // above (isTimerRunning is authoritative here). A local restart-state
+    // auto-resume that starts a timer ~2s later fires its own state notif (the
+    // state genuinely changes, so the debounce lets it through).
+    notifyTrackingState("startup");
 }
 
 function createTray() {
@@ -3796,6 +3828,105 @@ async function startTimer(projectId = null) {
     }
 }
 
+// ── "Always know your tracking state" notifications ──────────────────────────
+// Fires a single system notification of the CURRENT tracking state on the four
+// transitions where the user might otherwise be surprised: wake (resume), unlock,
+// login / startup auto-resume, and (via the auto-stop toast) any automatic stop.
+//
+// Dedup model:
+//   - _lastNotifiedTracking + _lastStateNotifAt coalesce the PAIRED power events a
+//     single lid-open emits (resume + unlock, a tick apart): the second call sees
+//     the SAME tracking state within the debounce window and is dropped. A genuine
+//     state change (not-tracking → tracking) is always allowed through.
+//   - _lastAutoStopNotifAt: whenever an automatic-stop toast fires (sleep-gap,
+//     idle-watchdog, idle hard-stop, startup/stale gap) we stamp this; the generic
+//     state notif then suppresses itself briefly so a resume that just auto-STOPPED
+//     shows only the specific "…because no activity was detected" toast, never a
+//     contradictory second message.
+const STATE_NOTIF_DEBOUNCE_MS = 5000; // coalesce paired resume+unlock
+const AUTOSTOP_NOTIF_SUPPRESS_MS = 8000; // let the specific auto-stop toast win
+let _lastStateNotifAt = 0;
+let _lastNotifiedTracking = null;
+let _lastAutoStopNotifAt = 0;
+
+/** Live all-projects today total (server total + current running session). */
+function liveTodayTotalSeconds() {
+    const base = todayTotalGlobal || 0;
+    if (isTimerRunning && _cachedStartedAtMs) {
+        return (
+            base +
+            Math.max(
+                0,
+                Math.floor((Date.now() - _cachedStartedAtMs) / 1000) -
+                    _pendingOfflineReassignIdleSec,
+            )
+        );
+    }
+    return base;
+}
+
+/**
+ * Show ONE notification reflecting the current tracking state. Guarded so it never
+ * fires after logout, never double-fires on paired power events, and never
+ * contradicts a just-shown automatic-stop toast or a live idle alert.
+ *
+ * @param {string} reason - transition tag for logs (resume/unlock/login/startup)
+ */
+function notifyTrackingState(reason) {
+    try {
+        const now = Date.now();
+        const isTracking = !!isTimerRunning;
+
+        // All dedup/coalescing/suppression guards live in the pure decision fn.
+        if (
+            !shouldNotifyTrackingState({
+                isAuthenticated,
+                isTracking,
+                isIdleAlertActive: isIdleAlertActive(),
+                now,
+                lastStateNotifAt: _lastStateNotifAt,
+                lastNotifiedTracking: _lastNotifiedTracking,
+                lastAutoStopNotifAt: _lastAutoStopNotifAt,
+                debounceMs: STATE_NOTIF_DEBOUNCE_MS,
+                autoStopSuppressMs: AUTOSTOP_NOTIF_SUPPRESS_MS,
+            })
+        ) {
+            return;
+        }
+
+        _lastStateNotifAt = now;
+        _lastNotifiedTracking = isTracking;
+
+        const { title, body } = buildTrackingStateNotification({
+            isTracking,
+            todayTotalSeconds: liveTodayTotalSeconds(),
+        });
+        showSystemNotification({
+            title,
+            body,
+            durationMs: 6000,
+            id: `trackflow-state-${now}`,
+            // Nice-to-have: clicking focuses the app (cross-platform via Electron).
+            onClick: () => {
+                try {
+                    showPopup();
+                } catch {}
+            },
+        });
+        console.log(
+            `[Notify] tracking-state (${reason}): ${isTracking ? "active" : "stopped"}`,
+        );
+    } catch (e) {
+        console.warn("[Notify] state notification failed:", e.message);
+    }
+}
+
+/** Stamp the moment an automatic-stop toast is shown so the generic state notif
+ *  suppresses itself and never contradicts it. */
+function markAutoStopNotified() {
+    _lastAutoStopNotifAt = Date.now();
+}
+
 async function autoStopTimerForPowerEvent(reason, endedAtMs) {
     if (!isTimerRunning) return;
     logToFile(
@@ -3811,12 +3942,21 @@ async function autoStopTimerForPowerEvent(reason, endedAtMs) {
     // data-layer backstop.)
     if (result && result.error) return;
     const label = PowerManager.formatTimeShortLocal(new Date(endedAtMs));
-    const reasonVerb =
-        reason === "lock-screen" ? "was locked" : "went to sleep";
+    let reasonClause;
+    if (reason === "lock-screen") {
+        reasonClause = "your computer was locked";
+    } else if (reason === "idle-watchdog" || reason === "idle") {
+        reasonClause = "no activity was detected";
+    } else {
+        reasonClause = "your computer went to sleep";
+    }
     PowerManager.showAutoStopNotification(
         "TrackFlow — Timer auto-stopped",
-        `Timer stopped at ${label} because your computer ${reasonVerb}. All time tracked before then was saved.`,
+        `Timer stopped at ${label} because ${reasonClause}. All time tracked before then was saved.`,
     );
+    // This specific toast IS the state message for an automatic stop — suppress the
+    // generic "not tracking" notif that a paired resume would otherwise fire.
+    markAutoStopNotified();
 }
 
 /**
@@ -3879,6 +4019,119 @@ async function autoStopAfterSleepGap(sleepSec, suspendedAtMs) {
     return true;
 }
 
+// ── Idle hard-stop watchdog (clamshell / never-sleeps backstop) ───────────────
+//
+// Failure mode this closes: the lid is closed but the machine stays AWAKE (on
+// charger or with an external display), or the user simply walks away. NO
+// `suspend` event ever fires, so `autoStopAfterSleepGap` never runs. If the
+// interactive idle alert is disabled, misconfigured, never shown, or never
+// answered, nothing stops the timer and the entire idle span is credited — the
+// reported "12 hours tracked while asleep" phantom.
+//
+// This watchdog is defense-in-depth: it runs on a fixed cadence whenever the
+// timer is running and is INDEPENDENT of the idle-detection feature toggle and of
+// the idle detector's internal state. It reads the OS idle counter directly and
+// hard-stops the timer, back-dated to the true last activity, once idle exceeds
+// an absolute cap. The idle detector's own hard cap fires first in the normal
+// (idle-detection-enabled) case; this is the layer that survives idle detection
+// being turned off entirely or the detector getting wedged.
+let _idleWatchdogInterval = null;
+const IDLE_WATCHDOG_TICK_MS = 30_000; // cheap: one getSystemIdleTime() per 30s
+
+/**
+ * Absolute idle ceiling (seconds) past which the watchdog force-stops the timer.
+ *
+ * DECOUPLED from `idle_alert_auto_stop_min` on purpose (matches the idle
+ * detector's hardStopIdleSec): the interactive countdown can be configured up to
+ * 4h, but this safety net is a FIXED, tight bound — idle threshold + a fixed few
+ * minutes grace + margin — so worst-case billed idle stays bounded no matter the
+ * org config. The +120s margin (vs. the idle detector's +60s) means the idle
+ * detector's own hard cap wins in the normal case; this layer only fires when
+ * idle detection is disabled or the detector is wedged.
+ */
+const IDLE_WATCHDOG_GRACE_SEC = 10 * 60; // fixed 10-min grace (few minutes)
+function getIdleWatchdogCapSec() {
+    const rawTimeout = Number(config?.idle_timeout);
+    const thresholdSec =
+        Number.isFinite(rawTimeout) && rawTimeout > 0
+            ? Math.round(rawTimeout * 60)
+            : PowerManager.DEFAULT_GAP_THRESHOLD_SEC;
+    return thresholdSec + IDLE_WATCHDOG_GRACE_SEC + 120;
+}
+
+async function _idleWatchdogTick() {
+    try {
+        if (!isTimerRunning) return;
+        // An interactive idle action or an in-flight stop is already resolving the
+        // idle — do not race it (the stopTimer mutex would no-op anyway).
+        if (_idleActionInProgress || _stopTimerInProgress) return;
+        // Respect the "always keep idle time" policy: those orgs intentionally
+        // credit presence, so awake-idle is not a phantom for them. (True sleep is
+        // still stopped by autoStopAfterSleepGap regardless of policy.)
+        if (config?.keep_idle_time === "always") return;
+
+        let systemIdleSec;
+        try {
+            systemIdleSec = powerMonitor.getSystemIdleTime();
+        } catch (e) {
+            // Some Linux/Wayland sessions can throw or return unreliable values —
+            // fail open (do nothing) rather than false-stop.
+            return;
+        }
+
+        const lastActiveIso = loadLastActiveAt();
+        const { shouldStop, stopAtMs, idleSec } =
+            PowerManager.evaluateIdleHardStop({
+                systemIdleSec,
+                hardStopSec: getIdleWatchdogCapSec(),
+                nowMs: Date.now(),
+                lastActiveAtMs: lastActiveIso
+                    ? new Date(lastActiveIso).getTime()
+                    : null,
+            });
+
+        if (!shouldStop || stopAtMs == null) return;
+
+        console.log(
+            `[IdleWatchdog] idle ${idleSec}s exceeded cap — hard-stopping at ${new Date(stopAtMs).toISOString()}`,
+        );
+        logToFile(
+            "warn",
+            `[IDLE_WATCHDOG_STOP] idleSec=${idleSec} cap=${getIdleWatchdogCapSec()} stopAt=${new Date(stopAtMs).toISOString()}`,
+        );
+
+        // Tear down capture/idle state first so nothing re-arms against a closed
+        // entry, then stop through the shared back-dated power-event path so the
+        // server receives the correct ended_at and reconcile cannot resurrect it.
+        screenshotService?.stop();
+        activityMonitor?.stop();
+        idleDetector?.stop();
+        dismissIdleAlert();
+        await autoStopTimerForPowerEvent("idle-watchdog", stopAtMs);
+    } catch (e) {
+        console.error("[IdleWatchdog] tick failed:", e.message);
+    }
+}
+
+function startIdleWatchdog() {
+    stopIdleWatchdog();
+    _idleWatchdogInterval = setInterval(
+        () => {
+            _idleWatchdogTick();
+        },
+        IDLE_WATCHDOG_TICK_MS,
+    );
+    // Don't hold the event loop open on the watchdog alone.
+    if (_idleWatchdogInterval.unref) _idleWatchdogInterval.unref();
+}
+
+function stopIdleWatchdog() {
+    if (_idleWatchdogInterval) {
+        clearInterval(_idleWatchdogInterval);
+        _idleWatchdogInterval = null;
+    }
+}
+
 /**
  * Close stale open sessions when the app was offline/crashed longer than the gap threshold.
  * Runs before reconcileTimerState on startup.
@@ -3921,6 +4174,7 @@ async function detectAndCloseStaleSessionOnStartup() {
         "TrackFlow — Timer auto-stopped",
         `Timer was auto-stopped — the app was offline since ${label}.`,
     );
+    markAutoStopNotified();
 }
 
 async function stopTimer(options = {}) {

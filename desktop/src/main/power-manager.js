@@ -172,6 +172,46 @@ function evaluateSleepGap({
 }
 
 /**
+ * Pure logic for the awake-but-idle hard-stop backstop (the "clamshell / never
+ * sleeps" failure mode).
+ *
+ * A machine that stays AWAKE with the lid closed (on charger or with an external
+ * display) never emits a `suspend` event, so `evaluateSleepGap` never runs. If
+ * the interactive idle alert is disabled, misconfigured, or simply never
+ * answered, nothing else stops the timer and the whole idle span is credited —
+ * the "12 hours tracked while asleep" phantom. This backstop is driven by the OS
+ * idle counter (`powerMonitor.getSystemIdleTime`) and fires independently of the
+ * idle-detection feature toggle.
+ *
+ * The stop is back-dated to the true last input (`nowMs - systemIdleSec`), never
+ * to now — so the idle span itself is never credited. When a last-active anchor
+ * is known and is EARLIER than that, the earlier instant wins (conservative: we
+ * never credit more than the honest last-activity time).
+ *
+ * @returns {{ shouldStop: boolean, stopAtMs: number|null, idleSec: number }}
+ */
+function evaluateIdleHardStop({
+    systemIdleSec,
+    hardStopSec,
+    nowMs,
+    lastActiveAtMs,
+}) {
+    const idleSec = Number(systemIdleSec) || 0;
+    if (!(hardStopSec > 0) || idleSec < hardStopSec) {
+        return { shouldStop: false, stopAtMs: null, idleSec };
+    }
+    let stopAtMs = nowMs - idleSec * 1000;
+    if (
+        typeof lastActiveAtMs === "number" &&
+        lastActiveAtMs > 0 &&
+        lastActiveAtMs < stopAtMs
+    ) {
+        stopAtMs = lastActiveAtMs;
+    }
+    return { shouldStop: true, stopAtMs, idleSec };
+}
+
+/**
  * Pure gap-detection logic for unit tests.
  * @returns {{ shouldClose: boolean, stopAtMs: number|null, gapSec: number }}
  */
@@ -215,6 +255,7 @@ module.exports = {
     unregisterPowerHandlers,
     evaluateStartupGap,
     evaluateSleepGap,
+    evaluateIdleHardStop,
     showAutoStopNotification,
     formatTimeShortLocal,
     DEFAULT_GAP_THRESHOLD_SEC,

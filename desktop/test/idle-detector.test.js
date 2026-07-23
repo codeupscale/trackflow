@@ -47,18 +47,81 @@ describe("IdleDetector", () => {
         expect(detector.alertAutoStopSec).toBe(120);
     });
 
-    test("zero auto-stop minutes disables idle popup auto-stop", () => {
-        detector = new IdleDetector({ idle_alert_auto_stop_min: 0 });
+    test("zero auto-stop minutes disables the interactive countdown but NOT the absolute hard-stop", () => {
+        // Regression for the "12h phantom": idle_alert_auto_stop_min = 0 used to
+        // leave the alert open forever (no interval), so a lid-closed/walked-away
+        // machine credited hours of idle. The interactive countdown stays off, but
+        // the absolute hard-stop grace must still fire deterministically.
+        detector = new IdleDetector({
+            idle_timeout: 5,
+            idle_alert_auto_stop_min: 0,
+            idle_check_interval_sec: 10,
+        });
         expect(detector.alertAutoStopSec).toBe(0);
+        // Hard-stop grace is fixed (10 min), independent of the disabled countdown.
+        expect(detector.hardStopGraceSec).toBe(10 * 60);
 
+        const onAutoStop = jest.fn();
+        detector.onAutoStop(onAutoStop);
         detector.start();
-        powerMonitor.getSystemIdleTime.mockReturnValue(600);
-        jest.advanceTimersByTime(2000);
 
-        detector.setAlertState();
-        jest.advanceTimersByTime(30 * 60 * 1000);
+        const idleStartedAt = Date.now();
+        detector.setAlertState(idleStartedAt);
+        // An interval MUST be running even with the interactive countdown disabled.
+        expect(detector.checkInterval).not.toBeNull();
 
+        // Not yet — still within the fixed hard-stop grace.
+        jest.advanceTimersByTime(9 * 60 * 1000);
+        expect(onAutoStop).not.toHaveBeenCalled();
+
+        // Past the fixed 10-min grace → hard-stop fires deterministically.
+        jest.advanceTimersByTime(90 * 1000); // total 10m30s
+        expect(onAutoStop).toHaveBeenCalledTimes(1);
+        expect(detector.state).toBe(IDLE_STATE.RESOLVED);
         expect(detector.checkInterval).toBeNull();
+    });
+
+    test("absolute hard-stop grace is DECOUPLED from a large interactive countdown", () => {
+        // Coordinator requirement: an org setting idle_alert_auto_stop_min near the
+        // 240-min cap must NOT push the absolute hard-stop out with it. The fixed
+        // grace bounds worst-case idle exposure regardless of org config.
+        const big = new IdleDetector({ idle_alert_auto_stop_min: 240 });
+        expect(big.alertAutoStopSec).toBe(240 * 60); // interactive countdown honored
+        expect(big.hardStopGraceSec).toBe(10 * 60); // hard-stop stays fixed/tight
+
+        const small = new IdleDetector({ idle_alert_auto_stop_min: 2 });
+        expect(small.hardStopGraceSec).toBe(10 * 60); // same fixed bound
+
+        const off = new IdleDetector({ idle_alert_auto_stop_min: 0 });
+        expect(off.hardStopGraceSec).toBe(10 * 60); // same fixed bound
+    });
+
+    test("hard-stop grace is measured from the alert re-show, not total idle (preserved sleep)", () => {
+        // A preserved idle alert re-shown after a long sleep must still give the
+        // user the grace window from the moment it re-appears — the hard cap must
+        // NOT fire on the first tick just because idleStartedAt is hours in the past.
+        detector = new IdleDetector({
+            idle_timeout: 5,
+            idle_alert_auto_stop_min: 0, // interactive off — only the hard cap governs
+            idle_check_interval_sec: 10,
+        });
+        const onAutoStop = jest.fn();
+        detector.onAutoStop(onAutoStop);
+        detector.start();
+        detector.suspend();
+        detector.resume();
+
+        // Re-show the alert with idleStartedAt 3 hours ago (long sleep gap).
+        const idleStartedAt = Date.now() - 3 * 60 * 60 * 1000;
+        detector.setAlertState(idleStartedAt);
+
+        // First tick: must NOT fire despite 3h of total idle.
+        jest.advanceTimersByTime(10 * 1000);
+        expect(onAutoStop).not.toHaveBeenCalled();
+
+        // Fires only after the fixed grace measured from the re-show.
+        jest.advanceTimersByTime(10 * 60 * 1000);
+        expect(onAutoStop).toHaveBeenCalledTimes(1);
     });
 
     test("should not start if disabled", () => {
