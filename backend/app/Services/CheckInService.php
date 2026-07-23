@@ -2,9 +2,11 @@
 
 namespace App\Services;
 
+use App\Models\ActivityLog;
 use App\Models\AttendancePolicy;
 use App\Models\AttendanceRecord;
 use App\Models\CheckInSession;
+use App\Models\TimeEntry;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
@@ -103,6 +105,18 @@ class CheckInService
         $startLocal = $startedAt->copy()->setTimezone($tz); // org-local wall clock of the real start
         $date = $startLocal->toDateString();                // the day that start falls in
         $lateAt = Carbon::parse("{$date} {$policy->late_threshold}", $tz);
+
+        // Feature A (owner request 2026-07-23): suppress auto check-in for very early
+        // starts. A timer started BEFORE `auto_check_in_min_time` (org-local wall clock,
+        // default 11:00) does NOT create an attendance check-in — it is a side-effect-free
+        // no-op, exactly like the other skip paths. At/after the threshold (boundary
+        // inclusive), the original behaviour is unchanged. Resolved per-date in the org tz
+        // so DST transitions are handled the same way as the other policy times.
+        $minTime = $user->organization?->getSetting('auto_check_in_min_time', '11:00:00') ?: '11:00:00';
+        $minAt = Carbon::parse("{$date} {$minTime}", $tz);
+        if ($startLocal->lt($minAt)) {
+            return null;
+        }
 
         return DB::transaction(function () use ($user, $policy, $tz, $startedAt, $startLocal, $date, $lateAt) {
             // 1. Ensure the day row exists (unique(org,user,date) serializes creation).
@@ -605,6 +619,188 @@ class CheckInService
         }
 
         return $count;
+    }
+
+    /**
+     * Feature B (owner request 2026-07-23): at the org-local midnight, force a
+     * checkout on every OPEN session left over from a day that has already ended.
+     *
+     * This is DIFFERENT from autoCloseStaleCheckIns(): that backstop only FLAGS the
+     * record missing_checkout and deliberately leaves the session open. Here we
+     * actually stamp a check_out_at so worked_seconds/overtime are finalised.
+     *
+     * The stamped checkout is the user's LAST TRACKED ACTIVITY on that session's
+     * org-local day (owner decision), falling back to the policy checkout_time when
+     * there is no usable activity. The session is always guaranteed to close strictly
+     * after its check_in_at.
+     *
+     * Only records whose org-local `date` is in the PAST (relative to org-local today)
+     * are ever touched — a session from the current day is never closed early. Runs
+     * inside a per-record transaction with lockForUpdate and re-checks the open state
+     * under lock, so a racing manual checkout is never double-closed.
+     *
+     * @return int number of sessions force-closed.
+     */
+    public function autoCheckOutOpenSessions(string $orgId): int
+    {
+        $policy = $this->getPolicy($orgId);
+        $today = now()->setTimezone($policy->timezone)->toDateString();
+
+        // Records from a PAST org-local day that still carry an OPEN session.
+        $stale = AttendanceRecord::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->where('date', '<', $today)
+            ->whereHas('sessions', function ($q) use ($orgId) {
+                $q->withoutGlobalScopes()
+                    ->where('organization_id', $orgId)
+                    ->whereNull('check_out_at');
+            })
+            ->get();
+
+        $closed = 0;
+        foreach ($stale as $record) {
+            $closed += $this->forceCloseRecordOpenSessions($record, $policy);
+        }
+
+        return $closed;
+    }
+
+    /**
+     * Force-close a single record's open sessions inside a locked transaction.
+     * Returns the number of sessions actually closed (0 when a concurrent checkout
+     * already closed them — never double-closes).
+     */
+    private function forceCloseRecordOpenSessions(AttendanceRecord $record, AttendancePolicy $policy): int
+    {
+        return DB::transaction(function () use ($record, $policy) {
+            // 1. Lock the day row first (record → session lock order, same as checkOut()).
+            $locked = AttendanceRecord::withoutGlobalScopes()
+                ->where('organization_id', $record->organization_id)
+                ->whereKey($record->id)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $locked) {
+                return 0;
+            }
+
+            // 2. Re-fetch the open sessions UNDER lock. If a manual checkout closed them
+            //    between the outer scan and here, there is nothing to do.
+            $openSessions = CheckInSession::withoutGlobalScopes()
+                ->where('organization_id', $locked->organization_id)
+                ->where('attendance_record_id', $locked->id)
+                ->open()
+                ->lockForUpdate()
+                ->orderBy('check_in_at')
+                ->get();
+
+            if ($openSessions->isEmpty()) {
+                return 0;
+            }
+
+            $recordDate = $locked->date instanceof Carbon
+                ? $locked->date->toDateString()
+                : Carbon::parse((string) $locked->date)->toDateString();
+
+            // 3. Resolve the day's last tracked-activity instant once (shared by every
+            //    open session on the record — normally just one).
+            $lastActivity = $this->lastTrackedActivityInstant(
+                $locked->organization_id,
+                $locked->user_id,
+                $recordDate,
+                $policy
+            );
+
+            $count = 0;
+            foreach ($openSessions as $session) {
+                $checkoutAt = $this->resolveForcedCheckoutInstant($session, $lastActivity, $recordDate, $policy);
+                $session->update(['check_out_at' => $checkoutAt]);
+                $count++;
+            }
+
+            // 4. Recompute rollups from the now-closed session set (worked_seconds,
+            //    check_out_at, early-checkout/overtime). This also clears missing_checkout
+            //    because every session is closed — we re-assert the audit flags below.
+            $this->recomputeRecordRollups($locked, $policy);
+
+            // 5. Re-assert audit flags AFTER recompute: the checkout was FABRICATED by the
+            //    backstop, so the record is flagged missing_checkout + auto_closed
+            //    (regularizable). `auto_checked_out` is a durable marker that a checkout was
+            //    synthesised — unlike missing_checkout/auto_closed it is never cleared by the
+            //    3am close-stale heal, so the fabrication stays auditable.
+            $locked->refresh();
+            $flags = $locked->check_in_flags ?? [];
+            $flags['auto_closed'] = true;
+            $flags['auto_checked_out'] = true;
+            $locked->update([
+                'missing_checkout' => true,
+                'check_in_flags' => $flags,
+            ]);
+
+            return $count;
+        });
+    }
+
+    /**
+     * The user's last tracked-activity instant on a given org-local day, scoped to org.
+     *
+     * "Last activity" = the MAX of two signals, whichever is later:
+     *   - the last CLOSED tracked time entry's `ended_at` that day (the common case), and
+     *   - the last activity-log heartbeat's `logged_at` that day.
+     *
+     * The heartbeat is the finest-grained record of real work and, crucially, is the ONLY
+     * signal available when a tracked entry is still open (null `ended_at`) — so an entry
+     * left running gives a truthful last-seen instant instead of nothing. Both are bounded
+     * to the org-local day. Returns null when the user had no tracked activity that day.
+     */
+    private function lastTrackedActivityInstant(string $orgId, string $userId, string $recordDate, AttendancePolicy $policy): ?Carbon
+    {
+        $tz = $policy->timezone;
+        $dayStart = Carbon::parse("{$recordDate} 00:00:00", $tz)->utc();
+        $dayEnd = Carbon::parse("{$recordDate} 23:59:59", $tz)->utc();
+
+        $maxEnded = TimeEntry::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->where('user_id', $userId)
+            ->where('type', 'tracked')
+            ->whereNotNull('ended_at')
+            ->whereBetween('ended_at', [$dayStart, $dayEnd])
+            ->max('ended_at');
+
+        $maxHeartbeat = ActivityLog::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->where('user_id', $userId)
+            ->whereBetween('logged_at', [$dayStart, $dayEnd])
+            ->max('logged_at');
+
+        $candidates = collect([$maxEnded, $maxHeartbeat])
+            ->filter()
+            ->map(fn ($v) => $v instanceof Carbon ? $v : Carbon::parse((string) $v, 'UTC'));
+
+        return $candidates->isEmpty() ? null : $candidates->max();
+    }
+
+    /**
+     * The instant a forced checkout should be stamped for one open session:
+     *   1. the day's last tracked activity, when it is strictly after this check-in;
+     *   2. else the policy checkout_time for that org-local day, when after check-in;
+     *   3. else check_in_at + 1s — a degenerate guard (e.g. a very late-evening check-in
+     *      with no later activity) so the checkout is ALWAYS strictly after the check-in.
+     */
+    private function resolveForcedCheckoutInstant(CheckInSession $session, ?Carbon $lastActivity, string $recordDate, AttendancePolicy $policy): Carbon
+    {
+        $checkInAt = $session->check_in_at;
+
+        if ($lastActivity !== null && $lastActivity->gt($checkInAt)) {
+            return $lastActivity->copy();
+        }
+
+        $offAt = Carbon::parse("{$recordDate} {$policy->checkout_time}", $policy->timezone)->utc();
+        if ($offAt->gt($checkInAt)) {
+            return $offAt;
+        }
+
+        return $checkInAt->copy()->addSecond();
     }
 
     /**

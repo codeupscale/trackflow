@@ -83,18 +83,121 @@ class AutoCheckInOnTrackTest extends TestCase
         $this->assertTrue($session->check_in_at->equalTo($start));
     }
 
-    public function test_early_start_before_window_is_still_recorded(): void
+    public function test_start_before_check_in_window_but_after_min_time_is_recorded(): void
     {
-        // The normal checkIn() 422s before the window. Auto MUST record it instead.
+        // The normal checkIn() 422s before the 11:30 window. Auto MUST record a start that
+        // sits before the window yet at/after the 11:00 min-time floor (Feature A).
         $org = $this->orgWithFeature();
         $user = $this->createUser($org, 'employee');
 
-        $start = Carbon::parse('2026-03-16 04:00:00', 'UTC'); // 09:00 local, before 11:30
+        $start = Carbon::parse('2026-03-16 06:10:00', 'UTC'); // 11:10 local — before 11:30, after 11:00
         $record = $this->service()->autoCheckInFromTracking($user, $start);
 
         $this->assertNotNull($record);
         $this->assertEquals('on_time', $record->check_in_status);
         $this->assertTrue($record->check_in_at->equalTo($start));
+    }
+
+    // ── Feature A: suppress auto check-in before the 11:00 min-time floor ────
+
+    public function test_start_before_min_time_is_skipped(): void
+    {
+        $org = $this->orgWithFeature();
+        $user = $this->createUser($org, 'employee');
+
+        // 09:00 local (04:00 UTC) — well before the default 11:00 floor.
+        $result = $this->service()->autoCheckInFromTracking(
+            $user,
+            Carbon::parse('2026-03-16 04:00:00', 'UTC')
+        );
+
+        $this->assertNull($result, 'a pre-11:00 start must not create a check-in');
+        $this->assertDatabaseMissing('check_in_sessions', ['user_id' => $user->id]);
+        $this->assertDatabaseMissing('attendance_records', ['user_id' => $user->id]);
+    }
+
+    public function test_start_just_before_min_time_is_skipped(): void
+    {
+        $org = $this->orgWithFeature();
+        $user = $this->createUser($org, 'employee');
+
+        // 10:59 local (05:59 UTC) — one minute before the floor.
+        $result = $this->service()->autoCheckInFromTracking(
+            $user,
+            Carbon::parse('2026-03-16 05:59:00', 'UTC')
+        );
+
+        $this->assertNull($result);
+        $this->assertDatabaseMissing('check_in_sessions', ['user_id' => $user->id]);
+    }
+
+    public function test_start_exactly_at_min_time_is_recorded(): void
+    {
+        $org = $this->orgWithFeature();
+        $user = $this->createUser($org, 'employee');
+
+        // Exactly 11:00 local (06:00 UTC) — boundary is inclusive (>= floor records).
+        $start = Carbon::parse('2026-03-16 06:00:00', 'UTC');
+        $record = $this->service()->autoCheckInFromTracking($user, $start);
+
+        $this->assertNotNull($record, 'a start exactly at the floor must be recorded');
+        $this->assertEquals('on_time', $record->check_in_status);
+        $this->assertTrue($record->check_in_at->equalTo($start));
+    }
+
+    public function test_configurable_min_time_threshold(): void
+    {
+        // Lower the floor to 09:00 — a start that the default 11:00 would suppress now records.
+        $org = $this->orgWithFeature();
+        $org->update(['settings' => array_merge($org->settings ?? [], [
+            'auto_check_in_min_time' => '09:00:00',
+        ])]);
+        $org->refresh();
+
+        $user = $this->createUser($org, 'employee');
+
+        // 08:30 local (03:30 UTC) — still below the custom 09:00 floor → skipped.
+        $this->assertNull($this->service()->autoCheckInFromTracking(
+            $user,
+            Carbon::parse('2026-03-16 03:30:00', 'UTC')
+        ));
+        $this->assertDatabaseMissing('check_in_sessions', ['user_id' => $user->id]);
+
+        // 09:30 local (04:30 UTC) — above the custom floor → recorded.
+        $record = $this->service()->autoCheckInFromTracking(
+            $user,
+            Carbon::parse('2026-03-16 04:30:00', 'UTC')
+        );
+        $this->assertNotNull($record);
+        $this->assertTrue($record->check_in_at->equalTo(Carbon::parse('2026-03-16 04:30:00', 'UTC')));
+    }
+
+    public function test_min_time_enforced_in_org_timezone(): void
+    {
+        // Non-PKT org: America/New_York (EDT = UTC-4 on 2026-03-16, DST active). The 11:00
+        // floor must be evaluated in the org tz, not UTC.
+        $org = $this->orgWithFeature();
+        $user = $this->createUser($org, 'employee');
+
+        \App\Models\AttendancePolicy::factory()->create([
+            'organization_id' => $org->id,
+            'timezone' => 'America/New_York',
+        ]);
+
+        // 14:30 UTC = 10:30 EDT — before the 11:00 floor → skipped. (If the floor were
+        // evaluated in UTC, 14:30 would be well past 11:00 and wrongly recorded.)
+        $this->assertNull($this->service()->autoCheckInFromTracking(
+            $user,
+            Carbon::parse('2026-03-16 14:30:00', 'UTC')
+        ));
+        $this->assertDatabaseMissing('check_in_sessions', ['user_id' => $user->id]);
+
+        // 15:30 UTC = 11:30 EDT — after the floor → recorded.
+        $record = $this->service()->autoCheckInFromTracking(
+            $user,
+            Carbon::parse('2026-03-16 15:30:00', 'UTC')
+        );
+        $this->assertNotNull($record);
     }
 
     public function test_late_start_is_marked_late_honestly(): void

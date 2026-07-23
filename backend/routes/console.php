@@ -2,6 +2,7 @@
 
 use App\Jobs\CloseStaleCheckInsJob;
 use App\Jobs\CloseStaleTimerEntriesJob;
+use App\Jobs\ForceCheckOutOpenSessionsJob;
 use App\Jobs\GenerateDailyAttendanceJob;
 use App\Jobs\PruneOldActivityLogsJob;
 use App\Jobs\SendDailyActivitySummaryJob;
@@ -99,6 +100,22 @@ Schedule::call(function () {
             }
         });
 })->dailyAt('03:00')->name('close-stale-check-ins');
+
+// Feature B: force-checkout open check-in sessions at 00:00 Asia/Karachi (= 19:00 UTC).
+// Stamps a real check_out_at (last tracked activity, else policy checkout_time) on every
+// open session whose org-local day has ended — unlike close-stale-check-ins (03:00), which
+// only flags the record and leaves the session open as a secondary backstop.
+// NOTE: the Laravel scheduler is DISABLED on dev and only runs in prod — do not rely on
+// this firing in tests; test autoCheckOutOpenSessions() directly.
+Schedule::call(function () {
+    Organization::query()
+        ->select('id')
+        ->chunkById(500, function ($orgs) {
+            foreach ($orgs as $org) {
+                ForceCheckOutOpenSessionsJob::dispatch($org->id);
+            }
+        });
+})->dailyAt('19:00')->name('force-checkout-open-sessions');
 
 // FIX B11: Watchdog — close stale open entries (no heartbeat for 2+ hours)
 Schedule::job(new CloseStaleTimerEntriesJob)->everyThirtyMinutes()->name('close-stale-timer-entries');
