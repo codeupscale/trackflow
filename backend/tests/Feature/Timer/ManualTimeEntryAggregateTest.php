@@ -185,6 +185,26 @@ class ManualTimeEntryAggregateTest extends TestCase
         $this->assertEquals(round(self::MANUAL_SECONDS / 3600, 2), (float) $record->total_hours);
     }
 
+    // ── ReportService::attendance (REPT-08) ───────────────────────────────
+
+    public function test_attendance_report_excludes_pending_manual_then_counts_on_approval(): void
+    {
+        // Only a manual entry, so the attendance worked-seconds reflects it directly.
+        // Regression: ReportService::attendance() was missing the approval filter, so
+        // a pending/rejected manual entry leaked into attendance totals and approving
+        // had no effect. It must now behave like every other report aggregate.
+        $manual = $this->pendingManual();
+
+        $this->actingAs($this->owner, 'sanctum');
+
+        // Pending: the attendance report shows no worked seconds for the employee.
+        $this->assertEquals(0, $this->attendanceReportSeconds());
+
+        // Approve → the manual seconds now appear (and the report cache is busted).
+        $this->postJson("/api/v1/time-entries/{$manual->id}/approve")->assertOk();
+        $this->assertEquals(self::MANUAL_SECONDS, $this->attendanceReportSeconds());
+    }
+
     // ── Regression: default-approved tracked rows still count ─────────────
 
     public function test_preexisting_tracked_entries_still_count_in_summary(): void
@@ -265,6 +285,22 @@ class ManualTimeEntryAggregateTest extends TestCase
     private function dashboardWeekSeconds(): int
     {
         return (int) $this->getJson('/api/v1/dashboard')->assertOk()->json('week_seconds');
+    }
+
+    private function attendanceReportSeconds(): int
+    {
+        $rows = $this->getJson('/api/v1/reports/attendance?' . http_build_query([
+            'date_from' => self::RANGE_FROM,
+            'date_to' => self::RANGE_TO,
+        ]))->assertOk()->json('attendance');
+
+        foreach ($rows as $row) {
+            if (($row['user_id'] ?? null) === $this->employee->id) {
+                return (int) $row['total_seconds'];
+            }
+        }
+
+        return 0;
     }
 
     private function attendanceRecord(): ?AttendanceRecord
