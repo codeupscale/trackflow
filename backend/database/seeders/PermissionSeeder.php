@@ -81,7 +81,6 @@ class PermissionSeeder extends Seeder
             ['attendance.approve_regularizations',  'attendance', 'approve_regularizations',  'Approve or reject regularizations',   true],
             ['attendance.manage_overtime_rules',    'attendance', 'manage_overtime_rules',    'Configure overtime rules',            false],
             ['attendance.check_in',                 'attendance', 'check_in',                 'Check in and check out for the day',           false],
-            ['attendance.manage_policy',            'attendance', 'manage_policy',            'Configure attendance check-in policy',       false],
             ['attendance.view_all',                 'attendance', 'view_all',                 'View all employees check-in records org-wide', false],
             ['attendance.export',                   'attendance', 'export',                   'Export attendance / check-in reports', false],
 
@@ -203,7 +202,6 @@ class PermissionSeeder extends Seeder
             'attendance.approve_regularizations' => 'organization',
             'attendance.manage_overtime_rules'   => 'none',
             'attendance.check_in'                => 'none',
-            'attendance.manage_policy'           => 'none',
             'attendance.view_all'                => 'none',
             'attendance.export'                  => 'none',
 
@@ -301,7 +299,6 @@ class PermissionSeeder extends Seeder
             'attendance.approve_regularizations' => 'organization',
             'attendance.manage_overtime_rules'   => 'none',
             'attendance.check_in'                => 'none',
-            'attendance.manage_policy'           => 'none',
             'attendance.view_all'                => 'none',
             'attendance.export'                  => 'none',
 
@@ -363,8 +360,8 @@ class PermissionSeeder extends Seeder
 
             // attendance — org-wide visibility + export because payroll depends on
             // late/early/worked-hours data (mirrors payroll.view_all/run grants below).
-            // Policy editing (attendance.manage_policy) is intentionally NOT granted:
-            // setting the 11:30/11:45/20:30 windows is owner/org_manager/hr_manager only.
+            // (Check-in windows are configured per-shift now — there is no per-org policy
+            // permission; managing shift times is gated by shifts.* permissions.)
             'attendance.view'       => 'organization',
             'attendance.regularize' => 'none',
             'attendance.check_in'   => 'none',

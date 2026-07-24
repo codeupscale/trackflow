@@ -64,17 +64,9 @@ class CheckInRoleMatrixTest extends TestCase
         $export->assertHeader('Content-Type', 'text/csv; charset=UTF-8');
     }
 
-    private function putPolicy(): \Illuminate\Testing\TestResponse
-    {
-        return $this->putJson('/api/v1/hr/attendance/policy', [
-            'check_in_time' => '10:00:00',
-            'late_threshold' => '10:15:00',
-            'checkout_time' => '19:00:00',
-            'timezone' => 'Asia/Karachi',
-        ]);
-    }
-
-    // ── Elevated roles: view_all + export + edit policy ────────────────────
+    // ── Elevated roles: view_all + export ──────────────────────────────────
+    // (The per-org attendance policy endpoint was removed — check-in windows now come
+    //  from each user's shift, so there is no longer a manage_policy permission to test.)
 
     public function test_owner_can_view_all_summary_export_and_edit_policy(): void
     {
@@ -89,7 +81,6 @@ class CheckInRoleMatrixTest extends TestCase
         $this->actingAs($owner, 'sanctum');
 
         $this->assertCanViewAllAndExport([$emp1->id, $emp2->id]);
-        $this->putPolicy()->assertOk();
     }
 
     public function test_org_manager_can_view_all_export_and_edit_policy(): void
@@ -104,7 +95,6 @@ class CheckInRoleMatrixTest extends TestCase
         $this->actingAs($admin, 'sanctum');
 
         $this->assertCanViewAllAndExport([$emp1->id, $emp2->id]);
-        $this->putPolicy()->assertOk();
     }
 
     public function test_hr_manager_can_view_all_export_and_edit_policy(): void
@@ -119,7 +109,6 @@ class CheckInRoleMatrixTest extends TestCase
         $this->actingAs($hr, 'sanctum');
 
         $this->assertCanViewAllAndExport([$emp1->id, $emp2->id]);
-        $this->putPolicy()->assertOk();
     }
 
     public function test_finance_manager_can_view_all_and_export_but_cannot_edit_policy(): void
@@ -134,8 +123,6 @@ class CheckInRoleMatrixTest extends TestCase
         $this->actingAs($finance, 'sanctum');
 
         $this->assertCanViewAllAndExport([$emp1->id, $emp2->id]);
-        // Finance must NOT be able to change the check-in windows.
-        $this->putPolicy()->assertStatus(403);
     }
 
     // ── Restricted roles: scoped view + no export ──────────────────────────
@@ -219,9 +206,11 @@ class CheckInRoleMatrixTest extends TestCase
     /**
      * The upgrade migration (existing orgs) must grant the same attendance.*
      * permissions per role as PermissionSeeder (fresh installs), or upgraded orgs
-     * drift — e.g. hr_manager losing manage_policy. Compares the migration's
-     * $rolePermissions matrix against the seeder role maps for the four check-in-era
-     * keys. Owner is bypass-only in both, so it is excluded.
+     * drift. Compares the migration's $rolePermissions matrix against the seeder role
+     * maps for the check-in-era keys. Owner is bypass-only in both, so it is excluded.
+     * (attendance.manage_policy is intentionally NOT compared — the per-org policy was
+     * removed in favour of per-shift windows, so the seeder no longer defines it while
+     * the historical seed migration still carries it.)
      */
     public function test_migration_grant_matrix_matches_seeder_for_attendance_permissions(): void
     {
@@ -242,7 +231,6 @@ class CheckInRoleMatrixTest extends TestCase
 
         $keys = [
             'attendance.check_in',
-            'attendance.manage_policy',
             'attendance.view_all',
             'attendance.export',
         ];
@@ -258,8 +246,5 @@ class CheckInRoleMatrixTest extends TestCase
                 );
             }
         }
-
-        // Explicit guard for the finding under remediation.
-        $this->assertArrayHasKey('attendance.manage_policy', $migrationGrants['hr_manager']);
     }
 }

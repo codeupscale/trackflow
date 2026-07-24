@@ -177,12 +177,13 @@ class AutoCheckInOnTrackTest extends TestCase
         // Non-PKT org: America/New_York (EDT = UTC-4 on 2026-03-16, DST active). The 11:00
         // floor must be evaluated in the org tz, not UTC.
         $org = $this->orgWithFeature();
-        $user = $this->createUser($org, 'employee');
-
-        \App\Models\AttendancePolicy::factory()->create([
-            'organization_id' => $org->id,
+        // Org timezone drives the fallback schedule (no shift assigned): America/New_York
+        // (EDT = UTC-4 on 2026-03-16, DST active), so the 11:00 floor is evaluated there.
+        $org->update(['settings' => array_merge($org->settings ?? [], [
             'timezone' => 'America/New_York',
-        ]);
+        ])]);
+        $org->refresh();
+        $user = $this->createUser($org, 'employee');
 
         // 14:30 UTC = 10:30 EDT — before the 11:00 floor → skipped. (If the floor were
         // evaluated in UTC, 14:30 would be well past 11:00 and wrongly recorded.)

@@ -4,11 +4,9 @@ import api from '@/lib/api';
 import { triggerDownload, readBlobError } from '@/lib/download';
 import type {
   TodayStatus,
-  AttendancePolicy,
   PaginatedAttendance,
   PaginatedCheckInSummary,
 } from '@/lib/validations/attendance';
-import type { AttendancePolicyFormData } from '@/lib/validations/attendance-policy';
 
 // ─── Filter shapes ────────────────────────────────────────────────
 
@@ -172,36 +170,9 @@ export function useCheckInsSummary(filters?: CheckInSummaryFilters) {
   });
 }
 
-// ─── Policy ───────────────────────────────────────────────────────
-
-export function useAttendancePolicy() {
-  return useQuery<AttendancePolicy>({
-    queryKey: ['attendance', 'policy'],
-    queryFn: async () => {
-      const res = await api.get('/hr/attendance/policy');
-      return res.data.data ?? res.data;
-    },
-    staleTime: 5 * 60_000,
-  });
-}
-
-export function useUpdateAttendancePolicy() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (data: AttendancePolicyFormData) => {
-      const res = await api.put('/hr/attendance/policy', data);
-      return res.data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['attendance', 'policy'] });
-      queryClient.invalidateQueries({ queryKey: ['attendance', 'today'] });
-      toast.success('Attendance policy updated');
-    },
-    onError: (error: unknown) => {
-      toast.error(extractMessage(error, 'Failed to update attendance policy'));
-    },
-  });
-}
+// The per-org attendance policy endpoint was removed — check-in windows now come from
+// each user's assigned shift. The today-status response still returns a `policy` object
+// (sourced from the shift) for display; there is no policy read/update hook.
 
 // ─── Export ───────────────────────────────────────────────────────
 

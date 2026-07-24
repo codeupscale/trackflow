@@ -33,6 +33,7 @@ export const shiftSchema = z.object({
     .max(60, 'Cannot exceed 60 minutes')
     .optional()
     .default(0),
+  allow_early_check_in: z.boolean().optional().default(false),
   color: z
     .string()
     .regex(/^#[0-9A-Fa-f]{6}$/, 'Must be a valid hex color')
@@ -81,6 +82,7 @@ export interface Shift {
   days_of_week: DayOfWeek[];
   break_minutes: number;
   grace_period_minutes: number;
+  allow_early_check_in: boolean;
   color: string;
   timezone: string;
   description: string | null;

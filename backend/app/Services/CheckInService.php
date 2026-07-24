@@ -3,11 +3,13 @@
 namespace App\Services;
 
 use App\Models\ActivityLog;
-use App\Models\AttendancePolicy;
 use App\Models\AttendanceRecord;
 use App\Models\CheckInSession;
+use App\Models\Organization;
+use App\Models\Shift;
 use App\Models\TimeEntry;
 use App\Models\User;
+use App\Support\CheckInSchedule;
 use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
@@ -16,8 +18,12 @@ use Illuminate\Support\LazyCollection;
 /**
  * Check-in / checkout self-service attendance.
  *
- * Timezone contract (applied everywhere):
- *   - The org's AttendancePolicy timezone is authoritative.
+ * Schedule contract (applied everywhere):
+ *   - Each user's check-in window comes from their assigned SHIFT for the day
+ *     (start_time = check-in open, start_time + grace = late threshold, end_time =
+ *     checkout time, shift.timezone, shift.allow_early_check_in). Resolved via
+ *     resolveSchedule() into a CheckInSchedule value object. When no active shift covers
+ *     the day, the org fallback (11:30 / 11:45 / 20:30, org timezone) applies.
  *   - now() (UTC) is the authoritative instant — any client-supplied timestamp is ignored.
  *   - The org-local wall clock ($local) is used for window enforcement and the day boundary.
  *   - officialStart / lateAt / offAt are rebuilt per-date via Carbon::parse("$date $time", $tz)
@@ -41,33 +47,108 @@ class CheckInService
      */
     private const CHECKOUT_IDEMPOTENCY_WINDOW_MINUTES = 5;
 
+    /** Fallback check-in window when a user has no active shift for the day. */
+    private const FALLBACK_CHECK_IN_TIME = '11:30:00';
+
+    private const FALLBACK_LATE_THRESHOLD = '11:45:00';
+
+    private const FALLBACK_CHECKOUT_TIME = '20:30:00';
+
+    private const FALLBACK_TIMEZONE = 'Asia/Karachi';
+
     /**
-     * Get (or lazily create with defaults) the org's attendance policy.
+     * Resolve a user's effective check-in schedule for a day, from their assigned shift
+     * (or the org fallback). Returns the same shape the old per-org AttendancePolicy did,
+     * so the rest of the service reads $schedule->check_in_time / ->late_threshold /
+     * ->checkout_time / ->timezone / ->allow_early_check_in unchanged.
+     *
+     * $date is the org-local calendar day the schedule applies to; defaults to today in
+     * the org timezone.
      */
-    public function getPolicy(string $orgId): AttendancePolicy
+    public function resolveSchedule(string $orgId, string $userId, ?string $date = null): CheckInSchedule
     {
-        return AttendancePolicy::withoutGlobalScopes()->firstOrCreate(
-            ['organization_id' => $orgId],
-            [
-                'check_in_time' => '11:30:00',
-                'late_threshold' => '11:45:00',
-                'checkout_time' => '20:30:00',
-                'timezone' => 'Asia/Karachi',
-                'allow_early_check_in' => false,
-                'is_active' => true,
-            ]
+        $orgTz = $this->orgTimezone($orgId);
+        $date ??= now()->setTimezone($orgTz)->toDateString();
+
+        $shift = $this->resolveUserShift($orgId, $userId, $date);
+
+        if ($shift) {
+            $start = $this->normalizeTime($shift->start_time);
+            $grace = (int) ($shift->grace_period_minutes ?? 0);
+
+            return new CheckInSchedule(
+                check_in_time: $start,
+                late_threshold: $this->addMinutesToTime($start, $grace),
+                checkout_time: $this->normalizeTime($shift->end_time),
+                timezone: $shift->timezone ?: $orgTz,
+                allow_early_check_in: (bool) $shift->allow_early_check_in,
+                shift_id: $shift->id,
+            );
+        }
+
+        return new CheckInSchedule(
+            check_in_time: self::FALLBACK_CHECK_IN_TIME,
+            late_threshold: self::FALLBACK_LATE_THRESHOLD,
+            checkout_time: self::FALLBACK_CHECKOUT_TIME,
+            timezone: $orgTz,
+            allow_early_check_in: false,
+            shift_id: null,
         );
     }
 
     /**
-     * Update the org's attendance policy.
+     * The org's timezone (org setting, backfilled to Asia/Karachi for this deployment).
+     * Used for org-wide "today" bucketing (nightly jobs, CSV) and as the schedule tz
+     * fallback. Mirrors the old AttendancePolicy timezone default.
      */
-    public function updatePolicy(string $orgId, array $data): AttendancePolicy
+    public function orgTimezone(string $orgId): string
     {
-        $policy = $this->getPolicy($orgId);
-        $policy->update($data);
+        $org = Organization::withoutGlobalScopes()->find($orgId);
 
-        return $policy->fresh();
+        return $org?->getSetting('timezone') ?: self::FALLBACK_TIMEZONE;
+    }
+
+    /**
+     * The active shift covering $userId on $date (latest-effective wins on overlap, e.g.
+     * a single-day swap override). Inactive / soft-deleted shifts and soft-deleted
+     * assignments are excluded. Null when the user has no shift that day.
+     */
+    private function resolveUserShift(string $orgId, string $userId, string $date): ?Shift
+    {
+        $shiftId = DB::table('user_shifts')
+            ->where('organization_id', $orgId)
+            ->where('user_id', $userId)
+            ->whereNull('deleted_at')
+            ->where('effective_from', '<=', $date)
+            ->where(function ($q) use ($date) {
+                $q->whereNull('effective_to')->orWhere('effective_to', '>=', $date);
+            })
+            ->orderByDesc('effective_from')
+            ->value('shift_id');
+
+        if (! $shiftId) {
+            return null;
+        }
+
+        return Shift::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->where('is_active', true)
+            ->whereKey($shiftId)
+            ->first();
+    }
+
+    /** Normalize a DB time value ("HH:MM" or "HH:MM:SS") to "HH:MM:SS". */
+    private function normalizeTime(string $time): string
+    {
+        return Carbon::parse($time)->format('H:i:s');
+    }
+
+    /** Add whole minutes to an "HH:MM:SS" wall-clock time, returning "HH:MM:SS". */
+    private function addMinutesToTime(string $time, int $minutes): string
+    {
+        return Carbon::createFromFormat('H:i:s', $this->normalizeTime($time))
+            ->addMinutes($minutes)
+            ->format('H:i:s');
     }
 
     /**
@@ -99,12 +180,13 @@ class CheckInService
             return null;
         }
 
-        $policy = $this->getPolicy($user->organization_id);
-        $tz = $policy->timezone;
+        $orgTz = $this->orgTimezone($user->organization_id);
+        $date = $startedAt->copy()->setTimezone($orgTz)->toDateString(); // the day the start falls in
+        $schedule = $this->resolveSchedule($user->organization_id, $user->id, $date);
+        $tz = $schedule->timezone;
 
-        $startLocal = $startedAt->copy()->setTimezone($tz); // org-local wall clock of the real start
-        $date = $startLocal->toDateString();                // the day that start falls in
-        $lateAt = Carbon::parse("{$date} {$policy->late_threshold}", $tz);
+        $startLocal = $startedAt->copy()->setTimezone($tz); // shift-local wall clock of the real start
+        $lateAt = Carbon::parse("{$date} {$schedule->late_threshold}", $tz);
 
         // Feature A (owner request 2026-07-23): suppress auto check-in for very early
         // starts. A timer started BEFORE `auto_check_in_min_time` (org-local wall clock,
@@ -118,7 +200,7 @@ class CheckInService
             return null;
         }
 
-        return DB::transaction(function () use ($user, $policy, $tz, $startedAt, $startLocal, $date, $lateAt) {
+        return DB::transaction(function () use ($user, $tz, $startedAt, $startLocal, $date, $lateAt) {
             // 1. Ensure the day row exists (unique(org,user,date) serializes creation).
             $record = AttendanceRecord::withoutGlobalScopes()->firstOrCreate(
                 [
@@ -183,7 +265,7 @@ class CheckInService
             ]);
 
             // 6. Roll up (sets check_in_at = the session's start).
-            $this->recomputeRecordRollups($record, $policy);
+            $this->recomputeRecordRollups($record);
 
             return $record->refresh();
         });
@@ -194,17 +276,17 @@ class CheckInService
      */
     public function checkIn(User $user): AttendanceRecord
     {
-        $policy = $this->getPolicy($user->organization_id);
-        $tz = $policy->timezone;
+        $schedule = $this->resolveSchedule($user->organization_id, $user->id);
+        $tz = $schedule->timezone;
 
         $now = now();                               // UTC, authoritative
-        $local = $now->copy()->setTimezone($tz);    // org-local wall clock
-        $date = $local->toDateString();             // org-local calendar day
+        $local = $now->copy()->setTimezone($tz);    // shift-local wall clock
+        $date = $local->toDateString();             // shift-local calendar day
 
-        $officialStart = Carbon::parse("{$date} {$policy->check_in_time}", $tz);
-        $lateAt = Carbon::parse("{$date} {$policy->late_threshold}", $tz);
+        $officialStart = Carbon::parse("{$date} {$schedule->check_in_time}", $tz);
+        $lateAt = Carbon::parse("{$date} {$schedule->late_threshold}", $tz);
 
-        return DB::transaction(function () use ($user, $policy, $tz, $now, $local, $date, $officialStart, $lateAt) {
+        return DB::transaction(function () use ($user, $schedule, $tz, $now, $local, $date, $officialStart, $lateAt) {
             // 1. Ensure the day row exists. The unique(org,user,date) index serializes the
             //    first-of-day check-in even under concurrency. The row may already exist
             //    (nightly attendance job pre-creates it with a null check_in_at), in which
@@ -243,7 +325,7 @@ class CheckInService
             // 4. Hard pre-window block on EVERY check-in (not only the first). The day row
             //    may already exist from firstOrCreate — we simply do not create a session
             //    and do not mutate any check-in fields.
-            if (! $policy->allow_early_check_in && $local->lt($officialStart)) {
+            if (! $schedule->allow_early_check_in && $local->lt($officialStart)) {
                 $opensAt = $officialStart->format('g:i A');
                 abort(422, "Check-in opens at {$opensAt} ({$tz}).");
             }
@@ -288,7 +370,7 @@ class CheckInService
             ]);
 
             // 8. Recompute the day rollup columns from the session set.
-            $this->recomputeRecordRollups($record, $policy);
+            $this->recomputeRecordRollups($record);
 
             return $record->refresh();
         });
@@ -299,11 +381,9 @@ class CheckInService
      */
     public function checkOut(User $user): AttendanceRecord
     {
-        $policy = $this->getPolicy($user->organization_id);
-
         $now = now(); // UTC, authoritative
 
-        return DB::transaction(function () use ($user, $policy, $now) {
+        return DB::transaction(function () use ($user, $now) {
             // 1. Locate the open session (no lock yet — we only need its record id). The
             //    36h lookback lets a forgotten checkout that crosses midnight still close
             //    the prior day's open session.
@@ -350,7 +430,7 @@ class CheckInService
             $session->update(['check_out_at' => $now]);
 
             // 6. Recompute the day rollup columns from the session set.
-            $this->recomputeRecordRollups($record, $policy);
+            $this->recomputeRecordRollups($record);
 
             return $record->refresh();
         });
@@ -368,9 +448,16 @@ class CheckInService
      * MUST NOT touch check_in_status / check_in_late_minutes / check_in_flags / status —
      * those are first-check-in-owned and set once in checkIn().
      */
-    private function recomputeRecordRollups(AttendanceRecord $record, AttendancePolicy $policy): void
+    private function recomputeRecordRollups(AttendanceRecord $record): void
     {
-        $tz = $policy->timezone;
+        // Off time of the record's own day (rebuilt per-date so DST is handled).
+        $recordDate = $record->date instanceof Carbon
+            ? $record->date->toDateString()
+            : Carbon::parse((string) $record->date)->toDateString();
+
+        // The user's shift schedule for THAT day drives checkout early/overtime + tz.
+        $schedule = $this->resolveSchedule($record->organization_id, $record->user_id, $recordDate);
+        $tz = $schedule->timezone;
 
         $sessions = $record->sessions()->orderBy('check_in_at')->get();
         $first = $sessions->first();
@@ -384,11 +471,7 @@ class CheckInService
         /** @var Carbon|null $lastClosedOut */
         $lastClosedOut = $closed->max('check_out_at');
 
-        // Off time of the record's own day (rebuilt per-date so DST is handled).
-        $recordDate = $record->date instanceof Carbon
-            ? $record->date->toDateString()
-            : Carbon::parse((string) $record->date)->toDateString();
-        $offAt = Carbon::parse("{$recordDate} {$policy->checkout_time}", $tz);
+        $offAt = Carbon::parse("{$recordDate} {$schedule->checkout_time}", $tz);
 
         $isEarly = false;
         $earlyMinutes = 0;
@@ -428,8 +511,8 @@ class CheckInService
      */
     public function getTodayStatus(User $user): array
     {
-        $policy = $this->getPolicy($user->organization_id);
-        $tz = $policy->timezone;
+        $schedule = $this->resolveSchedule($user->organization_id, $user->id);
+        $tz = $schedule->timezone;
 
         $now = now();
         $local = $now->copy()->setTimezone($tz);
@@ -522,12 +605,14 @@ class CheckInService
             'status' => $record?->status,
             'check_in_flags' => $record?->check_in_flags,
             'server_now' => $now->toIso8601String(),
+            // Emitted as `policy` for FE back-compat, but sourced from the user's shift
+            // schedule (or the org fallback) rather than the removed attendance policy.
             'policy' => [
-                'check_in_time' => $policy->check_in_time,
-                'late_threshold' => $policy->late_threshold,
-                'checkout_time' => $policy->checkout_time,
-                'timezone' => $policy->timezone,
-                'allow_early_check_in' => (bool) $policy->allow_early_check_in,
+                'check_in_time' => $schedule->check_in_time,
+                'late_threshold' => $schedule->late_threshold,
+                'checkout_time' => $schedule->checkout_time,
+                'timezone' => $schedule->timezone,
+                'allow_early_check_in' => $schedule->allow_early_check_in,
             ],
         ];
     }
@@ -581,8 +666,7 @@ class CheckInService
      */
     public function autoCloseStaleCheckIns(string $orgId): int
     {
-        $policy = $this->getPolicy($orgId);
-        $today = now()->setTimezone($policy->timezone)->toDateString();
+        $today = now()->setTimezone($this->orgTimezone($orgId))->toDateString();
 
         // Self-heal rows that still carry missing_checkout even though every session
         // closed (e.g. checkout after the backstop ran but before the flag was cleared).
@@ -613,7 +697,7 @@ class CheckInService
             ]);
 
             // Rollup reflects the already-closed sessions; the open one stays open.
-            $this->recomputeRecordRollups($record, $policy);
+            $this->recomputeRecordRollups($record);
 
             $count++;
         }
@@ -643,8 +727,7 @@ class CheckInService
      */
     public function autoCheckOutOpenSessions(string $orgId): int
     {
-        $policy = $this->getPolicy($orgId);
-        $today = now()->setTimezone($policy->timezone)->toDateString();
+        $today = now()->setTimezone($this->orgTimezone($orgId))->toDateString();
 
         // Records from a PAST org-local day that still carry an OPEN session.
         $stale = AttendanceRecord::withoutGlobalScopes()
@@ -659,7 +742,7 @@ class CheckInService
 
         $closed = 0;
         foreach ($stale as $record) {
-            $closed += $this->forceCloseRecordOpenSessions($record, $policy);
+            $closed += $this->forceCloseRecordOpenSessions($record);
         }
 
         return $closed;
@@ -670,9 +753,9 @@ class CheckInService
      * Returns the number of sessions actually closed (0 when a concurrent checkout
      * already closed them — never double-closes).
      */
-    private function forceCloseRecordOpenSessions(AttendanceRecord $record, AttendancePolicy $policy): int
+    private function forceCloseRecordOpenSessions(AttendanceRecord $record): int
     {
-        return DB::transaction(function () use ($record, $policy) {
+        return DB::transaction(function () use ($record) {
             // 1. Lock the day row first (record → session lock order, same as checkOut()).
             $locked = AttendanceRecord::withoutGlobalScopes()
                 ->where('organization_id', $record->organization_id)
@@ -702,18 +785,21 @@ class CheckInService
                 ? $locked->date->toDateString()
                 : Carbon::parse((string) $locked->date)->toDateString();
 
+            // The user's shift schedule for that day drives the forced-checkout time.
+            $schedule = $this->resolveSchedule($locked->organization_id, $locked->user_id, $recordDate);
+
             // 3. Resolve the day's last tracked-activity instant once (shared by every
             //    open session on the record — normally just one).
             $lastActivity = $this->lastTrackedActivityInstant(
                 $locked->organization_id,
                 $locked->user_id,
                 $recordDate,
-                $policy
+                $schedule->timezone
             );
 
             $count = 0;
             foreach ($openSessions as $session) {
-                $checkoutAt = $this->resolveForcedCheckoutInstant($session, $lastActivity, $recordDate, $policy);
+                $checkoutAt = $this->resolveForcedCheckoutInstant($session, $lastActivity, $recordDate, $schedule);
                 $session->update(['check_out_at' => $checkoutAt]);
                 $count++;
             }
@@ -721,7 +807,7 @@ class CheckInService
             // 4. Recompute rollups from the now-closed session set (worked_seconds,
             //    check_out_at, early-checkout/overtime). This also clears missing_checkout
             //    because every session is closed — we re-assert the audit flags below.
-            $this->recomputeRecordRollups($locked, $policy);
+            $this->recomputeRecordRollups($locked);
 
             // 5. Re-assert audit flags AFTER recompute: the checkout was FABRICATED by the
             //    backstop, so the record is flagged missing_checkout + auto_closed
@@ -753,9 +839,8 @@ class CheckInService
      * left running gives a truthful last-seen instant instead of nothing. Both are bounded
      * to the org-local day. Returns null when the user had no tracked activity that day.
      */
-    private function lastTrackedActivityInstant(string $orgId, string $userId, string $recordDate, AttendancePolicy $policy): ?Carbon
+    private function lastTrackedActivityInstant(string $orgId, string $userId, string $recordDate, string $tz): ?Carbon
     {
-        $tz = $policy->timezone;
         $dayStart = Carbon::parse("{$recordDate} 00:00:00", $tz)->utc();
         $dayEnd = Carbon::parse("{$recordDate} 23:59:59", $tz)->utc();
 
@@ -783,11 +868,11 @@ class CheckInService
     /**
      * The instant a forced checkout should be stamped for one open session:
      *   1. the day's last tracked activity, when it is strictly after this check-in;
-     *   2. else the policy checkout_time for that org-local day, when after check-in;
+     *   2. else the user's SHIFT checkout_time (end_time) for that day, when after check-in;
      *   3. else check_in_at + 1s — a degenerate guard (e.g. a very late-evening check-in
      *      with no later activity) so the checkout is ALWAYS strictly after the check-in.
      */
-    private function resolveForcedCheckoutInstant(CheckInSession $session, ?Carbon $lastActivity, string $recordDate, AttendancePolicy $policy): Carbon
+    private function resolveForcedCheckoutInstant(CheckInSession $session, ?Carbon $lastActivity, string $recordDate, CheckInSchedule $schedule): Carbon
     {
         $checkInAt = $session->check_in_at;
 
@@ -795,7 +880,7 @@ class CheckInService
             return $lastActivity->copy();
         }
 
-        $offAt = Carbon::parse("{$recordDate} {$policy->checkout_time}", $policy->timezone)->utc();
+        $offAt = Carbon::parse("{$recordDate} {$schedule->checkout_time}", $schedule->timezone)->utc();
         if ($offAt->gt($checkInAt)) {
             return $offAt;
         }
@@ -840,7 +925,7 @@ class CheckInService
     {
         [$start, $end] = $this->resolvePeriod($filters);
         $scopedUserIds = $this->scopedUserIds($user);
-        $tz = $this->getPolicy($user->organization_id)->timezone;
+        $tz = $this->orgTimezone($user->organization_id);
 
         $query = AttendanceRecord::withoutGlobalScopes()
             ->where('organization_id', $user->organization_id)
@@ -1034,8 +1119,7 @@ class CheckInService
      */
     private function checkoutUnavailableMessage(User $user): string
     {
-        $policy = $this->getPolicy($user->organization_id);
-        $today = now()->setTimezone($policy->timezone)->toDateString();
+        $today = now()->setTimezone($this->orgTimezone($user->organization_id))->toDateString();
 
         $hasClosedSessionToday = AttendanceRecord::withoutGlobalScopes()
             ->where('organization_id', $user->organization_id)

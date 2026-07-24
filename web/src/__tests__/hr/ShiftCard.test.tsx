@@ -14,6 +14,7 @@ function makeShift(overrides: Partial<Shift> = {}): Shift {
     days_of_week: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
     break_minutes: 60,
     grace_period_minutes: 15,
+    allow_early_check_in: false,
     color: '#3B82F6',
     timezone: 'UTC',
     description: null,

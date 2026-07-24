@@ -32,6 +32,7 @@ class UpdateShiftRequest extends FormRequest
             'days_of_week.*' => ['string', Rule::in(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'])],
             'break_minutes' => ['sometimes', 'integer', 'min:0', 'max:120'],
             'grace_period_minutes' => ['sometimes', 'integer', 'min:0', 'max:60'],
+            'allow_early_check_in' => ['sometimes', 'boolean'],
             'color' => ['sometimes', 'string', 'regex:/^#[0-9A-Fa-f]{6}$/'],
             'timezone' => ['sometimes', 'string', 'timezone'],
             'description' => ['nullable', 'string'],

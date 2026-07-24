@@ -146,6 +146,7 @@ describe('useCreateShift', () => {
         grace_period_minutes: 10,
         color: '#3B82F6',
         timezone: 'UTC',
+        allow_early_check_in: false,
         is_active: true,
       });
     });
@@ -174,6 +175,7 @@ describe('useCreateShift', () => {
         grace_period_minutes: 0,
         color: '#3B82F6',
         timezone: 'UTC',
+        allow_early_check_in: false,
         is_active: true,
       });
     });
@@ -201,6 +203,7 @@ describe('useUpdateShift', () => {
         grace_period_minutes: 15,
         color: '#3B82F6',
         timezone: 'UTC',
+        allow_early_check_in: false,
         is_active: true,
       });
     });

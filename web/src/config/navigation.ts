@@ -23,7 +23,6 @@ import {
     Receipt,
     Settings,
     Shield,
-    SlidersHorizontal,
     UserCog,
     Users,
     UsersRound,
@@ -171,13 +170,8 @@ export const navigationConfig: NavGroup[] = [
                 icon: FileBarChart2,
                 requiredPermission: "attendance.view_all",
             },
-            // Attendance Policy settings — HR/admin only
-            {
-                name: "Attendance Policy",
-                href: "/hr/attendance/settings",
-                icon: SlidersHorizontal,
-                requiredPermission: "attendance.manage_policy",
-            },
+            // (Attendance Policy settings removed — check-in windows now come from each
+            //  user's shift; configure them under Shifts.)
             // Shifts management — managers/admins only (employees have shifts.view but NOT shifts.create)
             {
                 name: "Shifts",

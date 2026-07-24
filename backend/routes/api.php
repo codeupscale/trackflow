@@ -4,7 +4,6 @@ use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\DataPrivacyController;
 use App\Http\Controllers\Api\V1\Hr\AttendanceController;
-use App\Http\Controllers\Api\V1\Hr\AttendancePolicyController;
 use App\Http\Controllers\Api\V1\Hr\AttendanceRegularizationController;
 use App\Http\Controllers\Api\V1\Hr\DepartmentController;
 use App\Http\Controllers\Api\V1\Hr\EmployeeController;
@@ -331,10 +330,6 @@ Route::prefix('v1')->group(function () {
                 ->middleware('permission:attendance.view');
             Route::get('attendance/check-ins/export', [AttendanceController::class, 'checkInsExport'])
                 ->middleware('permission:attendance.export');
-            Route::get('attendance/policy', [AttendancePolicyController::class, 'show'])
-                ->middleware('permission:attendance.view');
-            Route::put('attendance/policy', [AttendancePolicyController::class, 'update'])
-                ->middleware('permission:attendance.manage_policy');
 
             // Attendance Regularizations
             Route::get('attendance/regularizations', [AttendanceRegularizationController::class, 'index'])
