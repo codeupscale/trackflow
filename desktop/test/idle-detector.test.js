@@ -19,109 +19,113 @@ describe("IdleDetector", () => {
     test("should initialize with default config", () => {
         detector = new IdleDetector();
         expect(detector.idleTimeoutSec).toBe(10 * 60); // 10 min default (raised from 5, 2026-07-16)
-        expect(detector.alertAutoStopSec).toBe(10 * 60); // 10 min default
+        // Auto-stop disabled (2026-07-23): the idle alert never auto-dismisses.
+        expect(detector.alertAutoStopSec).toBe(0);
+        expect(detector.hardStopGraceSec).toBe(0);
         expect(detector.enabled).toBe(true);
         expect(detector.state).toBe(IDLE_STATE.STOPPED);
     });
 
-    test("should respect custom config", () => {
+    test("should respect custom config (auto-stop stays disabled)", () => {
         detector = new IdleDetector({
             idle_timeout: 10,
             idle_alert_auto_stop_min: 20,
             idle_check_interval_sec: 30,
         });
         expect(detector.idleTimeoutSec).toBe(600);
-        expect(detector.alertAutoStopSec).toBe(1200);
+        // idle_alert_auto_stop_min is intentionally ignored — the alert never
+        // auto-dismisses regardless of the org setting.
+        expect(detector.alertAutoStopSec).toBe(0);
+        expect(detector.hardStopGraceSec).toBe(0);
         expect(detector.checkIntervalMs).toBe(30000);
     });
 
-    test("caps idle auto-stop at 4 hours regardless of a misconfigured org setting", () => {
-        // Regression: an org setting of 8600 min (~6 days) produced an absurd
-        // "auto-stop in 8597:40" countdown and a never-auto-stopping timer.
-        detector = new IdleDetector({ idle_alert_auto_stop_min: 8600 });
-        expect(detector.alertAutoStopSec).toBe(240 * 60); // clamped to 4h
+    test("idle_alert_auto_stop_min is ignored — auto-stop is always disabled", () => {
+        // Whatever the org sets — a huge misconfigured value, a small value, or 0 —
+        // auto-stop is off and the alert stays visible until the user resolves it.
+        for (const min of [8600, 240, 2, 0]) {
+            const d = new IdleDetector({ idle_alert_auto_stop_min: min });
+            expect(d.alertAutoStopSec).toBe(0);
+            expect(d.hardStopGraceSec).toBe(0);
+            d.stop();
+        }
     });
 
-    test("does not raise a small auto-stop value to the cap", () => {
-        detector = new IdleDetector({ idle_alert_auto_stop_min: 2 });
-        expect(detector.alertAutoStopSec).toBe(120);
-    });
+    // ── Never-auto-dismiss behavior ────────────────────────────────────────────
+    describe("idle alert never auto-dismisses", () => {
+        test("auto-stop never fires even with idle_alert_auto_stop_min set", () => {
+            // Regression guard for the 2026-07-23 product change: the alert must
+            // stay open until the user acts. Neither the (former) interactive
+            // countdown nor the (former) hard-stop cap may terminate ALERTING.
+            detector = new IdleDetector({
+                idle_timeout: 5,
+                idle_alert_auto_stop_min: 1, // ignored
+                idle_check_interval_sec: 10,
+            });
+            const onAutoStop = jest.fn();
+            detector.onAutoStop(onAutoStop);
+            detector.start();
 
-    test("zero auto-stop minutes disables the interactive countdown but NOT the absolute hard-stop", () => {
-        // Regression for the "12h phantom": idle_alert_auto_stop_min = 0 used to
-        // leave the alert open forever (no interval), so a lid-closed/walked-away
-        // machine credited hours of idle. The interactive countdown stays off, but
-        // the absolute hard-stop grace must still fire deterministically.
-        detector = new IdleDetector({
-            idle_timeout: 5,
-            idle_alert_auto_stop_min: 0,
-            idle_check_interval_sec: 10,
+            const idleStartedAt = Date.now();
+            detector.setAlertState(idleStartedAt);
+            // The check interval MUST still run (ALERTING invariant preserved).
+            expect(detector.checkInterval).not.toBeNull();
+
+            // Advance far past any previous auto-stop threshold (30+ min).
+            jest.advanceTimersByTime(30 * 60 * 1000);
+            expect(onAutoStop).not.toHaveBeenCalled();
+            expect(detector.state).toBe(IDLE_STATE.ALERTING);
+            expect(detector.isIdleActive()).toBe(true);
         });
-        expect(detector.alertAutoStopSec).toBe(0);
-        // Hard-stop grace is fixed (10 min), independent of the disabled countdown.
-        expect(detector.hardStopGraceSec).toBe(10 * 60);
 
-        const onAutoStop = jest.fn();
-        detector.onAutoStop(onAutoStop);
-        detector.start();
+        test("auto-stop never fires for a preserved sleep re-show", () => {
+            // A preserved idle alert re-shown after a long sleep must also stay
+            // open — the disabled hard cap must not fire despite hours of total idle.
+            detector = new IdleDetector({
+                idle_timeout: 5,
+                idle_alert_auto_stop_min: 0,
+                idle_check_interval_sec: 10,
+            });
+            const onAutoStop = jest.fn();
+            detector.onAutoStop(onAutoStop);
+            detector.start();
+            detector.suspend();
+            detector.resume();
 
-        const idleStartedAt = Date.now();
-        detector.setAlertState(idleStartedAt);
-        // An interval MUST be running even with the interactive countdown disabled.
-        expect(detector.checkInterval).not.toBeNull();
+            // Re-show the alert with idleStartedAt 3 hours ago (long sleep gap).
+            const idleStartedAt = Date.now() - 3 * 60 * 60 * 1000;
+            detector.setAlertState(idleStartedAt);
 
-        // Not yet — still within the fixed hard-stop grace.
-        jest.advanceTimersByTime(9 * 60 * 1000);
-        expect(onAutoStop).not.toHaveBeenCalled();
+            // First tick: must NOT fire despite 3h of total idle.
+            jest.advanceTimersByTime(10 * 1000);
+            expect(onAutoStop).not.toHaveBeenCalled();
 
-        // Past the fixed 10-min grace → hard-stop fires deterministically.
-        jest.advanceTimersByTime(90 * 1000); // total 10m30s
-        expect(onAutoStop).toHaveBeenCalledTimes(1);
-        expect(detector.state).toBe(IDLE_STATE.RESOLVED);
-        expect(detector.checkInterval).toBeNull();
-    });
-
-    test("absolute hard-stop grace is DECOUPLED from a large interactive countdown", () => {
-        // Coordinator requirement: an org setting idle_alert_auto_stop_min near the
-        // 240-min cap must NOT push the absolute hard-stop out with it. The fixed
-        // grace bounds worst-case idle exposure regardless of org config.
-        const big = new IdleDetector({ idle_alert_auto_stop_min: 240 });
-        expect(big.alertAutoStopSec).toBe(240 * 60); // interactive countdown honored
-        expect(big.hardStopGraceSec).toBe(10 * 60); // hard-stop stays fixed/tight
-
-        const small = new IdleDetector({ idle_alert_auto_stop_min: 2 });
-        expect(small.hardStopGraceSec).toBe(10 * 60); // same fixed bound
-
-        const off = new IdleDetector({ idle_alert_auto_stop_min: 0 });
-        expect(off.hardStopGraceSec).toBe(10 * 60); // same fixed bound
-    });
-
-    test("hard-stop grace is measured from the alert re-show, not total idle (preserved sleep)", () => {
-        // A preserved idle alert re-shown after a long sleep must still give the
-        // user the grace window from the moment it re-appears — the hard cap must
-        // NOT fire on the first tick just because idleStartedAt is hours in the past.
-        detector = new IdleDetector({
-            idle_timeout: 5,
-            idle_alert_auto_stop_min: 0, // interactive off — only the hard cap governs
-            idle_check_interval_sec: 10,
+            // Still open long after the former 10-min hard cap.
+            jest.advanceTimersByTime(60 * 60 * 1000);
+            expect(onAutoStop).not.toHaveBeenCalled();
+            expect(detector.state).toBe(IDLE_STATE.ALERTING);
         });
-        const onAutoStop = jest.fn();
-        detector.onAutoStop(onAutoStop);
-        detector.start();
-        detector.suspend();
-        detector.resume();
 
-        // Re-show the alert with idleStartedAt 3 hours ago (long sleep gap).
-        const idleStartedAt = Date.now() - 3 * 60 * 60 * 1000;
-        detector.setAlertState(idleStartedAt);
+        test("only an explicit user action terminates ALERTING", () => {
+            detector = new IdleDetector({
+                idle_timeout: 5,
+                idle_alert_auto_stop_min: 1,
+                idle_check_interval_sec: 10,
+            });
+            const onAutoStop = jest.fn();
+            detector.onAutoStop(onAutoStop);
+            detector.start();
 
-        // First tick: must NOT fire despite 3h of total idle.
-        jest.advanceTimersByTime(10 * 1000);
-        expect(onAutoStop).not.toHaveBeenCalled();
+            const actionId = detector.setAlertState(Date.now());
+            jest.advanceTimersByTime(45 * 60 * 1000);
+            expect(detector.state).toBe(IDLE_STATE.ALERTING);
 
-        // Fires only after the fixed grace measured from the re-show.
-        jest.advanceTimersByTime(10 * 60 * 1000);
-        expect(onAutoStop).toHaveBeenCalledTimes(1);
+            const result = detector.resolveIdle(actionId);
+            expect(result).not.toBeNull();
+            expect(detector.state).toBe(IDLE_STATE.RESOLVED);
+            expect(detector.checkInterval).toBeNull();
+            expect(onAutoStop).not.toHaveBeenCalled();
+        });
     });
 
     test("should not start if disabled", () => {
@@ -182,10 +186,10 @@ describe("IdleDetector", () => {
         expect(onIdle).toHaveBeenCalledTimes(1);
     });
 
-    test("should auto-stop after alert timeout", () => {
+    test("does NOT auto-stop after the alert has been shown a long time", () => {
         detector = new IdleDetector({
             idle_timeout: 5,
-            idle_alert_auto_stop_min: 1, // 1 min auto-stop for faster test
+            idle_alert_auto_stop_min: 1, // ignored — auto-stop disabled
             idle_check_interval_sec: 10,
         });
         const onIdle = jest.fn();
@@ -199,10 +203,11 @@ describe("IdleDetector", () => {
         jest.advanceTimersByTime(10000);
         expect(onIdle).toHaveBeenCalledTimes(1);
 
-        // Advance past auto-stop threshold (1 min)
-        powerMonitor.getSystemIdleTime.mockReturnValue(400);
-        jest.advanceTimersByTime(70000); // 7 more checks
-        expect(onAutoStop).toHaveBeenCalledTimes(1);
+        // Advance well past any former auto-stop threshold — must stay open.
+        powerMonitor.getSystemIdleTime.mockReturnValue(4000);
+        jest.advanceTimersByTime(60 * 60 * 1000);
+        expect(onAutoStop).not.toHaveBeenCalled();
+        expect(detector.state).toBe(IDLE_STATE.ALERTING);
     });
 
     test("resolveIdle should reset idle state and return idle info", () => {
@@ -364,10 +369,10 @@ describe("IdleDetector", () => {
         expect(detector.state).toBe(IDLE_STATE.SUSPENDED);
     });
 
-    test("setAlertState transitions to ALERTING with auto-stop check", () => {
+    test("setAlertState transitions to ALERTING and never auto-stops", () => {
         detector = new IdleDetector({
             idle_timeout: 1,
-            idle_alert_auto_stop_min: 2, // 2 min = 120s auto-stop after alert shown
+            idle_alert_auto_stop_min: 2, // ignored
             idle_check_interval_sec: 10,
         });
         const onAutoStop = jest.fn();
@@ -375,127 +380,17 @@ describe("IdleDetector", () => {
         detector.start();
 
         // Simulate resume after a long sleep — set alert state externally.
-        // Even though total idle exceeds the old (idleTimeout + autoStop) threshold,
-        // auto-stop should NOT fire immediately. It now counts from when the alert
-        // was shown (alertShownAt), giving the user the full autoStop window to respond.
         const sleepStart = Date.now() - 200000; // 200s ago
         const actionId = detector.setAlertState(sleepStart);
         expect(detector.state).toBe(IDLE_STATE.ALERTING);
         expect(detector.idleStartedAt).toBe(sleepStart);
         expect(actionId).toBeGreaterThan(0);
 
-        // The auto-stop check interval should be running
+        // The check interval runs (ALERTING invariant) but never fires auto-stop.
         expect(detector.checkInterval).not.toBeNull();
-
-        // After 10s of alert display, auto-stop should NOT fire (10s < 120s threshold)
-        jest.advanceTimersByTime(10000);
+        jest.advanceTimersByTime(60 * 60 * 1000);
         expect(onAutoStop).not.toHaveBeenCalled();
-
-        // After 110s more (total 120s of alert display), auto-stop should fire
-        jest.advanceTimersByTime(110000);
-        expect(onAutoStop).toHaveBeenCalledTimes(1);
-
-        // The reported total idle duration should reflect the full idle period
-        // (from idleStartedAt to now), not just the alert display time
-        const reportedDuration = onAutoStop.mock.calls[0][0];
-        expect(reportedDuration).toBeGreaterThanOrEqual(300); // 200s sleep + 120s alert
-    });
-
-    // ── Auto-stop tests (updated from original) ───────────────────────────────
-
-    test("auto-stop fires based on total idle time (idle_timeout + auto_stop)", () => {
-        detector = new IdleDetector({
-            idle_timeout: 2, // 2 min = 120s
-            idle_alert_auto_stop_min: 3, // 3 min = 180s
-            idle_check_interval_sec: 10,
-        });
-        const onIdle = jest.fn();
-        const onAutoStop = jest.fn();
-        detector.onIdleDetected(onIdle);
-        detector.onAutoStop(onAutoStop);
-        detector.start();
-
-        // Become idle at exactly 120s of system idle time
-        powerMonitor.getSystemIdleTime.mockReturnValue(120);
-        jest.advanceTimersByTime(10000);
-        expect(onIdle).toHaveBeenCalledTimes(1);
-
-        // After 170s more real time, total idle ~290s — should NOT auto-stop
-        powerMonitor.getSystemIdleTime.mockReturnValue(290);
-        jest.advanceTimersByTime(170000);
-        expect(onAutoStop).not.toHaveBeenCalled();
-
-        // After 20s more, total idle ~310s >= 300s — should auto-stop
-        powerMonitor.getSystemIdleTime.mockReturnValue(310);
-        jest.advanceTimersByTime(20000);
-        expect(onAutoStop).toHaveBeenCalledTimes(1);
-    });
-
-    test("auto-stop fires after correct total duration with precise threshold", () => {
-        detector = new IdleDetector({
-            idle_timeout: 1, // 1 min = 60s
-            idle_alert_auto_stop_min: 2, // 2 min = 120s
-            idle_check_interval_sec: 10,
-        });
-        const onIdle = jest.fn();
-        const onAutoStop = jest.fn();
-        detector.onIdleDetected(onIdle);
-        detector.onAutoStop(onAutoStop);
-        detector.start();
-
-        // Become idle at 60s
-        powerMonitor.getSystemIdleTime.mockReturnValue(60);
-        jest.advanceTimersByTime(10000);
-        expect(onIdle).toHaveBeenCalledTimes(1);
         expect(detector.state).toBe(IDLE_STATE.ALERTING);
-        expect(detector.idleStartedAt).not.toBeNull();
-
-        // Verify idleStartedAt was backdated: it should be ~60s before current time
-        const expectedIdleStart = Date.now() - 60 * 1000;
-        expect(detector.idleStartedAt).toBe(expectedIdleStart);
-
-        // Advance 110s — total idle from idleStartedAt = ~170s (< 180s threshold)
-        powerMonitor.getSystemIdleTime.mockReturnValue(170);
-        jest.advanceTimersByTime(110000);
-        expect(onAutoStop).not.toHaveBeenCalled();
-
-        // Advance 10s more — total idle from idleStartedAt = ~180s (>= 180s threshold)
-        powerMonitor.getSystemIdleTime.mockReturnValue(180);
-        jest.advanceTimersByTime(10000);
-        expect(onAutoStop).toHaveBeenCalledTimes(1);
-
-        // auto-stop should only fire once
-        expect(onAutoStop).toHaveBeenCalledTimes(1);
-    });
-
-    test("auto-stop callback receives total idle duration and actionId", () => {
-        detector = new IdleDetector({
-            idle_timeout: 1, // 60s
-            idle_alert_auto_stop_min: 1, // 60s
-            idle_check_interval_sec: 10,
-        });
-        const onAutoStop = jest.fn();
-        detector.onIdleDetected(jest.fn());
-        detector.onAutoStop(onAutoStop);
-        detector.start();
-
-        // Become idle at 60s
-        powerMonitor.getSystemIdleTime.mockReturnValue(60);
-        jest.advanceTimersByTime(10000);
-
-        // Auto-stop threshold = 60 + 60 = 120s from idleStartedAt
-        powerMonitor.getSystemIdleTime.mockReturnValue(130);
-        jest.advanceTimersByTime(70000);
-        expect(onAutoStop).toHaveBeenCalledTimes(1);
-
-        // The callback args should be (totalIdleDuration, actionId)
-        const reportedDuration = onAutoStop.mock.calls[0][0];
-        expect(reportedDuration).toBeGreaterThanOrEqual(120);
-        expect(reportedDuration).toBeLessThanOrEqual(140);
-
-        const reportedActionId = onAutoStop.mock.calls[0][1];
-        expect(typeof reportedActionId).toBe("number");
-        expect(reportedActionId).toBeGreaterThan(0);
     });
 
     test("getIdleDuration returns correct value during active idle tracking", () => {
@@ -582,17 +477,16 @@ describe("IdleDetector", () => {
         expect(second).toBeNull(); // Already resolved
     });
 
-    // ── Sleep/wake regression tests (auto-stop timing fix) ────────────────────
+    // ── Sleep/wake regression tests ────────────────────────────────────────────
 
-    describe("sleep/wake auto-stop timing", () => {
-        test("long sleep (> idle + autoStop) does NOT cause immediate auto-stop", () => {
-            // This is the core regression test for the bug where closing a laptop
-            // for > 15 minutes caused auto-stop to fire before the idle alert was
-            // visible, resulting in the timer being stopped without the user seeing
-            // the idle popup.
+    describe("sleep/wake idle preservation", () => {
+        test("long sleep does NOT cause immediate auto-stop (and never auto-stops)", () => {
+            // Core regression: closing a laptop for a long time must not fire
+            // auto-stop before (or after) the idle alert is visible. With auto-stop
+            // disabled the alert simply stays open on resume until the user acts.
             detector = new IdleDetector({
                 idle_timeout: 5, // 5 min = 300s
-                idle_alert_auto_stop_min: 10, // 10 min = 600s
+                idle_alert_auto_stop_min: 10, // ignored
                 idle_check_interval_sec: 10,
             });
             const onAutoStop = jest.fn();
@@ -607,52 +501,20 @@ describe("IdleDetector", () => {
             const sleepStart = Date.now() - 20 * 60 * 1000; // 20 min ago
             detector.setAlertState(sleepStart);
 
-            // After 10 seconds (first check interval), auto-stop should NOT fire
-            // because the alert has only been shown for 10 seconds, not 10 minutes
+            // Immediately after re-show — no fire.
             jest.advanceTimersByTime(10000);
             expect(onAutoStop).not.toHaveBeenCalled();
 
-            // After 5 minutes (300s) of alert display, still should not fire
-            jest.advanceTimersByTime(290000); // total: 300s
+            // Far past any former threshold — still open, never auto-stops.
+            jest.advanceTimersByTime(60 * 60 * 1000);
             expect(onAutoStop).not.toHaveBeenCalled();
-
-            // After 10 minutes (600s) of alert display, auto-stop should fire
-            jest.advanceTimersByTime(300000); // total: 600s
-            expect(onAutoStop).toHaveBeenCalledTimes(1);
-
-            // The callback should report the TOTAL idle duration (sleep + alert time)
-            const totalDuration = onAutoStop.mock.calls[0][0];
-            expect(totalDuration).toBeGreaterThanOrEqual(20 * 60 + 600); // ~30 min total
+            expect(detector.state).toBe(IDLE_STATE.ALERTING);
         });
 
-        test("moderate sleep (5-15 min) gives user full autoStop window", () => {
-            detector = new IdleDetector({
-                idle_timeout: 5, // 5 min = 300s
-                idle_alert_auto_stop_min: 10, // 10 min = 600s
-                idle_check_interval_sec: 10,
-            });
-            const onAutoStop = jest.fn();
-            detector.onAutoStop(onAutoStop);
-
-            // Sleep for 7 minutes (exceeds idle threshold but not autoStop total)
-            detector.start();
-            detector.suspend();
-            detector.resume();
-            const sleepStart = Date.now() - 7 * 60 * 1000;
-            detector.setAlertState(sleepStart);
-
-            // User has 10 minutes to respond, regardless of how long the sleep was
-            jest.advanceTimersByTime(5 * 60 * 1000); // 5 min of alert
-            expect(onAutoStop).not.toHaveBeenCalled();
-
-            jest.advanceTimersByTime(5 * 60 * 1000); // 10 min of alert total
-            expect(onAutoStop).toHaveBeenCalledTimes(1);
-        });
-
-        test("user can resolve idle before auto-stop after long sleep", () => {
+        test("user can resolve idle after long sleep (auto-stop never fires)", () => {
             detector = new IdleDetector({
                 idle_timeout: 5,
-                idle_alert_auto_stop_min: 10,
+                idle_alert_auto_stop_min: 10, // ignored
                 idle_check_interval_sec: 10,
             });
             const onAutoStop = jest.fn();
@@ -672,8 +534,8 @@ describe("IdleDetector", () => {
             expect(result.idleStartedAt).toBe(sleepStart);
             expect(detector.state).toBe(IDLE_STATE.RESOLVED);
 
-            // Auto-stop should never fire since idle was resolved
-            jest.advanceTimersByTime(20 * 60 * 1000);
+            // Auto-stop should never fire.
+            jest.advanceTimersByTime(60 * 60 * 1000);
             expect(onAutoStop).not.toHaveBeenCalled();
         });
 
@@ -764,11 +626,11 @@ describe("IdleDetector", () => {
             expect(detector.isIdleActive()).toBe(true);
         });
 
-        test("auto-stop still fires after a spurious start() during ALERTING", () => {
+        test("a spurious start() during ALERTING does not fabricate an auto-stop", () => {
             const onAutoStop = jest.fn();
             detector = new IdleDetector({
                 idle_timeout: 1,
-                idle_alert_auto_stop_min: 1,
+                idle_alert_auto_stop_min: 1, // ignored
                 idle_check_interval_sec: 10,
             });
             detector.onIdleDetected(jest.fn());
@@ -779,12 +641,13 @@ describe("IdleDetector", () => {
             jest.advanceTimersByTime(10000);
             expect(detector.state).toBe(IDLE_STATE.ALERTING);
 
-            // Spurious start() must NOT cancel the auto-stop interval
+            // Spurious start() must NOT change the alert lifecycle.
             detector.start();
 
-            // Advance past the 1-minute auto-stop window
-            jest.advanceTimersByTime(60 * 1000);
-            expect(onAutoStop).toHaveBeenCalledTimes(1);
+            // Auto-stop is disabled — advancing time must never fire it.
+            jest.advanceTimersByTime(60 * 60 * 1000);
+            expect(onAutoStop).not.toHaveBeenCalled();
+            expect(detector.state).toBe(IDLE_STATE.ALERTING);
         });
 
         test("start() during SUSPENDED is a no-op (sleep-preserved idle)", () => {

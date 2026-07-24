@@ -33,3 +33,31 @@ Server `timer:cleanup-stale` may still close open entries with no heartbeat afte
 - `web/src/app/(dashboard)/settings/page.tsx`
 - `desktop/src/main/idle-detector.js`
 - `desktop/test/idle-detector.test.js`
+
+## Follow-up (2026-07-23) — idle alert now NEVER auto-dismisses
+
+**Product decision:** the idle alert must stay visible until the user explicitly picks
+*Continue Tracking* or *Stop Timer* — no auto-dismiss at all. This supersedes the
+per-org interactive countdown AND removes the fixed 10-min hard-stop grace
+(`DEFAULT_HARD_STOP_GRACE_SEC`) that the "12h phantom" sleep/idle work had re-introduced.
+
+- `IdleDetector._applyConfig()` now forces `alertAutoStopSec = 0` and
+  `hardStopGraceSec = 0` (the `idle_alert_auto_stop_min` org setting is ignored).
+  `_checkAutoStop()` guards both fires with `> 0`, so neither ever fires — `ALERTING`
+  terminates only on an explicit user action (or the sleep/suspend path).
+- **Why this is billing-safe without any cap:** the timer is server-paused the instant
+  idle is *detected* — `pauseTimerForIdle()` calls `POST /timer/pause` back-dated to
+  `idleStartedAt` and halts heartbeats + screenshots. Server elapsed is frozen at
+  idle-start for the whole time the alert waits, so an unanswered alert credits **no**
+  additional idle/tracked time. The old "12h phantom" hole is closed by the pause, not by
+  the auto-stop cap.
+- Renderer countdown UI auto-hides when `autoStopGraceSec <= 0` (main now sends `0`).
+- Tests: `desktop/test/idle-detector.test.js` rewritten to assert never-dismiss
+  (auto-stop never fires; alert stays `ALERTING` past any former threshold). 80/80 idle
+  tests green.
+
+**Separate policy still applies:** the server `timer:cleanup-stale` job can still close an
+open entry after `offline_grace_minutes` (~4h) because idle pause stops heartbeats. The
+desktop window stays visible indefinitely, but a many-hours-unanswered entry may be closed
+server-side (back-dated to last heartbeat — billing-safe); a late Continue/Stop then
+reconciles against the closed entry. Distinct from desktop idle auto-stop.

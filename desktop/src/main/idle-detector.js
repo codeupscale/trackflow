@@ -25,20 +25,15 @@ const { powerMonitor } = require("electron");
 // Offline fallback only — the server value (Settings → Idle detection) wins.
 const DEFAULT_IDLE_TIMEOUT_MIN = 10;
 const DEFAULT_IDLE_CHECK_INTERVAL_SEC = 2;
-/** Hard upper bound for idle auto-stop (minutes). Guards against a misconfigured
- *  org setting producing an absurd countdown / never-auto-stopping timer. */
-const MAX_AUTO_STOP_MIN = 240; // 4 hours
 /** Schedule a one-shot fire when within this many seconds of the threshold. */
 const BOUNDARY_LEAD_SEC = 20;
-/**
- * Absolute safety grace (seconds) applied when the org DISABLED the interactive
- * idle auto-stop (`idle_alert_auto_stop_min = 0`). Historically that config left
- * the alert open forever, so a lid-closed / walked-away machine credited hours of
- * idle — the "12 hours tracked" phantom. The detector now ALWAYS enforces a hard
- * stop this long after the alert appears, back-dated to the last real activity,
- * even when the user never responds and even when interactive auto-stop is off.
- */
-const DEFAULT_HARD_STOP_GRACE_SEC = 10 * 60; // 10 min
+// Idle auto-stop is DISABLED by product decision (2026-07-23): the idle alert
+// must NEVER auto-dismiss — it stays visible until the user explicitly resolves
+// it ("Continue Tracking" or "Stop Timer"). See _applyConfig() for why this is
+// safe for billing without any auto-stop cap (the timer is server-paused the
+// instant idle is detected, so an unanswered alert credits no additional time).
+// The former MAX_AUTO_STOP_MIN clamp and DEFAULT_HARD_STOP_GRACE_SEC backstop
+// were removed with that change.
 
 const IDLE_STATE = Object.freeze({
     STOPPED: "STOPPED",
@@ -355,38 +350,23 @@ class IdleDetector {
         }
         timeoutMin = Math.min(30, Math.max(1, timeoutMin));
         this.idleTimeoutSec = timeoutMin * 60;
-        const rawAutoStopMin =
-            config.idle_alert_auto_stop_min != null
-                ? config.idle_alert_auto_stop_min
-                : 10;
-        // Clamp to [0, MAX_AUTO_STOP_MIN]. A misconfigured org setting (e.g. 8600 min
-        // ≈ 6 days) otherwise produced an absurd countdown ("auto-stop in 8597:40")
-        // and a timer that effectively never auto-stopped.
-        const autoStopMin = Math.min(
-            Math.max(0, rawAutoStopMin),
-            MAX_AUTO_STOP_MIN,
-        );
-        this.alertAutoStopSec = autoStopMin > 0 ? autoStopMin * 60 : 0;
-        // Absolute hard-stop grace: the max REAL-TIME the idle alert may sit
-        // unanswered (measured from alertShownAt) before a hard auto-stop MUST
-        // fire — regardless of whether interactive auto-stop is enabled or the
-        // alert was ever answered. Guarantees ALERTING always terminates, closing
-        // the "12h phantom" hole where idle_alert_auto_stop_min = 0 left the timer
-        // running forever.
+        // Idle auto-stop DISABLED (2026-07-23 product decision): the idle alert
+        // NEVER auto-dismisses. It stays visible until the user explicitly picks
+        // "Continue Tracking" or "Stop Timer". Both the interactive countdown
+        // (idle_alert_auto_stop_min) and the former absolute hard-stop grace are
+        // forced to 0 here; `_checkAutoStop()` treats 0 as "disabled" for each, so
+        // ALERTING now terminates ONLY on an explicit user action (or the
+        // sleep/suspend path). `idle_alert_auto_stop_min` is intentionally ignored.
         //
-        // DECOUPLED from alertAutoStopSec on purpose: the interactive countdown
-        // may be configured up to MAX_AUTO_STOP_MIN (4h), but this absolute safety
-        // net must NOT scale with it — otherwise a clamshell laptop under an org
-        // with a 4h countdown could sit open ~4h. It is a FIXED, tight bound so
-        // worst-case idle exposure is bounded regardless of org config. When the
-        // interactive countdown is shorter than this grace it still fires first
-        // (user-facing); when it is longer, this cap wins and bounds the loss.
-        //
-        // Measured from alertShownAt (not idleStartedAt) so a preserved idle alert
-        // re-shown after a long sleep still gives the user the grace window from
-        // the moment it re-appears, instead of hard-stopping on the first tick.
-        // Billing is bounded either way — the stop back-dates to idleStartedAt.
-        this.hardStopGraceSec = DEFAULT_HARD_STOP_GRACE_SEC;
+        // This is safe for billing WITHOUT any auto-stop cap because the timer is
+        // server-paused the instant idle is DETECTED: pauseTimerForIdle() in the
+        // main process calls POST /timer/pause back-dated to idleStartedAt and
+        // halts heartbeats + screenshots. Server elapsed is frozen at idle-start
+        // for the entire time the alert waits, so an unanswered alert credits NO
+        // additional idle/tracked time — the old "12h phantom" hole is closed by
+        // the pause, not by a forced auto-stop.
+        this.alertAutoStopSec = 0;
+        this.hardStopGraceSec = 0;
         const checkSec =
             config.idle_check_interval_sec != null
                 ? config.idle_check_interval_sec
@@ -479,10 +459,11 @@ class IdleDetector {
             }
 
             // Transition to ALERTING after callback (caller should show alert).
-            // ALWAYS run the check interval — even when interactive auto-stop is
-            // disabled (alertAutoStopSec === 0) — so the absolute hard-stop cap
-            // (hardStopIdleSec) is enforced and the alert can never sit unanswered
-            // forever (the "12h phantom" hole).
+            // The check interval still runs, but with auto-stop disabled
+            // (alertAutoStopSec === 0 and hardStopGraceSec === 0) `_checkAutoStop`
+            // never fires — the alert stays visible until the user resolves it.
+            // The interval is kept so the ALERTING invariant (checkInterval != null)
+            // and its state-cleanup path on resolve/suspend are unchanged.
             this._state = IDLE_STATE.ALERTING;
             this.checkInterval = setInterval(
                 () => this._checkAutoStop(),
@@ -539,14 +520,15 @@ class IdleDetector {
             this.alertAutoStopSec > 0 &&
             alertDurationSec >= this.alertAutoStopSec;
 
-        // Absolute hard-stop cap: fires once the alert has sat unanswered for the
-        // fixed grace, regardless of interactive auto-stop being disabled/
-        // misconfigured. Measured from alertShownAt (same clock as interactive) so
-        // a preserved sleep re-show still honors the grace window, and so the cap
-        // is decoupled from the org's interactive countdown length. This is what
-        // makes ALERTING deterministically terminate and closes the "12h phantom"
-        // hole (idle_alert_auto_stop_min = 0).
-        const hardCapFire = alertDurationSec >= this.hardStopGraceSec;
+        // Absolute hard-stop cap: DISABLED (hardStopGraceSec forced to 0 in
+        // _applyConfig, 2026-07-23). Guarded with > 0 so a 0 value means "disabled"
+        // rather than "fire immediately" (alertDurationSec >= 0 is always true).
+        // With both mechanisms off the alert never auto-dismisses; it is safe
+        // because the timer is server-paused at idle-detection, so no time accrues
+        // while it waits.
+        const hardCapFire =
+            this.hardStopGraceSec > 0 &&
+            alertDurationSec >= this.hardStopGraceSec;
 
         if (interactiveFire || hardCapFire) {
             const totalIdleDuration = totalIdleSec;
