@@ -23,6 +23,12 @@ class AttendanceServiceTest extends TestCase
         $this->service = app(AttendanceService::class);
     }
 
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow(); // reset any pinned clock
+        parent::tearDown();
+    }
+
     // ── Generate Daily Attendance ───────────────────────
 
     /**
@@ -338,7 +344,11 @@ class AttendanceServiceTest extends TestCase
             'user_id' => $user->id,
         ]);
 
-        $result = $this->service->getAttendance($user->id, $org->id, []);
+        // Range tightly bounds the 3 records → exactly 3 rows (all real, no synthesis).
+        $result = $this->service->getAttendance($user->id, $org->id, [
+            'start_date' => '2026-01-10',
+            'end_date' => '2026-01-12',
+        ]);
 
         $this->assertEquals(3, $result->total());
     }
@@ -372,7 +382,13 @@ class AttendanceServiceTest extends TestCase
             'end_date' => '2026-03-20',
         ]);
 
-        $this->assertEquals(1, $result->total());
+        // The roster fills every day in [03-10, 03-20] (11 days); only the in-range
+        // real record (03-15) appears, out-of-range records (03-01, 03-31) do not.
+        $this->assertEquals(11, $result->total());
+        $dates = collect($result->items())->pluck('date');
+        $this->assertTrue($dates->contains('2026-03-15'));
+        $this->assertFalse($dates->contains('2026-03-01'));
+        $this->assertFalse($dates->contains('2026-03-31'));
     }
 
     public function test_get_attendance_filters_by_status(): void
@@ -393,8 +409,14 @@ class AttendanceServiceTest extends TestCase
             'date' => '2026-03-17',
         ]);
 
-        $result = $this->service->getAttendance($user->id, $org->id, ['status' => 'present']);
+        $result = $this->service->getAttendance($user->id, $org->id, [
+            'start_date' => '2026-03-16',
+            'end_date' => '2026-03-17',
+            'status' => 'present',
+        ]);
 
+        // Status filter applies across real + synthesised rows; only the real present
+        // day (03-16) matches (03-17 is absent).
         $this->assertEquals(1, $result->total());
         // getAttendance now returns serialized rows (arrays), not Eloquent models.
         $this->assertEquals('present', $result->first()['status']);
@@ -468,6 +490,11 @@ class AttendanceServiceTest extends TestCase
 
     public function test_get_attendance_summary_computes_correct_counts(): void
     {
+        // Pin today to 03-08 so the month-to-date window is 03-01..03-08 — the seven
+        // record-days plus 03-01 (a Sunday → weekend), which leaves every count below
+        // unchanged while the summary now walks the real calendar.
+        Carbon::setTestNow(Carbon::parse('2026-03-08 12:00:00'));
+
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
         $this->actingAs($user, 'sanctum');
