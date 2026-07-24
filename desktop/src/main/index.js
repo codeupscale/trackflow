@@ -65,6 +65,10 @@ const { IDLE_STATE } = require("./idle-detector");
 const OfflineQueue = require("./offline-queue");
 const NetworkMonitor = require("./network-monitor");
 const {
+    hasPendingCompletedSession,
+    unsyncedCompletedSecondsForDay,
+} = require("./timer-session-sync");
+const {
     resolveWatchTarget,
     shouldStopForRemoval,
 } = require("./uninstall-watcher");
@@ -1214,6 +1218,62 @@ function getUnsyncedTimerSessions() {
     } catch (e) {
         console.error("[LocalTimerDb] getUnsynced failed:", e.message);
         return [];
+    }
+}
+
+/**
+ * True when a session that was created AND stopped locally still needs syncing —
+ * either the start never reached the server (synced_start = 0) or the start synced
+ * but the stop didn't (synced_stop = 0). Drives the periodic retry-until-synced loop
+ * so a fully-offline start+stop is flushed even when no NetworkMonitor 'online'
+ * transition fires (net.isOnline() stays true, or the offline window is sub-poll).
+ */
+function hasPendingCompletedOfflineSessions() {
+    const db = _getLocalTimerDb();
+    if (!db) return false;
+    try {
+        const rows = db
+            .prepare(
+                "SELECT synced_start, synced_stop, ended_at FROM timer_sessions WHERE ended_at IS NOT NULL AND (synced_start = 0 OR synced_stop = 0) LIMIT 1",
+            )
+            .all();
+        return hasPendingCompletedSession(rows);
+    } catch (e) {
+        console.warn(
+            "[LocalTimerDb] hasPendingCompletedOfflineSessions failed:",
+            e.message,
+        );
+        return false;
+    }
+}
+
+/**
+ * Seconds from completed offline sessions the SERVER has no knowledge of yet
+ * (synced_start = 0), started today (local day). The server's today_total excludes
+ * these, so they are added to the displayed total to keep the offline time visible
+ * until the retry loop syncs it — instead of the total visibly "resetting" to the
+ * server value the moment the app reconnects. Only synced_start = 0 rows are counted:
+ * once the start is on the server the entry is part of the server total (double-count
+ * guard), and stop-only-pending rows are already reflected server-side as open time.
+ */
+function getUnsyncedCompletedSecondsForToday() {
+    const db = _getLocalTimerDb();
+    if (!db) return 0;
+    try {
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+        const rows = db
+            .prepare(
+                "SELECT started_at, duration_seconds, synced_start, ended_at FROM timer_sessions WHERE ended_at IS NOT NULL AND synced_start = 0",
+            )
+            .all();
+        return unsyncedCompletedSecondsForDay(rows, startOfDay.getTime());
+    } catch (e) {
+        console.warn(
+            "[LocalTimerDb] getUnsyncedCompletedSecondsForToday failed:",
+            e.message,
+        );
+        return 0;
     }
 }
 
@@ -4493,6 +4553,17 @@ async function reconcileTimerState() {
         // Pass 1b: sync sessions that need both start + stop (fully unsynced, completed)
         for (const session of unsynced) {
             if (session.id === currentEntry?._localId) continue; // Skip active session
+            // LIVE-TIMER GUARD: a session whose START never synced can only be created
+            // via POST /timer/start, which the server force-CLOSES the currently-open
+            // timer to honor (one-open-timer-per-user). If a timer is live right now,
+            // pushing this historical start would auto-stop and truncate it — the
+            // "new time entry lost after stop→start" bug. Defer: the row stays in
+            // timer_sessions (its time stays visible via the pending-offline total) and
+            // syncs on a later reconcile once no timer is open. Pass 1a (stop-only,
+            // synced_start=1) is unaffected — it targets a specific entry, never auto-stops.
+            if (!session.synced_start && (isTimerRunning || isTimerPaused)) {
+                continue;
+            }
             if (!session.synced_start) {
                 try {
                     // BUG 1 FIX: send the REAL local started_at so the server records the
@@ -4754,13 +4825,44 @@ function startTimerSync() {
             const status = await apiClient.getTimerStatus();
             const globalTotal = status.today_total ?? 0;
             const elapsed = status.elapsed_seconds ?? 0;
+            // Completed offline sessions the server hasn't seen yet aren't in its
+            // today_total — add them so the offline time stays visible instead of the
+            // total "resetting" to the server value the instant we reconnect.
+            const pendingOfflineSecs = getUnsyncedCompletedSecondsForToday();
             if (isServerTimerOpen(status)) {
-                todayTotalGlobal = Math.max(0, globalTotal - elapsed);
+                todayTotalGlobal =
+                    Math.max(0, globalTotal - elapsed) + pendingOfflineSecs;
                 const projectTotal = status.project_today_total ?? globalTotal;
                 todayTotalCurrentProject = Math.max(0, projectTotal - elapsed);
             } else {
-                todayTotalGlobal = globalTotal;
+                todayTotalGlobal = globalTotal + pendingOfflineSecs;
                 todayTotalCurrentProject = 0;
+            }
+
+            // RETRY-UNTIL-SYNCED: a session created AND stopped while offline lives in
+            // timer_sessions with synced_start/synced_stop = 0 and is flushed ONLY by
+            // reconcileTimerState(). That historically ran only on a NetworkMonitor
+            // 'online' transition, which never fires when net.isOnline() stays true
+            // (interface up but server was unreachable) or when the offline window is
+            // shorter than the monitor's poll — so the offline session was never synced
+            // and its time appeared to reset. Reaching here means the status fetch just
+            // succeeded (server is reachable), so drive reconcile every tick until any
+            // completed-but-unsynced session lands on the server. scheduleReconcileAndFlush()
+            // defers to the shared mutation guard (runs after this tick releases it).
+            //
+            // CRITICAL: only drain while NO timer is live. Pushing a historical
+            // synced_start=0 start via POST /timer/start force-closes the currently-open
+            // server timer (one-open-timer-per-user), which would auto-stop and truncate
+            // the running session (the "new entry lost after stop→start" bug). While a
+            // timer runs/pauses the pending row stays local (its time still shows via
+            // pendingOfflineSecs) and syncs once the timer stops. Belt-and-suspenders with
+            // the Pass 1b live-timer guard in reconcileTimerState().
+            if (
+                !isTimerRunning &&
+                !isTimerPaused &&
+                hasPendingCompletedOfflineSessions()
+            ) {
+                scheduleReconcileAndFlush();
             }
 
             if (isServerTimerOpen(status) && !isTimerRunning) {
