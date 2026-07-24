@@ -348,4 +348,53 @@ class TimerOfflineCorrectnessTest extends TestCase
             'No new entry must be created for a closed session.'
         );
     }
+
+    // ─── Backfill: a start carrying ended_at creates a CLOSED entry and NEVER
+    //     auto-stops the user's live timer (defence-in-depth for stop→start loss).
+    public function test_backfill_start_with_ended_at_does_not_stop_the_live_timer(): void
+    {
+        // A live timer B is running (open entry + Redis running key).
+        $b = TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'started_at' => now()->subMinutes(3),
+            'ended_at' => null,
+            'duration_seconds' => null,
+            'type' => 'tracked',
+        ]);
+        Redis::setex("timer:{$this->user->id}", 2592000, json_encode([
+            'entry_id' => $b->id,
+            'started_at' => $b->started_at->toISOString(),
+            'state' => 'running',
+        ]));
+
+        // Replay a completed offline session A as a single start+ended_at call.
+        $aStart = now()->subHours(2);
+        $aEnd = now()->subHour();
+        $response = $this->postJson('/api/v1/timer/start', [
+            'started_at' => $aStart->toIso8601String(),
+            'ended_at' => $aEnd->toIso8601String(),
+            'idempotency_key' => 'backfill-a-1',
+        ]);
+        $response->assertStatus(201);
+
+        // A was created CLOSED with the real historical span.
+        $aId = $response->json('entry.id');
+        $a = TimeEntry::withoutGlobalScopes()->findOrFail($aId);
+        $this->assertNotNull($a->ended_at, 'Backfill entry must be created closed.');
+        $this->assertEqualsWithDelta(3600, (int) $a->duration_seconds, 2);
+
+        // The live timer B must NOT have been auto-stopped.
+        $this->assertNull($b->fresh()->ended_at, 'Backfill start must not stop the live timer.');
+
+        // Idempotent replay returns the same closed entry (200), no duplicate, B still open.
+        $replay = $this->postJson('/api/v1/timer/start', [
+            'started_at' => $aStart->toIso8601String(),
+            'ended_at' => $aEnd->toIso8601String(),
+            'idempotency_key' => 'backfill-a-1',
+        ]);
+        $replay->assertStatus(200);
+        $this->assertEquals($aId, $replay->json('entry.id'));
+        $this->assertNull($b->fresh()->ended_at);
+    }
 }

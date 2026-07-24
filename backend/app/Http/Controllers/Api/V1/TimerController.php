@@ -23,11 +23,15 @@ class TimerController extends Controller
             // honors it instead of stamping now() at reconcile time (BUG 1).
             // Skew bounds (future / far-past) are enforced in TimerService.
             'started_at' => 'nullable|date',
+            // A start carrying ended_at is a completed offline session replayed as a
+            // single call — the server creates a CLOSED entry WITHOUT auto-stopping the
+            // user's live timer (see TimerService::createClosedHistoricalEntry).
+            'ended_at' => 'nullable|date',
         ]);
 
         try {
             $result = $this->timerService->startWithMeta(
-                $request->only('project_id', 'task_id', 'notes', 'idempotency_key', 'started_at')
+                $request->only('project_id', 'task_id', 'notes', 'idempotency_key', 'started_at', 'ended_at')
             );
 
             $entry = $result['entry'];
