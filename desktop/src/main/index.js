@@ -881,6 +881,18 @@ let _idleActionInProgress = false;
 let _isHandlingIdleAction = false;
 // Timestamp when the idle alert window was shown (FIX D1) — used to exclude dialog wait from idle_seconds
 let _idleAlertShownAt = null;
+// Did POST /timer/pause for the CURRENT idle cycle actually land on the server?
+// False after an idle pause that failed (offline). While false the server still
+// believes the entry is running, so every sync tick re-pushes the pause instead of
+// adopting the server's stale "running" state (which used to resume tracking behind
+// the open idle alert). See bugs/desktop-idle-alert-timer-resumes-on-reconnect.md.
+let _idlePauseSynced = true;
+let _idlePauseRetryInFlight = false;
+// All-projects today total returned by POST /timer/start, handed to afterStartTimer()
+// so the "Today, all projects" line stays global instead of collapsing to the started
+// project's total. Null when the backend predates the field (then the existing
+// todayTotalGlobal — already the correct completed sum — is simply kept).
+let _startAllProjectsTotal = null;
 // DISPLAY-ONLY: seconds of idle that an OFFLINE reassign moved to another project but
 // the server split has not yet been applied (timer is offline). The local timer is
 // still anchored at the original start (we must NOT re-anchor offline — that breaks
@@ -945,7 +957,13 @@ function restoreInMemoryFromLocalActive(localActive) {
 function applyRunningStatusFromServer(status) {
     const globalTotal = status.today_total ?? 0;
     const elapsed = status.elapsed_seconds ?? 0;
-    todayTotalGlobal = Math.max(0, globalTotal - elapsed);
+    // `today_total` is PROJECT-SCOPED whenever the status call passed a project id
+    // (historical API semantics) — using it here made the "Today, all projects" line
+    // collapse to the selected project's total while the timer ran. Always prefer the
+    // never-scoped `all_projects_today_total`, falling back for older backends.
+    // Bug: bugs/desktop-today-total-project-scoped-when-project-selected.md
+    const allProjectsTotal = status.all_projects_today_total ?? globalTotal;
+    todayTotalGlobal = Math.max(0, allProjectsTotal - elapsed);
     const projectTotal = status.project_today_total ?? globalTotal;
     todayTotalCurrentProject = Math.max(0, projectTotal - elapsed);
 
@@ -953,7 +971,12 @@ function applyRunningStatusFromServer(status) {
     if ((!status.running && !serverPaused) || !status.entry) return false;
 
     isTimerRunning = true;
-    isTimerPaused = serverPaused;
+    // IDLE GUARD: while an idle decision is pending, the LOCAL pause is authoritative.
+    // The pause POST can fail (offline at the moment idle was detected), leaving the
+    // server entry "running"; adopting that state un-paused the timer behind the still
+    // open idle alert and tracking silently resumed without the user choosing anything.
+    // See bugs/desktop-idle-alert-timer-resumes-on-reconnect.md.
+    isTimerPaused = isIdlePauseAuthoritative() ? true : serverPaused;
     const localActive = getActiveLocalTimer();
     const previousLocalId = currentEntry?._localId || localActive?.id;
     currentEntry = {
@@ -987,6 +1010,20 @@ function isServerTimerOpen(status) {
  */
 function syncOpenTimerFromServerStatus(status, { notify = "auto" } = {}) {
     if (!isServerTimerOpen(status) || !status.entry) return false;
+    // IDLE GUARD: never adopt server state while an idle alert is waiting for the
+    // user. Two ways this used to resurrect tracking behind the open alert:
+    //   1. the idle pause POST failed (offline) → server still says "running" while
+    //      local is paused → the sync tick adopted "running" and restarted capture;
+    //   2. `!isTimerRunning` transient → the "server open, local stopped" branch
+    //      re-opened the timer.
+    // Instead: keep local state and re-push the pause so the server converges to us.
+    if (isIdlePauseAuthoritative()) {
+        console.log(
+            "[TimerSync] Idle alert active — server timer state ignored, re-pushing idle pause",
+        );
+        retryIdlePauseIfUnsynced();
+        return false;
+    }
     const wasRunning = isTimerRunning;
     const wasPaused = isTimerPaused;
     if (!applyRunningStatusFromServer(status)) return false;
@@ -1047,9 +1084,52 @@ function scheduleReconcileAndFlush() {
     }
 }
 
+/**
+ * True while an idle decision is pending AND the local "paused" state must win over
+ * whatever the server reports. The server can legitimately still say "running" here
+ * because the pause POST is best-effort (it fails when idle is detected offline), so
+ * adopting the server view would silently resume tracking behind the open alert.
+ */
+function isIdlePauseAuthoritative() {
+    return _isHandlingIdleAction || isIdleAlertActive();
+}
+
+/**
+ * Re-push the idle pause when the original POST /timer/pause never landed (offline at
+ * idle-detection time). Back-dated to idleStartedAt so the server freezes elapsed at
+ * the true idle start, not at reconnect time. Fire-and-forget; safe to call on every
+ * sync tick — it self-gates on the unsynced flag and a single in-flight attempt.
+ */
+function retryIdlePauseIfUnsynced() {
+    if (_idlePauseSynced || _idlePauseRetryInFlight) return;
+    if (!isTimerPaused || !isIdleAlertActive()) return;
+    if (!apiClient || !currentEntry?.id) return;
+    if (String(currentEntry.id).startsWith("local-")) return; // start not synced yet
+    if (networkMonitor && !networkMonitor.isOnline) return;
+
+    const idleStartedAt = idleDetector?.idleStartedAt;
+    const pausedAt = idleStartedAt
+        ? new Date(idleStartedAt).toISOString()
+        : new Date().toISOString();
+    _idlePauseRetryInFlight = true;
+    apiClient
+        .pauseTimer({ pausedAt, reason: "idle" })
+        .then(() => {
+            _idlePauseSynced = true;
+            console.log("[Timer] Idle pause re-synced to server");
+        })
+        .catch((e) => {
+            console.warn("[Timer] Idle pause retry failed:", e.message);
+        })
+        .finally(() => {
+            _idlePauseRetryInFlight = false;
+        });
+}
+
 async function pauseTimerForIdle(idleStartedAtIso) {
     if (!isTimerRunning || isTimerPaused) return;
     isTimerPaused = true;
+    _idlePauseSynced = false;
     logToFile(
         "info",
         `[TIMER_PAUSE] idle startedAt=${idleStartedAtIso || "now"}`,
@@ -1067,6 +1147,7 @@ async function pauseTimerForIdle(idleStartedAtIso) {
                 pausedAt: idleStartedAtIso || new Date().toISOString(),
                 reason: "idle",
             });
+            _idlePauseSynced = true;
         } catch (e) {
             console.warn(
                 "[Timer] Server pause failed (will retry on reconcile):",
@@ -1098,6 +1179,7 @@ async function pauseTimerForIdle(idleStartedAtIso) {
 async function resumeTimerAfterIdle() {
     if (!isTimerRunning) return;
     isTimerPaused = false;
+    _idlePauseSynced = true; // no pending pause to re-push once the user resumed
     logToFile("info", "[TIMER_RESUME] after idle action");
     if (
         apiClient &&
@@ -1147,11 +1229,38 @@ function _getLocalTimerDb() {
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
+        // OWNERSHIP: sessions are tagged with the user that recorded them so a sign-out
+        // no longer has to WIPE the table to stay safe for the next account. Added by
+        // migration because the table predates it; legacy rows keep user_id NULL and
+        // stay visible to whoever is signed in (they can only have come from this
+        // install's own pre-upgrade session).
+        try {
+            _localTimerDb.exec(
+                "ALTER TABLE timer_sessions ADD COLUMN user_id TEXT",
+            );
+        } catch {
+            // Column already exists — expected on every launch after the first.
+        }
         return _localTimerDb;
     } catch (e) {
         console.error("[LocalTimerDb] Init failed:", e.message);
         return null;
     }
+}
+
+/**
+ * Id of the signed-in user, used to tag and scope local timer sessions. Set right
+ * after the token is validated (getMe) and cleared on logout.
+ */
+let _sessionUserId = null;
+
+/** SQL fragment + params scoping a timer_sessions query to the signed-in user. */
+function _ownRowsClause(prefix = "AND") {
+    if (!_sessionUserId) return { sql: "", params: [] };
+    return {
+        sql: ` ${prefix} (user_id IS NULL OR user_id = ?)`,
+        params: [_sessionUserId],
+    };
 }
 
 function generateIdempotencyKey() {
@@ -1163,8 +1272,8 @@ function saveLocalTimerStart(id, idempotencyKey, projectId, startedAt) {
     if (!db) return;
     try {
         db.prepare(
-            "INSERT OR REPLACE INTO timer_sessions (id, idempotency_key, project_id, started_at) VALUES (?, ?, ?, ?)",
-        ).run(id, idempotencyKey, projectId, startedAt);
+            "INSERT OR REPLACE INTO timer_sessions (id, idempotency_key, project_id, started_at, user_id) VALUES (?, ?, ?, ?, ?)",
+        ).run(id, idempotencyKey, projectId, startedAt, _sessionUserId);
     } catch (e) {
         console.error("[LocalTimerDb] saveStart failed:", e.message);
     }
@@ -1210,11 +1319,14 @@ function getUnsyncedTimerSessions() {
     const db = _getLocalTimerDb();
     if (!db) return [];
     try {
+        const own = _ownRowsClause();
         return db
             .prepare(
-                "SELECT * FROM timer_sessions WHERE synced_start = 0 OR (ended_at IS NOT NULL AND synced_stop = 0) ORDER BY created_at ASC",
+                "SELECT * FROM timer_sessions WHERE (synced_start = 0 OR (ended_at IS NOT NULL AND synced_stop = 0))" +
+                    own.sql +
+                    " ORDER BY created_at ASC",
             )
-            .all();
+            .all(...own.params);
     } catch (e) {
         console.error("[LocalTimerDb] getUnsynced failed:", e.message);
         return [];
@@ -1232,11 +1344,14 @@ function hasPendingCompletedOfflineSessions() {
     const db = _getLocalTimerDb();
     if (!db) return false;
     try {
+        const own = _ownRowsClause();
         const rows = db
             .prepare(
-                "SELECT synced_start, synced_stop, ended_at FROM timer_sessions WHERE ended_at IS NOT NULL AND (synced_start = 0 OR synced_stop = 0) LIMIT 1",
+                "SELECT synced_start, synced_stop, ended_at FROM timer_sessions WHERE ended_at IS NOT NULL AND (synced_start = 0 OR synced_stop = 0)" +
+                    own.sql +
+                    " LIMIT 1",
             )
-            .all();
+            .all(...own.params);
         return hasPendingCompletedSession(rows);
     } catch (e) {
         console.warn(
@@ -1262,11 +1377,13 @@ function getUnsyncedCompletedSecondsForToday() {
     try {
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
+        const own = _ownRowsClause();
         const rows = db
             .prepare(
-                "SELECT started_at, duration_seconds, synced_start, ended_at FROM timer_sessions WHERE ended_at IS NOT NULL AND synced_start = 0",
+                "SELECT started_at, duration_seconds, synced_start, ended_at FROM timer_sessions WHERE ended_at IS NOT NULL AND synced_start = 0" +
+                    own.sql,
             )
-            .all();
+            .all(...own.params);
         return unsyncedCompletedSecondsForDay(rows, startOfDay.getTime());
     } catch (e) {
         console.warn(
@@ -1315,12 +1432,15 @@ function getActiveLocalTimer() {
     const db = _getLocalTimerDb();
     if (!db) return null;
     try {
+        const own = _ownRowsClause();
         const row =
             db
                 .prepare(
-                    "SELECT * FROM timer_sessions WHERE ended_at IS NULL ORDER BY created_at DESC LIMIT 1",
+                    "SELECT * FROM timer_sessions WHERE ended_at IS NULL" +
+                        own.sql +
+                        " ORDER BY created_at DESC LIMIT 1",
                 )
-                .get() || null;
+                .get(...own.params) || null;
         if (row && row.started_at) {
             const ageMs = Date.now() - new Date(row.started_at).getTime();
             if (
@@ -1357,17 +1477,44 @@ function cleanOldLocalTimerSessions() {
 }
 
 /**
- * Wipe ALL local timer_sessions rows. `timer_sessions` has no user_id, so a stale
- * row left by a previous account (e.g. an open session from a killed app) is
- * otherwise restored on the NEXT login as a live "Tracking HH:MM:SS" timer with a
- * started_at hours/days in the past — even on a brand-new account with zero server
- * entries. Called on logout so the next account starts with clean local timer state.
+ * Clear local timer sessions at logout WITHOUT throwing away tracked time.
+ *
+ * The old behaviour was `DELETE FROM timer_sessions` — needed because the table had
+ * no owner and a stale OPEN row was restored on the next login as a phantom
+ * "Tracking HH:MM:SS" timer. But it also deleted rows whose start/stop had never
+ * reached the server, so signing out while offline silently DESTROYED that tracked
+ * time: nothing was left for reconcile to push on the next launch.
+ *
+ * Now that rows carry `user_id`, keep exactly what still has to be uploaded — the
+ * signed-in user's CLOSED but unsynced sessions — and delete everything else
+ * (open rows, fully-synced rows, and any other account's rows). Kept rows are
+ * invisible to another account (every read is scoped by `_ownRowsClause()`), and
+ * they cannot resurrect a live timer because they are closed. `reconcileTimerState()`
+ * pushes them the next time this user signs in.
  */
 function clearLocalTimerSessions() {
     const db = _getLocalTimerDb();
     if (!db) return;
     try {
-        db.prepare("DELETE FROM timer_sessions").run();
+        if (_sessionUserId) {
+            const kept = db
+                .prepare(
+                    "DELETE FROM timer_sessions WHERE NOT (user_id = ? AND ended_at IS NOT NULL AND (synced_start = 0 OR synced_stop = 0))",
+                )
+                .run(_sessionUserId);
+            const pending = db
+                .prepare("SELECT COUNT(*) AS n FROM timer_sessions")
+                .get();
+            if (pending?.n > 0) {
+                console.warn(
+                    `[LocalTimerDb] Kept ${pending.n} unsynced session(s) for upload on next sign-in (deleted ${kept.changes} others)`,
+                );
+            }
+        } else {
+            // No known user (pre-migration rows / forced logout before getMe) — fall
+            // back to the original wipe rather than leaving unattributable rows.
+            db.prepare("DELETE FROM timer_sessions").run();
+        }
     } catch (e) {
         console.error(
             "[LocalTimerDb] clearLocalTimerSessions failed:",
@@ -1609,10 +1756,10 @@ app.on("before-quit", async (e) => {
         // appear to do nothing and the user had to click Quit twice.
         const forceExit = setTimeout(() => {
             console.warn(
-                "[Quit] Force-exit fallback fired (cleanup exceeded 3s)",
+                "[Quit] Force-exit fallback fired (cleanup exceeded 6s)",
             );
             app.exit(0);
-        }, 3000);
+        }, 6000);
         forceExit.unref?.();
         // LOCAL-FIRST: record the stop locally (synchronous, instant). The timer is
         // stopped regardless of whether the server/posthog calls below succeed —
@@ -1656,6 +1803,26 @@ app.on("before-quit", async (e) => {
         activityMonitor?.stop();
         screenshotService?.stop();
         idleDetector?.stop();
+        // UPLOAD ON QUIT: the direct stop above only lands when the server already
+        // knows the entry. A session that STARTED offline has no server entry to stop,
+        // so push start+stop (and any queued heartbeats/screenshots) before we exit —
+        // otherwise that time sits locally until the app is next launched. Bounded so
+        // Quit still exits promptly; anything left over is synced by reconcile on the
+        // next launch (unchanged local-first guarantee).
+        if (apiClient && networkMonitor?.isOnline !== false) {
+            await withTimeout(
+                (async () => {
+                    try {
+                        await reconcileTimerState();
+                    } catch {}
+                    try {
+                        await offlineQueue?.flush(apiClient);
+                    } catch {}
+                })(),
+                2500,
+                "[Quit] Sync budget exceeded — remaining data syncs on next launch",
+            );
+        }
         // Bound the PostHog flush — it was unbounded and could hang the quit forever.
         await Promise.race([
             posthog.shutdown(),
@@ -1765,6 +1932,10 @@ async function forceLogout() {
     todayTotalCurrentProject = 0;
     config = {};
     currentShift = null;
+    // Cleared AFTER clearLocalTimerSessions() above so this user's unsynced sessions
+    // are correctly attributed and kept — the token is dead, so they can only be
+    // uploaded when the same user signs in again.
+    _sessionUserId = null;
 
     _stopUnpinnedFocusWatch();
     if (popupWindow && !popupWindow.isDestroyed()) {
@@ -1874,6 +2045,10 @@ async function initializeApp() {
         try {
             user = await apiClient.getMe();
             tokenValid = true;
+            // Tag local timer sessions with their owner so a sign-out can keep this
+            // user's unsynced time instead of wiping the table (see
+            // clearLocalTimerSessions).
+            _sessionUserId = user?.id ? String(user.id) : null;
             break;
         } catch (e) {
             if (isAgentUpgradeRequiredError(e)) {
@@ -2015,6 +2190,10 @@ async function initializeApp() {
     networkMonitor = new NetworkMonitor();
     networkMonitor.on("online", async () => {
         console.log("[Network] Back online — reconciling and flushing");
+        // An idle pause raised while offline never reached the server — push it FIRST,
+        // before anything reads server state, so the entry is frozen at idleStartedAt
+        // and no reconnect path can mistake "server says running" for "resume".
+        retryIdlePauseIfUnsynced();
         // Reconcile local timer state with server before flushing queue
         await reconcileTimerState();
         await offlineQueue?.flush(apiClient);
@@ -2585,7 +2764,14 @@ function buildTrayContextMenu() {
     }
 
     // ── Timer controls ─────────────────────────────────────────────────────
-    if (isTimerRunning) {
+    // Same lock as the popup: while an idle alert waits for an answer, the tray must
+    // not offer a competing way to start/stop the timer.
+    if (isIdleAlertActive()) {
+        template.push({
+            label: "Waiting for idle response…",
+            enabled: false,
+        });
+    } else if (isTimerRunning) {
         template.push({
             label: "Stop Timer",
             click: () => stopTimer(),
@@ -3103,6 +3289,29 @@ function validateIdleAction(action) {
     return valid.includes(action) ? action : null;
 }
 
+/**
+ * How long sign-out may spend pushing tracked time to the server before giving up.
+ * Long enough for a reconcile + a modest queue flush, short enough that a dead
+ * network never makes "Sign out" feel broken. Anything not sent stays in SQLite.
+ */
+const LOGOUT_SYNC_BUDGET_MS = 6000;
+
+/** Await `promise`, but never longer than `ms`. Never rejects. */
+function withTimeout(promise, ms, timeoutLog = null) {
+    let timer = null;
+    return Promise.race([
+        Promise.resolve(promise).catch(() => {}),
+        new Promise((resolve) => {
+            timer = setTimeout(() => {
+                if (timeoutLog) console.warn(timeoutLog);
+                resolve();
+            }, ms);
+        }),
+    ]).finally(() => {
+        if (timer) clearTimeout(timer);
+    });
+}
+
 async function performLogout() {
     posthog.capture(currentEntry?.user_id || "unknown", "user_logged_out", {});
 
@@ -3132,7 +3341,36 @@ async function performLogout() {
             await apiClient.stopTimer();
         } catch {}
     }
-    // Wipe local timer_sessions so the NEXT account can't inherit this one's rows
+
+    // UPLOAD BEFORE TEARDOWN: the stop above is recorded locally first, so at this
+    // point the server may still be missing this session's start/stop (offline start,
+    // failed stop) and the offline queue may still hold heartbeats/screenshots. Push
+    // both NOW — after this function the apiClient is nulled and the queue closed, so
+    // nothing else can send them until the next sign-in. Bounded so a slow or
+    // unreachable server can never wedge sign-out; whatever doesn't make it stays in
+    // SQLite and is pushed by reconcile the next time this user signs in.
+    if (apiClient && networkMonitor?.isOnline !== false) {
+        console.log("[Logout] Flushing tracked time before sign-out");
+        await withTimeout(
+            (async () => {
+                try {
+                    await reconcileTimerState();
+                } catch (e) {
+                    console.warn("[Logout] reconcile failed:", e.message);
+                }
+                try {
+                    await offlineQueue?.flush(apiClient);
+                } catch (e) {
+                    console.warn("[Logout] queue flush failed:", e.message);
+                }
+            })(),
+            LOGOUT_SYNC_BUDGET_MS,
+            "[Logout] sync budget exceeded — remaining data stays queued locally",
+        );
+    }
+
+    // Prune local timer_sessions so the NEXT account can't inherit this one's rows
+    // (anything still unsynced for THIS user is deliberately kept — see the function).
     // (the table has no user_id; a stale open row would restore as a phantom
     // "Tracking HH:MM:SS" timer on the next login). The current timer was just
     // stopped above; the offline queue is closed below — both consistent with this.
@@ -3169,6 +3407,7 @@ async function performLogout() {
     todayTotalCurrentProject = 0;
     config = {};
     currentShift = null;
+    _sessionUserId = null;
 
     _stopUnpinnedFocusWatch();
     if (popupWindow && !popupWindow.isDestroyed()) {
@@ -3505,15 +3744,32 @@ function setupIPC() {
             todayTotal: todayTotalForDisplay,
             // Non-ticking all-projects sum for the secondary field.
             todayTotalGlobal,
+            // True while an idle alert is waiting for an answer — the popup renders
+            // itself locked so a re-opened window can never come back unlocked.
+            idleLocked: isIdleAlertActive(),
         };
     });
 
+    // Timer controls are LOCKED while an idle alert is pending. The renderer already
+    // disables the buttons; this is the authoritative guard (tray, keyboard, an
+    // out-of-date renderer) so the timer can only ever be driven from the idle window
+    // until the user answers it.
     ipcMain.handle("start-timer", async (_, projectId) => {
+        if (isIdleAlertActive()) {
+            return {
+                error: "Respond to the idle prompt first (Continue Tracking or Stop Timer).",
+            };
+        }
         const validProjectId = validateProjectId(projectId);
         return await startTimer(validProjectId);
     });
 
     ipcMain.handle("stop-timer", () => {
+        if (isIdleAlertActive()) {
+            return {
+                error: "Respond to the idle prompt first (Continue Tracking or Stop Timer).",
+            };
+        }
         return stopTimer();
     });
 
@@ -3565,7 +3821,29 @@ function afterStartTimer(projectIdForTotal, todayTotalForPopup) {
         `[afterStartTimer] Running for entry=${currentEntry.id}, project=${projectIdForTotal}`,
     );
     (async () => {
-        todayTotalGlobal = todayTotalForPopup;
+        // NOTE: do NOT assign `todayTotalGlobal = todayTotalForPopup` here.
+        // `todayTotalForPopup` is the PROJECT-scoped today total from the start
+        // response, so this overwrote the "Today, all projects" line with the
+        // just-started project's total (0 for a project with no time today) until the
+        // 10s sync tick repaired it — the "total starts from zero for ~10s" bug.
+        // Starting a timer cannot change the completed all-projects sum, so the
+        // existing value already IS correct; refresh it only from an authoritative
+        // all-projects number when the backend provides one.
+        // Bug: bugs/desktop-all-projects-total-resets-on-start.md
+        if (_startAllProjectsTotal != null) {
+            const elapsed = _cachedStartedAtMs
+                ? Math.max(
+                      0,
+                      Math.floor((Date.now() - _cachedStartedAtMs) / 1000),
+                  )
+                : 0;
+            // The server figure includes the freshly-started entry's elapsed; the
+            // desktop keeps `todayTotalGlobal` as the COMPLETED base and adds live
+            // elapsed on each tick, so subtract it back out here.
+            todayTotalGlobal = Math.max(0, _startAllProjectsTotal - elapsed);
+            _startAllProjectsTotal = null;
+        }
+        updateTrayTitle();
         loadProjects().catch(() => {});
         try {
             activityMonitor.start();
@@ -3628,6 +3906,11 @@ async function switchProject(projectId) {
             ? new Date(newEntry.started_at).getTime()
             : null;
         todayTotalCurrentProject = result.today_total ?? 0;
+        // Keep the "Today, all projects" line global across a project switch — the
+        // response's `today_total` is scoped to the NEW project.
+        if (result.all_projects_today_total != null) {
+            todayTotalGlobal = Math.max(0, result.all_projects_today_total);
+        }
 
         posthog.capture(newEntry?.user_id || "unknown", "timer_switched", {
             project_id: projectId,
@@ -3778,6 +4061,7 @@ async function startTimer(projectId = null) {
             };
             adoptServerStartedAt(currentEntry?.started_at);
             todayTotalCurrentProject = result.today_total ?? 0;
+            _startAllProjectsTotal = result.all_projects_today_total ?? null;
             markLocalTimerStartSynced(localId, result.entry.id);
             posthog.capture(
                 currentEntry?.user_id || "unknown",
@@ -3830,6 +4114,8 @@ async function startTimer(projectId = null) {
                     isTimerRunning = true;
                     isTimerPaused = false;
                     todayTotalCurrentProject = retryResult.today_total ?? 0;
+                    _startAllProjectsTotal =
+                        retryResult.all_projects_today_total ?? null;
                     markLocalTimerStartSynced(localId, retryResult.entry.id);
                     notifyPopup("timer-started", {
                         ...currentEntry,
@@ -4125,6 +4411,19 @@ async function _idleWatchdogTick() {
         // An interactive idle action or an in-flight stop is already resolving the
         // idle — do not race it (the stopTimer mutex would no-op anyway).
         if (_idleActionInProgress || _stopTimerInProgress) return;
+        // NEVER kill a live idle alert. The alert is answerable only by the user
+        // (2026-07-23 product decision: it must never auto-dismiss), and this
+        // watchdog fires at idle_timeout + 12 min — which is what was silently
+        // closing the popup ~10 minutes after it appeared. It is safe to stand down
+        // because the timer is server-PAUSED at idle detection, so nothing accrues
+        // while the alert waits; if that pause never landed (offline) we re-push it
+        // instead of hard-stopping. The watchdog still covers its real purpose:
+        // idle detection disabled, or the detector wedged with no alert on screen.
+        // See bugs/desktop-idle-alert-closed-by-idle-watchdog.md.
+        if (isIdleAlertActive()) {
+            retryIdlePauseIfUnsynced();
+            return;
+        }
         // Respect the "always keep idle time" policy: those orgs intentionally
         // credit presence, so awake-idle is not a phantom for them. (True sleep is
         // still stopped by autoStopAfterSleepGap regardless of policy.)
@@ -4823,6 +5122,8 @@ function startTimerSync() {
 
         try {
             const status = await apiClient.getTimerStatus();
+            // Server reachable — if an idle pause failed to land earlier, push it now.
+            retryIdlePauseIfUnsynced();
             const globalTotal = status.today_total ?? 0;
             const elapsed = status.elapsed_seconds ?? 0;
             // Completed offline sessions the server hasn't seen yet aren't in its
@@ -5131,6 +5432,18 @@ function notifyPopup(event, data) {
     }
 }
 
+/**
+ * Broadcast whether the main popup must be LOCKED because an idle alert is waiting
+ * for an answer. While locked the renderer disables Start / Stop / project select so
+ * the user cannot drive the timer from two places at once (e.g. hitting Stop in the
+ * popup while the idle window is still deciding what to do with the idle period).
+ * Recomputed from the single source of truth on every call, so it is safe to fire
+ * from any show/dismiss/resolve path.
+ */
+function notifyIdleLockState() {
+    notifyPopup("idle-lock", { locked: isIdleAlertActive() });
+}
+
 // ── Idle Alert System ────────────────────────────────────────────────────────
 
 /**
@@ -5306,12 +5619,17 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
             "idle-data",
             buildIdleAlertPayload(_idleAlertShownAt),
         );
+        notifyIdleLockState();
         return;
     }
     // BUG-2 FIX: Check idle detector state instead of isTimerRunning to avoid race condition
     // where a concurrent sync cycle temporarily sets isTimerRunning=false, preventing the
     // modal from appearing. The idle detector is the authoritative source of idle state.
     if (!idleDetector?.isIdleActive()) return;
+
+    // Lock the popup for the whole life of this alert — the idle window is the only
+    // place the user may act until they answer it.
+    notifyIdleLockState();
 
     screenshotService?.stop();
 
@@ -5561,6 +5879,9 @@ function dismissIdleAlert() {
         idleAlertWindow.destroy();
     }
     idleAlertWindow = null;
+    // Alert is gone — release the popup lock (recomputed, so a still-ALERTING
+    // detector with a hidden window keeps the popup locked).
+    notifyIdleLockState();
 }
 
 /**
@@ -5912,6 +6233,10 @@ async function handleIdleAction(
         _idleActionInProgress = false;
         // FIX D4: Release reconcile mutex
         _isHandlingIdleAction = false;
+        // The idle decision is over (or was aborted) — re-evaluate the popup lock so
+        // Start/Stop/project select come back. Runs on EVERY exit path, including the
+        // early returns above.
+        notifyIdleLockState();
     }
 }
 

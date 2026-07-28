@@ -39,7 +39,15 @@ class TimerController extends Controller
             $todayTotal = $this->timerService->todayTotal($entry->project_id);
 
             return response()->json(
-                ['entry' => $entry, 'today_total' => $todayTotal],
+                [
+                    'entry' => $entry,
+                    'today_total' => $todayTotal,
+                    // Always-global sum (never scoped to the started project). Without it
+                    // the desktop had no global figure at start time and fell back to the
+                    // project-scoped one for its "Today, all projects" line, which then
+                    // read 0 until the next 10s status sync.
+                    'all_projects_today_total' => $this->allProjectsTodayTotal($entry, $todayTotal),
+                ],
                 $isExisting ? 200 : 201
             );
         } catch (\InvalidArgumentException $e) {
@@ -73,7 +81,11 @@ class TimerController extends Controller
             $entry = $result['entry'];
             $todayTotal = $this->timerService->todayTotal($entry->project_id);
 
-            return response()->json(['entry' => $entry, 'today_total' => $todayTotal]);
+            return response()->json([
+                'entry' => $entry,
+                'today_total' => $todayTotal,
+                'all_projects_today_total' => $this->allProjectsTodayTotal($entry, $todayTotal),
+            ]);
         } catch (\InvalidArgumentException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         } catch (\RuntimeException $e) {
@@ -98,10 +110,29 @@ class TimerController extends Controller
                 'stopped_entry' => $result['stopped'],
                 'entry' => $result['started'],
                 'today_total' => $todayTotal,
+                'all_projects_today_total' => $this->allProjectsTodayTotal($result['started'], $todayTotal),
             ]);
         } catch (\RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 409);
         }
+    }
+
+    /**
+     * Always-global "today" total for a timer mutation response.
+     *
+     * `today_total` is scoped to the entry's project, which the desktop cannot use for
+     * its "Today, all projects" line — assigning the scoped value there made the line
+     * read 0 right after starting a fresh project until the next status sync
+     * (bugs/desktop-all-projects-total-resets-on-start.md).
+     *
+     * When the entry has no project the scoped and global sums are identical, so the
+     * extra query is skipped.
+     */
+    private function allProjectsTodayTotal(\App\Models\TimeEntry $entry, int $scopedTotal): int
+    {
+        return $entry->project_id === null
+            ? $scopedTotal
+            : $this->timerService->todayTotal(null);
     }
 
     // TIME-03: Pause timer (freeze elapsed; entry stays open)

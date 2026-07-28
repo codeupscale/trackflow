@@ -16,6 +16,27 @@ use Illuminate\Support\Str;
 
 class ScreenshotController extends Controller
 {
+    /**
+     * How long after an entry closes a LIVE desktop may still upload against it.
+     * Covers the normal race between the final capture and the stop call.
+     */
+    private const LIVE_UPLOAD_GRACE_MINUTES = 5;
+
+    /**
+     * How far back an OFFLINE-captured screenshot may be backfilled onto a closed
+     * entry. The desktop queues shots taken while offline and flushes them on
+     * reconnect — which can be hours (or a weekend) later. Bounded so the endpoint
+     * still cannot be used to attach arbitrary images to old history.
+     */
+    private const OFFLINE_BACKFILL_DAYS = 7;
+
+    /**
+     * Tolerance around the entry's own [started_at, ended_at] window when accepting a
+     * backfilled capture — absorbs desktop/server clock skew and the sub-second gap
+     * between the last capture and the stop instant.
+     */
+    private const BACKFILL_WINDOW_TOLERANCE_MINUTES = 2;
+
     private function disk(): string
     {
         return config('filesystems.default');
@@ -41,10 +62,30 @@ class ScreenshotController extends Controller
         $user = $request->user();
         $timeEntry = $user->timeEntries()->where('id', $request->time_entry_id)->firstOrFail();
 
-        $isActive = $timeEntry->ended_at === null
-            || $timeEntry->ended_at->greaterThan(now()->subMinutes(5));
+        $capturedAt = \Carbon\Carbon::parse($request->captured_at);
 
-        if (!$isActive) {
+        $isActive = $timeEntry->ended_at === null
+            || $timeEntry->ended_at->greaterThan(now()->subMinutes(self::LIVE_UPLOAD_GRACE_MINUTES));
+
+        // OFFLINE BACKFILL: screenshots captured while the desktop was offline are held
+        // in its local queue and only flushed on reconnect — by then the session has
+        // been stopped and is well past the 5-minute live grace. The old rule rejected
+        // them with a 422, which the desktop queue classifies as a PERMANENT client
+        // error, so every screenshot from an offline session was silently DROPPED
+        // (symptom: the last screenshots of offline-tracked time never appear).
+        // Accept such a shot when its capture instant genuinely falls inside the entry
+        // it claims, and the entry closed within the backfill horizon.
+        // See bugs/offline-screenshots-rejected-after-entry-closed.md
+        $isOfflineBackfill = false;
+        if (!$isActive && $timeEntry->ended_at !== null && $timeEntry->started_at !== null) {
+            $tolerance = self::BACKFILL_WINDOW_TOLERANCE_MINUTES;
+            $isOfflineBackfill = $capturedAt->betweenIncluded(
+                $timeEntry->started_at->copy()->subMinutes($tolerance),
+                $timeEntry->ended_at->copy()->addMinutes($tolerance)
+            ) && $timeEntry->ended_at->greaterThan(now()->subDays(self::OFFLINE_BACKFILL_DAYS));
+        }
+
+        if (!$isActive && !$isOfflineBackfill) {
             return response()->json([
                 'message' => 'Screenshots can only be uploaded to active time entries.',
                 'errors'  => ['time_entry_id' => ['The time entry is no longer active.']],

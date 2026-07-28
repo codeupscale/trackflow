@@ -274,6 +274,79 @@ class ScreenshotTest extends TestCase
             ->assertJsonValidationErrors(['captured_at']);
     }
 
+    // ── Offline backfill onto a closed entry ──────────────────────────────────
+    // bugs/offline-screenshots-rejected-after-entry-closed.md
+    //
+    // A desktop that captured while offline flushes its queue only after reconnect —
+    // by then the session is stopped and older than the 5-minute live grace. presign
+    // used to reject that with 422, which the desktop queue treats as a PERMANENT
+    // client error, so every screenshot from an offline session was dropped.
+
+    public function test_presign_accepts_offline_backfill_for_a_closed_entry(): void
+    {
+        $this->actingAs($this->employee, 'sanctum');
+
+        $closed = TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id'         => $this->employee->id,
+            'started_at'      => now()->subHours(4),
+            'ended_at'        => now()->subHours(3),
+            'duration_seconds' => 3600,
+        ]);
+
+        $response = $this->postJson('/api/v1/screenshots/presign', [
+            'time_entry_id' => $closed->id,
+            // Captured mid-session, uploaded 3 hours later once back online.
+            'captured_at'   => now()->subHours(3)->subMinutes(20)->toIso8601String(),
+            'file_size'     => 500 * 1024,
+        ]);
+
+        $response->assertStatus(200)->assertJsonStructure(['screenshot_id', 'upload_url']);
+    }
+
+    public function test_presign_rejects_a_capture_outside_the_closed_entry_window(): void
+    {
+        $this->actingAs($this->employee, 'sanctum');
+
+        $closed = TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id'         => $this->employee->id,
+            'started_at'      => now()->subHours(4),
+            'ended_at'        => now()->subHours(3),
+            'duration_seconds' => 3600,
+        ]);
+
+        $response = $this->postJson('/api/v1/screenshots/presign', [
+            'time_entry_id' => $closed->id,
+            // An hour after the entry ended — not part of that session.
+            'captured_at'   => now()->subHours(2)->toIso8601String(),
+            'file_size'     => 500 * 1024,
+        ]);
+
+        $response->assertStatus(422);
+    }
+
+    public function test_presign_rejects_backfill_beyond_the_horizon(): void
+    {
+        $this->actingAs($this->employee, 'sanctum');
+
+        $ancient = TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id'         => $this->employee->id,
+            'started_at'      => now()->subDays(30),
+            'ended_at'        => now()->subDays(30)->addHour(),
+            'duration_seconds' => 3600,
+        ]);
+
+        $response = $this->postJson('/api/v1/screenshots/presign', [
+            'time_entry_id' => $ancient->id,
+            'captured_at'   => now()->subDays(30)->addMinutes(20)->toIso8601String(),
+            'file_size'     => 500 * 1024,
+        ]);
+
+        $response->assertStatus(422);
+    }
+
     public function test_presign_requires_file_size(): void
     {
         $this->actingAs($this->employee, 'sanctum');
