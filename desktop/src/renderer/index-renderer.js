@@ -259,9 +259,17 @@ function startTicking() {
   if (!_tickListenerRegistered) {
     _tickListenerRegistered = true;
     window.trackflow.onTimerTick((data) => {
-      if (!isRunning) return;
+      // A tick flagged isPaused is the AUTHORITATIVE frozen value pushed by
+      // renderIdleFreeze() — the tracked time as of the moment the user went idle.
+      // Always apply it, and flip the UI to "Paused (idle)" if it isn't already.
+      const pausedTick = data?.isPaused === true;
+      // Any UNflagged tick that arrives while an idle decision is pending is a stale
+      // live tick: its elapsed is measured to now, so it carries the idle window's own
+      // duration. Dropping it is what stops idle minutes appearing in the total.
+      if (!pausedTick && (!isRunning || isPaused)) return;
       elapsedSeconds = data.totalSeconds;
       timerDisplay.textContent = data.formatted;
+      if (pausedTick && !isPaused) updateDisplay(false, true);
       // ISSUE 1 FIX: "Today, all projects" now reflects the running session live.
       // Prefer the live value (base sum + current session elapsed) computed by the
       // main process; fall back to the static server-synced sum for older payloads
@@ -293,20 +301,28 @@ async function syncTimerState() {
     updateTotalSum(state.todayTotalGlobal);
     // Re-opened popup must come back LOCKED if an idle alert is still pending.
     applyIdleLock(state.idleLocked === true);
-    if (state.isRunning) {
+    // PAUSED OUTRANKS RUNNING. Main keeps `isRunning` true through an idle pause
+    // (the entry is still open, just frozen), so testing isRunning first painted
+    // "Tracking" and re-armed ticking mid-idle — the popup then walked forward
+    // through the idle window. Check isPaused first so a re-opened / re-synced popup
+    // renders "Paused (idle)" frozen at the idle-start elapsed main returns.
+    if (state.isPaused) {
+      setStartedAt(state.entry?.started_at || null);
+      // NOTE: no calcElapsedFromStartedAt() fallback here — that measures to now and
+      // would re-introduce the idle window. `state.elapsed` is already frozen at the
+      // idle-start instant; 0 is the correct value when there is nothing to show.
+      const currentElapsed = state.elapsed ?? 0;
+      todayTotalBase = Math.max(0, todayTotalBase - currentElapsed);
+      elapsedSeconds = todayTotalBase + currentElapsed;
+      stopTicking();
+      updateDisplay(false, true);
+    } else if (state.isRunning) {
       setStartedAt(state.entry?.started_at || null);
       const currentElapsed = state.elapsed || calcElapsedFromStartedAt();
       todayTotalBase = Math.max(0, todayTotalBase - currentElapsed);
       elapsedSeconds = todayTotalBase + currentElapsed;
       updateDisplay(true, false);
       startTicking();
-    } else if (state.isPaused) {
-      setStartedAt(state.entry?.started_at || null);
-      const currentElapsed = state.elapsed || calcElapsedFromStartedAt();
-      todayTotalBase = Math.max(0, todayTotalBase - currentElapsed);
-      elapsedSeconds = todayTotalBase + currentElapsed;
-      stopTicking();
-      updateDisplay(false, true);
     } else {
       setStartedAt(null);
       stopTicking();
@@ -658,7 +674,10 @@ if (window.trackflow.onTimerPaused) {
     stopTicking();
     if (data?.entry?.started_at) setStartedAt(data.entry.started_at);
     if (data?.todayTotal != null) todayTotalBase = data.todayTotal;
-    const currentElapsed = data?.elapsed ?? calcElapsedFromStartedAt();
+    // Main always sends the frozen idle-start elapsed. Never fall back to
+    // calcElapsedFromStartedAt() — it measures to now, which is exactly the idle
+    // window's duration leaking back into the tracked total.
+    const currentElapsed = data?.elapsed ?? 0;
     elapsedSeconds = todayTotalBase + currentElapsed;
     updateDisplay(false, true);
   });

@@ -888,6 +888,11 @@ let _idleAlertShownAt = null;
 // the open idle alert). See bugs/desktop-idle-alert-timer-resumes-on-reconnect.md.
 let _idlePauseSynced = true;
 let _idlePauseRetryInFlight = false;
+// Wall-clock instant the visible elapsed is frozen at for the CURRENT idle cycle.
+// Backstop for displayAnchorMs() when idleDetector.idleStartedAt is unavailable
+// (detector re-armed / rebuilt) — without it the display would fall back to "now"
+// and silently absorb the whole idle window into the tracked total.
+let _idleFreezeAnchorMs = null;
 // All-projects today total returned by POST /timer/start, handed to afterStartTimer()
 // so the "Today, all projects" line stays global instead of collapsing to the started
 // project's total. Null when the backend predates the field (then the existing
@@ -1130,6 +1135,12 @@ async function pauseTimerForIdle(idleStartedAtIso) {
     if (!isTimerRunning || isTimerPaused) return;
     isTimerPaused = true;
     _idlePauseSynced = false;
+    // Capture the freeze anchor BEFORE any await — displayAnchorMs() (tray tick,
+    // get-timer-state, renderIdleFreeze) reads it the moment isTimerPaused flips.
+    _idleFreezeAnchorMs = idleStartedAtIso
+        ? new Date(idleStartedAtIso).getTime()
+        : Date.now();
+    if (!Number.isFinite(_idleFreezeAnchorMs)) _idleFreezeAnchorMs = Date.now();
     logToFile(
         "info",
         `[TIMER_PAUSE] idle startedAt=${idleStartedAtIso || "now"}`,
@@ -1161,9 +1172,7 @@ async function pauseTimerForIdle(idleStartedAtIso) {
     // value (e.g. 10:43) and OVERWRITES the corrected idle-start tick (e.g. 05:42) the
     // idle handler just pushed — leaving the popup disagreeing with the tray. Anchor to
     // idleStartedAtIso so both show the same idle-start elapsed.
-    const pauseAnchorMs = idleStartedAtIso
-        ? new Date(idleStartedAtIso).getTime()
-        : Date.now();
+    const pauseAnchorMs = _idleFreezeAnchorMs;
     notifyPopup("timer-paused", {
         entry: currentEntry,
         todayTotal: todayTotalCurrentProject,
@@ -1180,6 +1189,7 @@ async function resumeTimerAfterIdle() {
     if (!isTimerRunning) return;
     isTimerPaused = false;
     _idlePauseSynced = true; // no pending pause to re-push once the user resumed
+    _idleFreezeAnchorMs = null; // idle cycle resolved — display follows the clock again
     logToFile("info", "[TIMER_RESUME] after idle action");
     if (
         apiClient &&
@@ -2262,41 +2272,20 @@ async function initializeApp() {
             dismissIdleAlert();
             return;
         }
-        // Tray during idle: show the TRACKED TIME frozen at the moment idle began
-        // (e.g. "⏸ 02:26:40"), NOT "Idle (5m)" — the old text showed the idle
-        // *threshold*, which is meaningless to the user. The idle period is not
-        // counted yet (pending keep/discard), so we freeze at the idle-start elapsed:
-        // current elapsed minus how long we've been idle. The ⏸ marks it as paused.
-        const frozenSeconds = _cachedStartedAtMs
-            ? todayTotalCurrentProject +
-              Math.max(
-                  0,
-                  Math.floor((Date.now() - _cachedStartedAtMs) / 1000) -
-                      idleSeconds,
-              )
-            : todayTotalCurrentProject;
-        setTrayText(`⏸ ${formatTimeShort(frozenSeconds)}`);
-        // Freeze the MAIN WINDOW display at the same idle-start value as the tray.
-        // stopTrayTimer() above halted the per-second ticks, so without this the popup
-        // stays frozen at the LAST tick — which still includes the idle-threshold period
-        // (the ~5 min that triggered the prompt). Push one corrected tick so the popup
-        // matches the tray: frozen at the moment idle began, threshold excluded. The idle
-        // interval is not counted yet (pending keep/discard/reassign). On resolve,
-        // startTrayTimer() re-arms and the next live tick overwrites this value.
-        if (popupWindow && !popupWindow.isDestroyed()) {
-            popupWindow.webContents.send("timer-tick", {
-                totalSeconds: frozenSeconds,
-                formatted: formatTimeShort(frozenSeconds),
-                activityScore: 0,
-                lastScreenshotAt: _lastScreenshotAt,
-                isOnline: networkMonitor?.isOnline ?? true,
-            });
-        }
+        // Raise the pause FIRST: it flips isTimerPaused and stamps the freeze anchor
+        // synchronously (its `await` only covers the best-effort server POST), so the
+        // repaint below — and every later tray/popup repaint — measures elapsed to the
+        // idle-start instant instead of the wall clock. Tray shows the TRACKED TIME
+        // frozen at the moment idle began (e.g. "⏸ 02:26:40"), NOT "Idle (5m)"; the
+        // popup gets the same value so the two never disagree. The idle interval is not
+        // counted yet (pending keep/discard/reassign) — resumeTimerAfterIdle() clears
+        // the freeze and startTrayTimer() re-arms the live count.
         pauseTimerForIdle(
             idleStartedAt
                 ? new Date(idleStartedAt).toISOString()
                 : new Date().toISOString(),
         ).catch(() => {});
+        renderIdleFreeze();
         showIdleAlert(idleSeconds, idleStartedAt, actionId);
     });
 
@@ -3725,15 +3714,9 @@ function setupIPC() {
         // shows the threshold-inclusive climbing value again.
         let elapsedForState = 0;
         if (currentEntry && _cachedStartedAtMs) {
-            const idleStartIso = isTimerPaused
-                ? idleDetector?.idleStartedAt
-                : null;
-            const anchorMs = idleStartIso
-                ? new Date(idleStartIso).getTime()
-                : Date.now();
             elapsedForState = Math.max(
                 0,
-                Math.floor((anchorMs - _cachedStartedAtMs) / 1000),
+                Math.floor((displayAnchorMs() - _cachedStartedAtMs) / 1000),
             );
         }
         return {
@@ -5349,6 +5332,12 @@ function setTrayText(text) {
 
 function updateTrayTitle() {
     if (!tray) return;
+    // An idle decision is pending — never repaint the tray with a live/base total,
+    // that is what let the idle window's own duration leak back into the display.
+    if (isTimerRunning && isTimerPaused) {
+        renderIdleFreeze();
+        return;
+    }
     const total = isTimerRunning ? todayTotalCurrentProject : todayTotalGlobal;
     if (total > 0) {
         setTrayText(formatTimeShort(total));
@@ -5357,8 +5346,75 @@ function updateTrayTitle() {
     }
 }
 
+/**
+ * The instant the VISIBLE elapsed is measured to.
+ *
+ * While an idle decision is pending (`isTimerPaused`) this is the moment the user
+ * went idle — NOT `Date.now()`. The idle period is not counted yet (it is pending
+ * keep/discard/reassign), so anchoring to "now" is what made the minutes the idle
+ * prompt sat on screen appear in the tracked total.
+ * Bug: bugs/desktop-idle-window-time-counted-while-paused.md
+ */
+function displayAnchorMs() {
+    if (!isTimerPaused) return Date.now();
+    const idleStart = idleDetector?.idleStartedAt;
+    if (idleStart != null) {
+        const ms = new Date(idleStart).getTime();
+        if (Number.isFinite(ms) && ms > 0) return ms;
+    }
+    // Detector already re-armed / lost its anchor — fall back to the instant the
+    // pause was raised, captured in pauseTimerForIdle().
+    if (Number.isFinite(_idleFreezeAnchorMs)) return _idleFreezeAnchorMs;
+    return Date.now();
+}
+
+/** Seconds to display for the current session, frozen while idle-paused. */
+function computeDisplaySeconds() {
+    if (!_cachedStartedAtMs) return todayTotalCurrentProject;
+    const elapsed = Math.floor((displayAnchorMs() - _cachedStartedAtMs) / 1000);
+    return (
+        todayTotalCurrentProject +
+        Math.max(0, elapsed - _pendingOfflineReassignIdleSec)
+    );
+}
+
+/**
+ * Paint tray + popup with the FROZEN idle-start elapsed. Idempotent, so any path
+ * that re-arms the tray timer or refreshes the tray during an idle decision lands
+ * back on the same value instead of resuming the count.
+ */
+function renderIdleFreeze() {
+    const frozen = computeDisplaySeconds();
+    setTrayText(`⏸ ${formatTimeShort(frozen)}`);
+    if (popupWindow && !popupWindow.isDestroyed()) {
+        popupWindow.webContents.send("timer-tick", {
+            totalSeconds: frozen,
+            formatted: formatTimeShort(frozen),
+            // Marks this as the authoritative frozen value: the renderer applies a
+            // paused tick even when it is already showing "Paused (idle)", and drops
+            // every UNflagged tick while paused.
+            isPaused: true,
+            todayTotalGlobal,
+            todayTotalGlobalLive:
+                todayTotalGlobal +
+                Math.max(0, frozen - todayTotalCurrentProject),
+            activityScore: 0,
+            lastScreenshotAt: _lastScreenshotAt,
+            isOnline: networkMonitor?.isOnline ?? true,
+        });
+    }
+}
+
 function startTrayTimer() {
     stopTrayTimer();
+    // Hard gate: several paths (wake-from-sleep, idle-alert window closed, phantom
+    // -stop recovery) call startTrayTimer() without knowing an idle decision is
+    // still open. Counting from `_cachedStartedAtMs` there walks the display straight
+    // through the idle period. Freeze instead and let resumeTimerAfterIdle() re-arm.
+    if (isTimerPaused) {
+        renderIdleFreeze();
+        return;
+    }
     updateTrayTitle();
     trayTimerInterval = setInterval(() => {
         // If the timer stopped out-of-band (stop synced from the server/web, or the
@@ -5368,6 +5424,13 @@ function startTrayTimer() {
         if (!isTimerRunning) {
             stopTrayTimer();
             updateTrayTitle();
+            return;
+        }
+        // Idle pause raised while this interval was live (pauseTimerForIdle calls
+        // stopTrayTimer, but a re-arm can race it) — freeze and stand down.
+        if (isTimerPaused) {
+            stopTrayTimer();
+            renderIdleFreeze();
             return;
         }
         if (!_cachedStartedAtMs) return;

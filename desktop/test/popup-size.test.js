@@ -1,5 +1,5 @@
 // Regression tests for the Windows-resizable popup sizing rules (QA #10).
-// Covers min-size clamping (never below the designed 320x400 floor), max-size
+// Covers min-size clamping (never below the designed 320x480 floor), max-size
 // ceiling, and the platform gate (macOS/Linux always get the fixed design size,
 // so persistence can never change their behaviour).
 
@@ -15,18 +15,18 @@ const {
 } = require('../src/main/popup-size');
 
 describe('popup-size constants', () => {
-    test('design size is 320x400 and is also the minimum', () => {
+    test('design size is 320x480 and is also the minimum', () => {
         expect(POPUP_WIDTH).toBe(320);
-        expect(POPUP_HEIGHT).toBe(400);
+        expect(POPUP_HEIGHT).toBe(480);
         expect(POPUP_MIN_WIDTH).toBe(320);
-        expect(POPUP_MIN_HEIGHT).toBe(400);
+        expect(POPUP_MIN_HEIGHT).toBe(480);
     });
 
     test('max size is a compact ceiling above the design size', () => {
         expect(POPUP_MAX_WIDTH).toBeGreaterThan(POPUP_MIN_WIDTH);
         expect(POPUP_MAX_HEIGHT).toBeGreaterThan(POPUP_MIN_HEIGHT);
         expect(POPUP_MAX_WIDTH).toBe(480);
-        expect(POPUP_MAX_HEIGHT).toBe(640);
+        expect(POPUP_MAX_HEIGHT).toBe(720);
     });
 });
 
@@ -41,7 +41,7 @@ describe('clampPopupSize', () => {
             height: POPUP_MIN_HEIGHT,
         });
         // The specific DPI-drift regression: a few px short must snap back up.
-        expect(clampPopupSize(318, 397)).toEqual({
+        expect(clampPopupSize(318, 477)).toEqual({
             width: POPUP_MIN_WIDTH,
             height: POPUP_MIN_HEIGHT,
         });
