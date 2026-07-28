@@ -455,6 +455,14 @@
         </div>
       </div>
 
+      <!-- Idle lock banner — the idle window owns the timer until the user answers it -->
+      <div class="permission-banner" id="idleLockBanner" style="display:none" role="status">
+        <div class="permission-banner-text">
+          <span class="permission-banner-icon" aria-hidden="true" style="background:rgba(245,158,11,0.3);color:#f59e0b">!</span>
+          <span>You went idle — answer the idle prompt to continue</span>
+        </div>
+      </div>
+
       <!-- Connection status — always visible -->
       <div class="conn-status" id="connStatus">
         <span class="dot online" id="connDot"></span>

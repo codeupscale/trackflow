@@ -33,6 +33,11 @@ const {
 const crypto = require('crypto');
 const FormData = require('form-data');
 
+// Largest capture that may be persisted to the offline queue. MUST stay in sync with
+// MAX_SCREENSHOT_SIZE in offline-queue.js — a smaller value here drops shots the queue
+// would happily have stored.
+const MAX_OFFLINE_SCREENSHOT_BYTES = 2 * 1024 * 1024;
+
 // Lazy-load sharp
 let _sharp = null;
 let _sharpChecked = false;
@@ -1054,7 +1059,11 @@ class ScreenshotService {
   }
 
   _queueForOffline(buffer, appName, windowTitle, displayInfo, capturedAt, idempotencyKey, activityScore, entryId = null) {
-    if (buffer.length < 1024 * 1024) {
+    // Size cap must match the queue's own MAX_SCREENSHOT_SIZE (2MB). This used to be
+    // a tighter, undocumented 1MB gate, so any capture between 1–2MB (routine on a
+    // 4K/multi-monitor desktop) was silently thrown away instead of being queued —
+    // offline sessions came back with screenshots missing.
+    if (buffer.length <= MAX_OFFLINE_SCREENSHOT_BYTES) {
       const data = {
         buffer:          buffer,
         time_entry_id:   String(entryId != null ? entryId : this.currentEntryId),

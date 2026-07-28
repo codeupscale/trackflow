@@ -84,9 +84,10 @@ class TimerTest extends TestCase
         //   set(lockKey, 1, 'EX', 5, 'NX') -> acquire lock
         //   del(redisKey) -> clear timer (inside txn)
         //   del(lockKey) -> release lock (finally)
-        // Controller then calls todayTotal():
-        //   get(redisKey) -> check if timer running (returns null since we deleted it)
-        Redis::shouldReceive('get')->twice()->andReturn($timerPayload, null);
+        // Controller then calls todayTotal() twice — once scoped to the entry's project
+        // and once globally for all_projects_today_total:
+        //   get(redisKey) x2 -> check if timer running (null since we deleted it)
+        Redis::shouldReceive('get')->times(3)->andReturn($timerPayload, null, null);
         Redis::shouldReceive('set')->once()->andReturn(true);    // acquire lock
         Redis::shouldReceive('del')->twice()->andReturn(1);      // del(redisKey) + del(lockKey)
 
@@ -149,7 +150,9 @@ class TimerTest extends TestCase
         $project->members()->attach($this->user->id);
 
         Redis::shouldReceive('set')->once()->andReturn(true);       // acquire lock
-        Redis::shouldReceive('get')->twice()->andReturn(null, null); // duplicate guard + todayTotal()
+        // duplicate guard + todayTotal(project) + todayTotal(null) for the
+        // all_projects_today_total field (only queried when the entry HAS a project).
+        Redis::shouldReceive('get')->times(3)->andReturn(null, null, null);
         Redis::shouldReceive('setex')->once()->andReturn(true);     // store timer data
         Redis::shouldReceive('del')->once()->andReturn(1);          // release lock
 

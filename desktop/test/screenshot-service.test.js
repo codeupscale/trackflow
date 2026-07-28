@@ -893,7 +893,7 @@ describe('ScreenshotService', () => {
       service.currentEntryId = 'entry-1';
     });
 
-    test('queues screenshots under 1MB', () => {
+    test('queues small screenshots', () => {
       const buffer = Buffer.alloc(500 * 1024);
       service._queueForOffline(buffer, 'Chrome', 'Google');
       expect(mockOfflineQueue.add).toHaveBeenCalledWith('screenshot', expect.objectContaining({
@@ -903,8 +903,18 @@ describe('ScreenshotService', () => {
       }));
     });
 
-    test('skips screenshots larger than 1MB', () => {
+    // Regression: the cap here used to be 1MB while the queue itself stores up to
+    // 2MB, so 1–2MB captures (routine on 4K / multi-monitor) were silently dropped
+    // and never reached the server after an offline session.
+    // bugs/offline-screenshots-rejected-after-entry-closed.md
+    test('queues screenshots up to the queue limit (2MB)', () => {
       const buffer = Buffer.alloc(2 * 1024 * 1024);
+      service._queueForOffline(buffer);
+      expect(mockOfflineQueue.add).toHaveBeenCalledTimes(1);
+    });
+
+    test('skips screenshots larger than the queue limit', () => {
+      const buffer = Buffer.alloc(2 * 1024 * 1024 + 1);
       service._queueForOffline(buffer);
       expect(mockOfflineQueue.add).not.toHaveBeenCalled();
     });
