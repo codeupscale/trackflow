@@ -7,19 +7,24 @@
 // numbers and the pure resolve/clamp logic here makes them unit-testable without
 // pulling in Electron (index.js requires this module and delegates to it).
 
+// 400px was too tight once the real-world stack (offline banner + connection line +
+// shift banner + timer + all-projects total + project select + activity bar +
+// actions + footer) was all on screen at once — everything collapsed onto its
+// neighbour with no breathing room. 480 gives each block real vertical space; the
+// flex layout in index.html still shrinks gracefully below it.
 const POPUP_WIDTH = 320;
-const POPUP_HEIGHT = 400;
+const POPUP_HEIGHT = 480;
 
 // Never collapse below the designed size — the flex layout in index.html (issue
 // #7 hardening) is authored against this floor, so a smaller window clips the
 // footer / activity section.
 const POPUP_MIN_WIDTH = POPUP_WIDTH; // 320
-const POPUP_MIN_HEIGHT = POPUP_HEIGHT; // 400
+const POPUP_MIN_HEIGHT = POPUP_HEIGHT; // 480
 
 // A sensible ceiling so the tray popup stays a compact utility window and can't
 // be blown up to fill the screen. 1.5x the design size in each axis.
 const POPUP_MAX_WIDTH = 480;
-const POPUP_MAX_HEIGHT = 640;
+const POPUP_MAX_HEIGHT = 720;
 
 /**
  * Clamp an arbitrary (possibly fractional / NaN / out-of-range) width+height to
