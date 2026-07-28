@@ -68,9 +68,15 @@ class TimerTest extends TestCase
 
     public function test_can_stop_timer(): void
     {
+        // project_id is pinned because TimeEntryFactory assigns one RANDOMLY
+        // (fake()->optional(0.8)) and the controller only makes the extra
+        // todayTotal(null) call for all_projects_today_total when the entry HAS a
+        // project — leaving it to chance made the Redis get() count flaky (passed
+        // locally with a project, failed in CI without one).
         $entry = TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
             'user_id' => $this->user->id,
+            'project_id' => null,
             'started_at' => now()->subMinutes(30),
             'ended_at' => null,
         ]);
@@ -84,10 +90,11 @@ class TimerTest extends TestCase
         //   set(lockKey, 1, 'EX', 5, 'NX') -> acquire lock
         //   del(redisKey) -> clear timer (inside txn)
         //   del(lockKey) -> release lock (finally)
-        // Controller then calls todayTotal() twice — once scoped to the entry's project
-        // and once globally for all_projects_today_total:
-        //   get(redisKey) x2 -> check if timer running (null since we deleted it)
-        Redis::shouldReceive('get')->times(3)->andReturn($timerPayload, null, null);
+        // Controller then calls todayTotal():
+        //   get(redisKey) -> check if timer running (returns null since we deleted it)
+        // The entry has no project, so all_projects_today_total reuses that scoped
+        // value instead of issuing a second query — hence 2 gets, not 3.
+        Redis::shouldReceive('get')->twice()->andReturn($timerPayload, null);
         Redis::shouldReceive('set')->once()->andReturn(true);    // acquire lock
         Redis::shouldReceive('del')->twice()->andReturn(1);      // del(redisKey) + del(lockKey)
 
