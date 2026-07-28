@@ -14,6 +14,15 @@ use Tests\TestCase;
  */
 class EnforceMinimumAgentVersionTest extends TestCase
 {
+    /**
+     * A desktop login must also carry the device identifier that the single-desktop-session
+     * feature requires (AuthTokenService::requireDeviceIdFromRequest — 32-64 hex chars, no
+     * dashes). Only tests that expect the login to SUCCEED need it: a stale agent version is
+     * rejected by the EnforceMinimumAgentVersion middleware with 426 before the controller
+     * ever reaches the device check.
+     */
+    private const DEVICE_ID = 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+
     protected function tearDown(): void
     {
         config(['timer.min_agent_version' => '']);
@@ -77,6 +86,7 @@ class EnforceMinimumAgentVersionTest extends TestCase
         ], [
             'X-TrackFlow-Client' => 'desktop',
             'X-Agent-Version' => '1.0.44',
+            'X-Device-Id' => self::DEVICE_ID,
         ])->assertOk();
     }
 
