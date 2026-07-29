@@ -25,6 +25,7 @@ class Shift extends Model
         'color',
         'timezone',
         'grace_period_minutes',
+        'allow_early_check_in',
         'description',
     ];
 
@@ -35,6 +36,7 @@ class Shift extends Model
             'is_active' => 'boolean',
             'break_minutes' => 'integer',
             'grace_period_minutes' => 'integer',
+            'allow_early_check_in' => 'boolean',
         ];
     }
 

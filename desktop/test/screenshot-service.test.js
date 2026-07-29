@@ -1,6 +1,20 @@
 const { desktopCapturer, screen, systemPreferences, powerMonitor, dialog } = require('electron');
 const ScreenshotService = require('../src/main/screenshot-service');
 
+const mockShouldUseWaylandPersistentCapture = jest.fn(() => false);
+const mockWaylandCaptureJpeg = jest.fn().mockResolvedValue(Buffer.alloc(50000, 0x42));
+const mockWaylandOpen = jest.fn().mockResolvedValue({ ok: true, width: 1920, height: 1080 });
+const mockWaylandClose = jest.fn().mockResolvedValue();
+
+jest.mock('../src/main/wayland-capture-session', () => ({
+  shouldUseWaylandPersistentCapture: (...args) => mockShouldUseWaylandPersistentCapture(...args),
+  WaylandCaptureSession: jest.fn().mockImplementation(() => ({
+    open: mockWaylandOpen,
+    captureJpeg: mockWaylandCaptureJpeg,
+    close: mockWaylandClose,
+  })),
+}));
+
 jest.mock('../src/main/system-notifications', () => ({
   showSystemNotification: jest.fn(() => ({
     close: jest.fn(),
@@ -53,6 +67,7 @@ describe('ScreenshotService', () => {
   beforeEach(() => {
     jest.useFakeTimers();
     jest.clearAllMocks();
+    mockShouldUseWaylandPersistentCapture.mockReturnValue(false);
 
     mockApiClient = {
       presignScreenshot: jest.fn().mockResolvedValue({ screenshot_id: 'ss-1', upload_url: 'https://s3.example.com/upload', upload_headers: {} }),
@@ -292,8 +307,9 @@ describe('ScreenshotService', () => {
     test('uploads screenshot on success', async () => {
       service.currentEntryId = 'entry-1';
       await service.capture();
+      const isMac = process.platform === 'darwin';
       expect(desktopCapturer.getSources).toHaveBeenCalledWith({
-        types: ['screen', 'window'],
+        types: isMac ? ['screen', 'window'] : ['screen'],
         thumbnailSize: expect.any(Object),
         fetchWindowIcons: false,
       });
@@ -877,7 +893,7 @@ describe('ScreenshotService', () => {
       service.currentEntryId = 'entry-1';
     });
 
-    test('queues screenshots under 1MB', () => {
+    test('queues small screenshots', () => {
       const buffer = Buffer.alloc(500 * 1024);
       service._queueForOffline(buffer, 'Chrome', 'Google');
       expect(mockOfflineQueue.add).toHaveBeenCalledWith('screenshot', expect.objectContaining({
@@ -887,8 +903,18 @@ describe('ScreenshotService', () => {
       }));
     });
 
-    test('skips screenshots larger than 1MB', () => {
+    // Regression: the cap here used to be 1MB while the queue itself stores up to
+    // 2MB, so 1–2MB captures (routine on 4K / multi-monitor) were silently dropped
+    // and never reached the server after an offline session.
+    // bugs/offline-screenshots-rejected-after-entry-closed.md
+    test('queues screenshots up to the queue limit (2MB)', () => {
       const buffer = Buffer.alloc(2 * 1024 * 1024);
+      service._queueForOffline(buffer);
+      expect(mockOfflineQueue.add).toHaveBeenCalledTimes(1);
+    });
+
+    test('skips screenshots larger than the queue limit', () => {
+      const buffer = Buffer.alloc(2 * 1024 * 1024 + 1);
       service._queueForOffline(buffer);
       expect(mockOfflineQueue.add).not.toHaveBeenCalled();
     });
@@ -1045,6 +1071,40 @@ describe('ScreenshotService', () => {
       await service.capture();
       expect(sharp._instance.blur).not.toHaveBeenCalled();
       expect(mockApiClient.presignScreenshot).toHaveBeenCalled();
+    });
+  });
+
+  // ═════════════════════════════════════════════════════════════════
+  // ── Linux Wayland persistent capture ──
+  // ═════════════════════════════════════════════════════════════════
+
+  describe('Wayland persistent capture', () => {
+    test('start() opens a Wayland session when enabled', async () => {
+      mockShouldUseWaylandPersistentCapture.mockReturnValue(true);
+      service.start('entry-1', { immediateCapture: false });
+      await Promise.resolve();
+      expect(mockWaylandOpen).toHaveBeenCalledTimes(1);
+    });
+
+    test('capture() uses persistent stream without getSources on Wayland', async () => {
+      mockShouldUseWaylandPersistentCapture.mockReturnValue(true);
+      service.start('entry-1', { immediateCapture: false });
+      await Promise.resolve();
+
+      service.currentEntryId = 'entry-1';
+      await service.capture();
+
+      expect(mockWaylandCaptureJpeg).toHaveBeenCalledTimes(1);
+      expect(desktopCapturer.getSources).not.toHaveBeenCalled();
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalled();
+    });
+
+    test('stop() closes the Wayland session', async () => {
+      mockShouldUseWaylandPersistentCapture.mockReturnValue(true);
+      service.start('entry-1', { immediateCapture: false });
+      await Promise.resolve();
+      service.stop();
+      expect(mockWaylandClose).toHaveBeenCalledTimes(1);
     });
   });
 

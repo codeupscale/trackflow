@@ -1,8 +1,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { CheckInCard } from '@/components/hr/CheckInCard';
 import type { TodayStatus } from '@/lib/validations/attendance';
+
+// CheckInCard calls useQueryClient() directly, so it needs a real provider even though
+// the data/mutation hooks are mocked below.
+function renderCard() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <CheckInCard />
+    </QueryClientProvider>
+  );
+}
 
 // ── Mock the data/mutation hooks so we can drive the state machine directly. ──
 const mockUseTodayStatus = vi.fn();
@@ -61,13 +75,13 @@ afterEach(() => {
 describe('CheckInCard — state machine', () => {
   it('renders the loading skeleton', () => {
     mockUseTodayStatus.mockReturnValue({ isLoading: true, isError: false, data: undefined });
-    render(<CheckInCard />);
+    renderCard();
     expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('renders the error card on isError', () => {
     mockUseTodayStatus.mockReturnValue({ isLoading: false, isError: true, data: undefined });
-    render(<CheckInCard />);
+    renderCard();
     expect(screen.getByText(/failed to load your check-in status/i)).toBeInTheDocument();
   });
 
@@ -77,7 +91,7 @@ describe('CheckInCard — state machine', () => {
       isError: false,
       data: makeStatus({ sessions_count: 0, can_check_in: true }),
     });
-    render(<CheckInCard />);
+    renderCard();
     expect(screen.getByText(/you haven't checked in today/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Check In$/i })).toBeInTheDocument();
   });
@@ -112,7 +126,7 @@ describe('CheckInCard — state machine', () => {
         ],
       }),
     });
-    render(<CheckInCard />);
+    renderCard();
     // Live ticker uses HH:MM:SS — never "Xm worked".
     expect(screen.getByLabelText(/total time worked today/i)).toHaveTextContent('00:05:00');
     expect(screen.getByRole('button', { name: /check out/i })).toBeInTheDocument();
@@ -159,7 +173,7 @@ describe('CheckInCard — state machine', () => {
         ],
       }),
     });
-    render(<CheckInCard />);
+    renderCard();
     // Frozen total is the unambiguous duration scheme, NOT a running clock.
     expect(screen.getByText('8h 50m')).toBeInTheDocument();
     expect(screen.queryByText(/\d\d:\d\d:\d\d/)).toBeNull();

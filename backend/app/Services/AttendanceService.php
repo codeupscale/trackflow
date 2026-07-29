@@ -2,11 +2,11 @@
 
 namespace App\Services;
 
-use App\Models\AttendancePolicy;
 use App\Models\AttendanceRecord;
 use App\Models\AttendanceRegularization;
 use App\Models\CheckInSession;
 use App\Models\LeaveRequest;
+use App\Models\Organization;
 use App\Models\OvertimeRule;
 use App\Models\PublicHoliday;
 use App\Models\TimeEntry;
@@ -275,33 +275,145 @@ class AttendanceService
     /**
      * Get attendance records for a specific user (paginated, filterable by date range and status).
      */
+    /**
+     * Self "My Attendance" list — a COMPLETE per-day roster for the user over the range.
+     *
+     * Where a generated attendance_record exists it is used verbatim (present / half-day /
+     * late / overtime stay accurate); where one is missing the day is synthesised with a
+     * derived non-worked status (holiday > on_leave > weekend > absent). This mirrors
+     * getTeamAttendance() and guarantees every day appears even when GenerateDailyAttendanceJob
+     * never ran for the date (the current day, or environments where the scheduler is
+     * disabled) — previously the table only showed days the user actually checked in / tracked.
+     *
+     * Future days are never synthesised (they are not absences yet), so the list reflects
+     * the real calendar to-date.
+     */
     public function getAttendance(string $userId, string $orgId, array $filters): LengthAwarePaginator
     {
-        $query = AttendanceRecord::where('organization_id', $orgId)
-            ->where('user_id', $userId)
-            ->with('shift:id,name,start_time,end_time')
-            ->withCount(['sessions as open_sessions_count' => fn ($q) => $q->whereNull('check_out_at')]);
-
-        if (!empty($filters['start_date'])) {
-            $query->where('date', '>=', $filters['start_date']);
-        }
-
-        if (!empty($filters['end_date'])) {
-            $query->where('date', '<=', $filters['end_date']);
-        }
-
-        if (!empty($filters['status'])) {
-            $query->where('status', $filters['status']);
-        }
-
-        $paginator = $query->orderByDesc('date')->paginate($filters['per_page'] ?? 25);
-
-        // Serialize into the shape the web table expects (clock_in/clock_out/day/
-        // shift_name/hours/late), reconciling tracker-derived and check-in fields.
+        $perPage = (int) ($filters['per_page'] ?? 25);
+        $page = \Illuminate\Pagination\LengthAwarePaginator::resolveCurrentPage();
         $tz = $this->orgTimezone($orgId);
-        $paginator->getCollection()->transform(fn (AttendanceRecord $r) => $this->serializeRecord($r, $tz));
 
-        return $paginator;
+        // Resolve range as org-local DATE STRINGS. Cap the end at today (no future
+        // absences); default to month-to-date. Working in strings avoids any tz-instant
+        // pitfall between the org-tz "today" and the UTC-parsed filter dates (mixing them
+        // made the day-enumeration loop compare instants across timezones).
+        $todayStr = Carbon::now($tz)->toDateString();
+        $endStr = !empty($filters['end_date'])
+            ? Carbon::parse($filters['end_date'])->toDateString()
+            : $todayStr;
+        if ($endStr > $todayStr) {
+            $endStr = $todayStr;
+        }
+        $startStr = !empty($filters['start_date'])
+            ? Carbon::parse($filters['start_date'])->toDateString()
+            : Carbon::parse($endStr)->startOfMonth()->toDateString();
+
+        // Empty / inverted range (e.g. a future month) → no rows.
+        if ($startStr > $endStr) {
+            return new \Illuminate\Pagination\LengthAwarePaginator([], 0, $perPage, $page, [
+                'path' => \Illuminate\Pagination\LengthAwarePaginator::resolveCurrentPath(),
+            ]);
+        }
+
+        // Cap span to avoid runaway synthesis (matches getTeamAttendance).
+        $maxDays = 92;
+        $start = Carbon::parse($startStr);
+        $end = Carbon::parse($endStr);
+        if ($start->diffInDays($end) > $maxDays) {
+            $start = $end->copy()->subDays($maxDays);
+            $startStr = $start->toDateString();
+        }
+
+        $startDate = $startStr;
+        $endDate = $endStr;
+
+        // Existing generated records in range, keyed by date string.
+        $existing = AttendanceRecord::where('organization_id', $orgId)
+            ->where('user_id', $userId)
+            ->whereBetween('date', [$startDate, $endDate])
+            ->with('shift:id,name,start_time,end_time')
+            ->withCount(['sessions as open_sessions_count' => fn ($q) => $q->whereNull('check_out_at')])
+            ->get()
+            ->keyBy(fn ($r) => Carbon::parse($r->date)->toDateString());
+
+        // Holidays (date-string set) and this user's approved leaves overlapping the range.
+        $holidays = PublicHoliday::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->whereBetween('date', [$startDate, $endDate])
+            ->get()
+            ->map(fn ($h) => Carbon::parse($h->date)->toDateString())
+            ->flip();
+
+        $leaves = LeaveRequest::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->where('user_id', $userId)
+            ->where('status', 'approved')
+            ->where('start_date', '<=', $endDate)
+            ->where('end_date', '>=', $startDate)
+            ->get(['user_id', 'start_date', 'end_date'])
+            ->groupBy('user_id');
+
+        // Build a complete row per day.
+        $rows = [];
+        for ($d = Carbon::parse($startStr); $d->lte($end); $d->addDay()) {
+            $dateStr = $d->toDateString();
+            $record = $existing->get($dateStr);
+            if ($record) {
+                $rows[] = $this->serializeRecord($record, $tz) + ['is_synthetic' => false];
+                continue;
+            }
+
+            $rows[] = [
+                'id' => "synthetic-{$userId}-{$dateStr}",
+                'organization_id' => $orgId,
+                'user_id' => $userId,
+                'date' => $dateStr,
+                'day' => Carbon::parse($dateStr)->format('D'),
+                'shift_id' => null,
+                'shift_name' => null,
+                'expected_start' => null,
+                'expected_end' => null,
+                'first_seen' => null,
+                'last_seen' => null,
+                'clock_in' => null,
+                'clock_out' => null,
+                'total_hours' => 0,
+                'status' => $this->deriveAbsentStatus($userId, $dateStr, $holidays, $leaves),
+                'late_minutes' => 0,
+                'early_departure_minutes' => 0,
+                'overtime_minutes' => 0,
+                'overtime_hours' => 0,
+                'is_regularized' => false,
+                // Check-in signal columns — always absent on a synthesised row.
+                'check_in_at' => null,
+                'check_out_at' => null,
+                'worked_seconds' => null,
+                'worked_hhmm' => null,
+                'check_in_status' => null,
+                'check_in_late_minutes' => 0,
+                'is_early_checkout' => false,
+                'missing_checkout' => false,
+                'check_in_flags' => null,
+                'is_synthetic' => true,
+                'shift' => null,
+            ];
+        }
+
+        // Optional status filter applied across both real and synthesised rows.
+        if (!empty($filters['status'])) {
+            $rows = array_values(array_filter($rows, fn ($r) => $r['status'] === $filters['status']));
+        }
+
+        // Most recent first (matches the previous orderByDesc('date')).
+        usort($rows, fn ($a, $b) => strcmp($b['date'], $a['date']));
+
+        $total = count($rows);
+        $items = array_slice($rows, ($page - 1) * $perPage, $perPage);
+
+        return new \Illuminate\Pagination\LengthAwarePaginator($items, $total, $perPage, $page, [
+            'path' => \Illuminate\Pagination\LengthAwarePaginator::resolveCurrentPath(),
+        ]);
     }
 
     /**
@@ -449,9 +561,9 @@ class AttendanceService
             $rows = array_values(array_filter($rows, fn ($r) => $r['status'] === $filters['status']));
         }
 
-        // Sort by date desc, then employee name asc.
+        // Sort by date asc (oldest first), then employee name asc.
         usort($rows, function ($a, $b) {
-            $cmp = strcmp($b['date'], $a['date']);
+            $cmp = strcmp($a['date'], $b['date']);
             if ($cmp !== 0) {
                 return $cmp;
             }
@@ -627,16 +739,15 @@ class AttendanceService
     }
 
     /**
-     * The org's check-in policy timezone, used to render check-in instants as
-     * org-local wall-clock. Falls back to the app timezone when no policy exists
-     * (an org with no policy has no check-in data, so the fallback is never applied
-     * to a real check-in instant).
+     * The org timezone, used to render check-in instants / attendance rows as org-local
+     * wall-clock. Sourced from the org setting (backfilled to Asia/Karachi for this
+     * deployment); falls back to the app timezone.
      */
     private function orgTimezone(string $orgId): string
     {
-        return AttendancePolicy::withoutGlobalScopes()
-            ->where('organization_id', $orgId)
-            ->value('timezone') ?? (string) config('app.timezone', 'UTC');
+        $org = Organization::withoutGlobalScopes()->find($orgId);
+
+        return $org?->getSetting('timezone') ?: (string) config('app.timezone', 'UTC');
     }
 
     /**
@@ -677,35 +788,82 @@ class AttendanceService
         $startOfMonth = Carbon::create($year, $month, 1)->startOfMonth();
         $endOfMonth = $startOfMonth->copy()->endOfMonth();
 
+        $tz = $this->orgTimezone($orgId);
+
         $records = AttendanceRecord::where('organization_id', $orgId)
             ->where('user_id', $userId)
             ->whereBetween('date', [$startOfMonth->toDateString(), $endOfMonth->toDateString()])
-            ->get();
+            ->get()
+            ->keyBy(fn ($r) => Carbon::parse($r->date)->toDateString());
 
-        $presentDays = $records->where('status', 'present')->count();
-        $absentDays = $records->where('status', 'absent')->count();
-        $halfDays = $records->where('status', 'half_day')->count();
-        // Lateness has two independent sources that must both count: the legacy
-        // tracker-era `late_minutes` column and the manual check-in
-        // `check_in_late_minutes` (marked `check_in_status = late`). A day is late
-        // when EITHER signal fires — see detailRowGenerator() for the same rule.
-        $lateDays = $records->filter(function ($record) {
-            return (int) $record->late_minutes > 0
-                || (int) ($record->check_in_late_minutes ?? 0) > 0
-                || $record->check_in_status === 'late';
-        })->count();
-        $onLeaveDays = $records->where('status', 'on_leave')->count();
-        // Overtime likewise has two sources: tracker `overtime_minutes`, falling
-        // back to the manual checkout `check_out_overtime_minutes` when the tracker
-        // recorded none — mirrors detailRowGenerator().
-        $overtimeMinutes = $records->sum(function ($record) {
-            $tracker = (int) $record->overtime_minutes;
+        // Absent/weekend/holiday/on-leave days rarely have a persisted record on dev
+        // (GenerateDailyAttendanceJob only runs in prod), so counting existing rows
+        // undercounts absences and working days. Walk the real calendar (month-to-date)
+        // instead — using the record where it exists and a derived status where it
+        // doesn't (mirrors getAttendance()).
+        $holidays = PublicHoliday::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->whereBetween('date', [$startOfMonth->toDateString(), $endOfMonth->toDateString()])
+            ->get()
+            ->map(fn ($h) => Carbon::parse($h->date)->toDateString())
+            ->flip();
 
-            return $tracker > 0 ? $tracker : (int) ($record->check_out_overtime_minutes ?? 0);
-        });
+        $leaves = LeaveRequest::withoutGlobalScopes()
+            ->where('organization_id', $orgId)
+            ->where('user_id', $userId)
+            ->where('status', 'approved')
+            ->where('start_date', '<=', $endOfMonth->toDateString())
+            ->where('end_date', '>=', $startOfMonth->toDateString())
+            ->get(['user_id', 'start_date', 'end_date'])
+            ->groupBy('user_id');
 
-        // Total working days = days that aren't weekends or holidays
-        $totalWorkingDays = $records->whereNotIn('status', ['weekend', 'holiday'])->count();
+        // Only summarise up to today — future days aren't absences yet. Use org-local
+        // date strings so the org-tz "today" and the month bounds compare tz-safely.
+        $todayStr = Carbon::now($tz)->toDateString();
+        $rangeStartStr = $startOfMonth->toDateString();
+        $rangeEndStr = $endOfMonth->toDateString();
+        if ($rangeEndStr > $todayStr) {
+            $rangeEndStr = $todayStr;
+        }
+
+        $presentDays = $absentDays = $halfDays = $lateDays = $onLeaveDays = 0;
+        $totalWorkingDays = 0;
+        $overtimeMinutes = 0;
+
+        $rangeEnd = Carbon::parse($rangeEndStr);
+        for ($d = Carbon::parse($rangeStartStr); $rangeStartStr <= $rangeEndStr && $d->lte($rangeEnd); $d->addDay()) {
+            $dateStr = $d->toDateString();
+            $record = $records->get($dateStr);
+            $status = $record ? $record->status : $this->deriveAbsentStatus($userId, $dateStr, $holidays, $leaves);
+
+            match ($status) {
+                'present' => $presentDays++,
+                'absent' => $absentDays++,
+                'half_day' => $halfDays++,
+                'on_leave' => $onLeaveDays++,
+                default => null,
+            };
+
+            // Total working days = days that aren't weekends or holidays.
+            if (!in_array($status, ['weekend', 'holiday'], true)) {
+                $totalWorkingDays++;
+            }
+
+            if ($record) {
+                // Lateness has two independent sources that must both count: the legacy
+                // tracker-era `late_minutes` column and the manual check-in
+                // `check_in_late_minutes` (marked `check_in_status = late`).
+                if ((int) $record->late_minutes > 0
+                    || (int) ($record->check_in_late_minutes ?? 0) > 0
+                    || $record->check_in_status === 'late') {
+                    $lateDays++;
+                }
+                // Overtime: tracker `overtime_minutes`, falling back to the manual
+                // checkout `check_out_overtime_minutes` when the tracker recorded none.
+                $tracker = (int) $record->overtime_minutes;
+                $overtimeMinutes += $tracker > 0 ? $tracker : (int) ($record->check_out_overtime_minutes ?? 0);
+            }
+        }
 
         return [
             'month' => $month,

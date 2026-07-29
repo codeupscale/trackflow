@@ -25,11 +25,15 @@ const { powerMonitor } = require("electron");
 // Offline fallback only — the server value (Settings → Idle detection) wins.
 const DEFAULT_IDLE_TIMEOUT_MIN = 10;
 const DEFAULT_IDLE_CHECK_INTERVAL_SEC = 2;
-/** Hard upper bound for idle auto-stop (minutes). Guards against a misconfigured
- *  org setting producing an absurd countdown / never-auto-stopping timer. */
-const MAX_AUTO_STOP_MIN = 240; // 4 hours
 /** Schedule a one-shot fire when within this many seconds of the threshold. */
 const BOUNDARY_LEAD_SEC = 20;
+// Idle auto-stop is DISABLED by product decision (2026-07-23): the idle alert
+// must NEVER auto-dismiss — it stays visible until the user explicitly resolves
+// it ("Continue Tracking" or "Stop Timer"). See _applyConfig() for why this is
+// safe for billing without any auto-stop cap (the timer is server-paused the
+// instant idle is detected, so an unanswered alert credits no additional time).
+// The former MAX_AUTO_STOP_MIN clamp and DEFAULT_HARD_STOP_GRACE_SEC backstop
+// were removed with that change.
 
 const IDLE_STATE = Object.freeze({
     STOPPED: "STOPPED",
@@ -84,18 +88,15 @@ class IdleDetector {
             if (!this.enabled && wasEnabled) {
                 this.stop();
             } else if (this._state === IDLE_STATE.ALERTING) {
-                if (this.alertAutoStopSec <= 0 && this.checkInterval) {
-                    clearInterval(this.checkInterval);
-                    this.checkInterval = null;
-                } else if (this.alertAutoStopSec > 0 && !this.checkInterval) {
+                // ALERTING must ALWAYS keep a check interval running so the
+                // absolute hard-stop cap fires even when interactive auto-stop is
+                // disabled. Start one if missing; restart if the tick changed.
+                if (!this.checkInterval) {
                     this.checkInterval = setInterval(
                         () => this._checkAutoStop(),
                         this.checkIntervalMs,
                     );
-                } else if (
-                    this.checkIntervalMs !== oldCheckIntervalMs &&
-                    this.checkInterval
-                ) {
+                } else if (this.checkIntervalMs !== oldCheckIntervalMs) {
                     clearInterval(this.checkInterval);
                     this.checkInterval = setInterval(
                         () => this._checkAutoStop(),
@@ -246,13 +247,13 @@ class IdleDetector {
         this.idleStartedAt = idleStartedAt;
         this.alertShownAt = Date.now();
 
-        // Start check interval so auto-stop can fire while alert is showing
-        if (this.alertAutoStopSec > 0) {
-            this.checkInterval = setInterval(
-                () => this._checkAutoStop(),
-                this.checkIntervalMs,
-            );
-        }
+        // ALWAYS run the check interval so BOTH the interactive auto-stop AND the
+        // absolute hard-stop cap can fire while the (re-shown, post-sleep) alert is
+        // up — even when interactive auto-stop is disabled.
+        this.checkInterval = setInterval(
+            () => this._checkAutoStop(),
+            this.checkIntervalMs,
+        );
 
         return this._actionId;
     }
@@ -349,18 +350,23 @@ class IdleDetector {
         }
         timeoutMin = Math.min(30, Math.max(1, timeoutMin));
         this.idleTimeoutSec = timeoutMin * 60;
-        const rawAutoStopMin =
-            config.idle_alert_auto_stop_min != null
-                ? config.idle_alert_auto_stop_min
-                : 10;
-        // Clamp to [0, MAX_AUTO_STOP_MIN]. A misconfigured org setting (e.g. 8600 min
-        // ≈ 6 days) otherwise produced an absurd countdown ("auto-stop in 8597:40")
-        // and a timer that effectively never auto-stopped.
-        const autoStopMin = Math.min(
-            Math.max(0, rawAutoStopMin),
-            MAX_AUTO_STOP_MIN,
-        );
-        this.alertAutoStopSec = autoStopMin > 0 ? autoStopMin * 60 : 0;
+        // Idle auto-stop DISABLED (2026-07-23 product decision): the idle alert
+        // NEVER auto-dismisses. It stays visible until the user explicitly picks
+        // "Continue Tracking" or "Stop Timer". Both the interactive countdown
+        // (idle_alert_auto_stop_min) and the former absolute hard-stop grace are
+        // forced to 0 here; `_checkAutoStop()` treats 0 as "disabled" for each, so
+        // ALERTING now terminates ONLY on an explicit user action (or the
+        // sleep/suspend path). `idle_alert_auto_stop_min` is intentionally ignored.
+        //
+        // This is safe for billing WITHOUT any auto-stop cap because the timer is
+        // server-paused the instant idle is DETECTED: pauseTimerForIdle() in the
+        // main process calls POST /timer/pause back-dated to idleStartedAt and
+        // halts heartbeats + screenshots. Server elapsed is frozen at idle-start
+        // for the entire time the alert waits, so an unanswered alert credits NO
+        // additional idle/tracked time — the old "12h phantom" hole is closed by
+        // the pause, not by a forced auto-stop.
+        this.alertAutoStopSec = 0;
+        this.hardStopGraceSec = 0;
         const checkSec =
             config.idle_check_interval_sec != null
                 ? config.idle_check_interval_sec
@@ -452,15 +458,17 @@ class IdleDetector {
                 );
             }
 
-            // Transition to ALERTING after callback (caller should show alert)
-            // Start auto-stop check interval
+            // Transition to ALERTING after callback (caller should show alert).
+            // The check interval still runs, but with auto-stop disabled
+            // (alertAutoStopSec === 0 and hardStopGraceSec === 0) `_checkAutoStop`
+            // never fires — the alert stays visible until the user resolves it.
+            // The interval is kept so the ALERTING invariant (checkInterval != null)
+            // and its state-cleanup path on resolve/suspend are unchanged.
             this._state = IDLE_STATE.ALERTING;
-            if (this.alertAutoStopSec > 0) {
-                this.checkInterval = setInterval(
-                    () => this._checkAutoStop(),
-                    this.checkIntervalMs,
-                );
-            }
+            this.checkInterval = setInterval(
+                () => this._checkAutoStop(),
+                this.checkIntervalMs,
+            );
         } else if (
             systemIdleSec >= this.idleTimeoutSec - BOUNDARY_LEAD_SEC &&
             systemIdleSec < this.idleTimeoutSec
@@ -490,10 +498,6 @@ class IdleDetector {
      * ever seeing the idle alert.
      */
     _checkAutoStop() {
-        if (this.alertAutoStopSec <= 0) {
-            return;
-        }
-
         if (this._state !== IDLE_STATE.ALERTING) {
             this._clearInterval();
             return;
@@ -505,10 +509,29 @@ class IdleDetector {
         }
 
         const alertDurationSec = (Date.now() - this.alertShownAt) / 1000;
-        if (alertDurationSec >= this.alertAutoStopSec) {
-            const totalIdleDuration = this.idleStartedAt
-                ? Math.floor((Date.now() - this.idleStartedAt) / 1000)
-                : Math.floor(alertDurationSec);
+        const totalIdleSec = this.idleStartedAt
+            ? Math.floor((Date.now() - this.idleStartedAt) / 1000)
+            : Math.floor(alertDurationSec);
+
+        // Interactive auto-stop: fires alertAutoStopSec after the alert appeared
+        // (measured from alertShownAt, NOT idleStartedAt — a long sleep must not
+        // auto-stop before the user has a chance to see the re-shown popup).
+        const interactiveFire =
+            this.alertAutoStopSec > 0 &&
+            alertDurationSec >= this.alertAutoStopSec;
+
+        // Absolute hard-stop cap: DISABLED (hardStopGraceSec forced to 0 in
+        // _applyConfig, 2026-07-23). Guarded with > 0 so a 0 value means "disabled"
+        // rather than "fire immediately" (alertDurationSec >= 0 is always true).
+        // With both mechanisms off the alert never auto-dismisses; it is safe
+        // because the timer is server-paused at idle-detection, so no time accrues
+        // while it waits.
+        const hardCapFire =
+            this.hardStopGraceSec > 0 &&
+            alertDurationSec >= this.hardStopGraceSec;
+
+        if (interactiveFire || hardCapFire) {
+            const totalIdleDuration = totalIdleSec;
             const actionId = this._actionId;
             // Fire auto-stop BEFORE resolving, so the callback can read idleStartedAt
             if (this._onAutoStop) {

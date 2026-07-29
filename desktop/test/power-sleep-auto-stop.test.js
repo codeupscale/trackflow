@@ -118,6 +118,90 @@ describe("PowerManager", () => {
         });
     });
 
+    // Regression cover for the "12 hours tracked while asleep" phantom, mode 2:
+    // the machine stayed AWAKE (clamshell on charger / external display, or the
+    // user simply walked away) so NO suspend event fired and evaluateSleepGap
+    // never ran. This is the awake-but-idle watchdog backstop.
+    describe("evaluateIdleHardStop", () => {
+        const now = new Date("2026-07-23T14:00:00.000Z").getTime();
+        // cap = threshold(10m) + fixed grace(10m) + margin(2m) = 22m = 1320s
+        const CAP_SEC = 10 * 60 + 10 * 60 + 120;
+
+        test("does not stop while idle is under the cap", () => {
+            const r = PowerManager.evaluateIdleHardStop({
+                systemIdleSec: CAP_SEC - 1,
+                hardStopSec: CAP_SEC,
+                nowMs: now,
+                lastActiveAtMs: null,
+            });
+            expect(r.shouldStop).toBe(false);
+            expect(r.stopAtMs).toBeNull();
+        });
+
+        test("hard-stops once idle exceeds the cap, back-dated to last input", () => {
+            const idleSec = 12 * 60 * 60; // 12h idle (the reported phantom)
+            const r = PowerManager.evaluateIdleHardStop({
+                systemIdleSec: idleSec,
+                hardStopSec: CAP_SEC,
+                nowMs: now,
+                lastActiveAtMs: null,
+            });
+            expect(r.shouldStop).toBe(true);
+            // Back-dated to now - idle (true last input), NOT to now.
+            expect(r.stopAtMs).toBe(now - idleSec * 1000);
+            expect(r.idleSec).toBe(idleSec);
+        });
+
+        test("prefers an EARLIER last-active anchor over the OS idle estimate", () => {
+            const idleSec = 60 * 60; // 1h
+            const lastActive = now - 90 * 60 * 1000; // 90m ago — earlier than now-idle
+            const r = PowerManager.evaluateIdleHardStop({
+                systemIdleSec: idleSec,
+                hardStopSec: CAP_SEC,
+                nowMs: now,
+                lastActiveAtMs: lastActive,
+            });
+            expect(r.shouldStop).toBe(true);
+            // Conservative: never credit more than the honest last-activity time.
+            expect(r.stopAtMs).toBe(lastActive);
+        });
+
+        test("ignores a later last-active anchor (uses the OS idle estimate)", () => {
+            const idleSec = 60 * 60; // 1h → now-idle is earlier than lastActive
+            const lastActive = now - 10 * 60 * 1000; // 10m ago
+            const r = PowerManager.evaluateIdleHardStop({
+                systemIdleSec: idleSec,
+                hardStopSec: CAP_SEC,
+                nowMs: now,
+                lastActiveAtMs: lastActive,
+            });
+            expect(r.stopAtMs).toBe(now - idleSec * 1000);
+        });
+
+        test("a zero/unknown cap never stops", () => {
+            const r = PowerManager.evaluateIdleHardStop({
+                systemIdleSec: 20 * 60 * 60,
+                hardStopSec: 0,
+                nowMs: now,
+                lastActiveAtMs: null,
+            });
+            expect(r.shouldStop).toBe(false);
+        });
+
+        test("the cap is bounded — a 12h idle exceeds it regardless of config", () => {
+            // Worst-case: max threshold (30m) + fixed grace + margin. Even that is
+            // far below 12h, so a 12h phantom is impossible.
+            const maxCap = 30 * 60 + 10 * 60 + 120;
+            const r = PowerManager.evaluateIdleHardStop({
+                systemIdleSec: 12 * 60 * 60,
+                hardStopSec: maxCap,
+                nowMs: now,
+                lastActiveAtMs: null,
+            });
+            expect(r.shouldStop).toBe(true);
+        });
+    });
+
     describe("formatTimeShortLocal", () => {
         test("formats hours and minutes in 12-hour format", () => {
             const d = new Date();

@@ -66,8 +66,9 @@ export function ShiftFormSheet({
       days_of_week: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
       break_minutes: 0,
       grace_period_minutes: 0,
+      allow_early_check_in: false,
       color: '#3B82F6',
-      timezone: 'UTC',
+      timezone: 'Asia/Karachi',
       description: null,
       is_active: true,
     },
@@ -82,6 +83,7 @@ export function ShiftFormSheet({
         days_of_week: shift.days_of_week,
         break_minutes: shift.break_minutes,
         grace_period_minutes: shift.grace_period_minutes,
+        allow_early_check_in: shift.allow_early_check_in,
         color: shift.color,
         timezone: shift.timezone,
         description: shift.description,
@@ -95,8 +97,9 @@ export function ShiftFormSheet({
         days_of_week: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
         break_minutes: 0,
         grace_period_minutes: 0,
+        allow_early_check_in: false,
         color: '#3B82F6',
-        timezone: 'UTC',
+        timezone: 'Asia/Karachi',
         description: null,
         is_active: true,
       });
@@ -238,9 +241,11 @@ export function ShiftFormSheet({
                         min={0}
                         max={120}
                         {...field}
-                        onChange={(e) =>
-                          field.onChange(Number(e.target.value))
-                        }
+                        value={field.value ?? ''}
+                        // Keep the raw string so the field can be cleared while
+                        // editing; the zod schema coerces '' → 0 on submit. (The old
+                        // Number() here forced an empty input straight back to 0.)
+                        onChange={(e) => field.onChange(e.target.value)}
                       />
                     </FormControl>
                     <FormMessage />
@@ -260,9 +265,10 @@ export function ShiftFormSheet({
                         min={0}
                         max={60}
                         {...field}
-                        onChange={(e) =>
-                          field.onChange(Number(e.target.value))
-                        }
+                        value={field.value ?? ''}
+                        // Raw string while editing so the 0 can be erased; schema
+                        // coerces '' → 0 on submit.
+                        onChange={(e) => field.onChange(e.target.value)}
                       />
                     </FormControl>
                     <FormMessage />
@@ -312,6 +318,27 @@ export function ShiftFormSheet({
                     />
                   </FormControl>
                   <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="allow_early_check_in"
+              render={({ field }) => (
+                <FormItem className="flex items-center justify-between rounded-lg border border-border p-4">
+                  <div>
+                    <FormLabel>Allow early check-in</FormLabel>
+                    <FormDescription>
+                      Let employees check in before the shift start time
+                    </FormDescription>
+                  </div>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
                 </FormItem>
               )}
             />

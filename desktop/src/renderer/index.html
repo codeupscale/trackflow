@@ -37,7 +37,9 @@
     }
 
     .content {
-      padding: 12px 16px 16px;
+      /* Roomier than the original 12/16/16 — the popup felt cramped once banners,
+         the shift row and the activity bar were all on screen together. */
+      padding: 14px 18px 18px;
       flex: 1;
       display: flex;
       flex-direction: column;
@@ -49,7 +51,7 @@
     /* ── Timer Display ──────────────────────────────────────── */
     .timer-display {
       text-align: center;
-      padding: 20px 0;
+      padding: 26px 0 22px;
       flex: 1;
       display: flex;
       flex-direction: column;
@@ -70,7 +72,8 @@
       flex-shrink: 0;
     }
     .time {
-      font-size: 42px;
+      font-size: 44px;
+      line-height: 1.15;
       font-weight: 700;
       font-variant-numeric: tabular-nums;
       letter-spacing: 2px;
@@ -83,7 +86,7 @@
     .status {
       font-size: 13px;
       color: var(--text-muted);
-      margin-top: 4px;
+      margin-top: 10px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -92,10 +95,10 @@
 
     /* Secondary, non-ticking total: sum of all projects today (server-synced). */
     .total-sum {
-      font-size: 11px;
+      font-size: 12px;
       color: var(--text-muted);
       opacity: 0.75;
-      margin-top: 3px;
+      margin-top: 8px;
       font-variant-numeric: tabular-nums;
       letter-spacing: 0.3px;
     }
@@ -112,7 +115,7 @@
 
     /* ── Project Select ─────────────────────────────────────── */
     .select-wrap {
-      margin: 8px 0;
+      margin: 12px 0 4px;
     }
 
     /* ── Action Buttons ─────────────────────────────────────── */
@@ -120,18 +123,18 @@
       display: flex;
       gap: 8px;
       justify-content: center;
-      padding: 8px 0;
+      padding: 12px 0 6px;
     }
     .actions .btn {
       flex: 1;
-      padding: 10px;
+      padding: 12px;
       font-size: 14px;
     }
 
     /* ── Activity Bar ───────────────────────────────────────── */
     .activity-section {
       display: none;
-      margin: 4px 0 8px;
+      margin: 12px 0 4px;
     }
     .activity-section.visible {
       display: block;
@@ -140,7 +143,7 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 4px;
+      margin-bottom: 7px;
       font-size: 12px;
     }
     .activity-label {
@@ -157,14 +160,14 @@
     .activity-value.high { color: var(--accent-green); }
     .activity-bar {
       width: 100%;
-      height: 6px;
+      height: 8px;
       background: var(--bg-tertiary);
-      border-radius: 3px;
+      border-radius: 4px;
       overflow: hidden;
     }
     .activity-bar-fill {
       height: 100%;
-      border-radius: 3px;
+      border-radius: 4px;
       transition: width 0.6s ease, background-color 0.3s ease;
       background: var(--accent-green);
     }
@@ -177,9 +180,9 @@
       display: flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 10px;
-      margin: 4px 0;
-      border-radius: 6px;
+      padding: 9px 11px;
+      margin: 8px 0 2px;
+      border-radius: 8px;
       background: rgba(99, 102, 241, 0.1);
       border: 1px solid rgba(99, 102, 241, 0.2);
       font-size: 12px;
@@ -199,7 +202,7 @@
       align-items: center;
       justify-content: center;
       gap: 5px;
-      padding: 2px 0;
+      padding: 6px 0 2px;
       font-size: 11px;
       color: var(--text-muted);
     }
@@ -216,9 +219,14 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding-top: 10px;
+      margin-top: 12px;
+      padding-top: 14px;
       border-top: 1px solid var(--border-color);
-      font-size: 11px;
+      font-size: 12px;
+    }
+    /* Larger hit targets — 11px text on a 10px padding-top was a hard link to click. */
+    .footer a {
+      padding: 4px 0;
     }
 
     /* ── Permission Warning Banner ─────────────────────────── */
@@ -226,8 +234,8 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 8px 12px;
-      margin-bottom: 8px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
       border-radius: 8px;
       background: rgba(234, 179, 8, 0.12);
       border: 1px solid rgba(234, 179, 8, 0.3);
@@ -452,6 +460,14 @@
         <div class="permission-banner-text">
           <span class="permission-banner-icon" aria-hidden="true" style="background:rgba(239,68,68,0.3);color:#ef4444">!</span>
           <span>Offline — data will sync when connected</span>
+        </div>
+      </div>
+
+      <!-- Idle lock banner — the idle window owns the timer until the user answers it -->
+      <div class="permission-banner" id="idleLockBanner" style="display:none" role="status">
+        <div class="permission-banner-text">
+          <span class="permission-banner-icon" aria-hidden="true" style="background:rgba(245,158,11,0.3);color:#f59e0b">!</span>
+          <span>You went idle — answer the idle prompt to continue</span>
         </div>
       </div>
 

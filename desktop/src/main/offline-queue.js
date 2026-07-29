@@ -284,14 +284,25 @@ class OfflineQueue {
         const filePath = path.join(this._screenshotDir, filename);
         await fs.promises.writeFile(filePath, buffer);
 
-        // Store file path (not the blob) in SQLite
+        // Store file path (not the blob) in SQLite.
+        // Every field flush() reads back MUST be persisted here. `idempotency_key`,
+        // `activity_score` and the display fields used to be dropped on the way in and
+        // then read as `undefined` on the way out: the presign lost its dedupe key (a
+        // retried flush created duplicate rows), multi-monitor shots lost their
+        // display identity, and — worst — a shot queued during an offline start
+        // (`local-…` entry id) had NO idempotency_key left to resolve the real entry
+        // id with, so _isUnresolvableOrphan() could drop it outright.
         const queueData = {
           file_path: filePath,
           time_entry_id: data.time_entry_id,
           captured_at: data.captured_at,
+          idempotency_key: data.idempotency_key,
         };
         if (data.app_name) queueData.app_name = data.app_name;
         if (data.window_title) queueData.window_title = data.window_title;
+        if (data.activity_score != null) queueData.activity_score = data.activity_score;
+        if (data.display_index != null) queueData.display_index = data.display_index;
+        if (data.display_count != null) queueData.display_count = data.display_count;
         this._stmtInsert.run(type, JSON.stringify(queueData), priority);
         console.log(`[OfflineQueue] Screenshot saved to file: ${filename} (${Math.round(buffer.length / 1024)}KB)`);
       } else {

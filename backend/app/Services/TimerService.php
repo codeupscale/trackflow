@@ -133,6 +133,16 @@ class TimerService
             $overrideStartedAt = $this->parseClientTimestamp($data['started_at'], 'started_at');
         }
 
+        // HISTORICAL BACKFILL: a start carrying an `ended_at` is a completed offline
+        // session being replayed (start + stop in one call). Create a CLOSED entry and
+        // NEVER touch the open-timer slot — so replaying a backfill can NEVER auto-stop
+        // the user's currently-running timer. Defence-in-depth for the "new time entry
+        // lost after stop→start" bug: a closed entry (ended_at set) does not trip the
+        // one-open-timer partial unique index, so it coexists with a live timer.
+        if (! empty($data['ended_at'])) {
+            return $this->createClosedHistoricalEntry($user, $data, $overrideStartedAt);
+        }
+
         // Idempotency check — BEFORE lock acquisition (read-only, safe without lock).
         // If the desktop/client sends the same idempotency_key for a start that already
         // succeeded, return the existing OPEN entry instead of creating a duplicate.
@@ -288,6 +298,63 @@ class TimerService
         } finally {
             Redis::del($lockKey);
         }
+    }
+
+    /**
+     * Create a CLOSED time entry from a replayed completed offline session (a start that
+     * carries an `ended_at`). Unlike the normal start path it never acquires the timer
+     * lock, never writes the Redis running key, and NEVER auto-stops the user's open
+     * timer — a closed entry doesn't occupy the one-open-timer slot, so it coexists with
+     * a live timer. Idempotent on `idempotency_key` (matches any prior entry, open or
+     * closed) so a replay never duplicates.
+     */
+    private function createClosedHistoricalEntry(\App\Models\User $user, array $data, ?Carbon $overrideStartedAt): array
+    {
+        if ($overrideStartedAt === null) {
+            throw new \InvalidArgumentException('A historical entry requires started_at.');
+        }
+
+        $startedAt = $overrideStartedAt;
+        $endedAt = $this->parseClientTimestamp($data['ended_at'], 'ended_at');
+        // Validates chronology (rejects reversed/zero intervals) — same guard as stop.
+        $duration = $this->computeDuration($startedAt, $endedAt);
+
+        if (! empty($data['idempotency_key'])) {
+            $existing = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+                ->where('organization_id', $user->organization_id)
+                ->where('idempotency_key', $data['idempotency_key'])
+                ->whereNull('deleted_at')
+                ->first();
+
+            if ($existing) {
+                return ['entry' => $existing, 'is_existing' => true];
+            }
+        }
+
+        if (! empty($data['project_id'] ?? null)) {
+            $project = Project::where('organization_id', $user->organization_id)
+                ->findOrFail($data['project_id']);
+            if (! $project->isAssignedTo($user)) {
+                throw new AuthorizationException('You are not assigned to this project.');
+            }
+        }
+
+        $entry = TimeEntry::create([
+            'organization_id' => $user->organization_id,
+            'user_id' => $user->id,
+            'project_id' => $data['project_id'] ?? null,
+            'task_id' => $data['task_id'] ?? null,
+            'notes' => $data['notes'] ?? null,
+            'started_at' => $startedAt,
+            'ended_at' => $endedAt,
+            'duration_seconds' => $duration,
+            'type' => 'tracked',
+            'idempotency_key' => $data['idempotency_key'] ?? null,
+        ]);
+
+        TimerStopped::dispatch($entry);
+
+        return ['entry' => $entry, 'is_existing' => false];
     }
 
     /**

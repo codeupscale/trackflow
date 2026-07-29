@@ -265,26 +265,29 @@ describe('Idle Alert Popup', () => {
     expect(reassignClicked).toBe(true);
   });
 
-  // TC-081: Auto-stop countdown displayed
-  test('TC-081: auto-stop bar shown and countdown decrements', () => {
+  // TC-081: Auto-stop is disabled (2026-07-23) — the idle alert never
+  // auto-dismisses, so the countdown bar must stay hidden. Main now sends
+  // autoStopGraceSec: 0; computeAutoStopRemainingSec returns null for grace <= 0,
+  // and updateAutoStopCountdownDisplay hides the bar. This mirrors that logic.
+  test('TC-081: auto-stop bar stays hidden when auto-stop is disabled', () => {
     const autoStopBar = document.getElementById('autoStopBar');
-    const autoStopCountdownEl = document.getElementById('autoStopCountdown');
 
     const alertShownAt = Date.now() - 300000; // popup shown 5 min ago
-    const autoStopGraceSec = 600; // 10 minutes after popup
+    const autoStopGraceSec = 0; // auto-stop disabled
     const now = Date.now();
-    const remaining = Math.max(
-      0,
-      Math.floor((alertShownAt + autoStopGraceSec * 1000 - now) / 1000),
-    );
+    const remaining =
+      !alertShownAt || !autoStopGraceSec || autoStopGraceSec <= 0
+        ? null
+        : Math.max(
+              0,
+              Math.floor((alertShownAt + autoStopGraceSec * 1000 - now) / 1000),
+          );
 
-    if (remaining > 0) {
-      autoStopBar.style.display = '';
-      autoStopCountdownEl.textContent = formatCountdown(remaining);
-    }
+    // updateAutoStopCountdownDisplay(): remaining == null -> hide the bar.
+    autoStopBar.style.display = remaining == null ? 'none' : '';
 
-    expect(autoStopBar.style.display).toBe('');
-    expect(autoStopCountdownEl.textContent).toBe('5:00');
+    expect(remaining).toBeNull();
+    expect(autoStopBar.style.display).toBe('none');
   });
 
   // TC-082: Idle time formatted correctly

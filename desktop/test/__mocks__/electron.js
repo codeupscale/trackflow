@@ -11,8 +11,14 @@ const app = {
   dock: { hide: jest.fn(), show: jest.fn() },
 };
 
+const mockWebContents = {
+  send: jest.fn(),
+  executeJavaScript: jest.fn(),
+  loadFile: jest.fn().mockResolvedValue(),
+};
+
 const BrowserWindow = jest.fn().mockImplementation(() => ({
-  loadFile: jest.fn(),
+  loadFile: jest.fn().mockResolvedValue(),
   show: jest.fn(),
   hide: jest.fn(),
   focus: jest.fn(),
@@ -26,9 +32,7 @@ const BrowserWindow = jest.fn().mockImplementation(() => ({
   setAlwaysOnTop: jest.fn(),
   on: jest.fn(),
   once: jest.fn(),
-  webContents: {
-    send: jest.fn(),
-  },
+  webContents: mockWebContents,
   getBounds: jest.fn(() => ({ x: 0, y: 0, width: 320, height: 400 })),
 }));
 BrowserWindow.getAllWindows = jest.fn(() => []);
@@ -152,4 +156,5 @@ module.exports = {
   screen,
   safeStorage,
   systemPreferences,
+  __mockWebContents: mockWebContents,
 };

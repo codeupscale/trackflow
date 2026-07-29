@@ -16,6 +16,12 @@ use Tests\TestCase;
 
 class AttendanceTest extends TestCase
 {
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow(); // reset any pinned clock
+        parent::tearDown();
+    }
+
     // ── Own Attendance ──────────────────────────────────
 
     public function test_can_view_own_attendance(): void
@@ -27,10 +33,11 @@ class AttendanceTest extends TestCase
         AttendanceRecord::factory()->present()->create([
             'organization_id' => $org->id,
             'user_id' => $user->id,
-            'date' => now()->subDay()->toDateString(),
+            'date' => '2026-05-05',
         ]);
 
-        $response = $this->getJson('/api/v1/hr/attendance');
+        // Single-day range matching the record → exactly the one real row.
+        $response = $this->getJson('/api/v1/hr/attendance?start_date=2026-05-05&end_date=2026-05-05');
 
         $response->assertOk()
             ->assertJsonStructure([
@@ -39,6 +46,58 @@ class AttendanceTest extends TestCase
                 ],
             ]);
         $this->assertCount(1, $response->json('data'));
+        $this->assertEquals('present', $response->json('data.0.status'));
+    }
+
+    public function test_own_attendance_synthesises_missing_days_as_absent_or_weekend(): void
+    {
+        // Regression: the self "My Attendance" table must show EVERY day in range —
+        // days with no generated attendance_record (the common case on environments
+        // where GenerateDailyAttendanceJob never runs) are synthesised as
+        // holiday/on_leave/weekend/absent, not simply omitted.
+        Carbon::setTestNow(Carbon::parse('2026-03-05 12:00:00'));
+
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        // Only one real record in the window; the other days have none.
+        AttendanceRecord::factory()->present()->create([
+            'organization_id' => $org->id,
+            'user_id' => $user->id,
+            'date' => '2026-03-03', // Tuesday
+        ]);
+
+        $response = $this->getJson('/api/v1/hr/attendance?start_date=2026-03-01&end_date=2026-03-05');
+
+        $response->assertOk();
+        $rows = collect($response->json('data'));
+        $this->assertCount(5, $rows); // 03-01 .. 03-05, every day present
+
+        $byDate = $rows->keyBy('date');
+        $this->assertEquals('present', $byDate['2026-03-03']['status']); // real record
+        $this->assertFalse($byDate['2026-03-03']['is_synthetic']);
+        $this->assertEquals('absent', $byDate['2026-03-04']['status']);  // Wed, synthesised
+        $this->assertTrue($byDate['2026-03-04']['is_synthetic']);
+        $this->assertEquals('weekend', $byDate['2026-03-01']['status']); // Sunday, synthesised
+    }
+
+    public function test_own_attendance_does_not_synthesise_future_days(): void
+    {
+        // Future days in the requested range are not absences yet — never synthesised.
+        Carbon::setTestNow(Carbon::parse('2026-03-03 12:00:00'));
+
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        // Whole month requested, but only 03-01..03-03 has happened.
+        $response = $this->getJson('/api/v1/hr/attendance?start_date=2026-03-01&end_date=2026-03-31');
+
+        $response->assertOk();
+        $rows = collect($response->json('data'));
+        $this->assertCount(3, $rows); // capped at today (03-03)
+        $this->assertNull($rows->firstWhere('date', '2026-03-04'));
     }
 
     public function test_cannot_view_other_user_attendance(): void
@@ -47,21 +106,26 @@ class AttendanceTest extends TestCase
         $employee = $this->createUser($org, 'employee');
         $otherEmployee = $this->createUser($org, 'employee');
 
-        // Create record for otherEmployee
+        // Create a worked (present) record for the OTHER employee.
         AttendanceRecord::factory()->present()->create([
             'organization_id' => $org->id,
             'user_id' => $otherEmployee->id,
-            'date' => now()->subDay()->toDateString(),
+            'date' => '2026-05-05',
         ]);
 
         $this->actingAs($employee, 'sanctum');
 
-        // The index endpoint only returns the authenticated user's own records
-        $response = $this->getJson('/api/v1/hr/attendance');
+        // The index endpoint only ever returns the authenticated user's rows. The self
+        // view now synthesises a per-day roster, but every row must belong to the caller
+        // and none may leak the other employee's worked record.
+        $response = $this->getJson('/api/v1/hr/attendance?start_date=2026-05-05&end_date=2026-05-05');
 
         $response->assertOk();
-        $data = $response->json('data');
-        $this->assertCount(0, $data);
+        $rows = collect($response->json('data'));
+        $this->assertTrue($rows->every(fn ($r) => $r['user_id'] === $employee->id));
+        // The caller has no real record that day → the synthesised row is absent (0h),
+        // proving the other employee's present record did not leak in.
+        $this->assertTrue($rows->every(fn ($r) => (float) $r['total_hours'] === 0.0));
     }
 
     // ── Team Attendance ─────────────────────────────────
@@ -105,26 +169,28 @@ class AttendanceTest extends TestCase
 
     public function test_can_get_attendance_summary(): void
     {
+        // Pin "today" to the 2nd so the month-to-date window is exactly the two days
+        // that carry records — the summary now walks the real calendar, so an open
+        // window would also count every intervening weekday as absent.
+        Carbon::setTestNow(Carbon::parse('2026-03-02 12:00:00'));
+
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
         $this->actingAs($user, 'sanctum');
 
-        $month = now()->month;
-        $year = now()->year;
-
-        // Create some attendance records for this month
+        // Create records for the two days of the window (03-01 present, 03-02 absent).
         AttendanceRecord::factory()->present()->create([
             'organization_id' => $org->id,
             'user_id' => $user->id,
-            'date' => now()->startOfMonth()->toDateString(),
+            'date' => '2026-03-01',
         ]);
         AttendanceRecord::factory()->absent()->create([
             'organization_id' => $org->id,
             'user_id' => $user->id,
-            'date' => now()->startOfMonth()->addDay()->toDateString(),
+            'date' => '2026-03-02',
         ]);
 
-        $response = $this->getJson("/api/v1/hr/attendance/summary?month={$month}&year={$year}");
+        $response = $this->getJson('/api/v1/hr/attendance/summary?month=3&year=2026');
 
         $response->assertOk()
             ->assertJsonStructure([
@@ -533,32 +599,34 @@ class AttendanceTest extends TestCase
 
     public function test_attendance_date_filtering_works(): void
     {
+        // Pin today after the window so the past-range synthesis is deterministic.
+        Carbon::setTestNow(Carbon::parse('2026-04-01 12:00:00'));
+
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
         $this->actingAs($user, 'sanctum');
 
-        AttendanceRecord::factory()->present()->create([
-            'organization_id' => $org->id,
-            'user_id' => $user->id,
-            'date' => '2026-03-01',
-        ]);
-        AttendanceRecord::factory()->present()->create([
-            'organization_id' => $org->id,
-            'user_id' => $user->id,
-            'date' => '2026-03-15',
-        ]);
-        AttendanceRecord::factory()->present()->create([
-            'organization_id' => $org->id,
-            'user_id' => $user->id,
-            'date' => '2026-03-31',
-        ]);
+        foreach (['2026-03-01', '2026-03-15', '2026-03-31'] as $d) {
+            AttendanceRecord::factory()->present()->create([
+                'organization_id' => $org->id,
+                'user_id' => $user->id,
+                'date' => $d,
+            ]);
+        }
 
-        // Filter to only March 10-20
+        // Filter to March 10-20: the self roster fills every day in range, but only the
+        // in-range real record (03-15) is present; out-of-range records don't appear.
         $response = $this->getJson('/api/v1/hr/attendance?start_date=2026-03-10&end_date=2026-03-20');
 
         $response->assertOk();
-        $this->assertCount(1, $response->json('data'));
-        $this->assertStringContainsString('2026-03-15', $response->json('data.0.date'));
+        $rows = collect($response->json('data'));
+        $this->assertCount(11, $rows); // 03-10 .. 03-20
+        $march15 = $rows->firstWhere('date', '2026-03-15');
+        $this->assertNotNull($march15);
+        $this->assertEquals('present', $march15['status']);
+        // Out-of-range real records are excluded.
+        $this->assertNull($rows->firstWhere('date', '2026-03-01'));
+        $this->assertNull($rows->firstWhere('date', '2026-03-31'));
     }
 
     // ── Summary Validation ──────────────────────────────

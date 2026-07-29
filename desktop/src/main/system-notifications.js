@@ -20,6 +20,72 @@ function formatTimeShortLocal(date = new Date()) {
   return `${h}:${m} ${ampm}`;
 }
 
+/** Format a duration in seconds as "Xh Ym" (or "Ym" when under an hour). */
+function formatDurationShort(totalSeconds) {
+  const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+/**
+ * Pure dedup/coalescing decision for the tracking-state notification. Returns true
+ * when a state notification should fire. Guards, in order:
+ *   - not authenticated → never (respects logout / no session).
+ *   - an automatic-stop toast fired within `autoStopSuppressMs` → skip (that toast
+ *     is the specific message; don't contradict it — the resume-that-autostopped
+ *     case).
+ *   - an idle alert is showing → skip (the alert IS the state message).
+ *   - SAME tracking state within `debounceMs` of the last state notif → skip
+ *     (coalesces the paired resume+unlock a single lid-open emits). A genuine state
+ *     change is always allowed through.
+ *
+ * @returns {boolean}
+ */
+function shouldNotifyTrackingState({
+  isAuthenticated,
+  isTracking,
+  isIdleAlertActive = false,
+  now,
+  lastStateNotifAt = 0,
+  lastNotifiedTracking = null,
+  lastAutoStopNotifAt = 0,
+  debounceMs = 5000,
+  autoStopSuppressMs = 8000,
+}) {
+  if (!isAuthenticated) return false;
+  if (now - lastAutoStopNotifAt < autoStopSuppressMs) return false;
+  if (isIdleAlertActive) return false;
+  if (isTracking === lastNotifiedTracking && now - lastStateNotifAt < debounceMs) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Pure content selector for the "always know your tracking state" notification.
+ * Kept pure (no I/O) so the title/body wording is unit-testable.
+ *
+ * @param {object} opts
+ * @param {boolean} opts.isTracking - whether the timer is currently running
+ * @param {number} [opts.todayTotalSeconds=0] - today's tracked total (all projects)
+ * @returns {{ title: string, body: string }}
+ */
+function buildTrackingStateNotification({ isTracking, todayTotalSeconds = 0 } = {}) {
+  if (isTracking) {
+    return {
+      title: 'TrackFlow — Tracking active',
+      body: `Timer is running · today ${formatDurationShort(
+        todayTotalSeconds,
+      )}. You're being tracked.`,
+    };
+  }
+  return {
+    title: 'TrackFlow — Not tracking',
+    body: "Timer is stopped — you are NOT being tracked. Start the timer when you're ready.",
+  };
+}
+
 function resolveNotificationIcon() {
   const branded = getNotificationIcon();
   if (branded && !branded.isEmpty()) return branded;
@@ -130,4 +196,7 @@ module.exports = {
   initSystemNotifications,
   showSystemNotification,
   formatTimeShortLocal,
+  formatDurationShort,
+  buildTrackingStateNotification,
+  shouldNotifyTrackingState,
 };

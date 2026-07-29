@@ -26,8 +26,17 @@
 
 const { desktopCapturer, screen, systemPreferences, shell, dialog, BrowserWindow, powerMonitor, ipcMain } = require('electron');
 const { showSystemNotification, formatTimeShortLocal } = require('./system-notifications');
+const {
+  WaylandCaptureSession,
+  shouldUseWaylandPersistentCapture,
+} = require('./wayland-capture-session');
 const crypto = require('crypto');
 const FormData = require('form-data');
+
+// Largest capture that may be persisted to the offline queue. MUST stay in sync with
+// MAX_SCREENSHOT_SIZE in offline-queue.js — a smaller value here drops shots the queue
+// would happily have stored.
+const MAX_OFFLINE_SCREENSHOT_BYTES = 2 * 1024 * 1024;
 
 // Lazy-load sharp
 let _sharp = null;
@@ -175,6 +184,9 @@ class ScreenshotService {
     this._lastCaptureHash = null;
     this._staticCaptureCount = 0;
     this._wallpaperWarningEmitted = false;
+    /** @type {WaylandCaptureSession | null} */
+    this._waylandSession = null;
+    this._waylandOpenPromise = null;
     const immediateCapture = options.immediateCapture === true;
 
     // DEV/TEST override: TRACKFLOW_SCREENSHOT_TEST_INTERVAL_SEC (seconds) forces a
@@ -191,6 +203,17 @@ class ScreenshotService {
     const firstDelayMs = useTestInterval ? testIntervalSec * 1000 : firstDelayMin * 60 * 1000;
 
     console.log(`[SS] Started — entry=${entryId}, interval=${useTestInterval ? testIntervalSec + 's (TEST)' : (this.config.screenshot_interval || 5) + 'min'}, firstDelay=${useTestInterval ? testIntervalSec + 's (TEST)' : firstDelayMin + 'min'}, immediate=${immediateCapture}`);
+
+    if (shouldUseWaylandPersistentCapture()) {
+      this._waylandSession = new WaylandCaptureSession();
+      this._waylandOpenPromise = this._waylandSession.open().catch((err) => {
+        console.error(
+          `[SS] Wayland persistent capture unavailable (${err.message}) — falling back to per-capture getSources`,
+        );
+        this._waylandSession = null;
+        this._waylandOpenPromise = null;
+      });
+    }
 
     if (immediateCapture || firstDelayMs === 0) {
       setImmediate(() => {
@@ -240,6 +263,12 @@ class ScreenshotService {
     if (this._pauseTimeout) {
       clearTimeout(this._pauseTimeout);
       this._pauseTimeout = null;
+    }
+    if (this._waylandSession) {
+      const session = this._waylandSession;
+      this._waylandSession = null;
+      this._waylandOpenPromise = null;
+      session.close().catch(() => {});
     }
     if (this.currentEntryId) {
       console.log(`[SS] Stopped — entry=${this.currentEntryId}`);
@@ -351,6 +380,36 @@ class ScreenshotService {
     const permStatus = this._checkScreenPermissionStatus();
     if (process.platform === 'darwin') {
       console.log(`[SS] macOS screen permission: ${permStatus}`);
+    }
+
+    // Linux Wayland: reuse one portal grant for the whole timer session.
+    if (this._waylandSession) {
+      try {
+        if (this._waylandOpenPromise) {
+          await this._waylandOpenPromise;
+        }
+        if (!this._waylandSession) {
+          throw new Error('Wayland session failed to open');
+        }
+
+        const buffer = await this._waylandSession.captureJpeg();
+        if (!buffer || buffer.length === 0) {
+          throw new Error('Wayland frame grab returned empty buffer');
+        }
+
+        console.log(`[SS][Wayland] Captured ${buffer.length} bytes (${Math.round(buffer.length / 1024)}KB) from persistent stream`);
+
+        if (this.currentEntryId) {
+          await this.upload(buffer, null);
+          this._showNotification();
+          this._consecutiveFailures = 0;
+        }
+      } catch (e) {
+        this._handleCaptureFailure(`Wayland capture: ${e.message}`);
+      } finally {
+        this._capturing = false;
+      }
+      return;
     }
 
     try {
@@ -1000,7 +1059,11 @@ class ScreenshotService {
   }
 
   _queueForOffline(buffer, appName, windowTitle, displayInfo, capturedAt, idempotencyKey, activityScore, entryId = null) {
-    if (buffer.length < 1024 * 1024) {
+    // Size cap must match the queue's own MAX_SCREENSHOT_SIZE (2MB). This used to be
+    // a tighter, undocumented 1MB gate, so any capture between 1–2MB (routine on a
+    // 4K/multi-monitor desktop) was silently thrown away instead of being queued —
+    // offline sessions came back with screenshots missing.
+    if (buffer.length <= MAX_OFFLINE_SCREENSHOT_BYTES) {
       const data = {
         buffer:          buffer,
         time_entry_id:   String(entryId != null ? entryId : this.currentEntryId),

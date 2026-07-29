@@ -158,6 +158,8 @@ export default function MyAttendancePage() {
 
   const canRegularize = (record: AttendanceRecord) => {
     return (
+      // Synthetic rows (days with no persisted record) have no regularizable id.
+      !record.is_synthetic &&
       (record.status === 'absent' || record.status === 'half_day') &&
       !record.is_regularized &&
       record.regularization_status == null

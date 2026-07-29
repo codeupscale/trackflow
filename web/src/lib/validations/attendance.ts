@@ -73,6 +73,10 @@ export interface AttendanceRecord {
   overtime_hours: number;
   is_regularized: boolean;
   regularization_status: 'pending' | 'approved' | 'rejected' | null;
+  // True for a day with no persisted attendance_record — synthesised server-side so
+  // every day in range appears (holiday/on_leave/weekend/absent). Synthetic rows have
+  // a non-persistent id ("synthetic-…") and cannot be regularized.
+  is_synthetic?: boolean;
   // Check-in / checkout fields (present on check-ins list rows)
   check_in_at?: string | null;
   check_out_at?: string | null;

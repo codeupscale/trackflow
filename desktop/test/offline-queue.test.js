@@ -63,6 +63,39 @@ describe('OfflineQueue', () => {
     );
   });
 
+  // Regression: add() used to persist ONLY file_path / time_entry_id / captured_at /
+  // app_name / window_title, while flush() read back idempotency_key, activity_score
+  // and the display fields — they arrived as undefined. The presign lost its dedupe
+  // key, multi-monitor shots lost their display identity, and a shot queued during an
+  // offline start (local- entry id) had no idempotency_key left to resolve with.
+  // bugs/offline-screenshots-rejected-after-entry-closed.md
+  test('add screenshot persists every field flush() reads back', async () => {
+    const insertSpy = jest.spyOn(queue._stmtInsert, 'run');
+    await queue.add('screenshot', {
+      buffer: Buffer.alloc(5000, 0x42),
+      time_entry_id: 'local-abc',
+      captured_at: '2026-01-01T00:00:00.000Z',
+      idempotency_key: 'idem-key-1',
+      activity_score: 73,
+      display_index: 1,
+      display_count: 2,
+      app_name: 'Chrome',
+      window_title: 'Docs',
+    });
+
+    expect(insertSpy).toHaveBeenCalledTimes(1);
+    const [type, json] = insertSpy.mock.calls[0];
+    expect(type).toBe('screenshot');
+    const stored = JSON.parse(json);
+    expect(stored.idempotency_key).toBe('idem-key-1');
+    expect(stored.activity_score).toBe(73);
+    expect(stored.display_index).toBe(1);
+    expect(stored.display_count).toBe(2);
+    expect(stored.captured_at).toBe('2026-01-01T00:00:00.000Z');
+    expect(stored.app_name).toBe('Chrome');
+    expect(stored.window_title).toBe('Docs');
+  });
+
   test('add screenshot rejects oversized buffers', async () => {
     const hugeBuffer = Buffer.alloc(3 * 1024 * 1024); // 3MB > 2MB limit
     await queue.add('screenshot', {

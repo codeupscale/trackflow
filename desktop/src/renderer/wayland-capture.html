@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>TrackFlow Wayland Capture</title>
+</head>
+<body>
+<script>
+  /**
+   * Hidden capture page — keeps one desktop MediaStream alive for the timer session.
+   * Invoked from the main process via executeJavaScript (no preload needed).
+   */
+  let stream = null;
+  let video = null;
+
+  window.__waylandCaptureStart = async function (sourceId, maxWidth, maxHeight) {
+    try {
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+        stream = null;
+      }
+
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId,
+            maxWidth: maxWidth,
+            maxHeight: maxHeight,
+          },
+        },
+      });
+
+      video = document.createElement('video');
+      video.srcObject = stream;
+      video.muted = true;
+      video.playsInline = true;
+      await video.play();
+
+      // Wait for the first decoded frame.
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Video frame timeout')), 10000);
+        const onReady = () => {
+          clearTimeout(timeout);
+          if (video.videoWidth > 0 && video.videoHeight > 0) resolve();
+        };
+        if (video.readyState >= 2 && video.videoWidth > 0) {
+          onReady();
+          return;
+        }
+        video.addEventListener('loadeddata', onReady, { once: true });
+      });
+
+      return {
+        ok: true,
+        width: video.videoWidth,
+        height: video.videoHeight,
+      };
+    } catch (e) {
+      return { ok: false, error: e.message || String(e) };
+    }
+  };
+
+  window.__waylandCaptureGrab = function () {
+    try {
+      if (!video || !stream || video.videoWidth <= 0 || video.videoHeight <= 0) {
+        return { ok: false, error: 'Capture stream is not ready' };
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
+
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+      const base64 = dataUrl.split(',')[1];
+      if (!base64) {
+        return { ok: false, error: 'JPEG encode failed' };
+      }
+
+      return { ok: true, data: base64 };
+    } catch (e) {
+      return { ok: false, error: e.message || String(e) };
+    }
+  };
+
+  window.__waylandCaptureStop = function () {
+    try {
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+      }
+      stream = null;
+      video = null;
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message || String(e) };
+    }
+  };
+</script>
+</body>
+</html>

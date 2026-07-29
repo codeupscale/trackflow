@@ -715,6 +715,9 @@ class ReportService
                 ->where('started_at', '>=', $dateFrom)
                 ->where('started_at', '<', $dateTo)
                 ->whereNotNull('ended_at')
+                // Aggregate exclusion rule: only approved entries count (pending/
+                // rejected manual entries must not skew the weekday activity average).
+                ->where('approval_status', 'approved')
                 ->whereNotNull('activity_score')
                 ->where('activity_score', '>', 0);
 
@@ -806,6 +809,10 @@ class ReportService
                 ->where('started_at', '>=', $dateFrom)
                 ->where('started_at', '<', $dateTo)
                 ->whereNotNull('ended_at')
+                // Aggregate exclusion rule: only approved entries count. Without this,
+                // pending/rejected manual entries leaked into attendance totals and
+                // approving/rejecting had no effect on the report.
+                ->where('approval_status', 'approved')
                 ->selectRaw("
                     user_id,
                     DATE(started_at) as date,

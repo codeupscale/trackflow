@@ -2,24 +2,30 @@
 
 namespace Tests\Feature\Hr;
 
-use App\Models\AttendancePolicy;
 use App\Models\AttendanceRecord;
 use App\Models\CheckInSession;
 use App\Models\LeaveRequest;
 use App\Models\LeaveType;
+use App\Models\Organization;
 use App\Models\PublicHoliday;
+use App\Models\Shift;
+use App\Models\User;
 use App\Services\AttendanceService;
 use App\Services\CheckInService;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 /**
  * Feature coverage for the check-in / checkout attendance feature (Phase 2).
  *
- * Timezone contract under test: the org AttendancePolicy timezone is authoritative
- * and server now() (UTC) is the source of truth. The default policy tz is
- * Asia/Karachi (UTC+5, no DST), so a given org-local wall-clock time maps to a
- * fixed UTC instant. Helpers below set the frozen "server now" in UTC.
+ * Schedule contract under test: a user's check-in window comes from their assigned
+ * SHIFT (start_time / start+grace / end_time / shift.timezone), or the org fallback
+ * (11:30 / 11:45 / 20:30 Asia/Karachi) when no shift is assigned. Server now() (UTC) is
+ * the source of truth. Most tests below rely on the Asia/Karachi fallback (no shift
+ * assigned); tz-specific tests assign a shift via assignShift(). Helpers set the frozen
+ * "server now" in UTC.
  *
  * Karachi reference (UTC+5) on a working Monday (2026-03-16):
  *   local 11:00 = 06:00 UTC (before window)
@@ -46,6 +52,39 @@ class CheckInTest extends TestCase
     private function freezeUtc(string $utc): void
     {
         Carbon::setTestNow(Carbon::parse($utc, 'UTC'));
+    }
+
+    /**
+     * Assign $user an active shift, so their check-in schedule comes from it instead of
+     * the org fallback. Defaults reproduce the old policy (11:30 / +15 grace = 11:45 late
+     * / 20:30 off / Asia/Karachi); override timezone/times per test.
+     */
+    private function assignShift(Organization $org, User $user, array $overrides = []): Shift
+    {
+        $shift = Shift::create(array_merge([
+            'organization_id' => $org->id,
+            'name' => 'Test Shift',
+            'start_time' => '11:30:00',
+            'end_time' => '20:30:00',
+            'grace_period_minutes' => 15,
+            'timezone' => 'Asia/Karachi',
+            'allow_early_check_in' => false,
+            'is_active' => true,
+            'days_of_week' => ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+        ], $overrides));
+
+        DB::table('user_shifts')->insert([
+            'id' => (string) Str::uuid(),
+            'organization_id' => $org->id,
+            'user_id' => $user->id,
+            'shift_id' => $shift->id,
+            'effective_from' => '2000-01-01',
+            'effective_to' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        return $shift;
     }
 
     private function checkInService(): CheckInService
@@ -394,11 +433,8 @@ class CheckInTest extends TestCase
         $user = $this->createUser($org, 'employee');
         $this->actingAs($user, 'sanctum');
 
-        // Non-PKT org: America/New_York (EDT = UTC-4 on 2026-03-16, DST active).
-        AttendancePolicy::factory()->create([
-            'organization_id' => $org->id,
-            'timezone' => 'America/New_York',
-        ]);
+        // Non-PKT shift: America/New_York (EDT = UTC-4 on 2026-03-16, DST active).
+        $this->assignShift($org, $user, ['timezone' => 'America/New_York']);
 
         // 15:00 UTC = 11:00 EDT — before the 11:30 window. If enforcement used UTC
         // wall-clock (15:00) this would be accepted as "late"; being rejected proves
@@ -513,9 +549,9 @@ class CheckInTest extends TestCase
         $this->actingAs($user, 'sanctum');
 
         // Early check-in allowed so we can check in at 02:00 local.
-        AttendancePolicy::factory()->allowsEarlyCheckIn()->create([
-            'organization_id' => $org->id,
+        $this->assignShift($org, $user, [
             'timezone' => 'Asia/Karachi',
+            'allow_early_check_in' => true,
         ]);
 
         // 2026-03-16 21:00 UTC = 2026-03-17 02:00 Karachi. The org-local date is the
@@ -663,9 +699,12 @@ class CheckInTest extends TestCase
 
         $response = $this->getJson('/api/v1/hr/attendance/summary?month=3&year=2026');
 
+        // present_days counts the single check-in day. total_working_days now reflects
+        // the real calendar month-to-date (03-01..03-16 = 11 working days, 5 weekend
+        // days) rather than just the days that happen to have a persisted record.
         $response->assertOk()
             ->assertJsonPath('data.present_days', 1)
-            ->assertJsonPath('data.total_working_days', 1);
+            ->assertJsonPath('data.total_working_days', 11);
     }
 
     // ── Cross-org isolation ────────────────────────────────────────────────
@@ -695,67 +734,9 @@ class CheckInTest extends TestCase
         $this->assertCount(0, $response->json('data'));
     }
 
-    // ── Policy management ──────────────────────────────────────────────────
-
-    public function test_policy_update_validates_time_ordering(): void
-    {
-        $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'org_manager');
-        $this->actingAs($admin, 'sanctum');
-
-        $response = $this->putJson('/api/v1/hr/attendance/policy', [
-            'check_in_time' => '11:30:00',
-            'late_threshold' => '11:00:00', // before check-in time — invalid
-            'checkout_time' => '20:30:00',
-        ]);
-
-        $response->assertStatus(422)
-            ->assertJsonValidationErrors(['late_threshold']);
-    }
-
-    public function test_policy_update_succeeds_for_admin(): void
-    {
-        $org = $this->createOrganization();
-        $admin = $this->createUser($org, 'org_manager');
-        $this->actingAs($admin, 'sanctum');
-
-        $response = $this->putJson('/api/v1/hr/attendance/policy', [
-            'check_in_time' => '10:00:00',
-            'late_threshold' => '10:15:00',
-            'checkout_time' => '19:00:00',
-            'timezone' => 'Asia/Karachi',
-        ]);
-
-        $response->assertOk()
-            ->assertJsonPath('data.check_in_time', '10:00:00')
-            ->assertJsonPath('data.late_threshold', '10:15:00');
-    }
-
-    public function test_employee_cannot_update_policy(): void
-    {
-        $org = $this->createOrganization();
-        $employee = $this->createUser($org, 'employee');
-        $this->actingAs($employee, 'sanctum');
-
-        $response = $this->putJson('/api/v1/hr/attendance/policy', [
-            'check_in_time' => '10:00:00',
-        ]);
-
-        $response->assertStatus(403);
-    }
-
-    public function test_policy_show_returns_defaults(): void
-    {
-        $org = $this->createOrganization();
-        $user = $this->createUser($org, 'employee');
-        $this->actingAs($user, 'sanctum');
-
-        $response = $this->getJson('/api/v1/hr/attendance/policy');
-
-        $response->assertOk()
-            ->assertJsonPath('data.check_in_time', '11:30:00')
-            ->assertJsonPath('data.timezone', 'Asia/Karachi');
-    }
+    // ── Policy management endpoint removed — check-in windows now come from the
+    //    user's shift (see ShiftController / shift assignment), not a per-org policy.
+    //    The old GET/PUT /hr/attendance/policy tests were deleted with the endpoint.
 
     public function test_evening_checkout_survives_next_day_backstop(): void
     {

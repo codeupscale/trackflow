@@ -45,7 +45,7 @@ describe('Idle alert window visibility', () => {
       idleSeconds: 300,
       actionId: 1,
       alertShownAt: Date.now() - 60000,
-      autoStopGraceSec: 600,
+      autoStopGraceSec: 0, // auto-stop disabled (2026-07-23) — alert never auto-dismisses
       projects: [],
     };
 
@@ -139,7 +139,7 @@ describe('Idle alert window visibility', () => {
     expect(sentData).toHaveProperty('idleStartedAt');
     expect(sentData).toHaveProperty('idleSeconds', 300);
     expect(sentData).toHaveProperty('alertShownAt');
-    expect(sentData).toHaveProperty('autoStopGraceSec', 600);
+    expect(sentData).toHaveProperty('autoStopGraceSec', 0);
     expect(sentData).toHaveProperty('projects');
     expect(Array.isArray(sentData.projects)).toBe(true);
   });

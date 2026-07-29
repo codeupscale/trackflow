@@ -180,6 +180,42 @@ function setStartedAt(isoOrMs) {
   }
 }
 
+// ── Idle lock ──
+// While the idle alert is waiting for an answer, the popup must not offer a second
+// way to drive the timer (the QA repro: Stop/Start still clickable behind the idle
+// window, producing states nobody asked for). Main broadcasts `idle-lock` on every
+// show/dismiss/resolve and also returns `idleLocked` from get-timer-state so a
+// re-opened popup renders locked from the first paint.
+let _idleLocked = false;
+
+function applyIdleLock(locked) {
+  _idleLocked = !!locked;
+  const banner = document.getElementById('idleLockBanner');
+  if (banner) banner.style.display = _idleLocked ? 'flex' : 'none';
+  if (_idleLocked) {
+    startBtn.disabled = true;
+    stopBtn.disabled = true;
+    projectSelect.disabled = true;
+    startBtn.style.opacity = '0.5';
+    stopBtn.style.opacity = '0.5';
+    startBtn.style.cursor = 'not-allowed';
+    stopBtn.style.cursor = 'not-allowed';
+    stopBtn.title = 'Answer the idle prompt first';
+    startBtn.title = 'Answer the idle prompt first';
+  } else {
+    stopBtn.disabled = false;
+    stopBtn.style.opacity = '1';
+    stopBtn.style.cursor = 'pointer';
+    stopBtn.title = '';
+    startBtn.title = '';
+    // Start / project select ownership goes back to the normal state machine.
+    syncProjectSelectEnabled();
+    updateStartBtnState();
+  }
+}
+
+window.trackflow.onIdleLock?.((data) => applyIdleLock(data?.locked));
+
 function updateDisplay(running, paused = false) {
   isRunning = running;
   isPaused = paused;
@@ -209,6 +245,8 @@ function updateDisplay(running, paused = false) {
     _lastScreenshotAt = null;
     updateConnStatus();
   }
+  // The lock outranks the normal running/stopped button logic above.
+  if (_idleLocked) applyIdleLock(true);
 }
 
 // The main process is the single source of truth for elapsed time.
@@ -221,9 +259,17 @@ function startTicking() {
   if (!_tickListenerRegistered) {
     _tickListenerRegistered = true;
     window.trackflow.onTimerTick((data) => {
-      if (!isRunning) return;
+      // A tick flagged isPaused is the AUTHORITATIVE frozen value pushed by
+      // renderIdleFreeze() — the tracked time as of the moment the user went idle.
+      // Always apply it, and flip the UI to "Paused (idle)" if it isn't already.
+      const pausedTick = data?.isPaused === true;
+      // Any UNflagged tick that arrives while an idle decision is pending is a stale
+      // live tick: its elapsed is measured to now, so it carries the idle window's own
+      // duration. Dropping it is what stops idle minutes appearing in the total.
+      if (!pausedTick && (!isRunning || isPaused)) return;
       elapsedSeconds = data.totalSeconds;
       timerDisplay.textContent = data.formatted;
+      if (pausedTick && !isPaused) updateDisplay(false, true);
       // ISSUE 1 FIX: "Today, all projects" now reflects the running session live.
       // Prefer the live value (base sum + current session elapsed) computed by the
       // main process; fall back to the static server-synced sum for older payloads
@@ -253,20 +299,30 @@ async function syncTimerState() {
     const state = await window.trackflow.getTimerState(selectedProjectId);
     todayTotalBase = state.todayTotal ?? 0;
     updateTotalSum(state.todayTotalGlobal);
-    if (state.isRunning) {
+    // Re-opened popup must come back LOCKED if an idle alert is still pending.
+    applyIdleLock(state.idleLocked === true);
+    // PAUSED OUTRANKS RUNNING. Main keeps `isRunning` true through an idle pause
+    // (the entry is still open, just frozen), so testing isRunning first painted
+    // "Tracking" and re-armed ticking mid-idle — the popup then walked forward
+    // through the idle window. Check isPaused first so a re-opened / re-synced popup
+    // renders "Paused (idle)" frozen at the idle-start elapsed main returns.
+    if (state.isPaused) {
+      setStartedAt(state.entry?.started_at || null);
+      // NOTE: no calcElapsedFromStartedAt() fallback here — that measures to now and
+      // would re-introduce the idle window. `state.elapsed` is already frozen at the
+      // idle-start instant; 0 is the correct value when there is nothing to show.
+      const currentElapsed = state.elapsed ?? 0;
+      todayTotalBase = Math.max(0, todayTotalBase - currentElapsed);
+      elapsedSeconds = todayTotalBase + currentElapsed;
+      stopTicking();
+      updateDisplay(false, true);
+    } else if (state.isRunning) {
       setStartedAt(state.entry?.started_at || null);
       const currentElapsed = state.elapsed || calcElapsedFromStartedAt();
       todayTotalBase = Math.max(0, todayTotalBase - currentElapsed);
       elapsedSeconds = todayTotalBase + currentElapsed;
       updateDisplay(true, false);
       startTicking();
-    } else if (state.isPaused) {
-      setStartedAt(state.entry?.started_at || null);
-      const currentElapsed = state.elapsed || calcElapsedFromStartedAt();
-      todayTotalBase = Math.max(0, todayTotalBase - currentElapsed);
-      elapsedSeconds = todayTotalBase + currentElapsed;
-      stopTicking();
-      updateDisplay(false, true);
     } else {
       setStartedAt(null);
       stopTicking();
@@ -363,11 +419,12 @@ async function loadProjects(retryCount = 0) {
 // has real options. Called after async project loads so a dropdown disabled by an
 // earlier updateDisplay() (while the list was empty) gets re-enabled.
 function syncProjectSelectEnabled() {
-  projectSelect.disabled = isRunning || isPaused || projectSelect.options.length <= 1;
+  projectSelect.disabled = _idleLocked || isRunning || isPaused || projectSelect.options.length <= 1;
 }
 
 // Disable Start button when no project selected
 function updateStartBtnState() {
+  if (_idleLocked) return; // Idle alert owns the controls — applyIdleLock decides
   if (isRunning) return; // Don't touch button state while running
   const hasProject = projectSelect.value && projectSelect.value !== '';
   startBtn.disabled = !hasProject;
@@ -468,6 +525,7 @@ async function init() {
 }
 
 startBtn.addEventListener('click', async () => {
+  if (_idleLocked) return; // idle alert is waiting for an answer
   const projectId = projectSelect.value || null;
   if (!projectId) {
     // Safety check — button should already be disabled
@@ -496,6 +554,7 @@ startBtn.addEventListener('click', async () => {
 
 let _stopInFlight = false; // RACE-FIX: Prevent rapid stop-start from overlapping
 stopBtn.addEventListener('click', () => {
+  if (_idleLocked) return; // idle alert is waiting for an answer
   if (_stopInFlight) return;
   _stopInFlight = true;
   stopTicking();
@@ -615,7 +674,10 @@ if (window.trackflow.onTimerPaused) {
     stopTicking();
     if (data?.entry?.started_at) setStartedAt(data.entry.started_at);
     if (data?.todayTotal != null) todayTotalBase = data.todayTotal;
-    const currentElapsed = data?.elapsed ?? calcElapsedFromStartedAt();
+    // Main always sends the frozen idle-start elapsed. Never fall back to
+    // calcElapsedFromStartedAt() — it measures to now, which is exactly the idle
+    // window's duration leaking back into the tracked total.
+    const currentElapsed = data?.elapsed ?? 0;
     elapsedSeconds = todayTotalBase + currentElapsed;
     updateDisplay(false, true);
   });
