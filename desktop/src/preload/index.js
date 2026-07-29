@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('trackflow', {
   setLastProject: (projectId) => ipcRenderer.invoke('set-last-project', projectId),
   logout: () => ipcRenderer.invoke('logout'),
   hideWindow: () => ipcRenderer.invoke('hide-window'),
+  quitApp: () => ipcRenderer.invoke('quit-app'),
   togglePin: (forceState) => ipcRenderer.invoke('toggle-pin', forceState),
   getPinState: () => ipcRenderer.invoke('get-pin-state'),
   onPinStateChanged: (callback) => safeOn('pin-state-changed', (_, data) => callback(data)),
