@@ -936,24 +936,11 @@ let _stopTimerInProgress = false;
 // mutate timer state (currentEntry, _cachedStartedAtMs, isTimerRunning) concurrently.
 let _timerStateMutationInProgress = false;
 
-/**
- * BUG 2 FIX: Adopt a server `started_at` into the display anchor ONLY when it does
- * not move the anchor LATER than the local source of truth. The local SQLite
- * `started_at` is immutable truth; the server must never push the visible start
- * forward (which causes the timer to jump backward). We accept a server start
- * only when there is no local cached start yet, or the server start is
- * earlier-or-equal (never lose time, never jump).
- */
-function adoptServerStartedAt(serverStartedAtIso) {
-    const serverMs = serverStartedAtIso
-        ? new Date(serverStartedAtIso).getTime()
-        : null;
-    if (serverMs == null || Number.isNaN(serverMs)) return;
-    if (_cachedStartedAtMs == null || serverMs <= _cachedStartedAtMs) {
-        _cachedStartedAtMs = serverMs;
-    }
-    // else: server start is LATER than local truth — keep local anchor (immutable).
-}
+// adoptServerStartedAt() lived here. It reconciled a server-supplied `started_at`
+// against the local anchor ("earlier-or-equal wins") so a skewed server clock could
+// never push the visible start forward. There is no server-supplied start any more —
+// the local SQLite timestamp is the only one that exists — so the reconciliation it
+// performed is not merely unused, it is unrepresentable.
 
 /** Restore in-memory timer state from an open SQLite timer_sessions row (phantom-stop recovery). */
 function restoreInMemoryFromLocalActive(localActive) {
