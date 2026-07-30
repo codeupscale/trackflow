@@ -15,13 +15,16 @@
 // activity bar, actions, footer) had no breathing room at the popup size and
 // every block collapsed onto its neighbour.
 const WINDOW_WIDTH = 440;
-const WINDOW_HEIGHT = 600;
+// 560, not 600: the natural content height is ~450px, so 600 left the timer hero
+// floating in ~150px of dead space. 560 keeps real breathing room — the whole
+// point of leaving the 320x480 popup behind — without the layout looking sparse.
+const WINDOW_HEIGHT = 560;
 
 // Never let the window collapse below the layout's design floor. The flex
 // layout in index.html is authored against this; smaller than this and the
 // footer starts to clip.
 const WINDOW_MIN_WIDTH = 380;
-const WINDOW_MIN_HEIGHT = 520;
+const WINDOW_MIN_HEIGHT = 480;
 
 // How much of the window must remain on a display for a restored position to
 // count as "visible". Enough that the title bar is always grabbable — a window

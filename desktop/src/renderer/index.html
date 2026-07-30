@@ -129,18 +129,24 @@
 
     /* ── Timer hero ──────────────────────────────────────────── */
     .timer-card {
-      flex: 1;
+      /* Sized to its CONTENT, not to the leftover space. `flex: 1` made the card
+         swallow every spare pixel, so on a tall window the timer floated in a
+         large dead zone with the card border miles away from it. `margin-block:
+         auto` instead splits the free space evenly ABOVE and BELOW the card, so
+         the hero sits optically centred while the controls and footer stay put
+         at the bottom. `flex: 0 1 auto` still lets it shrink (margins collapse
+         to 0 first) so nothing overflows near the size floor. */
+      flex: 0 1 auto;
+      margin-block: auto;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 10px;
-      padding: 20px 16px;
+      gap: 8px;
+      padding: 26px 16px;
       border-radius: 12px;
       background: var(--bg-secondary);
       border: 1px solid var(--border-color);
-      /* Absorb the flexible space and be the FIRST thing to give it back, so the
-         controls and footer below always stay on-screen as the window shrinks. */
       min-height: 0;
     }
     .time {
@@ -248,6 +254,31 @@
       padding: 12px;
       font-size: 14px;
       font-weight: 600;
+    }
+
+    /* Stop is a frequent, completely reversible action — it should read as the
+       primary control while tracking, not as a destructive alarm. The shared
+       .btn-danger fill (--accent-red, a saturated coral) turned the bottom third
+       of the window into a red slab, and stacked directly under a red
+       low-activity bar it made the whole window look like an error state. This
+       keeps it unmistakably "stop" via a tinted fill + red label. */
+    .actions #stopBtn {
+      background: rgba(255, 100, 103, 0.14);
+      border: 1px solid rgba(255, 100, 103, 0.38);
+      color: #ff8b8d;
+    }
+    .actions #stopBtn:hover:not(:disabled) {
+      background: rgba(255, 100, 103, 0.22);
+      border-color: rgba(255, 100, 103, 0.6);
+    }
+    [data-theme="light"] .actions #stopBtn {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #dc2626;
+    }
+    [data-theme="light"] .actions #stopBtn:hover:not(:disabled) {
+      background: rgba(239, 68, 68, 0.16);
+      border-color: rgba(239, 68, 68, 0.5);
     }
 
     /* ── Footer ──────────────────────────────────────────────── */
@@ -361,11 +392,13 @@
     .update-badge.visible { display: block; }
 
     /* ── Compact height fallback ─────────────────────────────── */
-    /* Near the 520px floor the hero gives up its padding first so the controls
-       and footer are never the things that clip. */
-    @media (max-height: 560px) {
+    /* Near the 480px floor the hero gives up its padding first so the controls
+       and footer are never the things that clip. Set below the 560px default so
+       it only kicks in once the user has actually shrunk the window (and on
+       Linux, where the native title bar takes its height out of the content). */
+    @media (max-height: 500px) {
       .content { padding: 14px 18px 12px; gap: 10px; }
-      .timer-card { padding: 12px; gap: 6px; }
+      .timer-card { padding: 14px; gap: 6px; }
       .time { font-size: 38px; }
     }
   </style>

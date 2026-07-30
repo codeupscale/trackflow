@@ -2032,6 +2032,10 @@ function startSelfRemovalWatcher() {
 }
 
 async function initializeApp() {
+    // Install the application menu before any window exists, so Electron's stock
+    // default menu never gets a chance to render into a framed window.
+    buildAppMenu();
+
     // Register theme handler early — needed by both login and main windows
     ipcMain.removeHandler("get-theme");
     ipcMain.handle("get-theme", () => getOSTheme());
@@ -2687,6 +2691,76 @@ async function initializeApp() {
     // auto-resume that starts a timer ~2s later fires its own state notif (the
     // state genuinely changes, so the debounce lets it through).
     notifyTrackingState("startup");
+}
+
+/**
+ * Install the application menu.
+ *
+ * Previously no menu was ever set, so Electron installed its stock default. That
+ * was invisible while the window was frameless, but a real window would render
+ * that default menu bar (File/Edit/View/Window/Help, complete with Reload and
+ * Toggle DevTools) INSIDE the frame on Windows/Linux — clutter on a compact
+ * tracker, and it hands end users a reload button.
+ *
+ *   - Windows/Linux: no menu at all. Chromium still handles clipboard and
+ *     undo/redo inside text inputs natively, so the login form is unaffected.
+ *   - macOS: a menu is NOT optional — without one, Cmd+C/V/A, Cmd+W, Cmd+M and
+ *     Cmd+Q all stop working, because on macOS those live in the menu bar rather
+ *     than in the window. This builds the minimum standard set.
+ *
+ * Cmd+W maps to the window's close, which HIDES to tray (see the 'close' handler
+ * in createPopupWindow) — so it tucks the window away without stopping a timer,
+ * exactly like the red button.
+ */
+function buildAppMenu() {
+    if (process.platform !== "darwin") {
+        Menu.setApplicationMenu(null);
+        return;
+    }
+
+    Menu.setApplicationMenu(
+        Menu.buildFromTemplate([
+            {
+                label: app.name,
+                submenu: [
+                    { role: "about" },
+                    { type: "separator" },
+                    { role: "hide" },
+                    { role: "hideOthers" },
+                    { role: "unhide" },
+                    { type: "separator" },
+                    // 'quit' runs before-quit → graceful timer stop + queue flush.
+                    { role: "quit" },
+                ],
+            },
+            {
+                label: "Edit",
+                submenu: [
+                    { role: "undo" },
+                    { role: "redo" },
+                    { type: "separator" },
+                    { role: "cut" },
+                    { role: "copy" },
+                    { role: "paste" },
+                    { role: "selectAll" },
+                ],
+            },
+            {
+                label: "Window",
+                submenu: [
+                    { role: "minimize" },
+                    // Hides to tray rather than destroying — the timer keeps running.
+                    { role: "close", label: "Close Window" },
+                    { type: "separator" },
+                    {
+                        label: "Show TrackFlow",
+                        accelerator: "CmdOrCtrl+Shift+T",
+                        click: () => showPopup(),
+                    },
+                ],
+            },
+        ]),
+    );
 }
 
 function createTray() {
@@ -6196,11 +6270,26 @@ function createLoginWindow() {
 
     loginWindow = new BrowserWindow({
         width: 400,
-        height: 500,
-        frame: false, // Custom titlebar for identical look on macOS/Windows/Linux
+        // 520, up from 500: the branded header row grew from 32px to 40px, and the
+        // form needs to stay clear of the bottom edge once the inline error message
+        // appears (this dialog is deliberately not resizable, so it cannot grow).
+        height: 520,
+        // 400x520 is the CONTENT box. Linux gets a real native title bar, whose
+        // height would otherwise be taken OUT of the content area and clip the
+        // bottom of a fixed-size, non-resizable form.
+        useContentSize: true,
+        // Sign-in stays a fixed-size dialog, but it gets the same native window
+        // controls as the main window — the first screen users see should not be
+        // the one place the app looks like a frameless widget.
         resizable: false,
+        maximizable: false,
         center: true,
-        backgroundColor: "#0a0a0a",
+        title: "Sign in to TrackFlow",
+        backgroundColor: "#121110", // matches --bg-primary (was a stale #0a0a0a)
+        ...WindowGeometry.resolveWindowChrome(process.platform, {
+            background: "#121110",
+            symbol: "#a8a29e",
+        }),
         webPreferences: {
             preload: path.join(__dirname, "..", "preload", "index.js"),
             contextIsolation: true,
