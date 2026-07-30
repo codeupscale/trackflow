@@ -210,7 +210,13 @@ html.platform-win .titlebar { padding-right: 138px; }
   margin-bottom: 8px;
 }
 .logo svg {
-  width: 160px;
+  /* 97px, not 160px. The lockup's viewBox used to be `0 0 880 200` while its ink
+     only ran x=14..544 (measured with getBBox), so ~336 units of trailing
+     whitespace were baked into the asset: `text-align: center` dutifully centred
+     the BOX, leaving the visible artwork ~29px left of centre. The viewBox is now
+     cropped to the ink, and the width is scaled to match so the lockup renders at
+     exactly the same size it always did — just actually centred. */
+  width: 97px;
   height: auto;
 }
 .logo-light { display: none; }

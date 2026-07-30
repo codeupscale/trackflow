@@ -6278,11 +6278,19 @@ function createLoginWindow() {
         // height would otherwise be taken OUT of the content area and clip the
         // bottom of a fixed-size, non-resizable form.
         useContentSize: true,
-        // Sign-in stays a fixed-size dialog, but it gets the same native window
-        // controls as the main window — the first screen users see should not be
-        // the one place the app looks like a frameless widget.
-        resizable: false,
-        maximizable: false,
+        // Sign-in gets the same native window controls as the main window — the
+        // first screen users see should not be the one place the app looks like a
+        // frameless widget.
+        //
+        // It is RESIZABLE (floored at its design size) purely so the zoom button
+        // is live: macOS greys out the third traffic light on a non-resizable
+        // window, which reads as a broken green light rather than a deliberate
+        // constraint. The form is centred in `.main`, so extra room just adds
+        // margin around it.
+        resizable: true,
+        maximizable: true,
+        minWidth: 400,
+        minHeight: 520,
         center: true,
         title: "Sign in to TrackFlow",
         backgroundColor: "#121110", // matches --bg-primary (was a stale #0a0a0a)
