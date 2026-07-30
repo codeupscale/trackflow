@@ -2718,19 +2718,39 @@ function buildAppMenu() {
         return;
     }
 
+    // Every user-facing name here is the LITERAL "TrackFlow", never `app.name`.
+    //
+    // `app.name` is "trackflow-agent" — package.json's `name`. The capitalised
+    // "TrackFlow" lives in `build.productName`, which is electron-builder config
+    // that Electron never reads at runtime, so the menu would otherwise read
+    // "trackflow-agent" / "Hide trackflow-agent" / "Quit trackflow-agent" in the
+    // packaged app. The roles below derive their default labels from `app.name`
+    // too, hence the explicit overrides.
+    //
+    // Do NOT "fix" this by adding a top-level `productName` or calling
+    // app.setName(): `app.getPath('userData')` is built from app.name, so
+    // renaming it moves the data directory from
+    // ~/Library/Application Support/trackflow-agent to .../TrackFlow and orphans
+    // every existing install's tokens.enc (forced re-login for everyone),
+    // offline-queue.db (PERMANENT loss of time tracked offline but not yet
+    // synced), offline-screenshots/ and user-prefs.json. Same failure class as
+    // bugs/desktop-signout-quit-unsynced-time-lost.md. The cosmetic win is not
+    // worth the data.
+    const APP_LABEL = "TrackFlow";
+
     Menu.setApplicationMenu(
         Menu.buildFromTemplate([
             {
-                label: app.name,
+                label: APP_LABEL,
                 submenu: [
-                    { role: "about" },
+                    { role: "about", label: `About ${APP_LABEL}` },
                     { type: "separator" },
-                    { role: "hide" },
+                    { role: "hide", label: `Hide ${APP_LABEL}` },
                     { role: "hideOthers" },
                     { role: "unhide" },
                     { type: "separator" },
                     // 'quit' runs before-quit → graceful timer stop + queue flush.
-                    { role: "quit" },
+                    { role: "quit", label: `Quit ${APP_LABEL}` },
                 ],
             },
             {
