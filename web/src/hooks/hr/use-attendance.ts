@@ -17,6 +17,7 @@ interface AttendanceFilters {
 interface TeamAttendanceFilters {
   department_id?: string | null;
   user_id?: string | null;
+  search?: string | null;
   start_date?: string;
   end_date?: string;
   page?: number;
@@ -55,6 +56,7 @@ export function useTeamAttendance(filters?: TeamAttendanceFilters) {
       const params = buildParams({
         department_id: filters?.department_id,
         user_id: filters?.user_id,
+        search: filters?.search,
         start_date: filters?.start_date,
         end_date: filters?.end_date,
         page: filters?.page,
