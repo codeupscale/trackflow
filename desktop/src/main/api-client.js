@@ -193,71 +193,46 @@ class ApiClient {
   }
 
   /**
-   * Start a timer.
+   * Liveness probe for the sync worker's health gate.
    *
-   * BUG 1 FIX: `startedAt` (ISO8601) is the REAL local start time from the SQLite
-   * `timer_sessions` row (the local source of truth). It MUST be sent on every
-   * start — both the live start and reconcile/offline start passes — so the
-   * server records the true start instead of defaulting to now() at reconcile
-   * time (which silently loses the offline hours). The backend honors it
-   * (validated: <= now+5min, >= now-24h). 200 and 201 are both success.
-   */
-  async startTimer(projectId = null, idempotencyKey = null, startedAt = null) {
-    const payload = { project_id: projectId };
-    if (idempotencyKey) payload.idempotency_key = idempotencyKey;
-    if (startedAt) payload.started_at = startedAt;
-    const res = await this.client.post('/timer/start', payload, {
-      timeout: 10000, // Timer operations: 10s timeout
-    });
-    return res.data;
-  }
-
-  /**
-   * Stop a timer.
+   * Uses /health/live, NOT /health: the full health check probes S3 and counts failed
+   * jobs, which is far too expensive for every agent to poll on a 60s cadence. All the
+   * gate needs to know is whether spending a real request is worth it.
    *
-   * BUG 3 FIX: `data.time_entry_id` (server uuid) MUST be sent on every
-   * reconcile/offline stop so the server closes the INTENDED entry and never a
-   * newer (live) session opened after this one. Optional `started_at`/`ended_at`
-   * (ISO8601) are offline overrides; `idempotency_key` makes lost-response
-   * replays safe. Caller treats 404 (entry not found) as already-synced success.
+   * Unauthenticated and short-timeout by design, and it NEVER throws — the caller
+   * treats any failure as "offline", which is always the safe interpretation.
    */
-  async stopTimer(data = {}) {
-    const res = await this.client.post('/timer/stop', data, {
-      timeout: 10000, // Timer operations: 10s timeout
-    });
-    return res.data;
+  async checkHealth() {
+    try {
+      const res = await this.client.get('/health/live', {
+        timeout: 5000,
+        // Skip the auth-refresh interceptor path: a liveness probe must never be able
+        // to trigger a token refresh, let alone a logout.
+        headers: { Authorization: undefined },
+      });
+      return res.status === 200;
+    } catch {
+      return false;
+    }
   }
 
   /**
-   * Pause the running timer (freeze elapsed on server; entry stays open).
+   * Push local work sessions to the server (one-way upsert).
+   *
+   * This is the ONLY call that writes tracked time. Each session carries the
+   * client-generated uuid the server upserts on and the local revision, so a replay is
+   * a no-op and an out-of-order arrival cannot overwrite newer data.
+   *
+   * The generous timeout is deliberate: a batch of 100 sessions after a long offline
+   * stretch does real work server-side, and a timeout here means the agent retries an
+   * upsert the server may already have applied — safe, but wasteful.
    */
-  async pauseTimer({ pausedAt = null, reason = 'idle' } = {}) {
-    const payload = { pause_reason: reason };
-    if (pausedAt) payload.paused_at = pausedAt;
-    const res = await this.client.post('/timer/pause', payload, {
-      timeout: 10000,
-    });
-    return res.data;
-  }
-
-  /**
-   * Resume a paused timer.
-   */
-  async resumeTimer() {
-    const res = await this.client.post('/timer/resume', {}, {
-      timeout: 10000,
-    });
-    return res.data;
-  }
-
-  /**
-   * Atomically switch the running timer to a different project.
-   * Stops the current entry and starts a new one in a single server transaction.
-   */
-  async switchProject(projectId, taskId = null) {
-    const payload = { project_id: projectId };
-    if (taskId) payload.task_id = taskId;
-    const res = await this.client.post('/timer/switch', payload);
+  async syncSessions(sessions) {
+    const res = await this.client.post(
+      '/timer/sessions/sync',
+      { sessions },
+      { timeout: 30000 },
+    );
     return res.data;
   }
 
@@ -350,10 +325,10 @@ class ApiClient {
     return Array.isArray(body) ? body : (body.data || body.projects || []);
   }
 
-  async reportIdleTime(data) {
-    const res = await this.client.post('/timer/idle', data);
-    return res.data;
-  }
+  // reportIdleTime() is gone with POST /timer/idle. Idle decisions are now resolved
+  // LOCALLY (the live session is closed at idleStartedAt and, for "continue tracking",
+  // a fresh one opened at now) and carried up by the ordinary session sync. Idle time is
+  // never credited as work, which was the point of the server-side wall.
 
   async deleteTimeEntry(entryId) {
     const res = await this.client.delete(`/time-entries/${entryId}`);

@@ -35,6 +35,35 @@ class TimerServiceTest extends TestCase
     }
 
     /**
+     * Open a live session directly.
+     *
+     * These tests used TimerService::start() purely as a FIXTURE — they assert on
+     * status(), todayTotal() and processHeartbeat(), not on starting. start() is gone
+     * (the desktop agent owns session creation and pushes via TimeEntrySyncService), so
+     * this creates the same end state: an open entry plus the Redis timer key that the
+     * read paths key off.
+     */
+    private function openSession(array $attributes = []): TimeEntry
+    {
+        $entry = TimeEntry::create(array_merge([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'started_at' => now(),
+            'type' => 'tracked',
+        ], $attributes));
+
+        Redis::setex("timer:{$this->user->id}", 2592000, json_encode([
+            'entry_id' => $entry->id,
+            'started_at' => $entry->started_at->toISOString(),
+            'project_id' => $entry->project_id,
+            'task_id' => $entry->task_id,
+            'state' => 'running',
+        ]));
+
+        return $entry;
+    }
+
+    /**
      * Pin the clock to a safe mid-day UTC instant (10:00 UTC = 15:00 PKT) before any data
      * setup. The test user's timezone is Asia/Karachi (UTC+5); todayTotal()/status() compute
      * day boundaries in that zone. When the suite runs between 19:00–24:00 UTC, the PKT "today"
@@ -46,180 +75,6 @@ class TimerServiceTest extends TestCase
     private function freezeMidday(): void
     {
         $this->travelTo(\Illuminate\Support\Carbon::create(2026, 7, 6, 10, 0, 0, 'UTC'));
-    }
-
-    // ─── start() ──────────────────────────────────────────────────────
-
-    public function test_start_creates_time_entry_and_sets_redis(): void
-    {
-        $entry = $this->service->start([]);
-
-        $this->assertInstanceOf(TimeEntry::class, $entry);
-        $this->assertEquals($this->user->id, $entry->user_id);
-        $this->assertEquals($this->org->id, $entry->organization_id);
-        $this->assertEquals('tracked', $entry->type);
-        $this->assertNotNull($entry->started_at);
-        $this->assertNull($entry->ended_at);
-        $this->assertNull($entry->duration_seconds);
-
-        // Verify Redis key was set
-        $redisKey = "timer:{$this->user->id}";
-        $data = json_decode(Redis::get($redisKey), true);
-        $this->assertEquals($entry->id, $data['entry_id']);
-        $this->assertNotNull($data['started_at']);
-    }
-
-    public function test_start_with_project_id(): void
-    {
-        $project = Project::factory()->create([
-            'organization_id' => $this->org->id,
-        ]);
-        // Assign employee to project
-        $project->members()->attach($this->user->id);
-
-        $entry = $this->service->start(['project_id' => $project->id]);
-
-        $this->assertEquals($project->id, $entry->project_id);
-    }
-
-    public function test_start_with_task_id_and_notes(): void
-    {
-        $entry = $this->service->start([
-            'task_id' => null,
-            'notes' => 'Working on feature X',
-        ]);
-
-        $this->assertEquals('Working on feature X', $entry->notes);
-    }
-
-    public function test_start_throws_authorization_exception_for_unassigned_project(): void
-    {
-        $project = Project::factory()->create([
-            'organization_id' => $this->org->id,
-        ]);
-        // Do NOT assign the employee to the project
-
-        $this->expectException(AuthorizationException::class);
-        $this->expectExceptionMessage('You are not assigned to this project.');
-
-        $this->service->start(['project_id' => $project->id]);
-    }
-
-    public function test_start_allows_admin_on_any_project(): void
-    {
-        $admin = $this->createUser($this->org, 'org_manager');
-        $this->actingAs($admin, 'sanctum');
-
-        $project = Project::factory()->create([
-            'organization_id' => $this->org->id,
-        ]);
-        // Admin is NOT explicitly assigned, but hasRole('admin') returns true in isAssignedTo
-
-        $result = (new TimerService())->start(['project_id' => $project->id]);
-        $this->assertEquals($project->id, $result['entry']->project_id);
-    }
-
-    public function test_start_throws_when_project_belongs_to_different_org(): void
-    {
-        $otherOrg = $this->createOrganization();
-        $otherProject = Project::factory()->create([
-            'organization_id' => $otherOrg->id,
-        ]);
-
-        $this->expectException(\Illuminate\Database\Eloquent\ModelNotFoundException::class);
-        $this->service->start(['project_id' => $otherProject->id]);
-    }
-
-    public function test_start_dispatches_timer_started_event(): void
-    {
-        \Illuminate\Support\Facades\Event::fake([\App\Events\TimerStarted::class]);
-
-        $entry = $this->service->start([]);
-
-        \Illuminate\Support\Facades\Event::assertDispatched(\App\Events\TimerStarted::class, function ($event) use ($entry) {
-            return $event->entry->id === $entry->id;
-        });
-    }
-
-    // ─── stop() ──────────────────────────────────────────────────────
-
-    public function test_stop_finalizes_entry_and_clears_redis(): void
-    {
-        // Start a timer first
-        $entry = $this->service->start([]);
-        $entryId = $entry->id;
-
-        // Wait a tiny bit for duration calculation
-        sleep(1);
-
-        $stopped = $this->service->stop();
-
-        $this->assertEquals($entryId, $stopped->id);
-        $this->assertNotNull($stopped->ended_at);
-        $this->assertNotNull($stopped->duration_seconds);
-        $this->assertGreaterThanOrEqual(1, $stopped->duration_seconds);
-
-        // Redis should be cleared
-        $redisKey = "timer:{$this->user->id}";
-        $this->assertNull(Redis::get($redisKey));
-    }
-
-    public function test_stop_throws_when_no_timer_running(): void
-    {
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('No timer is currently running.');
-
-        $this->service->stop();
-    }
-
-    public function test_stop_dispatches_timer_stopped_event(): void
-    {
-        $this->service->start([]);
-
-        \Illuminate\Support\Facades\Event::fake([\App\Events\TimerStopped::class]);
-
-        $stopped = $this->service->stop();
-
-        \Illuminate\Support\Facades\Event::assertDispatched(\App\Events\TimerStopped::class, function ($event) use ($stopped) {
-            return $event->entry->id === $stopped->id;
-        });
-    }
-
-    public function test_stop_computes_final_activity_score_from_logs(): void
-    {
-        $entry = $this->service->start([]);
-
-        // Create activity logs for this entry
-        ActivityLog::factory()->create([
-            'organization_id' => $this->org->id,
-            'user_id' => $this->user->id,
-            'time_entry_id' => $entry->id,
-            'keyboard_events' => 150,
-            'mouse_events' => 150,
-        ]);
-        ActivityLog::factory()->create([
-            'organization_id' => $this->org->id,
-            'user_id' => $this->user->id,
-            'time_entry_id' => $entry->id,
-            'keyboard_events' => 300,
-            'mouse_events' => 0,
-        ]);
-
-        $stopped = $this->service->stop();
-
-        // Score = avg of [min(100, round(300/300*100)), min(100, round(300/300*100))] = avg(100, 100) = 100
-        $this->assertNotNull($stopped->activity_score);
-        $this->assertEquals(100, $stopped->activity_score);
-    }
-
-    public function test_stop_returns_null_activity_score_when_no_logs(): void
-    {
-        $entry = $this->service->start([]);
-        $stopped = $this->service->stop();
-
-        // No activity logs, so computeFinalActivityScore returns null
-        // The fallback is $entry->activity_score ?? 0
-        $this->assertEquals(0, $stopped->activity_score);
     }
 
     // ─── status() ────────────────────────────────────────────────────
@@ -237,7 +92,7 @@ class TimerServiceTest extends TestCase
 
     public function test_status_when_timer_is_running(): void
     {
-        $entry = $this->service->start([]);
+        $entry = $this->openSession();
 
         $status = $this->service->status();
 
@@ -369,6 +224,42 @@ class TimerServiceTest extends TestCase
         $this->assertEquals(3600, $status['all_projects_today_total']);
     }
 
+    /**
+     * Redis is a cache, not the source of truth. When the key is evicted or Redis
+     * restarts, status() must recover the live session from the DB and REPAIR the key —
+     * otherwise the web dashboard shows the user as idle while they are tracking.
+     *
+     * (Moved here from the retired TimerSyncTest, which otherwise only covered the
+     * deleted start/stop RPC. The session is created directly rather than via the old
+     * TimerService::start(), which no longer exists.)
+     */
+    public function test_status_falls_back_to_db_when_redis_key_missing(): void
+    {
+        $startedAt = now()->subMinutes(5);
+        $entry = TimeEntry::create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'started_at' => $startedAt,
+            'type' => 'tracked',
+        ]);
+
+        Redis::del("timer:{$this->user->id}");
+
+        $status = $this->service->status();
+
+        $this->assertTrue($status['running'], 'status() must report running when DB has an open entry.');
+        $this->assertEquals($entry->id, $status['entry']->id);
+        $this->assertGreaterThan(0, $status['elapsed_seconds']);
+        $this->assertEqualsWithDelta(
+            $startedAt->timestamp,
+            $status['entry']->started_at->timestamp,
+            2,
+            'Redis repair must preserve the real started_at.'
+        );
+
+        $this->assertNotNull(Redis::get("timer:{$this->user->id}"), 'status() must repair the evicted key.');
+    }
+
     public function test_status_running_all_projects_total_is_global_and_includes_elapsed(): void
     {
         $this->freezeMidday();
@@ -389,7 +280,7 @@ class TimerServiceTest extends TestCase
         ]);
 
         // Start a running timer on project A.
-        $this->service->start(['project_id' => $projectA->id]);
+        $this->openSession(['project_id' => $projectA->id]);
 
         // Request status scoped to project A.
         $status = $this->service->status($projectA->id);
@@ -398,43 +289,6 @@ class TimerServiceTest extends TestCase
         $this->assertLessThan(3600, $status['today_total']);
         // all_projects_today_total includes project B's completed hour + A's elapsed.
         $this->assertGreaterThanOrEqual(3600, $status['all_projects_today_total']);
-    }
-
-    // ─── Multi-tenancy isolation ─────────────────────────────────────
-
-    public function test_start_isolates_entries_by_organization(): void
-    {
-        // Create entry for org A
-        $entryA = $this->service->start([]);
-
-        // Create user in org B
-        $orgB = $this->createOrganization();
-        $userB = $this->createUser($orgB, 'employee');
-        $this->actingAs($userB, 'sanctum');
-
-        $serviceB = new TimerService();
-        $entryB = $serviceB->start([]);
-
-        $this->assertNotEquals($entryA->organization_id, $entryB->organization_id);
-        $this->assertEquals($this->org->id, $entryA->organization_id);
-        $this->assertEquals($orgB->id, $entryB->organization_id);
-    }
-
-    public function test_stop_cannot_stop_another_users_timer(): void
-    {
-        // Start timer for user A
-        $this->service->start([]);
-
-        // Switch to user B (same org)
-        $userB = $this->createUser($this->org, 'employee');
-        $this->actingAs($userB, 'sanctum');
-
-        $serviceB = new TimerService();
-
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('No timer is currently running.');
-
-        $serviceB->stop();
     }
 
     // ─── todayTotal() ────────────────────────────────────────────────
@@ -480,7 +334,7 @@ class TimerServiceTest extends TestCase
         ]);
 
         // Start a running timer
-        $this->service->start([]);
+        $this->openSession();
 
         $total = $this->service->todayTotal();
 
@@ -548,7 +402,7 @@ class TimerServiceTest extends TestCase
 
     public function test_process_heartbeat_creates_activity_log(): void
     {
-        $entry = $this->service->start([]);
+        $entry = $this->openSession();
 
         $log = $this->service->processHeartbeat([
             'keyboard_events' => 100,
@@ -577,7 +431,7 @@ class TimerServiceTest extends TestCase
 
     public function test_process_heartbeat_updates_activity_score_ema(): void
     {
-        $entry = $this->service->start([]);
+        $entry = $this->openSession();
 
         // First heartbeat — sets initial score
         $this->service->processHeartbeat([
@@ -601,7 +455,7 @@ class TimerServiceTest extends TestCase
 
     public function test_process_heartbeat_updates_user_last_active_at(): void
     {
-        $this->service->start([]);
+        $this->openSession();
 
         $beforeUpdate = $this->user->last_active_at;
 
@@ -612,170 +466,6 @@ class TimerServiceTest extends TestCase
 
         $this->user->refresh();
         $this->assertNotNull($this->user->last_active_at);
-    }
-
-    // ─── pause() ─────────────────────────────────────────────────────
-
-    public function test_pause_freezes_timer_without_creating_idle_entry(): void
-    {
-        $project = Project::factory()->create(['organization_id' => $this->org->id]);
-        $project->members()->attach($this->user->id);
-
-        $this->service->start(['project_id' => $project->id]);
-
-        $pausedEntry = $this->service->pause();
-
-        // pause() is a soft pause: the entry stays OPEN (no ended_at) and the timer is
-        // marked 'paused' in Redis so elapsed freezes. resume() then continues the same
-        // entry (see test_pause_freezes_elapsed_and_resume_restores_running).
-        $this->assertNull($pausedEntry->ended_at);
-
-        $meta = json_decode(Redis::get("timer:{$this->user->id}"), true);
-        $this->assertSame('paused', $meta['state']);
-
-        // Verify no idle entry was created (zero-duration idle entries were removed
-        // because they corrupted duration totals and reports)
-        $idleEntry = TimeEntry::withoutGlobalScopes()
-            ->where('user_id', $this->user->id)
-            ->where('type', 'idle')
-            ->latest('id')
-            ->first();
-
-        $this->assertNull($idleEntry);
-    }
-
-    // ─── reportIdle() ────────────────────────────────────────────────
-
-    public function test_report_idle_discard_action(): void
-    {
-        $entry = $this->service->start([]);
-        $entryId = $entry->id;
-
-        $idleStart = now()->subMinutes(5);
-        $idleEnd = now();
-
-        $result = $this->service->reportIdle([
-            'idle_started_at' => $idleStart->toISOString(),
-            'idle_ended_at' => $idleEnd->toISOString(),
-            'idle_seconds' => 300,
-            'action' => 'discard',
-        ]);
-
-        // Original entry should be shortened
-        $originalEntry = TimeEntry::withoutGlobalScopes()->find($entryId);
-        $this->assertNotNull($originalEntry->ended_at);
-
-        // Idle entry should be created
-        $this->assertNotNull($result['idle_entry']);
-        $this->assertEquals('idle', $result['idle_entry']->type);
-
-        // New running entry should be created
-        $this->assertNotNull($result['new_entry']);
-        $this->assertEquals('tracked', $result['new_entry']->type);
-        $this->assertNull($result['new_entry']->ended_at);
-
-        // Redis should point to the new entry
-        $redisData = json_decode(Redis::get("timer:{$this->user->id}"), true);
-        $this->assertEquals($result['new_entry']->id, $redisData['entry_id']);
-    }
-
-    public function test_report_idle_returns_nulls_when_no_timer(): void
-    {
-        $result = $this->service->reportIdle([
-            'idle_started_at' => now()->subMinutes(5)->toISOString(),
-            'idle_ended_at' => now()->toISOString(),
-            'idle_seconds' => 300,
-            'action' => 'discard',
-        ]);
-
-        $this->assertNull($result['idle_entry']);
-        $this->assertNull($result['new_entry']);
-    }
-
-    public function test_report_idle_reassign_on_stopped_timer_splits_closed_entry(): void
-    {
-        // Scenario: user reassigned idle time while offline, then stopped the timer
-        // before the offline queue flushed. By flush time the timer is stopped (no
-        // Redis) and the entry is closed. The reassign must still split the CLOSED
-        // entry historically — WITHOUT resurrecting a running timer.
-        $target = Project::factory()->create(['organization_id' => $this->org->id]);
-        $target->members()->attach($this->user->id);
-
-        $start = now()->subMinutes(10);
-        $end = now();
-        $closed = TimeEntry::factory()->create([
-            'organization_id' => $this->org->id,
-            'user_id' => $this->user->id,
-            'project_id' => null, // original (default) project
-            'started_at' => $start,
-            'ended_at' => $end,
-            'duration_seconds' => 600,
-            'type' => 'tracked',
-        ]);
-
-        $idleStart = (clone $start)->addMinutes(1); // 1 min of work, then idle
-        $idleEnd = (clone $start)->addMinutes(8);   // 7 min idle window
-
-        // No Redis timer set — timer is stopped.
-        $result = $this->service->reportIdle([
-            'time_entry_id' => $closed->id,
-            'idle_started_at' => $idleStart->toISOString(),
-            'idle_ended_at' => $idleEnd->toISOString(),
-            'idle_seconds' => 420,
-            'action' => 'reassign',
-            'project_id' => $target->id,
-        ]);
-
-        // No running timer reopened.
-        $this->assertNull($result['new_entry']);
-        $this->assertNotNull($result['idle_entry']);
-        $this->assertNull(Redis::get("timer:{$this->user->id}"));
-
-        // Original entry shortened to idle-start.
-        $orig = TimeEntry::withoutGlobalScopes()->find($closed->id);
-        $this->assertEqualsWithDelta($idleStart->timestamp, $orig->ended_at->timestamp, 1);
-
-        // Reassigned tracked entry on the target project for the full idle window.
-        $reassigned = TimeEntry::withoutGlobalScopes()
-            ->where('project_id', $target->id)->where('type', 'tracked')->first();
-        $this->assertNotNull($reassigned);
-        $this->assertEqualsWithDelta(420, $reassigned->duration_seconds, 1);
-
-        // Post-idle remainder on the original project — CLOSED (not running).
-        $remainder = TimeEntry::withoutGlobalScopes()
-            ->where('id', '!=', $closed->id)
-            ->where('type', 'tracked')
-            ->whereNull('project_id')
-            ->first();
-        $this->assertNotNull($remainder);
-        $this->assertNotNull($remainder->ended_at);
-        $this->assertEqualsWithDelta($end->timestamp, $remainder->ended_at->timestamp, 1);
-
-        // Idempotent: a replay finds the entry already shortened and no-ops.
-        $again = $this->service->reportIdle([
-            'time_entry_id' => $closed->id,
-            'idle_started_at' => $idleStart->toISOString(),
-            'idle_ended_at' => $idleEnd->toISOString(),
-            'idle_seconds' => 420,
-            'action' => 'reassign',
-            'project_id' => $target->id,
-        ]);
-        $this->assertNull($again['idle_entry']);
-        $this->assertNull($again['new_entry']);
-    }
-
-    // ─── Edge cases ──────────────────────────────────────────────────
-
-    public function test_start_stop_start_cycle_works(): void
-    {
-        $entry1 = $this->service->start([]);
-        $this->service->stop();
-
-        $entry2 = $this->service->start([]);
-        $this->assertNotEquals($entry1->id, $entry2->id);
-
-        $stopped = $this->service->stop();
-        $this->assertEquals($entry2->id, $stopped->id);
     }
 
     public function test_today_total_excludes_yesterday_entries(): void

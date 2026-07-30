@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Models\Scopes\GlobalOrganizationScope;
+use App\Models\TimeEntry;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
@@ -48,9 +50,10 @@ class AuthTokenService
     /**
      * On a desktop sign-in, take over the single desktop slot (last-login-wins):
      *
-     *  - Close any timer left open by a crashed / uninstalled / force-killed agent.
-     *    The entry is ended at its last heartbeat, so phantom "non-tracked" time
-     *    after the agent stopped reporting is discarded, never counted.
+     *  - Close any timer left open by a crashed / uninstalled / force-killed agent,
+     *    but ONLY once it has gone quiet (see below). The entry is ended at its last
+     *    heartbeat, so phantom "non-tracked" time after the agent stopped reporting is
+     *    discarded, never counted.
      *  - Revoke every previous DESKTOP token for the account, on any device. The
      *    prior machine's next request 401s and it logs itself out.
      *
@@ -62,11 +65,47 @@ class AuthTokenService
      */
     public function terminatePreviousDesktopSessions(User $user): void
     {
-        if ($this->timerService->userHasOpenTimer($user)) {
+        if ($this->hasAbandonedOpenTimer($user)) {
             $this->timerService->closeStaleOpenTimer($user);
         }
 
         $this->revokeAllDesktopTokens($user);
+    }
+
+    /**
+     * True when the user's open timer really is abandoned, rather than actively being
+     * tracked offline by an agent that simply has not synced yet.
+     *
+     * Under offline-first tracking an OPEN entry is no longer evidence of a dead
+     * session: the desktop holds the live session in local SQLite and pushes it on a
+     * ~60s cadence, so a laptop tracking on a plane legitimately leaves an open server
+     * entry untouched for hours. Force-closing it on the next sign-in would truncate
+     * real work at its last heartbeat, and the agent's next push would then have to
+     * re-extend an entry login had just closed — a pointless fight between two writers.
+     *
+     * `client_synced_at` is the liveness signal: it is stamped on every successful
+     * push. Only close when the agent has been silent for longer than the offline grace
+     * window. A legacy entry that predates the column (null `client_synced_at`) falls
+     * back to `started_at`, preserving the old behaviour for anything genuinely stale.
+     */
+    private function hasAbandonedOpenTimer(User $user): bool
+    {
+        $entry = TimeEntry::withoutGlobalScope(GlobalOrganizationScope::class)
+            ->where('user_id', $user->id)
+            ->where('organization_id', $user->organization_id)
+            ->whereNull('ended_at')
+            ->whereNull('deleted_at')
+            ->latest('started_at')
+            ->first();
+
+        if ($entry === null) {
+            return false;
+        }
+
+        $graceMinutes = (int) config('timer.offline_grace_minutes', 240);
+        $lastContact = $entry->client_synced_at ?? $entry->started_at;
+
+        return $lastContact->lt(now()->subMinutes($graceMinutes));
     }
 
     private function revokeAllDesktopTokens(User $user): void

@@ -41,12 +41,13 @@ class CleanupStaleEntries extends Command
         $graceMinutes = (int) config('timer.offline_grace_minutes', 240);
         $threshold = Carbon::now()->subMinutes($graceMinutes);
         $closed = 0;
+        $maxDuration = (int) config('timer.max_entry_duration', self::MAX_ENTRY_DURATION);
 
         // Find all running entries (ended_at IS NULL, type = tracked)
         TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->whereNull('ended_at')
             ->where('type', 'tracked')
-            ->chunkById(200, function ($entries) use ($threshold, &$closed) {
+            ->chunkById(200, function ($entries) use ($threshold, $maxDuration, &$closed) {
                 // Batch-fetch last heartbeat for all entries in this chunk (avoid N+1)
                 $entryIds = $entries->pluck('id');
                 $lastHeartbeats = ActivityLog::whereIn('time_entry_id', $entryIds)
@@ -62,22 +63,34 @@ class CleanupStaleEntries extends Command
                         ? Carbon::parse($lastHeartbeat)
                         : null;
 
-                    // If no heartbeat exists, use started_at as the reference
+                    // LIVENESS: `client_synced_at` is stamped on every successful agent
+                    // push (~60s cadence), which makes it a far sharper signal than the
+                    // last heartbeat — offline heartbeats arrive in one burst long after
+                    // capture, so an agent can look silent for hours while perfectly
+                    // healthy. Take the MOST RECENT evidence of life from either source;
+                    // an entry is only stale when BOTH have gone quiet.
+                    $lastContact = $entry->client_synced_at;
                     $referenceTime = $lastActive ?? $entry->started_at;
+                    if ($lastContact !== null && $lastContact->gt($referenceTime)) {
+                        $referenceTime = $lastContact;
+                    }
 
-                    // Skip if still within the 30-minute threshold
+                    // Skip while the agent is still demonstrably alive.
                     if ($referenceTime->gt($threshold)) {
                         continue;
                     }
 
-                    // Close the stale entry: set ended_at to last known activity
+                    // Close the stale entry AT its last known activity, never at now() —
+                    // dead time after the agent went silent is discarded, not billed.
+                    // client_synced_at is deliberately NOT used as the close point: it
+                    // proves the agent was alive, not that the user was working.
                     $endedAt = $lastActive ?? $entry->started_at;
                     $duration = (int) abs($endedAt->diffInSeconds($entry->started_at));
 
                     // Cap duration to prevent runaway entries from corrupting reports
-                    $duration = min($duration, self::MAX_ENTRY_DURATION);
-                    if ($duration === self::MAX_ENTRY_DURATION) {
-                        $endedAt = $entry->started_at->copy()->addSeconds(self::MAX_ENTRY_DURATION);
+                    $duration = min($duration, $maxDuration);
+                    if ($duration === $maxDuration) {
+                        $endedAt = $entry->started_at->copy()->addSeconds($maxDuration);
                     }
 
                     $entry->update([

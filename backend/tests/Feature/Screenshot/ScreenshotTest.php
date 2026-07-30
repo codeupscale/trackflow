@@ -330,21 +330,49 @@ class ScreenshotTest extends TestCase
     {
         $this->actingAs($this->employee, 'sanctum');
 
+        // The horizon tracks timer.max_past_skew (30d by default) rather than a fixed
+        // 7 days: the agent flushes its session batch BEFORE its screenshot queue, so a
+        // narrower window here would accept the time entry and then permanently 422 its
+        // evidence. Go well past the session window to prove a horizon still exists.
+        $beyond = (int) ceil(((int) config('timer.max_past_skew', 2592000)) / 86400) + 5;
+
         $ancient = TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
             'user_id'         => $this->employee->id,
-            'started_at'      => now()->subDays(30),
-            'ended_at'        => now()->subDays(30)->addHour(),
+            'started_at'      => now()->subDays($beyond),
+            'ended_at'        => now()->subDays($beyond)->addHour(),
             'duration_seconds' => 3600,
         ]);
 
         $response = $this->postJson('/api/v1/screenshots/presign', [
             'time_entry_id' => $ancient->id,
-            'captured_at'   => now()->subDays(30)->addMinutes(20)->toIso8601String(),
+            'captured_at'   => now()->subDays($beyond)->addMinutes(20)->toIso8601String(),
             'file_size'     => 500 * 1024,
         ]);
 
         $response->assertStatus(422);
+    }
+
+    public function test_presign_accepts_backfill_within_the_session_sync_window(): void
+    {
+        $this->actingAs($this->employee, 'sanctum');
+
+        // 20 days offline: beyond the old 7-day screenshot horizon but well inside the
+        // 30-day session window. Before the horizons were aligned, this session uploaded
+        // fine while every screenshot from it was silently dropped.
+        $entry = TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id'         => $this->employee->id,
+            'started_at'      => now()->subDays(20),
+            'ended_at'        => now()->subDays(20)->addHour(),
+            'duration_seconds' => 3600,
+        ]);
+
+        $this->postJson('/api/v1/screenshots/presign', [
+            'time_entry_id' => $entry->id,
+            'captured_at'   => now()->subDays(20)->addMinutes(20)->toIso8601String(),
+            'file_size'     => 500 * 1024,
+        ])->assertOk();
     }
 
     public function test_presign_requires_file_size(): void

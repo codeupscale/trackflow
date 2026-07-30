@@ -11,10 +11,18 @@ class AgentController extends Controller
 {
     public function config(Request $request): JsonResponse
     {
-        $org = $request->user()->organization;
+        $user = $request->user();
+        $org = $user->organization;
         $idleTimeout = max(1, min(30, (int) ($org->getSetting('idle_timeout', 5) ?? 5)));
 
         return response()->json([
+            // Day-boundary zone for the agent's midnight session split.
+            //
+            // MUST be the same zone TimezoneAwareDateRange uses server-side, because
+            // that is what every daily rollup keys off — reports, attendance and
+            // payroll. Splitting on the machine's local zone instead would mis-attribute
+            // hours for anyone travelling or working outside the org's zone.
+            'timezone' => $user->getTimezoneForDates(),
             'screenshot_interval' => $org->getSetting('screenshot_interval', 5),
             'idle_timeout' => $idleTimeout,
             'idle_detection' => true,
