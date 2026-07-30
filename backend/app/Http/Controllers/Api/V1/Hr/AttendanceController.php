@@ -180,12 +180,13 @@ class AttendanceController extends Controller
             'status' => ['sometimes', 'string', 'in:present,absent,half_day,on_leave,weekend,holiday'],
             'user_id' => ['sometimes', 'uuid'],
             'department_id' => ['sometimes', 'uuid'],
+            'search' => ['sometimes', 'string', 'max:100'],
             'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
         ]);
 
         $records = $this->attendanceService->getTeamAttendance(
             $request->user()->organization_id,
-            $request->only(['start_date', 'end_date', 'status', 'user_id', 'department_id', 'per_page'])
+            $request->only(['start_date', 'end_date', 'status', 'user_id', 'department_id', 'search', 'per_page'])
         );
 
         return response()->json($records);

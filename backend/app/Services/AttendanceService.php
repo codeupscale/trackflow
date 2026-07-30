@@ -461,6 +461,23 @@ class AttendanceService
             });
         }
 
+        // Free-text employee search (name / email / employee id). ANDed with the
+        // department filter, so it narrows within the selected department rather
+        // than widening across the org. LIKE wildcards are escaped so a user typing
+        // "%" or "_" gets a literal match instead of a full-table scan.
+        if (!empty($filters['search'])) {
+            $search = str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], trim($filters['search']));
+            if ($search !== '') {
+                $usersQuery->where(function ($q) use ($search) {
+                    $q->where('name', 'ilike', "%{$search}%")
+                        ->orWhere('email', 'ilike', "%{$search}%")
+                        ->orWhereHas('employeeProfile', function ($p) use ($search) {
+                            $p->where('employee_id', 'ilike', "%{$search}%");
+                        });
+                });
+            }
+        }
+
         $users = $usersQuery->orderBy('name')->get(['id', 'name', 'email', 'avatar_url']);
         $userIds = $users->pluck('id');
 
