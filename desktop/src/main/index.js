@@ -393,6 +393,13 @@ function clearRestartState() {
 let _screenPermissionDeclinedThisSession = false;
 let _screenPermissionGranted = null; // null = not checked yet, true/false after check
 
+// Set once the user answers "Skip for Now" to the pre-start permission onboarding.
+// Without it the gate re-probed and re-opened the SAME modal on every single Start,
+// so a user who had deliberately chosen to track without screenshots was blocked by
+// a dialog they had already dismissed. Session-scoped on purpose: it is cleared the
+// moment permission is actually confirmed, and a relaunch asks once more.
+let _screenPermissionSkippedThisSession = false;
+
 function checkScreenRecordingPermission() {
     if (process.platform !== "darwin") {
         _screenPermissionGranted = true;
@@ -412,6 +419,13 @@ function checkScreenRecordingPermission() {
         if (status === "granted") {
             _screenPermissionGranted = true;
             console.log("[Permission] Screen recording API status: granted");
+            // Broadcast + persist, exactly as the probe's granted path does. Without
+            // this, a banner raised earlier in the session (while status was still
+            // 'denied') was never taken down once permission actually landed, so the
+            // UI kept demanding a permission the user had already given.
+            saveScreenPermissionState(true);
+            _screenPermissionSkippedThisSession = false;
+            notifyPopup("permission-status", { granted: true });
             return true;
         }
         // For 'denied' or 'not-determined', don't trust it — force probe (API often
@@ -548,6 +562,7 @@ async function probeScreenRecordingPermission() {
                 );
                 _screenPermissionGranted = true;
                 saveScreenPermissionState(true);
+                _screenPermissionSkippedThisSession = false;
                 // Clear any "permission needed" banner — permission is confirmed.
                 notifyPopup("permission-status", { granted: true });
                 return true;
@@ -3408,7 +3423,8 @@ async function startTimer(projectId = null) {
         // is not surprised by a permission prompt mid-tracking.
         if (
             process.platform === "darwin" &&
-            _screenPermissionGranted !== true
+            _screenPermissionGranted !== true &&
+            !_screenPermissionSkippedThisSession
         ) {
             checkScreenRecordingPermission();
             if (!_screenPermissionGranted) {
@@ -3433,7 +3449,10 @@ async function startTimer(projectId = null) {
                             error: "Please grant Screen Recording permission and restart the app. Your project selection will be remembered.",
                         };
                     }
-                    // User clicked "Skip for Now" — let them track without screenshots
+                    // User clicked "Skip for Now" — let them track without screenshots,
+                    // and stop asking for the rest of this session. The banner below
+                    // still records the degraded state; only the blocking modal stops.
+                    _screenPermissionSkippedThisSession = true;
                     console.log(
                         "[Timer] User skipped permission — starting timer without screenshot capability",
                     );
@@ -3449,8 +3468,14 @@ async function startTimer(projectId = null) {
         // (loadProjects()). A stale cache is not a data-integrity risk: the sync
         // endpoint re-checks assignment and stores the entry with project_id = null
         // rather than rejecting it, so the TIME survives either way.
-        if (projectId && Array.isArray(projects) && projects.length > 0) {
-            const known = projects.some((p) => String(p.id) === String(projectId));
+        // `cachedProjects` is the module-level cache loadProjects() fills. Reading a
+        // bare `projects` here threw ReferenceError on EVERY start — an undeclared
+        // identifier always throws — which aborted the handler before the session was
+        // ever written, so the timer could not start at all.
+        if (projectId && Array.isArray(cachedProjects) && cachedProjects.length > 0) {
+            const known = cachedProjects.some(
+                (p) => String(p.id) === String(projectId),
+            );
             if (!known) {
                 _startTimerInProgress = false;
                 return { error: "You are not assigned to this project." };
