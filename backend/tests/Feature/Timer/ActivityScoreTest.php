@@ -17,12 +17,13 @@ use Tests\TestCase;
 /**
  * Activity score calculation tests.
  *
- * Uses DatabaseMigrations (not RefreshDatabase) because TimerService::start()
- * and stop() use DB::transaction() internally, and SQLite + PHP 8.4 does not
- * support nested transactions via the RefreshDatabase transaction wrapper.
+ * Uses DatabaseMigrations (not RefreshDatabase) because the sync service uses
+ * DB::transaction() internally, and SQLite + PHP 8.4 does not support nested
+ * transactions via the RefreshDatabase transaction wrapper.
  *
- * Uses Redis::shouldReceive() to mock Redis in tests that call TimerService
- * methods, because the test environment may not have a live Redis instance.
+ * Heartbeat tests still mock Redis (processHeartbeat reads the timer key); entry
+ * closing goes through closeViaSync() against live Redis, matching how the desktop
+ * agent actually finalizes a session.
  *
  * Covers:
  *   - Active-seconds model scoring (active_seconds / interval * 100)
@@ -79,64 +80,33 @@ class ActivityScoreTest extends TestCase
     }
 
     /**
-     * Helper: mock Redis for stop() call (get returns timer data, del clears it).
+     * Close an entry the way the product now does it: the desktop agent pushes the
+     * session with an `ended_at`, and TimeEntrySyncService finalizes the activity score
+     * from ActivityLog ground truth on the way through.
+     *
+     * The scoring maths itself is unchanged (it lives in HandlesTimeEntryState, shared
+     * by both services) — only the mechanism that triggers finalization moved, so these
+     * tests keep their original assertions.
      */
-    private function mockRedisForStop(TimeEntry $entry): void
+    private function closeViaSync(TimeEntry $entry, ?\Carbon\Carbon $endedAt = null): TimeEntry
     {
-        // Prevent ShouldBroadcast events from hitting Horizon's Redis job repository
-        // while the Redis facade is partially mocked.
-        Event::fake([TimerStopped::class, TimerStarted::class]);
+        if ($entry->idempotency_key === null) {
+            $entry->forceFill(['idempotency_key' => (string) \Illuminate\Support\Str::uuid()])->save();
+        }
 
-        $redisData = json_encode([
-            'entry_id' => $entry->id,
+        app(\App\Services\TimeEntrySyncService::class)->sync([[
+            'uuid' => $entry->idempotency_key,
+            'revision' => ($entry->client_revision ?? 0) + 1,
             'started_at' => $entry->started_at->toISOString(),
-            'project_id' => $entry->project_id ?? null,
-            'task_id' => $entry->task_id ?? null,
-        ]);
+            'ended_at' => ($endedAt ?? now())->toISOString(),
+            'project_id' => $entry->project_id,
+        ]], $this->user);
 
-        Redis::shouldReceive('get')
-            ->with("timer:{$this->user->id}")
-            ->andReturn($redisData);
-        Redis::shouldReceive('set')
-            ->with("timer:lock:{$this->user->id}", 1, 'EX', 15, 'NX')
-            ->andReturn(true);
-        Redis::shouldReceive('del')
-            ->with("timer:{$this->user->id}")
-            ->andReturn(1);
-        Redis::shouldReceive('del')
-            ->with("timer:lock:{$this->user->id}")
-            ->andReturn(1);
+        return $entry->fresh();
     }
 
-    /**
-     * Helper: mock Redis for switchProject() call.
-     */
-    private function mockRedisForSwitch(TimeEntry $entry): void
-    {
-        // Prevent ShouldBroadcast events from hitting Horizon's Redis job repository
-        // while the Redis facade is partially mocked.
-        Event::fake([TimerStopped::class, TimerStarted::class]);
-
-        $redisData = json_encode([
-            'entry_id' => $entry->id,
-            'started_at' => $entry->started_at->toISOString(),
-            'project_id' => $entry->project_id ?? null,
-            'task_id' => $entry->task_id ?? null,
-        ]);
-
-        Redis::shouldReceive('get')
-            ->with("timer:{$this->user->id}")
-            ->andReturn($redisData);
-        Redis::shouldReceive('set')
-            ->with("timer:lock:{$this->user->id}", 1, 'EX', 15, 'NX')
-            ->andReturn(true);
-        Redis::shouldReceive('setex')
-            ->withAnyArgs()
-            ->andReturn(true);
-        Redis::shouldReceive('del')
-            ->with("timer:lock:{$this->user->id}")
-            ->andReturn(1);
-    }
+    // (mockRedisForStop / mockRedisForSwitch are gone with the endpoints they mocked.
+    // Closing now goes through closeViaSync() against live Redis.)
 
     // ─── Active-seconds model: score = active_seconds / interval * 100 ─────
 
@@ -284,9 +254,7 @@ class ActivityScoreTest extends TestCase
             'active_seconds' => 10,
         ]);
 
-        $this->mockRedisForStop($entry);
-
-        $stopped = $this->service->stop();
+        $stopped = $this->closeViaSync($entry);
         // (20+10) / (30+30) * 100 = 50
         $this->assertEquals(50, $stopped->activity_score);
     }
@@ -310,9 +278,7 @@ class ActivityScoreTest extends TestCase
             'active_seconds' => 50, // capped to 30
         ]);
 
-        $this->mockRedisForStop($entry);
-
-        $stopped = $this->service->stop();
+        $stopped = $this->closeViaSync($entry);
         $this->assertEquals(100, $stopped->activity_score);
     }
 
@@ -335,9 +301,7 @@ class ActivityScoreTest extends TestCase
             'active_seconds' => 0,
         ]);
 
-        $this->mockRedisForStop($entry);
-
-        $stopped = $this->service->stop();
+        $stopped = $this->closeViaSync($entry);
         $this->assertEquals(0, $stopped->activity_score);
     }
 
@@ -350,9 +314,7 @@ class ActivityScoreTest extends TestCase
             'type' => 'tracked',
         ]);
 
-        $this->mockRedisForStop($entry);
-
-        $stopped = $this->service->stop();
+        $stopped = $this->closeViaSync($entry);
         $this->assertEquals(0, $stopped->activity_score);
     }
 
@@ -433,9 +395,7 @@ class ActivityScoreTest extends TestCase
             'active_seconds' => null,
         ]);
 
-        $this->mockRedisForStop($entry);
-
-        $stopped = $this->service->stop();
+        $stopped = $this->closeViaSync($entry);
         // avg(100, 0) = 50
         $this->assertEquals(50, $stopped->activity_score);
     }
@@ -511,9 +471,7 @@ class ActivityScoreTest extends TestCase
             'type' => 'tracked',
         ]);
 
-        $this->mockRedisForStop($entry);
-
-        $stopped = $this->service->stop();
+        $stopped = $this->closeViaSync($entry);
 
         $this->assertEquals($entry->id, $stopped->id);
         $this->assertNotNull($stopped->ended_at);
@@ -521,17 +479,9 @@ class ActivityScoreTest extends TestCase
         $this->assertGreaterThanOrEqual(1, $stopped->duration_seconds);
     }
 
-    public function test_stop_throws_when_no_timer_running(): void
-    {
-        Redis::shouldReceive('get')
-            ->with("timer:{$this->user->id}")
-            ->andReturn(null);
-
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('No timer is currently running.');
-
-        $this->service->stop();
-    }
+    // (The old test_stop_throws_when_no_timer_running covered POST /timer/stop, which no
+    // longer exists — there is nothing to "stop" server-side now. Its successor is
+    // TimerSessionSyncTest::test_legacy_mutation_endpoints_are_gone.)
 
     // ─── Multi-tenancy isolation ─────────────────────────────────────────
 
@@ -701,22 +651,25 @@ class ActivityScoreTest extends TestCase
             'active_seconds' => null,
         ]);
 
-        $this->mockRedisForStop($entry);
-
-        $stopped = $this->service->stop();
+        $stopped = $this->closeViaSync($entry);
         // active_seconds mode: 30/60 * 100 = 50
         $this->assertEquals(50, $stopped->activity_score);
     }
 
-    // ─── switchProject preserves activity score ──────────────────────────
+    // ─── Project switch preserves activity score ─────────────────────────
 
-    public function test_switch_project_preserves_activity_score(): void
+    public function test_project_switch_preserves_activity_score(): void
     {
+        // A project switch is no longer an atomic server operation — the agent performs
+        // it locally (close row A, open row B at the same instant) and syncs both in one
+        // batch. The invariant under test is unchanged: the CLOSED half must still get
+        // its final score computed from ActivityLog ground truth.
         $entry = TimeEntry::create([
             'organization_id' => $this->org->id,
             'user_id' => $this->user->id,
             'started_at' => now()->subMinute(),
             'type' => 'tracked',
+            'idempotency_key' => (string) \Illuminate\Support\Str::uuid(),
         ]);
 
         ActivityLog::create([
@@ -729,12 +682,31 @@ class ActivityScoreTest extends TestCase
             'active_seconds' => 30,
         ]);
 
-        $this->mockRedisForSwitch($entry);
+        $switchAt = now();
+        $newUuid = (string) \Illuminate\Support\Str::uuid();
 
-        $result = $this->service->switchProject([]);
+        app(\App\Services\TimeEntrySyncService::class)->sync([
+            [
+                'uuid' => $entry->idempotency_key,
+                'revision' => 2,
+                'started_at' => $entry->started_at->toISOString(),
+                'ended_at' => $switchAt->toISOString(),
+                'project_id' => null,
+            ],
+            [
+                'uuid' => $newUuid,
+                'revision' => 1,
+                'started_at' => $switchAt->toISOString(),
+                'ended_at' => null,
+                'project_id' => null,
+            ],
+        ], $this->user);
 
-        $this->assertNotNull($result['stopped']->activity_score);
-        $this->assertEquals(100, $result['stopped']->activity_score);
-        $this->assertNull($result['started']->ended_at);
+        $stopped = $entry->fresh();
+        $started = TimeEntry::where('idempotency_key', $newUuid)->firstOrFail();
+
+        $this->assertEquals(100, $stopped->activity_score);
+        $this->assertNotNull($stopped->ended_at);
+        $this->assertNull($started->ended_at);
     }
 }

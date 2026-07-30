@@ -28,7 +28,12 @@ class CloseStaleTimerEntriesJob implements ShouldQueue
         // offline grace window (default 4h) plus a margin, otherwise it would force-close
         // running entries while their offline-queued heartbeats are still in flight and
         // truncate legitimate offline work. Default: grace + 60 minutes.
+        //
+        // `updated_at` is a valid liveness proxy because the sync endpoint stamps
+        // client_synced_at on EVERY push of the live session — including pushes that
+        // carry no data change — so a healthy agent keeps this column moving.
         $graceMinutes = (int) config('timer.offline_grace_minutes', 240);
+        $maxDuration = (int) config('timer.max_entry_duration', 86400);
         $backstopThreshold = now()->subMinutes($graceMinutes + 60);
 
         $staleEntries = TimeEntry::whereNull('ended_at')
@@ -40,7 +45,7 @@ class CloseStaleTimerEntriesJob implements ShouldQueue
             $duration = (int) abs($closedAt->diffInSeconds($entry->started_at));
             $entry->update([
                 'ended_at' => $closedAt,
-                'duration_seconds' => min($duration, 43200),
+                'duration_seconds' => min($duration, $maxDuration),
             ]);
             Log::warning('CloseStaleTimerEntriesJob: closed stale entry', [
                 'entry_id' => $entry->id,

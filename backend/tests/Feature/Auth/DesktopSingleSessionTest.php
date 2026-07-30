@@ -85,11 +85,14 @@ class DesktopSingleSessionTest extends TestCase
             'password' => 'password123',
         ], $this->desktopHeaders(self::DEVICE_A))->assertOk();
 
-        // A timer left open by the previous (crashed / uninstalled) session.
+        // A timer left open by the previous (crashed / uninstalled) session. It has been
+        // silent well past the offline grace window, which is what marks it ABANDONED
+        // rather than "an agent tracking offline that simply has not pushed yet".
         $entry = TimeEntry::factory()->create([
             'organization_id' => $org->id,
             'user_id' => $user->id,
-            'started_at' => now()->subHour(),
+            'started_at' => now()->subHours(9),
+            'client_synced_at' => now()->subHours(9),
             'ended_at' => null,
         ]);
 
@@ -115,13 +118,15 @@ class DesktopSingleSessionTest extends TestCase
             'role' => 'owner',
         ]);
 
-        // Timer started 2h ago; the agent died after 30 min (last heartbeat then).
-        $startedAt = now()->subHours(2);
+        // Timer started 9h ago; the agent died after 30 min (last heartbeat then) and has
+        // been silent since — past the offline grace window, so it counts as abandoned.
+        $startedAt = now()->subHours(9);
         $lastHeartbeat = $startedAt->copy()->addMinutes(30);
         $entry = TimeEntry::factory()->create([
             'organization_id' => $org->id,
             'user_id' => $user->id,
             'started_at' => $startedAt,
+            'client_synced_at' => $lastHeartbeat,
             'ended_at' => null,
         ]);
         ActivityLog::factory()->create([
@@ -140,6 +145,40 @@ class DesktopSingleSessionTest extends TestCase
         // Ends at last heartbeat (~30 min), NOT at login time (~2h). Phantom 90 min discarded.
         $this->assertNotNull($entry->ended_at);
         $this->assertEqualsWithDelta(1800, (int) $entry->duration_seconds, 5);
+    }
+
+    public function test_login_does_not_close_a_timer_the_agent_is_still_syncing(): void
+    {
+        $org = $this->createOrganization();
+        $user = User::factory()->create([
+            'organization_id' => $org->id,
+            'email' => 'live@example.com',
+            'password' => 'password123',
+            'role' => 'owner',
+        ]);
+
+        // An agent that pushed a minute ago is ALIVE. Under offline-first tracking an
+        // open entry is no longer evidence of a dead session — force-closing it here
+        // would truncate real work at its last heartbeat, and the agent's very next push
+        // would have to re-extend an entry login had just closed.
+        $entry = TimeEntry::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $user->id,
+            'started_at' => now()->subHours(3),
+            'client_synced_at' => now()->subMinute(),
+            'ended_at' => null,
+        ]);
+
+        $this->postJson('/api/v1/auth/login', [
+            'email' => 'live@example.com',
+            'password' => 'password123',
+        ], $this->desktopHeaders(self::DEVICE_A))->assertOk();
+
+        $entry->refresh();
+        $this->assertNull(
+            $entry->ended_at,
+            'A session an agent is actively syncing must survive a re-login.'
+        );
     }
 
     public function test_desktop_login_does_not_block_web_session(): void

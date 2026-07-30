@@ -111,7 +111,7 @@ class EnforceMinimumAgentVersionTest extends TestCase
             ->assertJsonPath('code', 'AGENT_UPGRADE_REQUIRED');
     }
 
-    public function test_old_desktop_cannot_start_timer(): void
+    public function test_old_desktop_cannot_sync_sessions(): void
     {
         config(['timer.min_agent_version' => '1.0.44']);
 
@@ -122,7 +122,10 @@ class EnforceMinimumAgentVersionTest extends TestCase
         ]);
         $this->actingAs($user, 'sanctum');
 
-        $this->postJson('/api/v1/timer/start', [], [
+        // The session-sync endpoint is the only tracked-time write path, so gating it
+        // is what actually forces an upgrade. (Rejection happens in middleware, ahead of
+        // request validation, hence the empty body.)
+        $this->postJson('/api/v1/timer/sessions/sync', [], [
             'X-TrackFlow-Client' => 'desktop',
             'X-Agent-Version' => '1.0.40',
         ])
