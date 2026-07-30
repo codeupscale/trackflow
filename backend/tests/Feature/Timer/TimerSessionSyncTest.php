@@ -6,8 +6,10 @@ use App\Models\ActivityLog;
 use App\Models\Organization;
 use App\Models\Project;
 use App\Models\TimeEntry;
+use App\Events\TimerStopped;
 use App\Models\User;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -413,6 +415,29 @@ class TimerSessionSyncTest extends TestCase
             ->assertOk()
             ->assertJsonPath('results.0.uuid', $open['uuid'])
             ->assertJsonPath('results.1.uuid', $closed['uuid']);
+    }
+
+    public function test_a_broadcast_failure_never_loses_the_session(): void
+    {
+        // TimerStarted/TimerStopped are ShouldBroadcastNow, so dispatching them talks to
+        // Reverb synchronously over HTTP. Before this was isolated, a websocket outage
+        // threw inside the enclosing transaction — rolling back the write and failing the
+        // whole sync. A Reverb restart would then have silently stopped ALL tracked time
+        // from uploading, which is the exact failure this architecture exists to prevent.
+        Event::listen(TimerStopped::class, function () {
+            throw new \RuntimeException('Pusher error: cURL error 7: connection refused');
+        });
+
+        $session = $this->payload(['ended_at' => now()->subMinutes(10)->toISOString()]);
+
+        $this->postJson(self::URL, ['sessions' => [$session]])
+            ->assertOk()
+            ->assertJsonPath('results.0.status', 'ok');
+
+        $this->assertDatabaseHas('time_entries', [
+            'idempotency_key' => $session['uuid'],
+            'duration_seconds' => 3000,
+        ]);
     }
 
     // ─── Isolation & validation ──────────────────────────────────────────────

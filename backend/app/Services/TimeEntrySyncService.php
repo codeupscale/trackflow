@@ -49,6 +49,31 @@ class TimeEntrySyncService
     public const STATUS_REJECTED = 'rejected';
 
     /**
+     * Events queued during a transaction, dispatched only after it commits.
+     *
+     * @var array<int, object>
+     */
+    private array $pendingEvents = [];
+
+    /** Fire everything queued during the transaction, each isolated from the others. */
+    private function flushPendingEvents(): void
+    {
+        $events = $this->pendingEvents;
+        $this->pendingEvents = [];
+
+        foreach ($events as $event) {
+            try {
+                event($event);
+            } catch (\Throwable $e) {
+                Log::warning('[TimeEntrySync] Broadcast failed (session already stored)', [
+                    'event' => $event::class,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+    }
+
+    /**
      * Apply a batch of client sessions.
      *
      * Every session is processed independently: one bad row never fails the batch, or a
@@ -121,6 +146,10 @@ class TimeEntrySyncService
         ksort($results);
 
         $this->syncRedisTimerKey($user, $openEntryId);
+
+        // AFTER every transaction has committed. Broadcasting is a live-dashboard
+        // convenience and must never be able to roll back — or fail — a stored session.
+        $this->flushPendingEvents();
 
         return array_values($results);
     }
@@ -232,7 +261,7 @@ class TimeEntrySyncService
         // already-closed session (a later revision correcting its boundary) also
         // broadcasts, so dashboards converge on the corrected value.
         if ($endedAt !== null) {
-            TimerStopped::dispatch($entry);
+            $this->pendingEvents[] = new TimerStopped($entry);
         }
 
         return $this->describe($entry, $warning, wasOpen: $wasOpen);
@@ -279,9 +308,9 @@ class TimeEntrySyncService
             // Only a genuinely new LIVE session is a "start". A backfilled closed session
             // from last week must NOT fire TimerStarted — AutoCheckInOnTimerStart would
             // clock the user in for TODAY on the strength of last week's work.
-            TimerStarted::dispatch($entry);
+            $this->pendingEvents[] = new TimerStarted($entry);
         } else {
-            TimerStopped::dispatch($entry);
+            $this->pendingEvents[] = new TimerStopped($entry);
         }
 
         return $this->describe($entry, $warning, wasOpen: false);
@@ -328,7 +357,7 @@ class TimeEntrySyncService
                 'ended_at' => $endedAt->toISOString(),
             ]);
 
-            TimerStopped::dispatch($entry->fresh());
+            $this->pendingEvents[] = new TimerStopped($entry->fresh());
         }
     }
 
