@@ -32,6 +32,21 @@
 
     /* .logo styles are in shared.css */
 
+    /* The header row is empty on sign-in (see the comment on #titlebar) — it
+       exists only to reserve the traffic-light area and provide a drag handle.
+       Drop its fill and divider so it reads as window chrome instead of an empty
+       banded strip above the card. */
+    .titlebar {
+      background: transparent;
+      border-bottom: none;
+    }
+    /* Linux gets a real WM title bar ABOVE this row, so an empty reserve strip
+       there is just 40px of dead space — collapse it. macOS and Windows keep it:
+       the traffic lights / caption buttons are painted INTO this row. */
+    html.platform-linux .titlebar {
+      display: none;
+    }
+
     .subtitle {
       text-align: center;
       font-size: 13px;
@@ -247,43 +262,18 @@
   </style>
 </head>
 <body>
-  <!-- Custom titlebar — identical on all platforms, replaces native frame -->
-  <div class="titlebar" id="titlebar">
-    <span class="titlebar-title">
-      <svg class="titlebar-logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
-        <defs>
-          <linearGradient id="ltg1" x1="60" y1="452" x2="452" y2="60" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stop-color="#4338CA"/>
-            <stop offset="45%" stop-color="#6366F1"/>
-            <stop offset="100%" stop-color="#06B6D4"/>
-          </linearGradient>
-          <linearGradient id="ltg2" x1="256" y1="268" x2="345" y2="148" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stop-color="#6366F1"/>
-            <stop offset="100%" stop-color="#22D3EE"/>
-          </linearGradient>
-        </defs>
-        <path d="M 108 362 A 180 180 0 1 1 348 108" stroke="url(#ltg1)" stroke-width="48" stroke-linecap="round" fill="none"/>
-        <path d="M 324 140 L 396 62 L 368 152 Z" fill="#06B6D4"/>
-        <path d="M 324 140 L 396 62 L 368 152 Z" fill="url(#ltg1)" opacity="0.25"/>
-        <line x1="256" y1="256" x2="330" y2="160" stroke="url(#ltg2)" stroke-width="28" stroke-linecap="round"/>
-        <circle cx="256" cy="256" r="24" fill="#6366F1"/>
-        <circle cx="256" cy="256" r="11" fill="#ffffff"/>
-      </svg>
-      TrackFlow
-    </span>
-    <div class="titlebar-controls">
-      <button class="titlebar-btn close" id="closeBtn" title="Close">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </button>
-    </div>
-  </div>
+  <!-- Empty chrome strip. The sign-in card already shows the full TrackFlow
+       lockup a few pixels below, so a second wordmark up here was pure
+       duplication. The row itself stays: it reserves the space the native
+       traffic lights are drawn into and remains the window's drag handle. -->
+  <div class="titlebar" id="titlebar"></div>
 
   <div class="main">
     <!-- Login Form -->
     <div class="login-card" id="loginView">
       <div class="logo">
         <!-- Dark theme variant (default) -->
-        <svg class="logo-dark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 200" fill="none">
+        <svg class="logo-dark" xmlns="http://www.w3.org/2000/svg" viewBox="14 0 530.5 200" fill="none">
           <defs>
             <linearGradient id="dg1" x1="12" y1="188" x2="188" y2="12" gradientUnits="userSpaceOnUse">
               <stop offset="0%" stop-color="#4338CA"/>
@@ -308,7 +298,7 @@
           </text>
         </svg>
         <!-- Light theme variant -->
-        <svg class="logo-light" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 200" fill="none">
+        <svg class="logo-light" xmlns="http://www.w3.org/2000/svg" viewBox="14 0 530.5 200" fill="none">
           <defs>
             <linearGradient id="lg1" x1="12" y1="188" x2="188" y2="12" gradientUnits="userSpaceOnUse">
               <stop offset="0%" stop-color="#4338CA"/>
@@ -381,7 +371,7 @@
     <div class="login-card org-selector" id="orgView">
       <div class="logo">
         <!-- Dark theme variant (default) -->
-        <svg class="logo-dark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 200" fill="none">
+        <svg class="logo-dark" xmlns="http://www.w3.org/2000/svg" viewBox="14 0 530.5 200" fill="none">
           <defs>
             <linearGradient id="dg1o" x1="12" y1="188" x2="188" y2="12" gradientUnits="userSpaceOnUse">
               <stop offset="0%" stop-color="#4338CA"/>
@@ -406,7 +396,7 @@
           </text>
         </svg>
         <!-- Light theme variant -->
-        <svg class="logo-light" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 200" fill="none">
+        <svg class="logo-light" xmlns="http://www.w3.org/2000/svg" viewBox="14 0 530.5 200" fill="none">
           <defs>
             <linearGradient id="lg1o" x1="12" y1="188" x2="188" y2="12" gradientUnits="userSpaceOnUse">
               <stop offset="0%" stop-color="#4338CA"/>
