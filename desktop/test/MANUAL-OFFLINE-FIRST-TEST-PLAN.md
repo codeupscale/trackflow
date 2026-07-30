@@ -15,7 +15,7 @@ Two workflows fire **in parallel** on the same push:
 | Workflow             | Trigger paths                    | Effect                                                                |
 | -------------------- | -------------------------------- | --------------------------------------------------------------------- |
 | `deploy-dev.yml`     | `backend/**`, `web/**`, `marketing/**` | Builds `:dev` images → deploys to `dev.trackflow.codeupscale.com` → **runs migrations** |
-| `desktop-release.yml`| `desktop/**`                     | Publishes a **prerelease** `v1.0.43-dev.N`, built with `TRACKFLOW_API_URL=https://dev.trackflow.codeupscale.com/api/v1` |
+| `desktop-release.yml`| `desktop/**`                     | Publishes a **prerelease** `v1.0.46-dev.N` (preflight auto-bumps past the last released version, so this is NOT package.json's `1.0.43`), built with `TRACKFLOW_API_URL=https://dev.trackflow.codeupscale.com/api/v1` |
 
 This change touches both, so both run.
 
@@ -23,7 +23,7 @@ This change touches both, so both run.
 > window the legacy endpoints are already gone, so **any older desktop build pointing at
 > dev cannot track** — `POST /timer/start` returns 404. That is the intended
 > force-upgrade, arriving early. Tell anyone testing on dev to stop tracking until they
-> install `v1.0.43-dev.N`.
+> install the new `-dev.N` prerelease.
 
 `TIMER_MIN_AGENT_VERSION` must stay **empty** throughout. Do not set it on dev or prod
 until a desktop build has rolled out.
@@ -38,7 +38,7 @@ until a desktop build has rolled out.
 | Dev containers       | `infra-tf-dev-app-1`, `infra-tf-dev-horizon-1`               |
 | Dev DB               | `trackflow_dev` (creds in `infra-tf-dev-app-1` env)          |
 | Server               | `ssh trackflow`                                              |
-| Desktop build        | GitHub Releases → prerelease `v1.0.43-dev.N`                  |
+| Desktop build        | GitHub Releases → prerelease **`v1.0.46-dev.3`** (from merge `3b8fc48b`) |
 | Local session store  | macOS `~/Library/Application Support/TrackFlow/offline-queue.db`<br>Windows `%APPDATA%\TrackFlow\offline-queue.db`<br>Linux `~/.config/TrackFlow/offline-queue.db` |
 
 **Inspect the desktop's local truth** (the table is `timer_sessions`):

@@ -380,7 +380,7 @@ jobs:
           VER="${{ needs.preflight.outputs.version }}"
           cat > marketing/src/lib/version.ts <<EOF
           export const DESKTOP_VERSION = 'v${VER}'
-          export const RELEASE_URL = \`https://github.com/codeupscale/trackflow/releases/tag/v\${VER}\`
+          export const RELEASE_URL = \`https://github.com/codeupscale/trackflow/releases/tag/\${DESKTOP_VERSION}\`
           EOF
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -528,6 +528,58 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release edit "v${{ needs.preflight.outputs.version }}" \
+          TAG="v${{ needs.preflight.outputs.version }}"
+          # The release can legitimately be gone by now — someone may have deleted
+          # an in-flight build. Don't fail the run over it; the cleanup job owns
+          # reclaiming the tag.
+          if ! gh release view "$TAG" --repo ${{ github.repository }} >/dev/null 2>&1; then
+            echo "::warning::Release $TAG no longer exists — nothing to flag."
+            exit 0
+          fi
+          gh release edit "$TAG" \
             --repo ${{ github.repository }} \
             --prerelease --draft=false
+
+  # ── Reclaim a failed dev release ─────────────────────────────────────────────
+  # Preflight creates the release — and therefore the TAG — before any platform
+  # build runs, so a failed build leaves behind either a half-populated release or
+  # (if someone deletes that release by hand, which does not remove the tag) a
+  # dangling tag. Both are harmful: an incomplete asset set means a missing
+  # latest-*.yml and a broken auto-update channel for that platform, and the
+  # leftover tag permanently burns a -dev.<n> number, since the counter in
+  # preflight is "highest existing dev tag + 1". This is what stranded
+  # v1.0.46-dev.1 (tagged 06e3e615, never published) and made numbering jump to
+  # -dev.2. Dev channel only — a production tag is never deleted automatically.
+  cleanup-failed-dev-release:
+    needs: [preflight, build-mac, build-windows, build-linux]
+    if: >-
+      always() && needs.preflight.outputs.channel == 'dev'
+      && needs.preflight.outputs.should_release == 'true'
+      && (needs.build-mac.result != 'success'
+          || needs.build-windows.result != 'success'
+          || needs.build-linux.result != 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete the incomplete release and reclaim its tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ needs.preflight.outputs.version }}"
+          echo "Incomplete dev build (mac=${{ needs.build-mac.result }}" \
+               "win=${{ needs.build-windows.result }}" \
+               "linux=${{ needs.build-linux.result }}) — reclaiming $TAG."
+
+          # --cleanup-tag removes the tag with the release. Deleting the release
+          # WITHOUT it is exactly how the dev.1 tag was orphaned.
+          if gh release view "$TAG" --repo ${{ github.repository }} >/dev/null 2>&1; then
+            gh release delete "$TAG" --repo ${{ github.repository }} --yes --cleanup-tag
+            echo "Deleted release $TAG and its tag."
+          fi
+
+          # The release may already be gone while the tag survives; drop it directly.
+          if gh api "repos/${{ github.repository }}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/${TAG}"
+            echo "Deleted dangling tag $TAG."
+          fi
+
+          echo "::notice::Reclaimed $TAG — the next dev build will reuse this number."
