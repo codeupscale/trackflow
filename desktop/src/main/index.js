@@ -274,14 +274,20 @@ function getStartupGapThresholdSec() {
 // ── Always-on-Top (Pin) Persistence ──────────────────────────────────────────
 // Persists the "always on top" / "pin" state so it survives app restarts.
 // Uses the same user-prefs.json file as lastSelectedProjectId.
+// DEFAULT CHANGED to unpinned. While this was a frameless tray popup, pinning it
+// on top was the only way to keep it visible while you worked — hide-on-blur
+// made an unpinned popup vanish the moment you clicked away. The main window is
+// now an ordinary window that stays put on its own, so floating it above every
+// other application by default is simply intrusive. Users who explicitly pinned
+// it keep their choice: only the "never chose" case flips.
 function loadAlwaysOnTop() {
     try {
         const p = getPrefsPath();
-        if (!p || !fs.existsSync(p)) return true; // default: pinned
+        if (!p || !fs.existsSync(p)) return false; // default: unpinned
         const data = JSON.parse(fs.readFileSync(p, "utf8"));
-        return data.alwaysOnTop !== undefined ? !!data.alwaysOnTop : true;
+        return data.alwaysOnTop !== undefined ? !!data.alwaysOnTop : false;
     } catch {
-        return true;
+        return false;
     }
 }
 
@@ -688,46 +694,51 @@ let tray = null;
 let popupWindow = null;
 let loginWindow = null;
 
-// Popup window size. Defined ONCE and shared by BOTH the initial creation and the
-// re-show reposition, so the two can never drift apart (the bug where the window
-// launched at one size and then resized itself on the next tray click).
-// ── Popup sizing (Windows QA enhancement #10) ────────────────────────────────
-// QA asked for the popup to behave like a normal Windows app window (drag the
-// edges/corners to resize). Frameless windows on Windows support native edge
-// resizing when `resizable: true` + the default thick frame (WS_THICKFRAME) is
-// kept, so we only enable it there. macOS/Linux (incl. Wayland, where window
-// geometry is compositor-owned) stay at the fixed 320x400 design size — QA only
-// requested Windows and enabling elsewhere risks regressing the frameless tray
-// popup behaviour (blur-hide, positioning, DPI anti-shrink from issue #7).
-// The dimensions and clamp/resolve rules live in ./popup-size (unit-tested).
-const PopupSize = require("./popup-size");
-const POPUP_WIDTH = PopupSize.POPUP_WIDTH;
-const POPUP_HEIGHT = PopupSize.POPUP_HEIGHT;
-const POPUP_MIN_WIDTH = PopupSize.POPUP_MIN_WIDTH;
-const POPUP_MIN_HEIGHT = PopupSize.POPUP_MIN_HEIGHT;
-const POPUP_MAX_WIDTH = PopupSize.POPUP_MAX_WIDTH;
-const POPUP_MAX_HEIGHT = PopupSize.POPUP_MAX_HEIGHT;
-const IS_POPUP_RESIZABLE = process.platform === "win32";
+// ── Main window geometry ─────────────────────────────────────────────────────
+// The main window is an ordinary resizable desktop window with native minimise /
+// maximise / close on all three platforms — not the old frameless, tray-anchored
+// 320x480 popup. Its full rect (position + size) is persisted and restored, and
+// a rect stranded off-screen by an unplugged monitor is re-centred rather than
+// restored invisibly. The dimensions and resolve rules live in
+// ./window-geometry (unit-tested, no Electron import).
+const WindowGeometry = require("./window-geometry");
+const WINDOW_WIDTH = WindowGeometry.WINDOW_WIDTH;
+const WINDOW_HEIGHT = WindowGeometry.WINDOW_HEIGHT;
+const WINDOW_MIN_WIDTH = WindowGeometry.WINDOW_MIN_WIDTH;
+const WINDOW_MIN_HEIGHT = WindowGeometry.WINDOW_MIN_HEIGHT;
 
-// Windows-only: the user's chosen size persisted in user-prefs.json. On every
-// other platform this always resolves to the fixed design size, so callers can
-// use it unconditionally without regressing macOS/Linux.
-function loadPopupSize() {
+// The user's window rect persisted in user-prefs.json.
+function loadWindowBounds() {
     let persisted = null;
     try {
-        persisted = loadUserPrefs().popupSize;
+        persisted = loadUserPrefs().windowBounds;
     } catch {}
-    return PopupSize.resolvePopupSize(persisted, IS_POPUP_RESIZABLE);
+    let displays = [];
+    let primary = null;
+    try {
+        displays = screen.getAllDisplays();
+        primary = screen.getPrimaryDisplay();
+    } catch {}
+    return WindowGeometry.resolveWindowBounds(persisted, displays, primary);
 }
 
-function savePopupSize(width, height) {
-    if (!IS_POPUP_RESIZABLE) return;
+function saveWindowBounds(bounds) {
+    if (!bounds) return;
     try {
+        const size = WindowGeometry.clampWindowSize(
+            bounds.width,
+            bounds.height,
+        );
         saveUserPrefsPatch({
-            popupSize: PopupSize.clampPopupSize(width, height),
+            windowBounds: {
+                x: Math.round(bounds.x),
+                y: Math.round(bounds.y),
+                width: size.width,
+                height: size.height,
+            },
         });
     } catch (e) {
-        console.error("Failed to save popup size:", e.message);
+        console.error("Failed to save window bounds:", e.message);
     }
 }
 
@@ -1299,6 +1310,17 @@ app.on("window-all-closed", () => {
     // Don't quit — keep running in system tray
 });
 
+// Clicking the Dock (macOS) or taskbar (Windows/Linux) icon must bring the
+// window back. The window is a real, taskbar-visible application window now and
+// its close button HIDES rather than destroys, so without this the icon stays in
+// the Dock with no way to reopen from it — the user would have to go find the
+// tray. `showPopup()` also handles the not-yet-authenticated case (login window)
+// and un-minimises.
+app.on("activate", () => {
+    if (!app.isReady()) return;
+    showPopup();
+});
+
 // Stop timer gracefully before quitting (with timeout to avoid hanging)
 app.on("before-quit", async (e) => {
     if (isQuitting) return; // Prevent re-entry
@@ -1533,6 +1555,10 @@ function startSelfRemovalWatcher() {
 }
 
 async function initializeApp() {
+    // Install the application menu before any window exists, so Electron's stock
+    // default menu never gets a chance to render into a framed window.
+    buildAppMenu();
+
     // Register theme handler early — needed by both login and main windows
     ipcMain.removeHandler("get-theme");
     ipcMain.handle("get-theme", () => getOSTheme());
@@ -2138,6 +2164,96 @@ async function initializeApp() {
     notifyTrackingState("startup");
 }
 
+/**
+ * Install the application menu.
+ *
+ * Previously no menu was ever set, so Electron installed its stock default. That
+ * was invisible while the window was frameless, but a real window would render
+ * that default menu bar (File/Edit/View/Window/Help, complete with Reload and
+ * Toggle DevTools) INSIDE the frame on Windows/Linux — clutter on a compact
+ * tracker, and it hands end users a reload button.
+ *
+ *   - Windows/Linux: no menu at all. Chromium still handles clipboard and
+ *     undo/redo inside text inputs natively, so the login form is unaffected.
+ *   - macOS: a menu is NOT optional — without one, Cmd+C/V/A, Cmd+W, Cmd+M and
+ *     Cmd+Q all stop working, because on macOS those live in the menu bar rather
+ *     than in the window. This builds the minimum standard set.
+ *
+ * Cmd+W maps to the window's close, which HIDES to tray (see the 'close' handler
+ * in createPopupWindow) — so it tucks the window away without stopping a timer,
+ * exactly like the red button.
+ */
+function buildAppMenu() {
+    if (process.platform !== "darwin") {
+        Menu.setApplicationMenu(null);
+        return;
+    }
+
+    // Every user-facing name here is the LITERAL "TrackFlow", never `app.name`.
+    //
+    // `app.name` is "trackflow-agent" — package.json's `name`. The capitalised
+    // "TrackFlow" lives in `build.productName`, which is electron-builder config
+    // that Electron never reads at runtime, so the menu would otherwise read
+    // "trackflow-agent" / "Hide trackflow-agent" / "Quit trackflow-agent" in the
+    // packaged app. The roles below derive their default labels from `app.name`
+    // too, hence the explicit overrides.
+    //
+    // Do NOT "fix" this by adding a top-level `productName` or calling
+    // app.setName(): `app.getPath('userData')` is built from app.name, so
+    // renaming it moves the data directory from
+    // ~/Library/Application Support/trackflow-agent to .../TrackFlow and orphans
+    // every existing install's tokens.enc (forced re-login for everyone),
+    // offline-queue.db (PERMANENT loss of time tracked offline but not yet
+    // synced), offline-screenshots/ and user-prefs.json. Same failure class as
+    // bugs/desktop-signout-quit-unsynced-time-lost.md. The cosmetic win is not
+    // worth the data.
+    const APP_LABEL = "TrackFlow";
+
+    Menu.setApplicationMenu(
+        Menu.buildFromTemplate([
+            {
+                label: APP_LABEL,
+                submenu: [
+                    { role: "about", label: `About ${APP_LABEL}` },
+                    { type: "separator" },
+                    { role: "hide", label: `Hide ${APP_LABEL}` },
+                    { role: "hideOthers" },
+                    { role: "unhide" },
+                    { type: "separator" },
+                    // 'quit' runs before-quit → graceful timer stop + queue flush.
+                    { role: "quit", label: `Quit ${APP_LABEL}` },
+                ],
+            },
+            {
+                label: "Edit",
+                submenu: [
+                    { role: "undo" },
+                    { role: "redo" },
+                    { type: "separator" },
+                    { role: "cut" },
+                    { role: "copy" },
+                    { role: "paste" },
+                    { role: "selectAll" },
+                ],
+            },
+            {
+                label: "Window",
+                submenu: [
+                    { role: "minimize" },
+                    // Hides to tray rather than destroying — the timer keeps running.
+                    { role: "close", label: "Close Window" },
+                    { type: "separator" },
+                    {
+                        label: "Show TrackFlow",
+                        accelerator: "CmdOrCtrl+Shift+T",
+                        click: () => showPopup(),
+                    },
+                ],
+            },
+        ]),
+    );
+}
+
 function createTray() {
     if (tray) {
         return;
@@ -2324,16 +2440,17 @@ function buildTrayContextMenu() {
 // Interval reference for the pin keepalive (macOS-only workaround)
 let _pinKeepalive = null;
 
-// ── ISSUE 8: focus-loss watch so an UNPINNED popup closes on a desktop/wallpaper click ──
-// On macOS, clicking the desktop/wallpaper does not reliably emit a 'blur' on an
-// accessory-app popup, so an unpinned popup could linger until the next click landed on
-// a real window ("stays open until you click somewhere"). While the popup is visible and
-// unpinned we poll focus; two consecutive unfocused samples hide it — this catches
-// clicking another app AND clicking the desktop. Windows/Linux keep using the window
-// 'blur' event (which DOES fire on desktop clicks there); a poll is intentionally NOT
-// used on those platforms because an open native <select> steals window focus and a poll
-// would wrongly hide the popup mid-selection. macOS renders <select> as an in-window
-// overlay that keeps webContents focused, so the poll is safe there.
+// ── ISSUE 8 (RETIRED): focus-loss watch that hid an unpinned popup on a click-away ──
+// This polled focus on macOS and hid the window after ~600ms of sustained
+// unfocus, so that clicking the desktop/wallpaper dismissed the tray popup the
+// same way clicking another app did.
+//
+// The main window is no longer a tray popup — it is an ordinary application
+// window with native minimise/maximise/close — so auto-hiding it when the user
+// clicks elsewhere is exactly the wrong behaviour: no desktop app disappears
+// because you looked at your browser. The watchdog is retired rather than
+// deleted so the several call sites (tray pin toggle, logout teardown) keep
+// working and any timer left over from an older session is still cleared.
 let _unpinnedFocusWatch = null;
 let _unpinnedUnfocusedTicks = 0;
 
@@ -2346,42 +2463,8 @@ function _stopUnpinnedFocusWatch() {
 }
 
 function _startUnpinnedFocusWatch() {
-    if (process.platform !== "darwin") return;
+    // Intentionally a no-op: never auto-hide the main window on focus loss.
     _stopUnpinnedFocusWatch();
-    if (isAlwaysOnTop) return; // pinned popups stay open (ISSUE 9)
-    _unpinnedFocusWatch = setInterval(() => {
-        if (
-            !popupWindow ||
-            popupWindow.isDestroyed() ||
-            !popupWindow.isVisible() ||
-            isAlwaysOnTop
-        ) {
-            _stopUnpinnedFocusWatch();
-            return;
-        }
-        const focused =
-            popupWindow.isFocused() ||
-            (popupWindow.webContents &&
-                !popupWindow.webContents.isDestroyed() &&
-                popupWindow.webContents.isFocused());
-        if (focused) {
-            _unpinnedUnfocusedTicks = 0;
-            return;
-        }
-        _unpinnedUnfocusedTicks++;
-        // ~2 ticks (~600ms) of sustained unfocus → the user clicked away (another app
-        // OR the desktop). Hide to tray.
-        if (_unpinnedUnfocusedTicks >= 2) {
-            _stopUnpinnedFocusWatch();
-            if (
-                popupWindow &&
-                !popupWindow.isDestroyed() &&
-                !popupWindow.isFocused()
-            ) {
-                popupWindow.hide();
-            }
-        }
-    }, 300);
 }
 
 function _applyAlwaysOnTop(win, pinned) {
@@ -2438,86 +2521,6 @@ function _applyAlwaysOnTop(win, pinned) {
     }
 }
 
-/**
- * Calculate the popup window x,y position anchored to the PRIMARY display.
- * Uses tray bounds only to determine whether the taskbar is at the top or
- * bottom, so the popup opens near the correct edge of the primary display.
- */
-function _calcPopupPosition(trayBounds, windowWidth, windowHeight) {
-    try {
-        const primary = screen.getPrimaryDisplay();
-        const workArea = primary.workArea;
-
-        // Detect top vs bottom taskbar.
-        // macOS: the menu bar (and tray) is ALWAYS at the top — anchor top-right
-        // unconditionally. Relying on tray.getBounds() here is fragile: on first run
-        // the bounds can be {0,0,0,0} before the icon has rendered, and on multi-
-        // monitor setups getDisplayNearestPoint({0,0}) can resolve the wrong display,
-        // which flipped the test and opened the popup at the BOTTOM-right.
-        // Windows/Linux: the taskbar can be top or bottom, so detect from tray bounds
-        // when available; if bounds aren't ready, default to bottom (typical taskbar).
-        let trayIsAtTop;
-        if (process.platform === "darwin") {
-            trayIsAtTop = true;
-        } else if (trayBounds.height > 0) {
-            const trayCenter = trayBounds.y + trayBounds.height / 2;
-            const trayDisplay = screen.getDisplayNearestPoint({
-                x: trayBounds.x,
-                y: trayBounds.y,
-            });
-            const screenCenter =
-                trayDisplay.workArea.y + trayDisplay.workArea.height / 2;
-            trayIsAtTop = trayCenter < screenCenter;
-        } else {
-            trayIsAtTop = false;
-        }
-
-        // Right-align on primary display (mirrors macOS Menu Bar convention)
-        const x = workArea.x + workArea.width - windowWidth - 8;
-        let y;
-
-        if (trayIsAtTop) {
-            y = workArea.y + 4;
-        } else {
-            y = workArea.y + workArea.height - windowHeight - 4;
-        }
-
-        return { x, y };
-    } catch {
-        // Last-resort fallback: top-right corner of screen
-        return { x: 8, y: 8 };
-    }
-}
-
-/**
- * Move an existing popup window back onto the primary display.
- * Called when showing an already-created window that may have been
- * left on an extended display from a previous session.
- */
-function _repositionToPrimaryDisplay(win, windowWidth, windowHeight) {
-    try {
-        if (!win || win.isDestroyed()) return;
-        const trayBounds = tray
-            ? tray.getBounds()
-            : { x: 0, y: 0, width: 0, height: 0 };
-        const { x, y } = _calcPopupPosition(
-            trayBounds,
-            windowWidth,
-            windowHeight,
-        );
-        // SHRINK FIX: re-assert BOTH position AND size on every show. On Windows
-        // fractional-DPI displays (125%/150%), Electron 42 rounds a frameless,
-        // non-resizable window's bounds down by the scale factor each time it is
-        // re-shown, so repeated taskbar/tray clicks shrank the popup a little more
-        // every click. Pinning the full bounds to the intended size here resets it
-        // to windowWidth x windowHeight each time instead of letting it drift.
-        win.setBounds(
-            { x, y, width: windowWidth, height: windowHeight },
-            false,
-        );
-    } catch {}
-}
-
 function showPopup() {
     if (!isAuthenticated) {
         createLoginWindow();
@@ -2525,27 +2528,29 @@ function showPopup() {
     }
 
     if (popupWindow && !popupWindow.isDestroyed()) {
-        // Reposition to primary display before showing (handles cases where a
-        // previous show placed it on an extended monitor). On Windows the popup
-        // is user-resizable, so re-assert the persisted size (not the fixed
-        // design size) — otherwise the SHRINK/anti-drift setBounds below would
-        // snap a user-resized window back to 320x400 on every reshow. On
-        // macOS/Linux loadPopupSize() returns the fixed design size, so this is
-        // identical to the previous behaviour there.
-        const showSize = loadPopupSize();
-        _repositionToPrimaryDisplay(
-            popupWindow,
-            showSize.width,
-            showSize.height,
-        );
-        if (typeof popupWindow.moveTop === "function") {
-            // Windows: moveTop() while a native <select> is open dismisses the
-            // dropdown; only re-assert z-order on macOS where the tray popup
-            // can slip behind other windows without it.
-            if (process.platform === "darwin") {
-                popupWindow.moveTop();
+        // Show the window where the user left it. It is NOT re-anchored to the
+        // tray or forced back onto the primary display any more — dragging it to
+        // a second monitor and having it jump home on the next show was popup
+        // behaviour, not window behaviour. The only correction applied is the
+        // off-screen rescue (a monitor unplugged while the window was hidden),
+        // which restores the saved size centred on the primary display.
+        try {
+            const b = popupWindow.getBounds();
+            if (
+                !WindowGeometry.isVisibleOnAnyDisplay(b, screen.getAllDisplays())
+            ) {
+                popupWindow.setBounds(
+                    WindowGeometry.centerOnDisplay(
+                        screen.getPrimaryDisplay(),
+                        b.width,
+                        b.height,
+                    ),
+                    false,
+                );
             }
-        }
+        } catch {}
+        // A window minimised to the Dock/taskbar must come back, not just focus.
+        if (popupWindow.isMinimized()) popupWindow.restore();
         popupWindow.show();
         popupWindow.focus();
         setImmediate(() => {
@@ -2573,32 +2578,29 @@ function showPopup() {
         return;
     }
 
-    const trayBounds = tray.getBounds();
-    // Use the shared POPUP_WIDTH/POPUP_HEIGHT so the initial size matches the
-    // re-show reposition exactly (no launch-large / reshow-small jump). The earlier
-    // bump to 380x520 was a workaround for a Windows dropdown clip that has since
-    // been fixed separately (dropdown rebuild + pin-keepalive fixes).
-    // On Windows, restore the user's last chosen size (clamped to min/max);
-    // everywhere else this resolves to the fixed POPUP_WIDTH/POPUP_HEIGHT.
-    const initialSize = loadPopupSize();
-    const windowWidth = initialSize.width;
-    const windowHeight = initialSize.height;
-
-    // MULTI-MONITOR FIX: Always position on the PRIMARY display regardless of
-    // which monitor the tray icon is on. Extended/secondary displays are excluded.
-    // We still use the tray position to detect top-vs-bottom taskbar placement.
-    const { x, y } = _calcPopupPosition(trayBounds, windowWidth, windowHeight);
+    // Restore the window where the user last left it (size AND position). A rect
+    // stranded off-screen by an unplugged monitor is re-centred on the primary
+    // display instead of restored invisibly — see window-geometry.js.
+    const initialBounds = loadWindowBounds();
+    const windowWidth = initialBounds.width;
+    const windowHeight = initialBounds.height;
 
     const popupOptions = {
         width: windowWidth,
         height: windowHeight,
-        x,
-        y,
-        frame: false,
-        resizable: IS_POPUP_RESIZABLE,
-        skipTaskbar: true,
+        x: initialBounds.x,
+        y: initialBounds.y,
+        minWidth: WINDOW_MIN_WIDTH,
+        minHeight: WINDOW_MIN_HEIGHT,
+        // A real app window: resizable and maximisable everywhere, present in
+        // the Dock / taskbar so it can be reached without the tray.
+        resizable: true,
+        maximizable: true,
+        minimizable: true,
+        skipTaskbar: false,
         show: false,
-        backgroundColor: "#0a0a0a", // Prevent white flash on all platforms
+        title: "TrackFlow",
+        backgroundColor: "#121110", // matches --bg-primary; no white flash
         webPreferences: {
             preload: path.join(__dirname, "..", "preload", "index.js"),
             contextIsolation: true,
@@ -2608,19 +2610,14 @@ function showPopup() {
         },
     };
 
-    // Windows: enable native edge/corner resizing on the frameless popup.
-    // `thickFrame: true` (the default) keeps the WS_THICKFRAME window style that
-    // gives Chromium the resize borders and Aero-snap without drawing a caption
-    // bar. Min size pins the designed layout floor; max keeps it a compact
-    // utility window. macOS/Linux keep resizable:false — no size constraints
-    // applied so their fixed-size behaviour is untouched.
-    if (IS_POPUP_RESIZABLE) {
-        popupOptions.thickFrame = true;
-        popupOptions.minWidth = POPUP_MIN_WIDTH;
-        popupOptions.minHeight = POPUP_MIN_HEIGHT;
-        popupOptions.maxWidth = POPUP_MAX_WIDTH;
-        popupOptions.maxHeight = POPUP_MAX_HEIGHT;
-    }
+    // Native window controls, styled per platform — see resolveWindowChrome().
+    Object.assign(
+        popupOptions,
+        WindowGeometry.resolveWindowChrome(process.platform, {
+            background: "#121110",
+            symbol: "#a8a29e",
+        }),
+    );
 
     popupWindow = new BrowserWindow(popupOptions);
 
@@ -2628,44 +2625,27 @@ function showPopup() {
     // On macOS, use 'floating' level + relativeLevel 1 for reliable z-order.
     _applyAlwaysOnTop(popupWindow, isAlwaysOnTop);
 
-    // Windows-only: persist the user's chosen size so it survives hide/show and
-    // app restarts. Debounced so a resize drag (many 'resize' events) writes
-    // once when it settles. `_repositionToPrimaryDisplay` also fires 'resize'
-    // when it re-asserts the persisted size on reshow, but that writes back the
-    // same clamped value, so it's a harmless no-op.
-    if (IS_POPUP_RESIZABLE) {
-        let _resizeSaveTimer = null;
-        popupWindow.on("resize", () => {
-            if (_resizeSaveTimer) clearTimeout(_resizeSaveTimer);
-            _resizeSaveTimer = setTimeout(() => {
-                _resizeSaveTimer = null;
-                if (!popupWindow || popupWindow.isDestroyed()) return;
-                const [w, h] = popupWindow.getContentSize();
-                savePopupSize(w, h);
-            }, 400);
-        });
-    }
+    // Persist the window rect (position AND size) so it survives hide/show and
+    // app restarts. Debounced so a resize/move drag — which fires a burst of
+    // events — writes once when it settles. A maximised window is deliberately
+    // NOT recorded: we want to restore the underlying restored-size rect, not a
+    // full-screen-sized one that would un-maximise to fill the display.
+    let _boundsSaveTimer = null;
+    const _persistBounds = () => {
+        if (_boundsSaveTimer) clearTimeout(_boundsSaveTimer);
+        _boundsSaveTimer = setTimeout(() => {
+            _boundsSaveTimer = null;
+            if (!popupWindow || popupWindow.isDestroyed()) return;
+            if (popupWindow.isMaximized() || popupWindow.isMinimized()) return;
+            saveWindowBounds(popupWindow.getBounds());
+        }, 400);
+    };
+    popupWindow.on("resize", _persistBounds);
+    popupWindow.on("move", _persistBounds);
 
     popupWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
 
     popupWindow.once("ready-to-show", () => {
-        // ISSUE 7 FIX (preserved): re-assert the exact content size on first show.
-        // A frameless window can be created a few px smaller than requested when a
-        // fresh popup is built AFTER a logout/login on a fractional-DPI display
-        // (Electron rounds the bounds by the scale factor). That shrunk height
-        // clipped the footer (Sign out / Dashboard) when the activity section
-        // appears on Start — but only post-relogin, where the window is rebuilt
-        // mid-session. Pinning the content size guarantees the same layout as a
-        // fresh launch. On Windows (resizable) we re-assert the user's PERSISTED
-        // size instead of the fixed design size — still never below the minimum
-        // (loadPopupSize clamps to POPUP_MIN_*), so the footer can't clip. On
-        // macOS/Linux loadPopupSize() === {POPUP_WIDTH, POPUP_HEIGHT}, so this is
-        // byte-for-byte the previous issue #7 behaviour. No-op where there is no
-        // DPI drift (macOS, Linux, 100%-scale Windows).
-        if (popupWindow && !popupWindow.isDestroyed()) {
-            const readySize = loadPopupSize();
-            popupWindow.setContentSize(readySize.width, readySize.height);
-        }
         popupWindow.show();
         if (process.env.NODE_ENV === "development") {
             popupWindow.webContents.openDevTools({ mode: "detach" });
@@ -2685,43 +2665,29 @@ function showPopup() {
         });
     });
 
-    // Hide on blur — debounced on all platforms to prevent show-then-immediately-hide
-    // race when the tray icon click steals focus before the popup can render.
-    let blurTimeout = null;
-    popupWindow.on("blur", () => {
-        if (blurTimeout) {
-            clearTimeout(blurTimeout);
-            blurTimeout = null;
-        }
-        // PIN FIX: when the window is pinned (always-on-top), the user explicitly
-        // wants it to stay visible while they work in other apps. Auto-hiding on
-        // blur here is what made "Pin" look broken — you'd click pin, click into
-        // another window, and the popup would vanish anyway. While pinned, never
-        // hide on blur; the user dismisses it via the tray click or close button.
-        if (isAlwaysOnTop) return;
-        if (Date.now() - _lastTrayClickAt < 300) return;
-        blurTimeout = setTimeout(() => {
-            if (
-                popupWindow &&
-                !popupWindow.isDestroyed() &&
-                !popupWindow.isFocused()
-            ) {
-                popupWindow.hide();
+    // NO hide-on-blur. This is an ordinary window now: clicking into another app
+    // must leave it exactly where it is, the same as any other desktop app. The
+    // old debounced blur->hide (plus the macOS unfocused-ticks watchdog that
+    // backed it up) was the single biggest reason the window felt like a
+    // fly-away popup rather than an application.
+
+    // Close (native red/X button) HIDES the window instead of destroying it, so
+    // a running timer is never silently killed by tidying up your desktop. The
+    // app keeps running in the tray; quitting is deliberate — tray > Quit, or
+    // Cmd/Ctrl+Q — and that path already stops the timer and flushes the offline
+    // queue in `before-quit`.
+    popupWindow.on("close", (e) => {
+        if (isQuitting) return; // real quit: let it through and tear down
+        e.preventDefault();
+        // Persist the final rect before hiding — the debounced move/resize saver
+        // may still have a pending write when the user closes right after a drag.
+        try {
+            if (!popupWindow.isMaximized() && !popupWindow.isMinimized()) {
+                saveWindowBounds(popupWindow.getBounds());
             }
-        }, 150);
+        } catch {}
+        popupWindow.hide();
     });
-    popupWindow.on("focus", () => {
-        if (blurTimeout) {
-            clearTimeout(blurTimeout);
-            blurTimeout = null;
-        }
-        _unpinnedUnfocusedTicks = 0;
-    });
-    // ISSUE 8: keep the macOS focus-loss watch tied to the popup's visibility.
-    // 'show' fires on both the initial show and every re-show (tray click), so this
-    // covers all show paths without touching the existing-window branch.
-    popupWindow.on("show", () => _startUnpinnedFocusWatch());
-    popupWindow.on("hide", () => _stopUnpinnedFocusWatch());
 
     popupWindow.on("closed", () => {
         popupWindow = null;
@@ -2928,14 +2894,23 @@ function setupIPC() {
     ipcMain.removeHandler("install-update");
 
     ipcMain.handle("hide-window", () => {
-        // ISSUE 9 FIX: the close button is disabled while pinned; enforce it in the
-        // main process too so a pinned modal can only be closed after unpinning.
-        // (Tray-toggle and blur-to-hide call popupWindow.hide() directly, not this
-        // IPC, so they are unaffected.)
-        if (isAlwaysOnTop) return;
+        // Backs the Escape shortcut. The pin no longer blocks hiding: pinning
+        // means "float above other apps", not "refuse to close" — that coupling
+        // only existed because the pinned popup had no other dismiss affordance.
+        // The window now has a native close button, so blocking this IPC while
+        // pinned would just make Escape silently do nothing.
         if (popupWindow && !popupWindow.isDestroyed()) {
             popupWindow.hide();
         }
+    });
+
+    // Cmd/Ctrl+Q must QUIT, the way it does in every other desktop app. It used
+    // to be wired to sign-out in the renderer, which was survivable while this
+    // was a transient tray popup and is not now that it is a normal window with
+    // a Dock/taskbar entry. app.quit() runs the `before-quit` handler, which
+    // stops the timer and flushes the offline queue before exiting.
+    ipcMain.handle("quit-app", () => {
+        app.quit();
     });
 
     ipcMain.handle("toggle-pin", (_, forceState) => {
@@ -5172,11 +5147,34 @@ function createLoginWindow() {
 
     loginWindow = new BrowserWindow({
         width: 400,
-        height: 500,
-        frame: false, // Custom titlebar for identical look on macOS/Windows/Linux
-        resizable: false,
+        // 520, up from 500: the branded header row grew from 32px to 40px, and the
+        // form needs to stay clear of the bottom edge once the inline error message
+        // appears (this dialog is deliberately not resizable, so it cannot grow).
+        height: 520,
+        // 400x520 is the CONTENT box. Linux gets a real native title bar, whose
+        // height would otherwise be taken OUT of the content area and clip the
+        // bottom of a fixed-size, non-resizable form.
+        useContentSize: true,
+        // Sign-in gets the same native window controls as the main window — the
+        // first screen users see should not be the one place the app looks like a
+        // frameless widget.
+        //
+        // It is RESIZABLE (floored at its design size) purely so the zoom button
+        // is live: macOS greys out the third traffic light on a non-resizable
+        // window, which reads as a broken green light rather than a deliberate
+        // constraint. The form is centred in `.main`, so extra room just adds
+        // margin around it.
+        resizable: true,
+        maximizable: true,
+        minWidth: 400,
+        minHeight: 520,
         center: true,
-        backgroundColor: "#0a0a0a",
+        title: "Sign in to TrackFlow",
+        backgroundColor: "#121110", // matches --bg-primary (was a stale #0a0a0a)
+        ...WindowGeometry.resolveWindowChrome(process.platform, {
+            background: "#121110",
+            symbol: "#a8a29e",
+        }),
         webPreferences: {
             preload: path.join(__dirname, "..", "preload", "index.js"),
             contextIsolation: true,

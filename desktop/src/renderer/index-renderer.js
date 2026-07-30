@@ -14,13 +14,15 @@ const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
 const isWin = navigator.platform.toUpperCase().indexOf('WIN') >= 0;
 const modKey = isMac ? 'Cmd' : 'Ctrl';
 
-// QA enhancement #10: the popup is user-resizable on Windows only. Tag the root
-// so the top-edge no-drag resize strip (see index.html) activates there and
-// stays fully inert on macOS/Linux (no reduction of the titlebar drag area).
-if (isWin) document.documentElement.classList.add('platform-win');
-
-// Apply shortcut hints
-document.getElementById('logoutBtn').title = `Sign out (${modKey}+Q)`;
+// Tag the root with the platform so the header can reserve room for whichever
+// native window controls the OS draws over it: macOS floats the traffic lights
+// on the LEFT of our header ('hiddenInset'), Windows paints minimise/maximise/
+// close into its RIGHT ('titleBarOverlay'), and Linux gets a real native title
+// bar ABOVE the header, so it needs no reserved space at all. See the chrome
+// block in main/index.js.
+document.documentElement.classList.add(
+  isMac ? 'platform-mac' : isWin ? 'platform-win' : 'platform-linux'
+);
 
 let elapsedSeconds = 0;
 let todayTotalBase = 0;
@@ -65,7 +67,6 @@ const startBtn = document.getElementById('startBtn');
 const startBtnText = document.getElementById('startBtnText');
 const stopBtn = document.getElementById('stopBtn');
 const projectSelect = document.getElementById('projectSelect');
-const logoutBtn = document.getElementById('logoutBtn');
 const logoutLink = document.getElementById('logoutLink');
 const dashboardLink = document.getElementById('dashboardLink');
 const permissionBanner = document.getElementById('permissionBanner');
@@ -582,41 +583,32 @@ stopBtn.addEventListener('click', () => {
   });
 });
 
+let _loggingOut = false;
 async function handleLogout() {
-  logoutBtn.disabled = true;
+  if (_loggingOut) return;
+  _loggingOut = true;
   stopTicking();
   await window.trackflow.logout();
 }
-logoutBtn.addEventListener('click', handleLogout);
 logoutLink.addEventListener('click', handleLogout);
+logoutLink.title = `Sign out (${modKey}+Q)`;
 dashboardLink.addEventListener('click', () => window.trackflow.openDashboard());
 
-// Hide button — dismiss window to tray without logging out
-const hideBtn = document.getElementById('hideBtn');
-hideBtn.addEventListener('click', () => {
-  // ISSUE 9: when pinned, the close button is disabled — the modal is only
-  // closable after unpinning. Guard here too in case of a synthetic click.
-  if (hideBtn.disabled) return;
-  window.trackflow.hideWindow();
-});
-
 // ── Pin (Always on Top) Button Logic ──
+// The custom hide-to-tray and sign-out buttons that used to sit beside this one
+// are gone: the window now has NATIVE close/minimise/maximise, and closing hides
+// to tray without stopping the timer. Sign out lives in the footer only.
 const pinBtn = document.getElementById('pinBtn');
 
 function updatePinUI(pinned) {
   if (pinned) {
     pinBtn.classList.add('pinned');
-    pinBtn.title = 'Always on top (pinned)';
+    pinBtn.title = 'Always on top — click to unpin';
   } else {
     pinBtn.classList.remove('pinned');
-    pinBtn.title = 'Pin window on top';
+    pinBtn.title = 'Keep window on top of other apps';
   }
-  // ISSUE 9 FIX: the close (hide-to-tray) button is DISABLED while pinned. A pinned
-  // modal is meant to stay put; it can only be closed after the user unpins it.
-  hideBtn.disabled = pinned;
-  hideBtn.style.opacity = pinned ? '0.4' : '';
-  hideBtn.style.cursor = pinned ? 'not-allowed' : '';
-  hideBtn.title = pinned ? 'Unpin to close' : 'Hide to tray';
+  pinBtn.setAttribute('aria-pressed', pinned ? 'true' : 'false');
 }
 
 // Load initial pin state from main process
@@ -644,11 +636,16 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (isRunning) stopBtn.click(); else startBtn.click();
   }
+  // Cmd/Ctrl+Q quits the app — the universal desktop meaning. It used to sign
+  // the user out, which was tolerable for a throwaway tray popup and is not for
+  // a normal window. Sign out is the footer link (and the tray menu).
   if ((e.ctrlKey || e.metaKey) && e.key === 'q') {
     e.preventDefault();
-    handleLogout();
+    window.trackflow.quitApp();
   }
-  if (e.key === 'Escape') window.blur();
+  // Escape hides the window to the tray. It used to call window.blur() and rely
+  // on the hide-on-blur handler, which no longer exists — so this was dead.
+  if (e.key === 'Escape') window.trackflow.hideWindow();
 });
 
 // Events from main process

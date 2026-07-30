@@ -9,6 +9,18 @@ function applyTheme(theme) {
 window.trackflow.getTheme().then(applyTheme).catch(() => {});
 window.trackflow.onThemeChange(applyTheme);
 
+// ── Platform tag ──
+// The sign-in dialog now gets the same NATIVE window controls as the main window,
+// so its header has to reserve room for whichever ones the OS paints over it:
+// traffic lights on the left (macOS), caption buttons on the right (Windows), or
+// nothing at all (Linux, which draws a real title bar above). Same contract as
+// index-renderer.js — see the .titlebar rules in shared.css.
+const _isMacUA = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+const _isWinUA = navigator.platform.toUpperCase().indexOf('WIN') >= 0;
+document.documentElement.classList.add(
+  _isMacUA ? 'platform-mac' : _isWinUA ? 'platform-win' : 'platform-linux'
+);
+
 const loginView = document.getElementById('loginView');
 const orgView = document.getElementById('orgView');
 const form = document.getElementById('loginForm');
@@ -52,10 +64,7 @@ passwordToggle.addEventListener('click', () => {
   passwordToggle.setAttribute('aria-pressed', String(!nextIsPassword));
 });
 
-// Close button
-document.getElementById('closeBtn').addEventListener('click', () => {
-  window.close();
-});
+// The custom close button is gone — the dialog has a native one now.
 
 // ── Show Org Selector ──
 function showOrgSelector(organizations, credentials) {
