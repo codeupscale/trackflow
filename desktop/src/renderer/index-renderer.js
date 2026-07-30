@@ -547,7 +547,13 @@ startBtn.addEventListener('click', async () => {
       showNotification(result.error);
     }
   } catch (e) {
-    showNotification('Failed to start timer');
+    // Surface the underlying reason. A bare "Failed to start timer" is
+    // indistinguishable between a thrown IPC error, a missing handler and a
+    // storage fault, which is exactly the ambiguity that makes these reports
+    // unactionable from a screenshot.
+    const detail = (e && (e.message || String(e))) || '';
+    showNotification(detail ? `Failed to start timer — ${detail}` : 'Failed to start timer');
+    console.error('[Timer] start-timer threw:', e);
   }
   startBtnText.textContent = 'Start';
   updateStartBtnState();

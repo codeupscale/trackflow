@@ -123,11 +123,28 @@ try {
     );
 } catch {}
 
+// JSON.stringify(new Error('boom')) is "{}" — message, stack and every SQLite
+// detail (code, errno) are non-enumerable, so the naive stringify below used to
+// erase exactly the information a crash log exists to carry. Electron's own
+// "Error occurred in handler for 'x'" lines arrived as literal `{}`, which made an
+// IPC throw undiagnosable from a user's log. Serialize Errors explicitly.
+function _serializeLogArg(a) {
+    if (typeof a === "string") return a;
+    if (a instanceof Error) {
+        const extra = [a.code, a.errno].filter((v) => v !== undefined).join("/");
+        return `${a.stack || `${a.name}: ${a.message}`}${extra ? ` (${extra})` : ""}`;
+    }
+    try {
+        return JSON.stringify(a);
+    } catch {
+        // Circular or otherwise unserializable — never let logging throw.
+        return String(a);
+    }
+}
+
 function logToFile(level, ...args) {
     const ts = new Date().toISOString();
-    const msg = args
-        .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
-        .join(" ");
+    const msg = args.map(_serializeLogArg).join(" ");
     const line = `[${ts}] [${level}] ${msg}\n`;
     try {
         fs.appendFileSync(getLogFile(), line);
