@@ -67,6 +67,7 @@ const NetworkMonitor = require("./network-monitor");
 const {
     hasPendingCompletedSession,
     unsyncedCompletedSecondsForDay,
+    completedSecondsForProjectDay,
 } = require("./session-rules");
 const { WorkSessionStore } = require("./work-session-store");
 const { SessionSyncWorker } = require("./session-sync-worker");
@@ -576,8 +577,136 @@ async function probeScreenRecordingPermission() {
         );
         return false;
     } catch (e) {
-        console.warn("[Permission] Probe failed:", e.message);
+        // Log the ERROR, not e.message. On macOS 12.3+ Electron captures via
+        // ScreenCaptureKit, and a TCC denial rejects getSources() outright with an
+        // empty message — so "Probe failed: " told us nothing. The full error carries
+        // the name/code that distinguishes a denial from a timeout or a real fault.
+        // (It also means the "sources returned, thumbnails empty" branch above is
+        // effectively dead on modern macOS: denial rejects rather than resolving.)
+        console.warn("[Permission] Probe failed:", e);
         return false;
+    }
+}
+
+// ── Re-checking permission after the user visits System Settings ────────────
+// macOS caches a process's Screen Recording verdict for the life of that process.
+// Granting the permission while TrackFlow is running does NOT make getSources()
+// start working — that is why macOS itself offers "Quit & Reopen". Nothing in the
+// app ever re-asked, and nothing could clear the amber banner except a SUCCESSFUL
+// screenshot, which is impossible while the permission is missing. So the banner
+// stayed up forever and every Start re-opened the same modal even though the user
+// had already granted the permission. Fixed by three things: a free
+// getMediaAccessStatus() re-check on every window focus, one rate-limited probe
+// after the user comes back from System Settings, and — when the probe still
+// fails after that — the relaunch offer that actually clears the cached verdict.
+
+// The row to toggle is named after the RUNNING BINARY, not the product. A dev run
+// is `electron .`, so macOS lists it as "Electron" — telling that user to look for
+// "TrackFlow" sends them hunting for a row that does not exist. macOS 15 also
+// renamed the pane to "Screen & System Audio Recording".
+const SCREEN_PERMISSION_ENTRY_NAME = app.isPackaged ? "TrackFlow" : "Electron";
+const SCREEN_PERMISSION_SETTINGS_PATH =
+    "System Settings ▸ Privacy & Security ▸ Screen & System Audio Recording";
+
+let _screenPermissionProbeAt = 0;
+let _screenPermissionRelaunchOfferedAt = 0;
+let _openedScreenSettings = false;
+const SCREEN_PERMISSION_PROBE_MIN_INTERVAL_MS = 3000;
+// The relaunch offer must NOT be once-per-session. Observed in a real session:
+// the user tabbed back from System Settings BEFORE granting, got the offer,
+// declined it (correctly — they had granted nothing yet), and a once-per-session
+// flag then suppressed the offer permanently. Seconds later the grant landed and
+// the app had no way left to tell them a restart was needed, which is the very
+// dead end this whole change exists to remove. So it re-offers, on a cooldown
+// long enough not to nag.
+const SCREEN_PERMISSION_RELAUNCH_REOFFER_MS = 45000;
+
+async function refreshScreenPermissionOnFocus() {
+    if (process.platform !== "darwin") return;
+    if (_screenPermissionGranted === true) return;
+
+    // Every branch below logs why it stopped. An earlier version of this function
+    // was silent, which made it impossible to tell from a user's log whether the
+    // re-check had even run — the same failure mode as the swallowed probe error.
+    console.log(
+        `[Permission] Focus re-check (openedSettings=${_openedScreenSettings}, lastRelaunchOffer=${_screenPermissionRelaunchOfferedAt || "never"})`,
+    );
+
+    // Free, never shows a dialog. For a properly signed build this alone flips
+    // the moment the user toggles TrackFlow on, and it clears the banner itself.
+    if (checkScreenRecordingPermission()) {
+        console.log("[Permission] Focus re-check: API now reports granted");
+        return;
+    }
+
+    // For ad-hoc signed builds getMediaAccessStatus() lies and reports 'denied'
+    // even when the permission IS granted, so the probe is the only truth. Only
+    // run it when we actually sent the user to Settings: a denied probe can raise
+    // the native macOS prompt, and doing that on every focus would be spam.
+    if (!_openedScreenSettings) {
+        console.log(
+            "[Permission] Focus re-check: still denied, not probing (user has not been sent to System Settings)",
+        );
+        return;
+    }
+
+    const now = Date.now();
+    if (now - _screenPermissionProbeAt < SCREEN_PERMISSION_PROBE_MIN_INTERVAL_MS) {
+        console.log("[Permission] Focus re-check: probe rate-limited");
+        return;
+    }
+    _screenPermissionProbeAt = now;
+
+    if (await probeScreenRecordingPermission()) {
+        console.log(
+            "[Permission] Focus re-check: probe now succeeds — permission confirmed",
+        );
+        _openedScreenSettings = false;
+        return;
+    }
+
+    // Granted in System Settings but this process still cannot capture: the
+    // cached TCC verdict. A relaunch is the ONLY way out, so offer it rather
+    // than leaving the user in the loop that caused this bug.
+    if (
+        _screenPermissionRelaunchOfferedAt &&
+        now - _screenPermissionRelaunchOfferedAt <
+            SCREEN_PERMISSION_RELAUNCH_REOFFER_MS
+    ) {
+        console.log(
+            "[Permission] Focus re-check: still denied; relaunch offer on cooldown",
+        );
+        return;
+    }
+    _screenPermissionRelaunchOfferedAt = now;
+    console.log(
+        "[Permission] Focus re-check: still denied after visiting Settings — offering relaunch",
+    );
+
+    const { response } = await dialog.showMessageBox({
+        type: "info",
+        title: "Restart TrackFlow",
+        message: "Restart TrackFlow to finish enabling screenshots",
+        detail:
+            `macOS only applies Screen Recording permission when an app restarts — a grant made ` +
+            `while ${SCREEN_PERMISSION_ENTRY_NAME} is running is invisible to it until then.\n\n` +
+            `If you have already switched ${SCREEN_PERMISSION_ENTRY_NAME} on in\n` +
+            `${SCREEN_PERMISSION_SETTINGS_PATH}\n` +
+            `then restart now to finish enabling screenshots.\n\n` +
+            "Your tracked time is saved locally and will not be lost.",
+        buttons: ["Restart Now", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+    });
+
+    if (response === 0) {
+        console.log("[Permission] User chose to relaunch — restarting now");
+        saveRestartState();
+        isQuitting = true;
+        app.relaunch();
+        app.exit(0);
+    } else {
+        console.log("[Permission] User declined the relaunch offer");
     }
 }
 
@@ -586,20 +715,23 @@ async function showScreenPermissionOnboarding(options = {}) {
 
     if (_screenPermissionDeclinedThisSession && !isPreStart) return "declined";
 
+    const steps =
+        "Steps to enable:\n" +
+        '1. Click "Open System Settings" below\n' +
+        `2. Go to ${SCREEN_PERMISSION_SETTINGS_PATH}\n` +
+        `3. Find "${SCREEN_PERMISSION_ENTRY_NAME}" in the list and switch it ON\n` +
+        "4. Return to TrackFlow — you will be offered a restart, which is what\n" +
+        "   actually applies the permission. macOS ignores it until then.\n";
+
     const detail = isPreStart
         ? "TrackFlow needs Screen Recording access to capture activity screenshots for your employer.\n\n" +
-          "Steps to enable:\n" +
-          '1. Click "Open System Settings" below\n' +
-          '2. Find "TrackFlow" in the list and toggle it ON\n' +
-          '3. macOS will ask you to "Quit & Reopen" — click it\n' +
+          "Tracking still works without it — only screenshots are affected.\n\n" +
+          steps +
           (wasTracking
               ? "\nDon't worry — your tracking session will resume automatically after restart."
               : "\nAfter restarting, you can start tracking right away.")
         : "Screen Recording permission is required to capture screenshots.\n\n" +
-          "Steps to enable:\n" +
-          '1. Click "Open System Settings" below\n' +
-          '2. Find "TrackFlow" in the list and toggle it ON\n' +
-          '3. macOS will ask you to "Quit & Reopen" — click it\n' +
+          steps +
           "\nYour selected project will be remembered after restart.";
 
     const result = await dialog.showMessageBox({
@@ -615,6 +747,13 @@ async function showScreenPermissionOnboarding(options = {}) {
     if (result.response === 0) {
         // Save state before directing user to settings (they may need to restart)
         saveRestartState();
+        // Arms the focus re-check: coming back from System Settings IS a focus
+        // event, and it is the only moment worth spending a probe on.
+        _openedScreenSettings = true;
+        _screenPermissionProbeAt = 0;
+        // A fresh trip to System Settings means a fresh chance the grant landed,
+        // so any earlier decline of the restart offer must not silence the next one.
+        _screenPermissionRelaunchOfferedAt = 0;
         shell.openExternal(
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
         );
@@ -1202,6 +1341,37 @@ function getUnsyncedCompletedSecondsForToday() {
     }
 }
 
+/** Seconds already completed locally for one project today. */
+function getLocalCompletedSecondsForProjectToday(projectId, opts) {
+    const store = getWorkSessionStore();
+    if (!store) return 0;
+    try {
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+        return completedSecondsForProjectDay(
+            store.getAll(),
+            startOfDay.getTime(),
+            projectId,
+            opts,
+        );
+    } catch (e) {
+        console.warn("[LocalTimerDb] project today total failed:", e.message);
+        return 0;
+    }
+}
+
+/**
+ * The project-scoped today total the SERVER last reported while NO timer was running.
+ *
+ * This is the number already on screen before Start, and the only sound seed for it.
+ * Local SQLite holds only THIS device's un-purged rows — measured on a real machine,
+ * 78s locally for a project the server knew had 443s — so seeding from local alone
+ * showed ~01:18 and then visibly jumped to ~07:23 when the next status tick landed.
+ * Only captured while stopped: once a timer runs the server figure starts including
+ * that live entry's elapsed, which would double-count against the ticking display.
+ */
+const _serverProjectTodayTotals = new Map();
+
 /** True while any completed session still needs uploading. */
 function hasPendingCompletedOfflineSessions() {
     const store = getWorkSessionStore();
@@ -1353,13 +1523,32 @@ app.on("activate", () => {
     showPopup();
 });
 
+// Returning from System Settings raises exactly this event, which is why the
+// permission re-check hangs off it. Registered here — NOT in the per-session
+// setup — because permission is a property of the machine, not of the signed-in
+// user; `removeSessionListeners()` re-attaches it after its removeAllListeners()
+// sweep so signing out cannot leave the app permanently unable to notice a grant.
+function onFocusRecheckScreenPermission() {
+    refreshScreenPermissionOnFocus().catch(() => {});
+}
+app.on("browser-window-focus", onFocusRecheckScreenPermission);
+
 // Stop timer gracefully before quitting (with timeout to avoid hanging)
 app.on("before-quit", async (e) => {
     if (isQuitting) return; // Prevent re-entry
 
+    // Commit to the quit BEFORE anything else can bail out. popupWindow's 'close'
+    // handler deliberately hides instead of closing unless this flag is set, and
+    // the flag used to be set ONLY on the timer-running branch below. So quitting
+    // while signed in and NOT tracking — the most ordinary state there is — had
+    // Electron ask the window to close, our own handler preventDefault() it, and
+    // the quit was silently cancelled: the app merely hid. Signing out first
+    // appeared to "fix" it only because that destroys this window and leaves the
+    // login window, which has no hide-on-close rule.
+    isQuitting = true;
+
     if (isTimerRunning && apiClient) {
         e.preventDefault();
-        isQuitting = true;
         console.log(
             "[Quit] Timer running — recording local stop, then exiting",
         );
@@ -1452,6 +1641,10 @@ function removeSessionListeners() {
     PowerManager.unregisterPowerHandlers();
     stopIdleWatchdog();
     app.removeAllListeners("browser-window-focus");
+    // Screen-recording permission is machine state, not session state — put its
+    // focus re-check back after the sweep above, or a logout would silently
+    // disable the only thing that can take the permission banner down.
+    app.on("browser-window-focus", onFocusRecheckScreenPermission);
     // Reset tracking-state notification dedup so the NEXT login always re-notifies
     // (and no post-logout resume can suppress a fresh state notif).
     _lastStateNotifAt = 0;
@@ -1515,6 +1708,9 @@ async function forceLogout() {
     sessionSyncWorker = null;
     workSessionStore = null;
     clearProjectsCache();
+    // Cached per-project server totals belong to the signed-in user — clearing them
+    // here keeps the next account from ever seeding a timer with someone else's hours.
+    _serverProjectTodayTotals.clear();
     todayTotalGlobal = 0;
     todayTotalCurrentProject = 0;
     config = {};
@@ -2866,6 +3062,9 @@ async function performLogout() {
     sessionSyncWorker = null;
     workSessionStore = null;
     clearProjectsCache();
+    // Cached per-project server totals belong to the signed-in user — clearing them
+    // here keeps the next account from ever seeding a timer with someone else's hours.
+    _serverProjectTodayTotals.clear();
     todayTotalGlobal = 0;
     todayTotalCurrentProject = 0;
     config = {};
@@ -3003,6 +3202,13 @@ function setupIPC() {
         console.log(
             "[Permission] User clicked Fix — opening Screen Recording settings",
         );
+        // Same arming as the onboarding dialog: the user is leaving for System
+        // Settings, so the next focus event is worth a probe.
+        _openedScreenSettings = true;
+        _screenPermissionProbeAt = 0;
+        // A fresh trip to System Settings means a fresh chance the grant landed,
+        // so any earlier decline of the restart offer must not silence the next one.
+        _screenPermissionRelaunchOfferedAt = 0;
         shell.openExternal(
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
         );
@@ -3144,6 +3350,12 @@ function setupIPC() {
                 todayTotalGlobal =
                     allProjectsTotal + getUnsyncedCompletedSecondsForToday();
                 if (!isTimerRunning) todayTotalCurrentProject = 0;
+
+                // Remember this project's completed total while stopped, so Start can
+                // seed the display with the very number the user is looking at.
+                if (!isTimerRunning && validProjectId) {
+                    _serverProjectTodayTotals.set(validProjectId, globalTotal);
+                }
 
                 if (isTimerRunning && currentEntry?.project_id) {
                     const sessionElapsed = _cachedStartedAtMs
@@ -3421,6 +3633,12 @@ async function startTimer(projectId = null) {
         // ── Pre-start permission gate (macOS only) ──────────────────────────────
         // Check screen recording permission BEFORE starting the timer so the user
         // is not surprised by a permission prompt mid-tracking.
+        // Screen Recording gates SCREENSHOTS, never TIME. This used to return an
+        // error when the user chose "Open System Settings", so Start did nothing at
+        // all — combined with the banner that could never clear, the user simply
+        // could not track time. The prompt now runs at most ONCE per session and the
+        // timer starts regardless of how it is answered: a missing screenshot
+        // permission degrades evidence capture, it must never cost tracked hours.
         if (
             process.platform === "darwin" &&
             _screenPermissionGranted !== true &&
@@ -3439,22 +3657,17 @@ async function startTimer(projectId = null) {
                     console.log(
                         "[Timer] Screen recording permission not granted — showing onboarding",
                     );
-                    const permResult = await showScreenPermissionOnboarding({
+                    // Asked once per session whichever button is pressed. Keying this
+                    // on "Skip for Now" alone was the bug: choosing "Open System
+                    // Settings" left the flag false, so the SAME modal re-opened on
+                    // every subsequent Start.
+                    _screenPermissionSkippedThisSession = true;
+                    await showScreenPermissionOnboarding({
                         isPreStart: true,
                         wasTracking: false,
                     });
-                    if (permResult === "opened-settings") {
-                        // User went to settings — don't start timer yet. They need to restart.
-                        return {
-                            error: "Please grant Screen Recording permission and restart the app. Your project selection will be remembered.",
-                        };
-                    }
-                    // User clicked "Skip for Now" — let them track without screenshots,
-                    // and stop asking for the rest of this session. The banner below
-                    // still records the degraded state; only the blocking modal stops.
-                    _screenPermissionSkippedThisSession = true;
                     console.log(
-                        "[Timer] User skipped permission — starting timer without screenshot capability",
+                        "[Timer] Starting timer without screenshot capability",
                     );
                     // Notify renderer that permission is not granted so it can show a warning
                     notifyPopup("permission-status", { granted: false });
@@ -3510,7 +3723,27 @@ async function startTimer(projectId = null) {
         currentEntry = localEntry;
         isTimerRunning = true;
         isTimerPaused = false;
-        todayTotalCurrentProject = 0;
+        // Seed the project's COMPLETED base instead of zeroing it. Hardcoding 0 meant
+        // the start response carried `todayTotal: 0` and the display restarted from
+        // 00:00:00 on a project that already had hours today.
+        //
+        // The seed must MATCH what is already on screen, or Start produces a visible
+        // jump a few seconds later when the status tick corrects it. So: prefer the
+        // server's last stopped-state figure for this project (it includes manual
+        // entries and work this device has since purged) and add only the local rows
+        // the server has NOT seen — mirroring how todayTotalGlobal is assembled. Local
+        // completed rows alone are NOT a proxy for the day's total. Falls back to the
+        // full local total when there is no server figure yet (first run, or offline),
+        // which is still far better than zero. No network call: both inputs are cached
+        // or local, so the start path stays offline by construction.
+        const serverProjectBase = _serverProjectTodayTotals.get(projectId);
+        todayTotalCurrentProject =
+            serverProjectBase != null
+                ? serverProjectBase +
+                  getLocalCompletedSecondsForProjectToday(projectId, {
+                      unsyncedOnly: true,
+                  })
+                : getLocalCompletedSecondsForProjectToday(projectId);
         _pendingOfflineReassignIdleSec = 0;
         _timerStateVersion++;
 

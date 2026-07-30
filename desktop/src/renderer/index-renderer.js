@@ -539,7 +539,11 @@ startBtn.addEventListener('click', async () => {
     const result = await window.trackflow.startTimer(projectId);
     if (result.success) {
       setStartedAt(result.entry?.started_at || new Date().toISOString());
-      if (result.todayTotal > 0) todayTotalBase = result.todayTotal;
+      // Assign unconditionally. The old `> 0` guard kept whatever base happened to
+      // be left over when the start response said 0, so starting on a fresh project
+      // could inherit the PREVIOUS project's total. Main now always returns that
+      // project's real completed total for today, so 0 is a legitimate answer.
+      todayTotalBase = result.todayTotal ?? 0;
       elapsedSeconds = todayTotalBase;
       updateDisplay(true);
       startTicking();

@@ -361,6 +361,58 @@ describe('display totals', () => {
         expect(rules.unsyncedCompletedSecondsForDay(rows, startOfDay)).toBe(0);
     });
 
+    describe('completedSecondsForProjectDay', () => {
+        // Regression: starting a timer on a project that already had hours today
+        // showed 00:00:00, because the start path hardcoded the project base to 0.
+        test('sums every completed row for the project, synced or not', () => {
+            const rows = [
+                { ended_at: 'x', started_at: '2026-07-30T01:00:00Z', duration_seconds: 600, project_id: 'p1', server_entry_id: 'srv' },
+                { ended_at: 'x', started_at: '2026-07-30T02:00:00Z', duration_seconds: 900, project_id: 'p1', server_entry_id: null },
+            ];
+            expect(rules.completedSecondsForProjectDay(rows, startOfDay, 'p1')).toBe(1500);
+        });
+
+        test('ignores other projects', () => {
+            const rows = [
+                { ended_at: 'x', started_at: '2026-07-30T01:00:00Z', duration_seconds: 600, project_id: 'p1' },
+                { ended_at: 'x', started_at: '2026-07-30T02:00:00Z', duration_seconds: 900, project_id: 'p2' },
+            ];
+            expect(rules.completedSecondsForProjectDay(rows, startOfDay, 'p2')).toBe(900);
+        });
+
+        test('excludes live rows and earlier days', () => {
+            const rows = [
+                { ended_at: null, started_at: '2026-07-30T01:00:00Z', duration_seconds: null, project_id: 'p1' },
+                { ended_at: 'x', started_at: '2026-07-29T23:00:00Z', duration_seconds: 600, project_id: 'p1' },
+            ];
+            expect(rules.completedSecondsForProjectDay(rows, startOfDay, 'p1')).toBe(0);
+        });
+
+        test('a null project id is its own bucket, not a wildcard', () => {
+            const rows = [
+                { ended_at: 'x', started_at: '2026-07-30T01:00:00Z', duration_seconds: 600, project_id: null },
+                { ended_at: 'x', started_at: '2026-07-30T02:00:00Z', duration_seconds: 900, project_id: 'p1' },
+            ];
+            expect(rules.completedSecondsForProjectDay(rows, startOfDay, null)).toBe(600);
+        });
+
+        test('handles a missing/!array row set', () => {
+            expect(rules.completedSecondsForProjectDay(null, startOfDay, 'p1')).toBe(0);
+        });
+
+        // The start seed adds ONLY unsynced local rows on top of the server's figure.
+        // Counting synced rows there would double-count them against the server total
+        // and overstate the day.
+        test('unsyncedOnly skips rows the server already has', () => {
+            const rows = [
+                { ended_at: 'x', started_at: '2026-07-30T01:00:00Z', duration_seconds: 600, project_id: 'p1', server_entry_id: 'srv' },
+                { ended_at: 'x', started_at: '2026-07-30T02:00:00Z', duration_seconds: 900, project_id: 'p1', server_entry_id: null },
+            ];
+            expect(rules.completedSecondsForProjectDay(rows, startOfDay, 'p1', { unsyncedOnly: true })).toBe(900);
+            expect(rules.completedSecondsForProjectDay(rows, startOfDay, 'p1')).toBe(1500);
+        });
+    });
+
     test('hasPendingCompletedSession only counts closed dirty rows', () => {
         expect(rules.hasPendingCompletedSession([{ ended_at: 'x', revision: 1, synced_revision: null }])).toBe(true);
         expect(rules.hasPendingCompletedSession([{ ended_at: 'x', revision: 1, synced_revision: 1 }])).toBe(false);

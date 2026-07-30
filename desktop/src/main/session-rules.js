@@ -238,6 +238,35 @@ function unsyncedCompletedSecondsForDay(rows, startOfDayMs) {
     return total;
 }
 
+/**
+ * Completed seconds tracked locally for ONE project on a given day.
+ *
+ * Unlike unsyncedCompletedSecondsForDay this counts every completed row, synced or
+ * not. It seeds the on-screen project total the instant a timer starts, before any
+ * server figure can arrive — starting a timer on a project that already has hours
+ * on it must not make the display fall back to 00:00:00 until the next status tick.
+ * A null projectId matches rows with no project, so "no project" is a bucket too.
+ */
+function completedSecondsForProjectDay(
+    rows,
+    startOfDayMs,
+    projectId,
+    { unsyncedOnly = false } = {},
+) {
+    const want = String(projectId ?? "");
+    let total = 0;
+    for (const r of Array.isArray(rows) ? rows : []) {
+        if (!r || r.ended_at == null) continue;
+        if (unsyncedOnly && r.server_entry_id) continue;
+        if (String(r.project_id ?? "") !== want) continue;
+        const startMs = Date.parse(r.started_at);
+        if (Number.isFinite(startMs) && startMs >= startOfDayMs) {
+            total += Number(r.duration_seconds) || 0;
+        }
+    }
+    return total;
+}
+
 /** True if any completed row still needs syncing — drives the retry-until-synced loop. */
 function hasPendingCompletedSession(rows) {
     return (Array.isArray(rows) ? rows : []).some(
@@ -261,5 +290,6 @@ module.exports = {
     nextBackoffMs,
     BACKOFF_SCHEDULE_MS,
     unsyncedCompletedSecondsForDay,
+    completedSecondsForProjectDay,
     hasPendingCompletedSession,
 };

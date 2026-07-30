@@ -131,6 +131,19 @@ class DatabaseSeeder extends Seeder
             'created_by' => $admin->id,
         ]);
 
+        // Assign members to projects.
+        // Without this the `project_user` pivot stays empty, and an employee signing
+        // in to the desktop agent gets an EMPTY project dropdown — which disables the
+        // Start button outright, so a freshly seeded database cannot track any time.
+        // Everyone gets the two client projects; Internal Tools goes to staff only.
+        $webApp->members()->syncWithoutDetaching(
+            collect($employees)->pluck('id')->push($manager->id, $admin->id, $owner->id)->all()
+        );
+        $mobileApp->members()->syncWithoutDetaching(
+            collect($employees)->pluck('id')->push($manager->id, $admin->id, $owner->id)->all()
+        );
+        $internal->members()->syncWithoutDetaching([$owner->id, $admin->id, $manager->id]);
+
         // Create tasks for projects
         $tasks = [];
         $webTasks = [
