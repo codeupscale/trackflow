@@ -154,6 +154,75 @@ class AttendanceTest extends TestCase
             ]);
     }
 
+    public function test_team_attendance_can_be_searched_by_employee_name(): void
+    {
+        $org = $this->createOrganization();
+        $manager = $this->createUser($org, 'org_manager');
+        $target = $this->createUser($org, 'employee', ['name' => 'Ali Khan']);
+        $other = $this->createUser($org, 'employee', ['name' => 'Faiz Rehmat']);
+
+        $this->actingAs($manager, 'sanctum');
+
+        $response = $this->getJson('/api/v1/hr/attendance/team?search=ali kh');
+
+        $response->assertOk();
+        $userIds = collect($response->json('data'))->pluck('user_id')->unique();
+        $this->assertContains($target->id, $userIds);
+        $this->assertNotContains($other->id, $userIds);
+        $this->assertNotContains($manager->id, $userIds);
+    }
+
+    public function test_team_attendance_search_is_case_insensitive_and_matches_email(): void
+    {
+        $org = $this->createOrganization();
+        $manager = $this->createUser($org, 'org_manager');
+        $target = $this->createUser($org, 'employee', [
+            'name' => 'Abdullah Iftikhar',
+            'email' => 'abdullah.iftikhar@example.com',
+        ]);
+        $other = $this->createUser($org, 'employee', ['name' => 'Ahtisham Butt']);
+
+        $this->actingAs($manager, 'sanctum');
+
+        $response = $this->getJson('/api/v1/hr/attendance/team?search=ABDULLAH.IFTIKHAR@EXAMPLE');
+
+        $response->assertOk();
+        $userIds = collect($response->json('data'))->pluck('user_id')->unique();
+        $this->assertContains($target->id, $userIds);
+        $this->assertNotContains($other->id, $userIds);
+    }
+
+    public function test_team_attendance_search_wildcards_are_escaped(): void
+    {
+        $org = $this->createOrganization();
+        $manager = $this->createUser($org, 'org_manager');
+        $this->createUser($org, 'employee', ['name' => 'Ali Khan']);
+
+        $this->actingAs($manager, 'sanctum');
+
+        // A bare "%" must be treated literally, not as "match everything".
+        $response = $this->getJson('/api/v1/hr/attendance/team?search=%25');
+
+        $response->assertOk();
+        $this->assertSame([], $response->json('data'));
+    }
+
+    public function test_team_attendance_search_cannot_cross_org(): void
+    {
+        $orgA = $this->createOrganization();
+        $orgB = $this->createOrganization();
+        $manager = $this->createUser($orgA, 'org_manager');
+        $foreign = $this->createUser($orgB, 'employee', ['name' => 'Ali Khan']);
+
+        $this->actingAs($manager, 'sanctum');
+
+        $response = $this->getJson('/api/v1/hr/attendance/team?search=Ali Khan');
+
+        $response->assertOk();
+        $userIds = collect($response->json('data'))->pluck('user_id')->unique();
+        $this->assertNotContains($foreign->id, $userIds);
+    }
+
     public function test_employee_cannot_view_team_attendance(): void
     {
         $org = $this->createOrganization();

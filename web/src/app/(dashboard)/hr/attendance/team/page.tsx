@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { Users } from 'lucide-react';
+import { Search, Users, X } from 'lucide-react';
 
+import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
@@ -69,8 +70,38 @@ export default function TeamAttendancePage() {
   });
   const [currentPage, setCurrentPage] = useState(1);
 
+  // Employee search — debounced so typing doesn't fire a request per keystroke.
+  // ANDs with the department filter server-side, so it narrows within the
+  // selected department rather than searching the whole org.
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
+
+  const handleSearchChange = (value: string) => {
+    setSearch(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setDebouncedSearch(value);
+      setCurrentPage(1);
+    }, 300);
+  };
+
+  const clearSearch = () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setSearch('');
+    setDebouncedSearch('');
+    setCurrentPage(1);
+  };
+
   const { data, isLoading, isError } = useTeamAttendance({
     department_id: departmentId,
+    search: debouncedSearch || undefined,
     start_date: dateFrom,
     end_date: dateTo,
     page: currentPage,
@@ -102,7 +133,34 @@ export default function TeamAttendancePage() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
+      <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
+        <div className="flex flex-col gap-1.5 w-full sm:w-[260px]">
+          <Label htmlFor="employee-search">Employee</Label>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
+            <Input
+              id="employee-search"
+              type="search"
+              placeholder="Search by name, email, or ID..."
+              value={search}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              className="pl-9 pr-9"
+              aria-label="Search employees"
+            />
+            {search && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={clearSearch}
+                aria-label="Clear employee search"
+                className="absolute right-1 top-1/2 -translate-y-1/2 size-7 text-muted-foreground hover:text-foreground"
+              >
+                <X className="size-3.5" />
+              </Button>
+            )}
+          </div>
+        </div>
         <div className="flex flex-col gap-1.5 w-full sm:w-[200px]">
           <Label htmlFor="department-filter">Department</Label>
           <DepartmentSelect
@@ -168,11 +226,23 @@ export default function TeamAttendancePage() {
               <div className="text-center">
                 <Users className="mx-auto mb-2 text-muted-foreground" />
                 <p className="text-muted-foreground font-medium">
-                  No attendance records found
+                  {debouncedSearch
+                    ? `No employees match "${debouncedSearch}"`
+                    : 'No attendance records found'}
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">
                   Adjust your filters or date range to view records.
                 </p>
+                {debouncedSearch && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={clearSearch}
+                    className="mt-4"
+                  >
+                    Clear search
+                  </Button>
+                )}
               </div>
             </CardContent>
           </Card>
