@@ -873,6 +873,9 @@ let loginWindow = null;
 // restored invisibly. The dimensions and resolve rules live in
 // ./window-geometry (unit-tested, no Electron import).
 const WindowGeometry = require("./window-geometry");
+// Windows-only: decides when a PINNED window must be moved onto the virtual
+// desktop the user switched to (see _evaluateVirtualDesktopFollow below).
+const VirtualDesktopFollow = require("./virtual-desktop-follow");
 const WINDOW_WIDTH = WindowGeometry.WINDOW_WIDTH;
 const WINDOW_HEIGHT = WindowGeometry.WINDOW_HEIGHT;
 const WINDOW_MIN_WIDTH = WindowGeometry.WINDOW_MIN_WIDTH;
@@ -2747,6 +2750,129 @@ function _applyAlwaysOnTop(win, pinned) {
             `[Pin] setAlwaysOnTop(false) called. isAlwaysOnTop()=${win.isAlwaysOnTop()}`,
         );
     }
+
+    // Windows virtual desktops: a fresh pin starts from a clean slate, and
+    // unpinning stops the follow entirely.
+    _resetVirtualDesktopFollow();
+}
+
+// ── Windows virtual desktops: a pinned window follows the user ────────────────
+// On macOS/Linux `setVisibleOnAllWorkspaces()` puts the pinned window on every
+// Space/workspace. On Windows that call is a documented NO-OP and there is no
+// supported API to pin a window across virtual desktops, so a pinned window
+// stayed stranded on the desktop it was opened on — visible on Desktop 1 and
+// simply absent on Desktops 2/3. (This is about the Windows "multiple desktops"
+// feature, not multiple monitors — a second monitor already works, because the
+// window keeps whatever rect the user dragged it to.)
+//
+// Instead of being on all desktops at once, the pinned window is moved to
+// whichever desktop the user is on: Windows re-assigns a window to the ACTIVE
+// virtual desktop when it is shown, so hide() + showInactive() teleports it.
+// The renderer tells us when the window stopped being painted (Chromium marks a
+// window on another virtual desktop as occluded — see the `report-composited`
+// probe in index-renderer.js); the decision itself lives in the pure, unit
+// tested ./virtual-desktop-follow.
+let _offDesktopSince = null; // epoch ms the window stopped being composited
+let _lastDesktopMoveAt = 0;
+let _followAttempts = 0; // consecutive moves that did not bring it back
+let _followEvalTimer = null;
+
+function _resetVirtualDesktopFollow() {
+    _offDesktopSince = null;
+    _followAttempts = 0;
+    if (_followEvalTimer) {
+        clearTimeout(_followEvalTimer);
+        _followEvalTimer = null;
+    }
+}
+
+/**
+ * True when we believe the window is sitting on a virtual desktop the user is
+ * NOT looking at. Used by showPopup() so a tray click brings the window here
+ * instead of yanking the user across to another desktop.
+ */
+function _isPopupOffCurrentVirtualDesktop() {
+    return process.platform === "win32" && _offDesktopSince !== null;
+}
+
+/**
+ * Re-show the window so Windows re-assigns it to the active virtual desktop.
+ * showInactive(), never show()/focus() — the user is typing in another app and
+ * a pinned tracker must not steal their keystrokes.
+ */
+function _moveWindowToCurrentVirtualDesktop(win) {
+    const bounds = win.getBounds();
+    win.hide();
+    win.showInactive();
+    // Some window managers nudge the rect across a hide/show cycle. Put it back
+    // exactly where the user left it rather than letting the window walk.
+    const after = win.getBounds();
+    if (after.x !== bounds.x || after.y !== bounds.y) {
+        try {
+            win.setBounds(bounds, false);
+        } catch {}
+    }
+    // A re-show can drop the topmost flag; the window is pinned, so re-assert it.
+    if (isAlwaysOnTop) win.setAlwaysOnTop(true);
+}
+
+function _evaluateVirtualDesktopFollow() {
+    if (_followEvalTimer) {
+        clearTimeout(_followEvalTimer);
+        _followEvalTimer = null;
+    }
+    const win = popupWindow;
+    if (!win || win.isDestroyed()) {
+        _resetVirtualDesktopFollow();
+        return;
+    }
+
+    const decision = VirtualDesktopFollow.decideFollowAction({
+        platform: process.platform,
+        pinned: isAlwaysOnTop,
+        windowVisible: win.isVisible(),
+        minimized: win.isMinimized(),
+        offDesktopSince: _offDesktopSince,
+        lastMoveAt: _lastDesktopMoveAt,
+        attempts: _followAttempts,
+        now: Date.now(),
+    });
+
+    if (decision.action === "wait") {
+        _followEvalTimer = setTimeout(
+            _evaluateVirtualDesktopFollow,
+            Math.max(50, decision.retryInMs || 200),
+        );
+        return;
+    }
+    if (decision.action !== "move") return;
+
+    _lastDesktopMoveAt = Date.now();
+    _followAttempts += 1;
+    console.log(
+        `[Pin] Pinned window is off the active virtual desktop — moving it here (attempt ${_followAttempts}).`,
+    );
+    try {
+        _moveWindowToCurrentVirtualDesktop(win);
+    } catch (e) {
+        console.warn(`[Pin] Virtual-desktop follow failed: ${e.message}`);
+    }
+}
+
+/**
+ * Renderer report: is this window actually being composited (i.e. on the desktop
+ * the user is looking at)? False also covers "hidden to tray" and "minimised",
+ * which is why the decision layer checks isVisible()/isMinimized() before acting.
+ */
+function _onRendererComposited(composited) {
+    if (process.platform !== "win32") return;
+    if (composited) {
+        // Back on screen — the follow worked (or the user came back to us).
+        _resetVirtualDesktopFollow();
+        return;
+    }
+    if (_offDesktopSince === null) _offDesktopSince = Date.now();
+    _evaluateVirtualDesktopFollow();
 }
 
 function showPopup() {
@@ -2779,6 +2905,18 @@ function showPopup() {
         } catch {}
         // A window minimised to the Dock/taskbar must come back, not just focus.
         if (popupWindow.isMinimized()) popupWindow.restore();
+        // Windows: if the window is parked on another virtual desktop, show()
+        // would drag the USER over to that desktop. Hide first so the following
+        // show() re-assigns the window to the desktop they are on instead.
+        if (
+            _isPopupOffCurrentVirtualDesktop() &&
+            popupWindow.isVisible() &&
+            !popupWindow.isMinimized()
+        ) {
+            try {
+                popupWindow.hide();
+            } catch {}
+        }
         popupWindow.show();
         popupWindow.focus();
         setImmediate(() => {
@@ -2919,6 +3057,7 @@ function showPopup() {
 
     popupWindow.on("closed", () => {
         popupWindow = null;
+        _resetVirtualDesktopFollow();
     });
 }
 
@@ -3168,6 +3307,24 @@ function setupIPC() {
 
     ipcMain.handle("get-pin-state", () => {
         return { pinned: isAlwaysOnTop };
+    });
+
+    // Windows virtual-desktop follow. The renderer reports whether the window is
+    // actually being painted; Chromium treats a window sitting on another virtual
+    // desktop as occluded, which is the only signal Electron gives us on Windows.
+    // `on` (not `handle`) — fire-and-forget, and it can arrive many times, so the
+    // previous listener is dropped before re-registering.
+    ipcMain.removeAllListeners("report-composited");
+    ipcMain.on("report-composited", (event, composited) => {
+        // Only the main window drives this — ignore the login/idle windows.
+        if (
+            !popupWindow ||
+            popupWindow.isDestroyed() ||
+            event.sender !== popupWindow.webContents
+        ) {
+            return;
+        }
+        _onRendererComposited(!!composited);
     });
 
     ipcMain.handle("check-screen-permission", async () => {

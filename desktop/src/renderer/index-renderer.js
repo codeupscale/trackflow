@@ -610,6 +610,13 @@ dashboardLink.addEventListener('click', () => window.trackflow.openDashboard());
 // to tray without stopping the timer. Sign out lives in the footer only.
 const pinBtn = document.getElementById('pinBtn');
 
+// Assigned by the Windows compositing probe below (no-op elsewhere). Pinning is
+// what turns the virtual-desktop follow on, so a fresh pin must re-state whether
+// this window is currently on screen — otherwise a window pinned from the TRAY
+// while it sits on another desktop would stay stranded there: it is already
+// occluded, so no `visibilitychange` is coming to tell main about it.
+let resyncCompositedReport = () => {};
+
 function updatePinUI(pinned) {
   if (pinned) {
     pinBtn.classList.add('pinned');
@@ -638,7 +645,77 @@ pinBtn.addEventListener('click', async () => {
 // Listen for pin state changes from main process (e.g. tray menu toggle)
 window.trackflow.onPinStateChanged((data) => {
   if (data) updatePinUI(data.pinned);
+  resyncCompositedReport();
 });
+
+// ── Windows virtual desktops: tell main whether this window is on screen ──────
+// Pinning shows the window on every Space (macOS) / workspace (Linux) for free,
+// but `setVisibleOnAllWorkspaces()` does nothing on Windows and Windows has no
+// supported API to pin a window across virtual desktops — so a pinned window sat
+// on Desktop 1 and never appeared on Desktop 2/3. Main solves that by MOVING the
+// pinned window to whichever desktop the user is on, and this probe is how it
+// finds out that the window is no longer there.
+//
+// Two independent signals, because Chromium reports occlusion differently across
+// Windows builds:
+//   1. `document.visibilityState` — a window on another virtual desktop is
+//      occluded, which normally flips this to 'hidden'. Event-driven, instant.
+//   2. Animation-frame starvation — an unpainted window gets no frames. One rAF
+//      is requested per poll; if it never lands, we are not being composited.
+//      This is the backstop for builds that keep reporting 'visible'.
+// Windows-only: macOS/Linux handle pinning natively and must not pay for a poll.
+if (isWin && window.trackflow.reportComposited) {
+  const POLL_MS = 700;
+  const FRAME_STALL_MS = 2500;   // no frame for this long => not being painted
+  const HEARTBEAT_MS = 2000;     // re-report while off-screen so a failed move retries
+  const MAX_HEARTBEATS = 5;      // ...but never report forever into the void
+
+  let framePending = false;
+  let lastFrameAt = Date.now();
+  let lastReported = null;
+  let lastSentAt = 0;
+  let heartbeats = 0;
+
+  const isComposited = () =>
+    document.visibilityState === 'visible' && Date.now() - lastFrameAt < FRAME_STALL_MS;
+
+  function report(force) {
+    const composited = isComposited();
+    const now = Date.now();
+    const changed = composited !== lastReported;
+    // While off-screen, repeat a few times: the move may not have stuck, and a
+    // repeat is the only way main gets to try again.
+    const heartbeatDue =
+      !composited && !changed && heartbeats < MAX_HEARTBEATS && now - lastSentAt >= HEARTBEAT_MS;
+    if (!changed && !heartbeatDue && !force) return;
+
+    heartbeats = composited || changed ? 0 : heartbeats + 1;
+    lastReported = composited;
+    lastSentAt = now;
+    window.trackflow.reportComposited(composited);
+  }
+
+  setInterval(() => {
+    if (!framePending) {
+      framePending = true;
+      requestAnimationFrame(() => {
+        framePending = false;
+        lastFrameAt = Date.now();
+      });
+    }
+    report(false);
+  }, POLL_MS);
+
+  // Instant path: leaving/entering a virtual desktop usually fires this.
+  document.addEventListener('visibilitychange', () => report(false));
+
+  // Pin toggled: re-state the current situation from scratch (see the
+  // declaration of this hook above the pin button for why).
+  resyncCompositedReport = () => {
+    heartbeats = 0;
+    report(true);
+  };
+}
 
 // Keyboard shortcuts — platform-aware
 document.addEventListener('keydown', (e) => {
