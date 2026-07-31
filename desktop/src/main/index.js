@@ -917,11 +917,11 @@ function saveWindowBounds(bounds) {
 }
 
 let idleAlertWindow = null;
-// ISSUE 4 FIX: On multi-monitor setups the idle alert must appear on EVERY display
-// so it is never missed on the screen the user is actually looking at. `idleAlertWindow`
-// is the PRIMARY, interactive window (on the display under the cursor); these are the
-// mirror windows shown on the other displays. All are torn down together on resolve.
-let _idleAlertExtraWindows = [];
+// The idle alert is a SINGLETON: exactly one window, on the display the cursor is
+// on. It used to be mirrored onto every monitor (one window per display), which is
+// how a user who locked the laptop and came back an hour later found a stack of
+// idle windows. A single window is enough because the alert floats above every
+// app and is visible on every Space / virtual desktop — see showIdleAlert().
 // Bug B: snapshot of the idle state preserved across a sleep/lock while an idle
 // alert is genuinely pending. Set in onSuspendCleanup, consumed (and cleared) in
 // onResumeAfterSleep to re-enter ALERTING with the SAME idleStartedAt. null when
@@ -1015,18 +1015,16 @@ function refreshProjectsOnOpen(onUpdated) {
         .catch(() => {});
 }
 
-// ISSUE 4 FIX: every live idle-alert window (primary + per-display mirrors).
+// The live idle-alert window, as a list — there is at most one, but the reveal /
+// hide / broadcast / sweep call sites all iterate, which is what keeps the
+// singleton rule enforceable in one place.
 function _getAllIdleAlertWindows() {
-    const all = [];
     if (idleAlertWindow && !idleAlertWindow.isDestroyed())
-        all.push(idleAlertWindow);
-    for (const w of _idleAlertExtraWindows) {
-        if (w && !w.isDestroyed()) all.push(w);
-    }
-    return all;
+        return [idleAlertWindow];
+    return [];
 }
 
-// Send an IPC message to every idle-alert window (all displays).
+// Send an IPC message to the idle-alert window.
 function _broadcastToIdleAlerts(channel, payload) {
     for (const w of _getAllIdleAlertWindows()) {
         try {
@@ -1035,17 +1033,22 @@ function _broadcastToIdleAlerts(channel, payload) {
     }
 }
 
-// Destroy the mirror (non-primary) idle-alert windows and clear the list.
-function _destroyIdleAlertExtras() {
-    for (const w of _idleAlertExtraWindows) {
-        if (w && !w.isDestroyed()) {
-            w._dismissedProgrammatically = true;
-            try {
-                w.destroy();
-            } catch {}
-        }
+/**
+ * Destroy EVERY idle-alert window that is still alive.
+ *
+ * This is what enforces "exactly one idle window, ever". It used to reap only the
+ * per-display MIRRORS, so a stale primary left behind by an interrupted cycle
+ * (lock the machine mid-alert, come back an hour later) could coexist with the
+ * freshly created one — the user came back to a stack of idle windows.
+ */
+function _destroyAllIdleAlertWindows() {
+    for (const w of _getAllIdleAlertWindows()) {
+        w._dismissedProgrammatically = true;
+        try {
+            w.destroy();
+        } catch {}
     }
-    _idleAlertExtraWindows = [];
+    idleAlertWindow = null;
 }
 
 function pushProjectsToIdleAlert(projects) {
@@ -2060,21 +2063,40 @@ async function initializeApp() {
             dismissIdleAlert();
             return;
         }
-        // Raise the pause FIRST: it flips isTimerPaused and stamps the freeze anchor
-        // synchronously (its `await` only covers the best-effort server POST), so the
-        // repaint below — and every later tray/popup repaint — measures elapsed to the
-        // idle-start instant instead of the wall clock. Tray shows the TRACKED TIME
-        // frozen at the moment idle began (e.g. "⏸ 02:26:40"), NOT "Idle (5m)"; the
-        // popup gets the same value so the two never disagree. The idle interval is not
-        // counted yet (pending keep/discard/reassign) — resumeTimerAfterIdle() clears
-        // the freeze and startTrayTimer() re-arms the live count.
-        pauseTimerForIdle(
-            idleStartedAt
-                ? new Date(idleStartedAt).toISOString()
-                : new Date().toISOString(),
-        ).catch(() => {});
+        // Raise the pause FIRST: it flips isTimerPaused and stamps the freeze anchor,
+        // so the repaint below — and every later tray/popup repaint — measures elapsed
+        // to the idle-start instant instead of the wall clock. Tray shows the TRACKED
+        // TIME frozen at the moment idle began (e.g. "⏸ 02:26:40"), NOT "Idle (5m)";
+        // the popup gets the same value so the two never disagree. The idle interval is
+        // not counted yet (pending continue/stop) — resumeTimerAfterIdle() clears the
+        // freeze and startTrayTimer() re-arms the live count.
+        //
+        // `pauseTimerForIdle()` is SYNCHRONOUS and returns undefined: since the
+        // local-first refactor the idle pause is a pure SQLite/in-memory operation
+        // with no server call. It used to be `async` and this line used to end in
+        // `.catch(() => {})` — which, once it stopped returning a promise, threw
+        // `Cannot read properties of undefined (reading 'catch')` on EVERY idle
+        // detection, before showIdleAlert() could run. The idle window then never
+        // appeared on any OS, and the detector was left wedged in DETECTED (see the
+        // matching guard in idle-detector._check()). Never chain a promise method here.
+        try {
+            pauseTimerForIdle(
+                idleStartedAt
+                    ? new Date(idleStartedAt).toISOString()
+                    : new Date().toISOString(),
+            );
+        } catch (e) {
+            // A failed pause must never cost the user the alert itself — the alert is
+            // the only way they can resolve the idle period.
+            console.error("[Idle] pauseTimerForIdle failed:", e.message);
+        }
         renderIdleFreeze();
-        showIdleAlert(idleSeconds, idleStartedAt, actionId);
+        // Wrapped in Promise.resolve() so this survives showIdleAlert() ever becoming
+        // synchronous, and so a rejection is LOGGED rather than swallowed as an
+        // unhandled rejection — a silently lost alert is exactly what this bug was.
+        Promise.resolve(
+            showIdleAlert(idleSeconds, idleStartedAt, actionId),
+        ).catch((e) => console.error("[Idle] showIdleAlert failed:", e?.message));
     });
 
     idleDetector.onAutoStop((totalIdleSeconds, actionId) => {
@@ -4992,9 +5014,7 @@ function isIdleAlertActive() {
     const detectorSuspended =
         idleDetector?.state === "SUSPENDED" ||
         (_idleSuspendState && _idleSuspendState.isIdle);
-    const windowLive =
-        (idleAlertWindow && !idleAlertWindow.isDestroyed()) ||
-        _idleAlertExtraWindows.some((w) => w && !w.isDestroyed());
+    const windowLive = !!(idleAlertWindow && !idleAlertWindow.isDestroyed());
     return !!(detectorIdle || detectorSuspended || windowLive);
 }
 
@@ -5093,24 +5113,33 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     // fresh list is pushed via idle-data when it arrives.
     refreshProjectsOnOpen(pushProjectsToIdleAlert);
 
-    // ISSUE 4 FIX: show one idle alert per display. Clear any stray mirrors from a
-    // previous cycle first, then pick the display under the cursor as the PRIMARY
-    // (interactive) window and mirror the alert onto every other display.
-    _destroyIdleAlertExtras();
+    // EXACTLY ONE idle window. Anything left alive from an earlier cycle is torn
+    // down first — a lock/sleep that interrupts an alert, or a re-show racing a
+    // teardown, must never leave a second window behind. Reported by the owner
+    // after locking the laptop and returning an hour later to a stack of them.
+    //
+    // This also retires the per-display MIRRORS (one alert on every monitor).
+    // Mirroring was added so a user working on a second monitor couldn't miss the
+    // alert, but the alert already floats above every app, on every Space/virtual
+    // desktop, and it is now placed on the display the CURSOR is on — the one the
+    // user is actually looking at. Two identical modal windows is a worse answer
+    // to that problem than one that shows up in the right place.
+    _destroyAllIdleAlertWindows();
 
-    let displays;
-    let primaryDisplay;
+    let alertDisplay;
     try {
-        displays = screen.getAllDisplays();
-        primaryDisplay = screen.getDisplayNearestPoint(
+        alertDisplay = screen.getDisplayNearestPoint(
             screen.getCursorScreenPoint(),
         );
     } catch {
-        displays = [];
-        primaryDisplay = null;
+        alertDisplay = null;
     }
-    if (!Array.isArray(displays) || displays.length === 0) {
-        displays = primaryDisplay ? [primaryDisplay] : [];
+    if (!alertDisplay) {
+        try {
+            alertDisplay = screen.getPrimaryDisplay();
+        } catch {
+            alertDisplay = null;
+        }
     }
 
     const IDLE_W = 380;
@@ -5161,59 +5190,16 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
             opts.fullScreenable = false;
         }
         const win = new BrowserWindow(opts);
-        // ALL-WORKSPACES FIX: make the alert follow the user everywhere, exactly
-        // like the tray popup. Must be applied to EVERY alert window (primary +
-        // per-display mirrors), which is why it lives here in the shared factory.
+        // ALL-WORKSPACES FIX: make the alert follow the user everywhere. This is
+        // what lets a SINGLE window replace the per-display mirrors — it floats
+        // over fullscreen apps and appears on whichever Space / virtual desktop
+        // the user is on.
         _applyIdleAlertEverywhereVisible(win);
         return win;
     }
 
-    // Order displays so the cursor's display is created first (becomes primary).
-    const orderedDisplays = [];
-    if (primaryDisplay) orderedDisplays.push(primaryDisplay);
-    for (const d of displays) {
-        if (!primaryDisplay || d.id !== primaryDisplay.id)
-            orderedDisplays.push(d);
-    }
-    if (orderedDisplays.length === 0) orderedDisplays.push(null);
-
-    // Create every display's window. The first (cursor display) is the primary,
-    // interactive window and carries the full close/re-show state machine; the
-    // rest are mirrors that share the same resolve path via the preload bridge.
-    idleAlertWindow = _createIdleWindowOnDisplay(orderedDisplays[0]);
-    for (let i = 1; i < orderedDisplays.length; i++) {
-        const mirror = _createIdleWindowOnDisplay(orderedDisplays[i]);
-        mirror._actionId = alertActionId;
-        mirror._dismissedProgrammatically = false;
-        let mirrorShown = false;
-        const showMirror = () => {
-            if (mirrorShown || mirror.isDestroyed()) return;
-            mirrorShown = true;
-            // Same platform reveal treatment as the primary (macOS re-assert /
-            // Windows flashFrame+moveTop) so every display's alert surfaces.
-            _revealIdleAlertWindow(mirror);
-            mirror.webContents.send(
-                "idle-data",
-                buildIdleAlertPayload(_idleAlertShownAt),
-            );
-        };
-        mirror.once("ready-to-show", showMirror);
-        mirror.webContents.once("did-finish-load", showMirror);
-        mirror.on("closed", () => {
-            _idleAlertExtraWindows = _idleAlertExtraWindows.filter(
-                (w) => w !== mirror,
-            );
-        });
-        mirror
-            .loadFile(path.join(__dirname, "..", "renderer", "idle-alert.html"))
-            .catch((err) => {
-                console.error(
-                    "[IdleAlert] Failed to load idle-alert.html (mirror):",
-                    err.message,
-                );
-            });
-        _idleAlertExtraWindows.push(mirror);
-    }
+    // ONE window, on the display the cursor is on.
+    idleAlertWindow = _createIdleWindowOnDisplay(alertDisplay);
 
     // Keep a local reference so the ready-to-show / did-finish-load callbacks
     // always operate on the window they were registered on, even if the outer
@@ -5254,9 +5240,9 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
 
     win.on("closed", () => {
         idleAlertWindow = null;
-        // The primary is gone — tear down any mirror windows so no orphan idle
-        // alert is left on another display.
-        _destroyIdleAlertExtras();
+        // Sweep anything else that somehow survived, so no orphan idle alert is
+        // ever left behind on another display or Space.
+        _destroyAllIdleAlertWindows();
         if (!win._dismissedProgrammatically) {
             if (idleDetector?.isIdleActive() && isTimerRunning) {
                 console.log(
@@ -5311,15 +5297,10 @@ function dismissIdleAlert() {
     // torn down (resolve/stop/logout) — clear it so a later resume never re-shows
     // a stale idle window.
     _idleSuspendState = null;
-    // ISSUE 4 FIX: tear down every display's idle alert together so none is orphaned.
-    _destroyIdleAlertExtras();
-    if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
-        // Mark as programmatic dismissal so the 'closed' handler doesn't
-        // re-arm the idle detector (handleIdleAction already did that).
-        idleAlertWindow._dismissedProgrammatically = true;
-        idleAlertWindow.destroy();
-    }
-    idleAlertWindow = null;
+    // Tear down every idle-alert window there is. `_dismissedProgrammatically` is
+    // set inside the sweeper, so the 'closed' handler does not re-arm the idle
+    // detector (handleIdleAction already did that).
+    _destroyAllIdleAlertWindows();
     // Alert is gone — release the popup lock (recomputed, so a still-ALERTING
     // detector with a hidden window keeps the popup locked).
     notifyIdleLockState();
