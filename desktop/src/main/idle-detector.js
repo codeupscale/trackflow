@@ -451,11 +451,25 @@ class IdleDetector {
             this._clearInterval();
 
             if (this._onIdleDetected) {
-                this._onIdleDetected(
-                    systemIdleSec,
-                    this.idleStartedAt,
-                    this._actionId,
-                );
+                // NEVER let a caller exception escape. The lines below re-arm the
+                // detector; skipping them leaves it stranded in DETECTED with no
+                // interval, which means idle is never detected again for the rest of
+                // the session AND every isIdleActive() consumer (the idle hard-stop
+                // watchdog, the popup lock) believes an alert is on screen forever.
+                // That is precisely how one bad call site cost every OS its idle
+                // window — see bugs/desktop-idle-alert-never-appears.md.
+                try {
+                    this._onIdleDetected(
+                        systemIdleSec,
+                        this.idleStartedAt,
+                        this._actionId,
+                    );
+                } catch (err) {
+                    console.error(
+                        "[IdleDetector] onIdleDetected callback threw:",
+                        err && err.message,
+                    );
+                }
             }
 
             // Transition to ALERTING after callback (caller should show alert).
@@ -464,11 +478,21 @@ class IdleDetector {
             // never fires — the alert stays visible until the user resolves it.
             // The interval is kept so the ALERTING invariant (checkInterval != null)
             // and its state-cleanup path on resolve/suspend are unchanged.
-            this._state = IDLE_STATE.ALERTING;
-            this.checkInterval = setInterval(
-                () => this._checkAutoStop(),
-                this.checkIntervalMs,
-            );
+            //
+            // ONLY when the callback left us in DETECTED. The `keep_idle_time`
+            // policies that never open a window ('always' resolves + re-starts,
+            // 'never' discards) move the detector on themselves; forcing ALERTING
+            // over the top of that stomped their fresh WATCHING state and orphaned
+            // the interval start() had just armed — idle silently stopped working
+            // for those orgs too.
+            if (this._state === IDLE_STATE.DETECTED) {
+                this._state = IDLE_STATE.ALERTING;
+                this._clearInterval();
+                this.checkInterval = setInterval(
+                    () => this._checkAutoStop(),
+                    this.checkIntervalMs,
+                );
+            }
         } else if (
             systemIdleSec >= this.idleTimeoutSec - BOUNDARY_LEAD_SEC &&
             systemIdleSec < this.idleTimeoutSec
