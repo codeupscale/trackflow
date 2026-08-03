@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#
+# Refuse to commit the 2026-08 supply-chain payload, or anything using its technique.
+#
+# Enable (once per clone — hooks are not shared by git automatically):
+#
+#     git config core.hooksPath .githooks
+#
+# Bypass in a genuine emergency with `git commit --no-verify`, and then go and read
+# bugs/incident-2026-08-supply-chain-payload-in-postcss-config.md, because the last
+# time this fired for real it had been sitting in the repo unnoticed.
+
+exec "$(git rev-parse --show-toplevel)/scripts/scan-for-malware.sh" --staged
