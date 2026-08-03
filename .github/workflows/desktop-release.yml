@@ -378,9 +378,14 @@ jobs:
       - name: Update marketing version
         run: |
           VER="${{ needs.preflight.outputs.version }}"
+          # RELEASE_URL must reference DESKTOP_VERSION (which already carries the leading
+          # "v"), NOT a `${VER}` that exists only in this shell and not in the emitted
+          # TypeScript module. Getting that wrong re-broke version.ts on every production
+          # release and failed deploy.yml's "Marketing type check" gate — which skips the
+          # API image build, silently leaving production on a stale backend.
           cat > marketing/src/lib/version.ts <<EOF
           export const DESKTOP_VERSION = 'v${VER}'
-          export const RELEASE_URL = \`https://github.com/codeupscale/trackflow/releases/tag/v\${VER}\`
+          export const RELEASE_URL = \`https://github.com/codeupscale/trackflow/releases/tag/\${DESKTOP_VERSION}\`
           EOF
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
