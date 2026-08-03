@@ -11,13 +11,12 @@ return [
     | before automated cleanup is allowed to force-close it.
     |
     | Desktop agents queue heartbeats while offline and flush them on reconnect,
-    | so a 30-minute threshold would truncate legitimate offline work. This grace
-    | window must cover the longest expected offline-tracking stretch (~3-4 hours)
-    | so that flushed heartbeats land before the entry is auto-closed.
+    | so a heartbeat-only threshold would truncate legitimate offline work.
     |
-    | Used by:
-    |   - App\Console\Commands\CleanupStaleEntries (primary cleanup threshold)
-    |   - App\Jobs\CloseStaleTimerEntriesJob       (longer backstop, >= this value)
+    | NOTE: entry auto-closing no longer uses this value — it moved to
+    | `abandoned_after_minutes` below, whose liveness rule also counts
+    | `client_synced_at` and so does not need a multi-hour cushion for queued
+    | heartbeats. This setting remains for token/session grace in AuthTokenService.
     |
     */
 
@@ -64,6 +63,27 @@ return [
     */
 
     'max_entry_duration' => (int) env('TIMER_MAX_ENTRY_DURATION', 86400), // 24 hours
+
+    /*
+    |--------------------------------------------------------------------------
+    | Abandoned Entry Window (minutes)
+    |--------------------------------------------------------------------------
+    |
+    | Silence after which an OPEN entry is treated as abandoned by an agent that is
+    | never coming back (reimaged, stolen, permanently offline) and is closed at its
+    | last known activity — never at now().
+    |
+    | Liveness is the MOST RECENT of the last heartbeat and `client_synced_at`, and
+    | `client_synced_at` is stamped on EVERY push of the live session including one
+    | that carries no change, so a healthy agent refreshes it at least once per upload
+    | interval. That is what makes a window this tight safe: only an agent that is
+    | genuinely unreachable goes quiet for an hour.
+    |
+    | Used by: App\Services\TimeEntrySyncService::closeAbandonedOpenEntries()
+    |
+    */
+
+    'abandoned_after_minutes' => (int) env('TIMER_ABANDONED_AFTER_MINUTES', 60),
 
     /*
     |--------------------------------------------------------------------------

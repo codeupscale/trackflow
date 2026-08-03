@@ -220,10 +220,29 @@ class WorkSessionStore {
      * halves in one transaction is what guarantees the timeline stays contiguous: there
      * is no window in which the user has two open sessions, or none.
      */
-    closeAndReopen(id, atIso, { projectId, taskId = null } = {}) {
+    /**
+     * Close a session and open its successor, in one transaction.
+     *
+     * `reopenAtIso` defaults to `atIso` — contiguous, which is what a project switch
+     * and the midnight split need: no instant may belong to no session.
+     *
+     * An IDLE discard is the opposite: it MUST pass a later `reopenAtIso` (the moment
+     * the user answered the prompt) so the idle span between the two rows belongs to
+     * NOBODY. Without it the gap is not discarded at all — it is merely moved into the
+     * new row and still billed. That is exactly what shipped: verified on a real
+     * session where the successor opened at idle-start and swallowed 13 idle minutes.
+     * See bugs/desktop-idle-continue-still-bills-the-idle-gap.md.
+     */
+    closeAndReopen(id, atIso, { projectId, taskId = null, reopenAtIso = null } = {}) {
+        const startedAt = reopenAtIso || atIso;
+        if (Date.parse(startedAt) < Date.parse(atIso)) {
+            throw new Error(
+                'closeAndReopen: reopenAtIso must be at or after the close instant',
+            );
+        }
         const run = this.db.transaction(() => {
             this.close(id, atIso);
-            return this.open({ projectId, taskId, startedAt: atIso });
+            return this.open({ projectId, taskId, startedAt });
         });
         return run();
     }

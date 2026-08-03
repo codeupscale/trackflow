@@ -68,6 +68,7 @@ const {
     hasPendingCompletedSession,
     unsyncedCompletedSecondsForDay,
     completedSecondsForProjectDay,
+    staleLiveSessionDecision,
 } = require("./session-rules");
 const { WorkSessionStore } = require("./work-session-store");
 const { SessionSyncWorker } = require("./session-sync-worker");
@@ -273,6 +274,32 @@ function touchLastActiveAt(iso = new Date().toISOString()) {
 
 function loadLastActiveAt() {
     return loadUserPrefs().lastActiveAt || null;
+}
+
+/**
+ * Stamp "last real input" from the OS idle counter — no network, no server ack.
+ *
+ * Called from the 1s tray tick and throttled to one disk write per 30s (the stamp
+ * feeds auto-stop back-dating, which is not sensitive to sub-30s precision, and
+ * writing user-prefs every second would be gratuitous I/O).
+ */
+let _lastActiveStampAt = 0;
+const LAST_ACTIVE_STAMP_INTERVAL_MS = 30_000;
+
+function _stampLastActiveFromOsIdle() {
+    const now = Date.now();
+    if (now - _lastActiveStampAt < LAST_ACTIVE_STAMP_INTERVAL_MS) return;
+    let idleSec;
+    try {
+        idleSec = powerMonitor.getSystemIdleTime();
+    } catch {
+        // Some Linux/Wayland sessions can throw — fall back to "now" rather than
+        // letting the stamp rot, which would make a live session look dead.
+        idleSec = 0;
+    }
+    if (!Number.isFinite(idleSec) || idleSec < 0) idleSec = 0;
+    _lastActiveStampAt = now;
+    touchLastActiveAt(new Date(now - idleSec * 1000).toISOString());
 }
 
 function saveAutoStopReason(reason) {
@@ -1304,10 +1331,26 @@ function closeLocalSession(localId, endedAtIso = null) {
  * Close the live session and open a fresh one at the same instant, atomically.
  * Used by project switch, idle "continue tracking", and the midnight split.
  */
-function splitLocalSession(localId, atIso, projectId, taskId = null) {
+/**
+ * Close the live session at `atIso` and open its successor.
+ *
+ * `reopenAtIso` defaults to `atIso` (contiguous — project switch, midnight split).
+ * The IDLE discard passes the resume instant so the idle span belongs to no session.
+ */
+function splitLocalSession(
+    localId,
+    atIso,
+    projectId,
+    taskId = null,
+    reopenAtIso = null,
+) {
     const store = getWorkSessionStore();
     if (!store || !localId) return null;
-    return store.closeAndReopen(localId, atIso, { projectId, taskId });
+    return store.closeAndReopen(localId, atIso, {
+        projectId,
+        taskId,
+        reopenAtIso,
+    });
 }
 
 /** Discard a just-closed session too short to be real work. Never touches synced rows. */
@@ -1538,6 +1581,33 @@ function onFocusRecheckScreenPermission() {
     refreshScreenPermissionOnFocus().catch(() => {});
 }
 app.on("browser-window-focus", onFocusRecheckScreenPermission);
+
+// ── Termination signals ──────────────────────────────────────────────────────
+// "Force quit by any means must not leave the session open."
+//
+// Every termination the OS lets us SEE is routed into the same graceful path as
+// tray > Quit: `app.quit()` runs the `before-quit` handler below, which closes the
+// live session locally and flushes within a bounded budget. That covers `kill`
+// (SIGTERM), Ctrl+C (SIGINT), a closing terminal (SIGHUP), Activity Monitor's
+// "Quit", Task Manager's "End task", and an OS logout/shutdown.
+//
+// SIGKILL — macOS "Force Quit" dialog, `kill -9`, a pulled battery — runs NO
+// JavaScript, on any platform, by design of the kernel. Nothing can close anything
+// at that instant. What protects the user there is local-first recovery: the row is
+// already durable in SQLite, and the next launch closes it at the last real input
+// (`detectAndCloseStaleSessionOnStartup`), as does the stale-session guard in
+// maybeSplitAtMidnight() if the app comes back long afterwards.
+for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+    process.on(signal, () => {
+        console.log(`[Quit] ${signal} received — closing session gracefully.`);
+        logToFile("info", `[SIGNAL_QUIT] ${signal}`);
+        try {
+            app.quit();
+        } catch (e) {
+            console.error("[Quit] app.quit() failed:", e.message);
+        }
+    });
+}
 
 // Stop timer gracefully before quitting (with timeout to avoid hanging)
 app.on("before-quit", async (e) => {
@@ -1992,12 +2062,9 @@ async function initializeApp() {
     // Initialize network monitor for online/offline detection
     networkMonitor = new NetworkMonitor();
     networkMonitor.on("online", async () => {
-        console.log("[Network] Back online — syncing sessions and flushing queue");
-        // Push the local session backlog, then the dependent uploads. syncNow() does
-        // both in that order (screenshots/heartbeats FK to entry ids that only exist
-        // once their session has synced) and bypasses any backoff window, since a
-        // confirmed reconnect is exactly when the backoff should be abandoned.
-        await sessionSyncWorker?.syncNow("online", { ignoreBackoff: true });
+        console.log("[Network] Back online");
+        // No upload on reconnect: the interval will pick the backlog up within one
+        // cycle, and a cycle that failed while offline is already retried there.
         // Notify renderer of status change
         notifyPopup("network-status", { online: true });
         // CONVERGENCE: after an offline stop/discard syncs, the tray title still
@@ -2355,15 +2422,8 @@ async function initializeApp() {
                     updateTrayTitle();
                 }
             }
-            // Upload runs only after any gap-stop above has fully settled, so the
-            // session boundaries pushed are the final ones.
-            if (networkMonitor?.isOnline && apiClient) {
-                setImmediate(() => {
-                    sessionSyncWorker
-                        ?.syncNow("wake", { ignoreBackoff: true })
-                        .catch(() => {});
-                });
-            }
+            // No upload on wake — the interval resumes with the machine and pushes
+            // whatever the sleep left behind on its next cycle.
             // Tell the user their CURRENT state on wake/unlock. Self-suppresses if
             // the sleep-gap/watchdog just auto-stopped (markAutoStopNotified ran
             // above) or if an idle alert is being re-shown — one message, no
@@ -3770,7 +3830,7 @@ async function switchProject(projectId) {
         });
         updateTrayTitle();
 
-        sessionSyncWorker?.syncNow("project-switch");
+        // No upload here — the interval owns that.
 
         return {
             success: true,
@@ -3938,10 +3998,9 @@ async function startTimer(projectId = null) {
         }
         setImmediate(() => afterStartTimer(projectId, todayTotalCurrentProject));
 
-        // Nudge the sync worker so a start is visible on the dashboard promptly when
-        // online, instead of waiting up to a full interval. Fire-and-forget: the
-        // session is already durable.
-        sessionSyncWorker?.syncNow("timer-start");
+        // NO upload here. Tracking is local; the sync worker pushes on its own
+        // interval (see SYNC_INTERVAL_MS). The session is already durable in SQLite,
+        // so the only cost of waiting is dashboard freshness.
 
         return {
             success: true,
@@ -4411,15 +4470,16 @@ async function stopTimer(options = {}) {
         // Post-stop async work (non-blocking). The session is already durable; this
         // only refreshes the DISPLAYED totals and nudges the upload.
         (async () => {
-            // Push promptly so the dashboard reflects the stop, rather than waiting up
-            // to a full sync interval. Failure is fine — the row stays dirty and the
-            // worker retries on its own schedule.
-            await sessionSyncWorker?.syncNow("timer-stop");
-
-            // Re-read the server totals: they include MANUAL entries, which the agent
-            // does not own and cannot compute locally. Offline, fall back to the local
-            // accumulated total — NEVER 0, or a sleep auto-stop would show 00:00:00
-            // despite the time being safely recorded.
+            // NO upload here — uploads happen on the sync interval only. The stop is
+            // already durable in SQLite; this block just refreshes the DISPLAYED
+            // totals.
+            //
+            // Because the just-stopped session has NOT been pushed yet, the server
+            // total does not contain it. Adding the local unsynced-completed seconds
+            // on top is what stops the total visibly DROPPING by the length of the
+            // session the user just finished — the same rule the status poll uses.
+            // The server figure is still needed because it includes MANUAL entries,
+            // which the agent does not own and cannot compute locally.
             const localGlobal =
                 (todayTotalGlobal || 0) +
                 Math.max(0, sessionElapsed - pendingIdleAtStop);
@@ -4427,9 +4487,11 @@ async function stopTimer(options = {}) {
                 const serverGlobal = await apiClient?.getTodayTotal(null);
                 todayTotalGlobal =
                     serverGlobal != null && serverGlobal >= 0
-                        ? serverGlobal
+                        ? serverGlobal + getUnsyncedCompletedSecondsForToday()
                         : localGlobal;
             } catch {
+                // Offline — keep the local accumulated total. NEVER 0, or a sleep
+                // auto-stop would show 00:00:00 despite the time being safely saved.
                 todayTotalGlobal = localGlobal;
             }
             updateTrayTitle();
@@ -4438,8 +4500,14 @@ async function stopTimer(options = {}) {
             try {
                 const serverTotal =
                     await apiClient?.getTodayTotal(stoppedProjectId);
+                // There is no project-scoped unsynced sum, so take whichever source
+                // knows more: the server (manual entries) or the local figure (which
+                // already includes the session that has not been uploaded yet).
                 if (serverTotal != null && serverTotal >= 0) {
-                    todayTotalForPopup = serverTotal;
+                    todayTotalForPopup = Math.max(
+                        serverTotal,
+                        localStoppedProjectTotal,
+                    );
                 }
             } catch {
                 todayTotalForPopup = localStoppedProjectTotal;
@@ -4760,6 +4828,41 @@ function maybeSplitAtMidnight() {
     if (!isTimerRunning || isTimerPaused || !sessionSyncWorker) return;
     if (_stopTimerInProgress || _isHandlingIdleAction) return;
 
+    // NEVER split a corpse. If the machine has been dead since before the idle
+    // threshold — force-killed, power cut, or asleep with no suspend event — the live
+    // row is not work in progress, it is an unclosed session. Splitting it at every
+    // midnight it spans is how a Friday-evening session nobody stopped became
+    // 24h + 24h + 11.7h = 63 hours of "tracked work" by Monday morning.
+    //
+    // Close it at the last real input instead, exactly like every other auto-stop.
+    // `loadLastActiveAt()` is stamped from the OS idle counter (see the tray tick),
+    // so this stays correct with no network at all — an offline user is NOT a corpse.
+    const lastActiveIso = loadLastActiveAt();
+    const stale = staleLiveSessionDecision({
+        lastActiveAtMs: lastActiveIso ? Date.parse(lastActiveIso) : NaN,
+        nowMs: Date.now(),
+        thresholdSec: getSleepGapThresholdSec(),
+        sessionStartedAtMs: _cachedStartedAtMs,
+    });
+    if (stale.stale && stale.closeAtMs != null) {
+        console.warn(
+            `[Timer] Live session dead for ${stale.deadSec}s — closing at last activity instead of splitting it across midnights.`,
+        );
+        logToFile(
+            "warn",
+            `[STALE_SESSION_STOP] deadSec=${stale.deadSec} stopAt=${new Date(stale.closeAtMs).toISOString()}`,
+        );
+        screenshotService?.stop();
+        activityMonitor?.stop();
+        idleDetector?.stop();
+        dismissIdleAlert();
+        autoStopTimerForPowerEvent("stale-session", stale.closeAtMs).catch(
+            (e) =>
+                console.error("[Timer] stale-session stop failed:", e.message),
+        );
+        return;
+    }
+
     const result = sessionSyncWorker.splitAtMidnightIfNeeded();
     if (!result || result.splits === 0 || !result.live) return;
 
@@ -4789,7 +4892,8 @@ function maybeSplitAtMidnight() {
         _splitAtMidnight: true,
     });
 
-    sessionSyncWorker.syncNow("midnight-split");
+    // No upload here — the split is a local correctness operation; the interval
+    // uploads both rows on its next cycle.
 }
 
 function startTrayTimer() {
@@ -4821,6 +4925,21 @@ function startTrayTimer() {
             return;
         }
         if (!_cachedStartedAtMs) return;
+
+        // ── Last real activity, stamped LOCALLY ─────────────────────────────
+        // Every back-dated auto-stop (crash recovery on launch, sleep gap, idle
+        // watchdog, the stale-session guard below) closes the entry at this stamp, so
+        // it decides how much time a force-kill can cost the user.
+        //
+        // It used to advance ONLY when a heartbeat was ACKNOWLEDGED by the server
+        // (`setOnHeartbeatSuccess`). That was survivable while sessions synced every
+        // 60s; with a 10-minute upload cadence a heartbeat cannot even be accepted
+        // until its session exists server-side, so the stamp could sit 10+ minutes in
+        // the past while the user typed — and a crash would then discard real work,
+        // or the guard below would read a live session as dead.
+        //
+        // The OS idle counter is the truth here, costs nothing, and needs no network.
+        _stampLastActiveFromOsIdle();
 
         // ── Midnight split ──────────────────────────────────────────────────
         // Close the live session at 00:00 (ORG timezone) and reopen it, so no entry
@@ -5426,9 +5545,18 @@ async function handleIdleAction(
                     ).toISOString();
                     const resumeIso = new Date().toISOString();
 
-                    // LOCAL SPLIT — no network. Close the live session at the moment
-                    // the user went idle and open a fresh one now, so the idle gap
-                    // simply does not exist in any session. Both rows sync normally.
+                    // LOCAL SPLIT — no network. Close the live session at the instant
+                    // the user went idle and open a fresh one AT THE RESUME INSTANT,
+                    // so the idle span belongs to no session at all. Both rows sync
+                    // normally.
+                    //
+                    // `resumeIso` is the entire point of the split and was previously
+                    // computed and then NOT passed, so the successor opened at
+                    // idle-START: the gap was never discarded, only moved into the new
+                    // row and billed anyway. Verified on a real session — 13 idle
+                    // minutes sat inside the entry that opened when the user clicked
+                    // "Continue tracking". See
+                    // bugs/desktop-idle-continue-still-bills-the-idle-gap.md.
                     const prevLocalId = currentEntry._localId || null;
                     const prevStartIso = currentEntry.started_at;
 
@@ -5438,6 +5566,7 @@ async function handleIdleAction(
                               idleStartIso,
                               currentEntry.project_id || null,
                               null,
+                              resumeIso,
                           )
                         : null;
 
@@ -5476,8 +5605,8 @@ async function handleIdleAction(
                         );
 
                         // No screenshots are captured during idle (Hubstaff behavior),
-                        // so there is nothing to re-attach or drop here.
-                        sessionSyncWorker?.syncNow("idle-discard");
+                        // so there is nothing to re-attach or drop here. Both rows go
+                        // up on the next sync interval.
                     }
                 }
                 // FIX D1: Reset _idleAlertShownAt after action handled
@@ -5526,15 +5655,8 @@ async function handleIdleAction(
                 });
                 break;
         }
-        // After idle is resolved: push the (possibly just-split) sessions and flush
-        // any data queued during sleep. Especially important after a long sleep.
-        if (networkMonitor?.isOnline && apiClient) {
-            setImmediate(() => {
-                sessionSyncWorker
-                    ?.syncNow("idle-resolved", { ignoreBackoff: true })
-                    .catch(() => {});
-            });
-        }
+        // No upload here either: the split rows are durable locally and the sync
+        // worker's interval owns every routine push.
         // FIX D7: Increment state version on successful idle action
         _timerStateVersion++;
     } finally {

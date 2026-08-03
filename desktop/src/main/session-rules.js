@@ -274,7 +274,54 @@ function hasPendingCompletedSession(rows) {
     );
 }
 
+/**
+ * Is the live session a CORPSE — i.e. has the machine been dead (force-killed, power
+ * cut, asleep) since before the idle threshold?
+ *
+ * This gates the midnight split. Splitting a corpse is how a session that nobody
+ * stopped over a weekend became three rows of 24h + 24h + 11.7h = 63 hours of
+ * "work": the split is correct code doing its job on a session that should have been
+ * closed days earlier. A dead session must be CLOSED at the last real input instead,
+ * exactly like every other auto-stop back-dates.
+ *
+ * `lastActiveAtMs` must come from a LOCAL signal (OS idle counter), never from a
+ * server-acknowledged heartbeat — otherwise an offline stretch looks identical to a
+ * corpse and this would stop a timer the user is actively using.
+ *
+ * @returns {{stale: boolean, closeAtMs: number|null, deadSec: number}}
+ */
+function staleLiveSessionDecision({
+    lastActiveAtMs,
+    nowMs,
+    thresholdSec,
+    sessionStartedAtMs = null,
+}) {
+    if (!Number.isFinite(lastActiveAtMs) || !Number.isFinite(nowMs)) {
+        return { stale: false, closeAtMs: null, deadSec: 0 };
+    }
+    if (!Number.isFinite(thresholdSec) || thresholdSec <= 0) {
+        return { stale: false, closeAtMs: null, deadSec: 0 };
+    }
+    const deadSec = Math.floor((nowMs - lastActiveAtMs) / 1000);
+    if (deadSec <= thresholdSec) {
+        return { stale: false, closeAtMs: null, deadSec: Math.max(0, deadSec) };
+    }
+    // Never close a session BEFORE it began: a last-active stamp older than the
+    // session (first run, cleared prefs, a clock that moved) would otherwise produce
+    // a negative-length row. Fall back to the session start — a zero-length row is
+    // recoverable, a negative one is corruption.
+    let closeAtMs = lastActiveAtMs;
+    if (
+        Number.isFinite(sessionStartedAtMs) &&
+        closeAtMs < sessionStartedAtMs
+    ) {
+        closeAtMs = sessionStartedAtMs;
+    }
+    return { stale: true, closeAtMs, deadSec };
+}
+
 module.exports = {
+    staleLiveSessionDecision,
     isDirty,
     isConfirmed,
     shouldConfirm,
