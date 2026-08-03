@@ -68,6 +68,7 @@ const {
     hasPendingCompletedSession,
     unsyncedCompletedSecondsForDay,
     completedSecondsForProjectDay,
+    staleLiveSessionDecision,
 } = require("./session-rules");
 const { WorkSessionStore } = require("./work-session-store");
 const { SessionSyncWorker } = require("./session-sync-worker");
@@ -273,6 +274,32 @@ function touchLastActiveAt(iso = new Date().toISOString()) {
 
 function loadLastActiveAt() {
     return loadUserPrefs().lastActiveAt || null;
+}
+
+/**
+ * Stamp "last real input" from the OS idle counter — no network, no server ack.
+ *
+ * Called from the 1s tray tick and throttled to one disk write per 30s (the stamp
+ * feeds auto-stop back-dating, which is not sensitive to sub-30s precision, and
+ * writing user-prefs every second would be gratuitous I/O).
+ */
+let _lastActiveStampAt = 0;
+const LAST_ACTIVE_STAMP_INTERVAL_MS = 30_000;
+
+function _stampLastActiveFromOsIdle() {
+    const now = Date.now();
+    if (now - _lastActiveStampAt < LAST_ACTIVE_STAMP_INTERVAL_MS) return;
+    let idleSec;
+    try {
+        idleSec = powerMonitor.getSystemIdleTime();
+    } catch {
+        // Some Linux/Wayland sessions can throw — fall back to "now" rather than
+        // letting the stamp rot, which would make a live session look dead.
+        idleSec = 0;
+    }
+    if (!Number.isFinite(idleSec) || idleSec < 0) idleSec = 0;
+    _lastActiveStampAt = now;
+    touchLastActiveAt(new Date(now - idleSec * 1000).toISOString());
 }
 
 function saveAutoStopReason(reason) {
@@ -1554,6 +1581,33 @@ function onFocusRecheckScreenPermission() {
     refreshScreenPermissionOnFocus().catch(() => {});
 }
 app.on("browser-window-focus", onFocusRecheckScreenPermission);
+
+// ── Termination signals ──────────────────────────────────────────────────────
+// "Force quit by any means must not leave the session open."
+//
+// Every termination the OS lets us SEE is routed into the same graceful path as
+// tray > Quit: `app.quit()` runs the `before-quit` handler below, which closes the
+// live session locally and flushes within a bounded budget. That covers `kill`
+// (SIGTERM), Ctrl+C (SIGINT), a closing terminal (SIGHUP), Activity Monitor's
+// "Quit", Task Manager's "End task", and an OS logout/shutdown.
+//
+// SIGKILL — macOS "Force Quit" dialog, `kill -9`, a pulled battery — runs NO
+// JavaScript, on any platform, by design of the kernel. Nothing can close anything
+// at that instant. What protects the user there is local-first recovery: the row is
+// already durable in SQLite, and the next launch closes it at the last real input
+// (`detectAndCloseStaleSessionOnStartup`), as does the stale-session guard in
+// maybeSplitAtMidnight() if the app comes back long afterwards.
+for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+    process.on(signal, () => {
+        console.log(`[Quit] ${signal} received — closing session gracefully.`);
+        logToFile("info", `[SIGNAL_QUIT] ${signal}`);
+        try {
+            app.quit();
+        } catch (e) {
+            console.error("[Quit] app.quit() failed:", e.message);
+        }
+    });
+}
 
 // Stop timer gracefully before quitting (with timeout to avoid hanging)
 app.on("before-quit", async (e) => {
@@ -4774,6 +4828,41 @@ function maybeSplitAtMidnight() {
     if (!isTimerRunning || isTimerPaused || !sessionSyncWorker) return;
     if (_stopTimerInProgress || _isHandlingIdleAction) return;
 
+    // NEVER split a corpse. If the machine has been dead since before the idle
+    // threshold — force-killed, power cut, or asleep with no suspend event — the live
+    // row is not work in progress, it is an unclosed session. Splitting it at every
+    // midnight it spans is how a Friday-evening session nobody stopped became
+    // 24h + 24h + 11.7h = 63 hours of "tracked work" by Monday morning.
+    //
+    // Close it at the last real input instead, exactly like every other auto-stop.
+    // `loadLastActiveAt()` is stamped from the OS idle counter (see the tray tick),
+    // so this stays correct with no network at all — an offline user is NOT a corpse.
+    const lastActiveIso = loadLastActiveAt();
+    const stale = staleLiveSessionDecision({
+        lastActiveAtMs: lastActiveIso ? Date.parse(lastActiveIso) : NaN,
+        nowMs: Date.now(),
+        thresholdSec: getSleepGapThresholdSec(),
+        sessionStartedAtMs: _cachedStartedAtMs,
+    });
+    if (stale.stale && stale.closeAtMs != null) {
+        console.warn(
+            `[Timer] Live session dead for ${stale.deadSec}s — closing at last activity instead of splitting it across midnights.`,
+        );
+        logToFile(
+            "warn",
+            `[STALE_SESSION_STOP] deadSec=${stale.deadSec} stopAt=${new Date(stale.closeAtMs).toISOString()}`,
+        );
+        screenshotService?.stop();
+        activityMonitor?.stop();
+        idleDetector?.stop();
+        dismissIdleAlert();
+        autoStopTimerForPowerEvent("stale-session", stale.closeAtMs).catch(
+            (e) =>
+                console.error("[Timer] stale-session stop failed:", e.message),
+        );
+        return;
+    }
+
     const result = sessionSyncWorker.splitAtMidnightIfNeeded();
     if (!result || result.splits === 0 || !result.live) return;
 
@@ -4836,6 +4925,21 @@ function startTrayTimer() {
             return;
         }
         if (!_cachedStartedAtMs) return;
+
+        // ── Last real activity, stamped LOCALLY ─────────────────────────────
+        // Every back-dated auto-stop (crash recovery on launch, sleep gap, idle
+        // watchdog, the stale-session guard below) closes the entry at this stamp, so
+        // it decides how much time a force-kill can cost the user.
+        //
+        // It used to advance ONLY when a heartbeat was ACKNOWLEDGED by the server
+        // (`setOnHeartbeatSuccess`). That was survivable while sessions synced every
+        // 60s; with a 10-minute upload cadence a heartbeat cannot even be accepted
+        // until its session exists server-side, so the stamp could sit 10+ minutes in
+        // the past while the user typed — and a crash would then discard real work,
+        // or the guard below would read a live session as dead.
+        //
+        // The OS idle counter is the truth here, costs nothing, and needs no network.
+        _stampLastActiveFromOsIdle();
 
         // ── Midnight split ──────────────────────────────────────────────────
         // Close the live session at 00:00 (ORG timezone) and reopen it, so no entry
