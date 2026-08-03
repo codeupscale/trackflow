@@ -317,6 +317,145 @@ class TimeEntrySyncService
     }
 
     /**
+     * Close entries abandoned by an agent that is never coming back.
+     *
+     * The desktop is the sole writer of tracked time, and local-first recovery closes a
+     * crashed session at the last real input on the agent's NEXT launch. That covers a
+     * force-quit or a power cut — but not a machine that is reimaged, stolen, or simply
+     * never switched on again. Its entry stays open forever, and `TimerService::status()`
+     * counts an open entry's elapsed to NOW (capped at `timer.max_entry_duration`, 24h),
+     * so a dashboard shows a fabricated day for someone who is gone.
+     *
+     * This closes such an entry at its last known activity — the newest heartbeat, else
+     * the last successful agent sync, else its own start. NEVER at `now()`: closing at
+     * now would bill precisely the dead time this exists to remove.
+     *
+     * The closure is PROVISIONAL by construction: `client_revision` is deliberately left
+     * untouched, so if the agent ever does come back, its next push (a higher revision)
+     * overwrites these values outright, exactly as the one-writer contract requires.
+     *
+     * @param  int|null  $staleMinutes  silence after which an entry counts as abandoned;
+     *                                  defaults to `timer.abandoned_after_minutes` (60)
+     * @return int number of entries closed
+     */
+    public function closeAbandonedOpenEntries(?string $organizationId = null, ?int $staleMinutes = null): int
+    {
+        $minutes = $staleMinutes ?? (int) config('timer.abandoned_after_minutes', 60);
+        if ($minutes < 1) {
+            // A zero/negative window would close sessions that are alive right now.
+            Log::warning('[TimeEntrySync] Refusing to close abandoned entries: invalid window', [
+                'organization_id' => $organizationId,
+                'stale_minutes' => $minutes,
+            ]);
+
+            return 0;
+        }
+
+        $cutoff = now()->subMinutes($minutes);
+        $closed = 0;
+
+        TimeEntry::withoutGlobalScope(GlobalOrganizationScope::class)
+            ->when($organizationId !== null, fn ($q) => $q->where('organization_id', $organizationId))
+            ->whereNull('ended_at')
+            ->whereNull('deleted_at')
+            // An entry that STARTED inside the window cannot be abandoned yet, and this
+            // keeps the scan on the partial index of open entries.
+            ->where('started_at', '<', $cutoff)
+            ->orderBy('id')
+            ->chunkById(200, function ($entries) use (&$closed, $cutoff) {
+                foreach ($entries as $entry) {
+                    if ($this->closeIfAbandoned($entry->id, $cutoff)) {
+                        $closed++;
+                    }
+                }
+            });
+
+        $this->flushPendingEvents();
+
+        if ($closed > 0) {
+            Log::info('[TimeEntrySync] Closed abandoned open entries', [
+                'organization_id' => $organizationId,
+                'closed' => $closed,
+                'stale_minutes' => $minutes,
+            ]);
+        }
+
+        return $closed;
+    }
+
+    /**
+     * Close one entry if it is still open AND still silent, under a row lock.
+     *
+     * Re-reads and re-checks inside the transaction: between the chunk query and here,
+     * a returning agent may have closed the entry itself or pushed a fresh heartbeat,
+     * and the agent always wins.
+     */
+    private function closeIfAbandoned(string $entryId, Carbon $cutoff): bool
+    {
+        return DB::transaction(function () use ($entryId, $cutoff) {
+            $entry = TimeEntry::withoutGlobalScope(GlobalOrganizationScope::class)
+                ->whereKey($entryId)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $entry || $entry->ended_at !== null) {
+                return false;
+            }
+
+            $lastHeartbeat = ActivityLog::where('time_entry_id', $entry->id)->max('logged_at');
+            $lastActivityAt = $lastHeartbeat ? Carbon::parse($lastHeartbeat) : null;
+
+            // LIVENESS vs CLOSE INSTANT are two different questions.
+            //
+            // Liveness = the MOST RECENT evidence the agent exists: a heartbeat OR
+            // `client_synced_at`, which the sync endpoint stamps on every push of the
+            // live session including one carrying no change. Offline heartbeats arrive
+            // in a burst long after capture, so heartbeats alone would declare a
+            // perfectly healthy agent dead. Both must be quiet before we act.
+            $lastContactAt = $lastActivityAt ?? $entry->started_at;
+            if ($entry->client_synced_at !== null && $entry->client_synced_at->gt($lastContactAt)) {
+                $lastContactAt = $entry->client_synced_at;
+            }
+            if ($lastContactAt->gt($cutoff)) {
+                return false;
+            }
+
+            // Close instant = the last evidence of WORK. `client_synced_at` proves the
+            // agent was alive, not that the user was at the keyboard, so it is never the
+            // close point — using it would bill the dead time this exists to remove.
+            $endedAt = $lastActivityAt ?? $entry->started_at;
+            if ($endedAt->lt($entry->started_at)) {
+                $endedAt = $entry->started_at->copy();
+            }
+
+            $entry->update([
+                'ended_at' => $endedAt,
+                'duration_seconds' => $this->computeDuration($entry->started_at, $endedAt),
+                'activity_score' => $this->computeFinalActivityScore($entry->id) ?? $entry->activity_score ?? 0,
+                // client_revision deliberately NOT touched — see closeAbandonedOpenEntries().
+            ]);
+
+            // Drop the cached "timer running" key so status() stops reporting a live
+            // timer for a user whose machine is gone. Guarded: the owner may have been
+            // deleted, and a missing user must not fail the close.
+            if ($entry->user) {
+                $this->syncRedisTimerKey($entry->user, null);
+            }
+
+            Log::info('[TimeEntrySync] Closed abandoned open entry', [
+                'entry_id' => $entry->id,
+                'user_id' => $entry->user_id,
+                'ended_at' => $endedAt->toISOString(),
+                'silent_since' => $lastContactAt->toISOString(),
+            ]);
+
+            $this->pendingEvents[] = new TimerStopped($entry->fresh());
+
+            return true;
+        });
+    }
+
+    /**
      * Close any OPEN entry for this user other than the one being opened, at its last
      * known activity: the newest heartbeat, else the last successful agent sync, else
      * its own start (a zero-length close, which counts no dead time).

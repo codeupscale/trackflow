@@ -6,7 +6,7 @@
 | **Platform** | All |
 | **Severity** | **P0** — produced 24-hour "work days" in reports, attendance and payroll |
 | **Reported** | 2026-08-03 (owner, via dev 8: "total showed 63 hours") |
-| **Status** | ✅ FIXED (2026-08-03, branch `fix/desktop-idle-gap-billed-and-sync-cadence`) — with one server-side gap still open, see *Remaining* |
+| **Status** | ✅ FIXED (2026-08-03, branch `fix/desktop-idle-gap-billed-and-sync-cadence`) — desktop and server sides both closed |
 
 ## Symptom
 
@@ -66,16 +66,42 @@ next launch, or by the corpse guard if the app returns much later. **No tracked 
 is lost, and no dead time is billed** — but the correction only lands when the agent
 next runs.
 
-## Remaining (server side)
+## Server side — a machine that never comes back (done, 2026-08-03)
 
-If the machine **never comes back** (reimaged, stolen, permanently offline), the
-server keeps that entry open forever. `TimerService::status()` counts an open entry's
-elapsed to *now*, capped at `timer.max_entry_duration` (24h), so dashboards can show
-up to a fabricated 24h day for a user who is simply gone.
+If the machine is reimaged, stolen or never switched on again, local-first recovery
+can never run. The entry would stay open and `TimerService::status()` counts an open
+entry's elapsed to *now* (capped at `timer.max_entry_duration`, 24h), so a dashboard
+shows a fabricated day for someone who is gone.
 
-Proposed: a scheduled job (beside `CloseStaleCheckInsJob`) that closes open
-`time_entries` with no heartbeat for N minutes, back-dated to the **last heartbeat**
-— never to `now`. Not built yet; needs the owner's call on N.
+**This already had not one but TWO implementations**, which is why it kept happening:
+
+| | window | closed the entry at | verdict |
+|---|---|---|---|
+| `timer:cleanup-stale` (every 5 min) | 4h | last **heartbeat** ✅ | kept |
+| `CloseStaleTimerEntriesJob` (every 30 min) | 5h | **`updated_at`** ❌ | deleted |
+
+`updated_at` moves on every agent push, so that job billed every dead minute between
+the user's last input and the agent's last sync. Two mechanisms disagreeing about the
+close instant is worse than either alone.
+
+Now a single implementation — `TimeEntrySyncService::closeAbandonedOpenEntries()`,
+driven by the 5-minute command, with the window at **60 minutes**
+(`timer.abandoned_after_minutes`, env `TIMER_ABANDONED_AFTER_MINUTES`):
+
+- **Liveness** = the most recent of the last heartbeat **and `client_synced_at`**,
+  which the sync endpoint stamps on *every* push of the live session including one
+  carrying no change. That is what makes a 60-minute window safe: an agent that is
+  merely offline — heartbeats queued, arriving hours later — is still visibly alive.
+- **Close instant** = the last **heartbeat**, else the entry's own start (a zero-length
+  close). Never `now()`, and never `client_synced_at`: that proves the agent was alive,
+  not that the user was working.
+- Runs under `lockForUpdate()` and re-checks, so a returning agent racing the sweeper
+  wins; emits `TimerStopped` after commit so dashboards update; clears the Redis timer
+  key so `status()` stops reporting a live timer.
+- **Provisional by construction**: `client_revision` is deliberately left untouched, so
+  the agent's next push (a higher revision) overrides the server's guess outright —
+  the one-writer contract is preserved. Covered by
+  `test_the_close_is_provisional_a_returning_agent_still_wins`.
 
 ## Manual QA
 

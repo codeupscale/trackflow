@@ -1,7 +1,6 @@
 <?php
 
 use App\Jobs\CloseStaleCheckInsJob;
-use App\Jobs\CloseStaleTimerEntriesJob;
 use App\Jobs\ForceCheckOutOpenSessionsJob;
 use App\Jobs\GenerateDailyAttendanceJob;
 use App\Jobs\PruneOldActivityLogsJob;
@@ -59,6 +58,11 @@ Schedule::call(function () {
 
 // JOB-07: Cleanup stale time entries — every 5 minutes
 // Auto-closes running entries with no heartbeat for 30+ minutes (orphaned timers)
+// Close entries abandoned by an agent that is never coming back (reimaged, stolen,
+// permanently offline). Window: timer.abandoned_after_minutes (60). Liveness is the
+// most recent of the last heartbeat and `client_synced_at`, so an agent that is merely
+// offline — whose heartbeats arrive in a burst later — is never treated as abandoned.
+// Closes at the last heartbeat, never at now().
 Schedule::command('timer:cleanup-stale')->everyFiveMinutes()->name('cleanup-stale-entries');
 
 // JOB-08: Daily activity summary emails — weekdays (Mon-Fri) at 23:00 UTC
@@ -118,7 +122,11 @@ Schedule::call(function () {
 })->dailyAt('19:00')->name('force-checkout-open-sessions');
 
 // FIX B11: Watchdog — close stale open entries (no heartbeat for 2+ hours)
-Schedule::job(new CloseStaleTimerEntriesJob)->everyThirtyMinutes()->name('close-stale-timer-entries');
+// (removed) close-stale-timer-entries — CloseStaleTimerEntriesJob duplicated
+// timer:cleanup-stale below on a wider window and closed entries at `updated_at`,
+// i.e. at the agent's last PUSH rather than the user's last INPUT, which bills every
+// dead minute in between. One implementation now: TimeEntrySyncService::closeAbandoned-
+// OpenEntries(), driven by the 5-minute command.
 
 // Data retention enforcement — Daily 4am UTC
 Schedule::job(new \App\Jobs\EnforceDataRetentionJob)->dailyAt('04:00')->name('enforce-data-retention');
