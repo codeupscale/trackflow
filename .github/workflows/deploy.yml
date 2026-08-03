@@ -72,6 +72,33 @@ concurrency:
 
 jobs:
 
+  # ─── GATE: REF MUST BE main ───────────────────────────────────────────────
+  # `on.push` is already restricted to main, but workflow_dispatch accepts ANY
+  # ref — and a dispatch builds and pushes to the SAME `:latest` tags production
+  # pulls. On 2026-08-02 a dispatch against the stale branch
+  # `fix/web-frontend-and-desktop-app` (a 2026-04-21 commit) rebuilt all three
+  # images from April code and rolled production back ~3.5 months, one minute
+  # after the real main deploy had run.
+  #
+  # This job fails loudly on a non-main ref. Every build/deploy job below ALSO
+  # carries `github.ref == 'refs/heads/main'` in its own `if`, because those
+  # conditions start with `always()` — which runs a job even when a job it needs
+  # has failed. The guard job alone would not stop them.
+
+  guard-ref:
+    name: Guard — refuse non-main ref
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify ref is main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Refusing to deploy from '${{ github.ref }}'."
+          echo "This workflow builds ghcr.io/codeupscale/trackflow-{api,web,marketing}:latest —"
+          echo "the exact tags production pulls. Deploying a non-main ref overwrites them and"
+          echo "rolls production back to whatever that branch contains."
+          echo "Re-run this workflow with the branch set to 'main'."
+          exit 1
+
   # ─── CHANGE DETECTION ─────────────────────────────────────────────────────
   # Determines which services need building based on file changes.
   # Skipped for workflow_dispatch (user picks explicitly).
@@ -79,7 +106,8 @@ jobs:
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    needs: [guard-ref]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       web: ${{ steps.filter.outputs.web }}
@@ -107,7 +135,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes]
     if: >-
-      always() && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'backend')) || (needs.changes.result == 'success' && needs.changes.outputs.backend == 'true'))
+      github.ref == 'refs/heads/main' && always() && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'backend')) || (needs.changes.result == 'success' && needs.changes.outputs.backend == 'true'))
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -198,7 +226,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes]
     if: >-
-      always() && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'web')) || (needs.changes.result == 'success' && needs.changes.outputs.web == 'true'))
+      github.ref == 'refs/heads/main' && always() && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'web')) || (needs.changes.result == 'success' && needs.changes.outputs.web == 'true'))
     defaults:
       run:
         working-directory: web
@@ -232,7 +260,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, test-backend]
     if: >-
-      always() && (needs.test-backend.result == 'success' || needs.test-backend.result == 'skipped') && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'backend')) || (needs.changes.result == 'success' && needs.changes.outputs.backend == 'true'))
+      github.ref == 'refs/heads/main' && always() && (needs.test-backend.result == 'success' || needs.test-backend.result == 'skipped') && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'backend')) || (needs.changes.result == 'success' && needs.changes.outputs.backend == 'true'))
     permissions:
       contents: read
       packages: write
@@ -269,7 +297,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, test-frontend]
     if: >-
-      always() && (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped') && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'web')) || (needs.changes.result == 'success' && needs.changes.outputs.web == 'true'))
+      github.ref == 'refs/heads/main' && always() && (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped') && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'web')) || (needs.changes.result == 'success' && needs.changes.outputs.web == 'true'))
     permissions:
       contents: read
       packages: write
@@ -315,7 +343,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes]
     if: >-
-      always() && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'marketing')) || (needs.changes.result == 'success' && needs.changes.outputs.marketing == 'true'))
+      github.ref == 'refs/heads/main' && always() && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'marketing')) || (needs.changes.result == 'success' && needs.changes.outputs.marketing == 'true'))
     defaults:
       run:
         working-directory: marketing
@@ -347,7 +375,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, test-marketing]
     if: >-
-      always() && (needs.test-marketing.result == 'success' || needs.test-marketing.result == 'skipped') && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'marketing')) || (needs.changes.result == 'success' && needs.changes.outputs.marketing == 'true'))
+      github.ref == 'refs/heads/main' && always() && (needs.test-marketing.result == 'success' || needs.test-marketing.result == 'skipped') && ((needs.changes.result == 'skipped' && (github.event.inputs.service == 'all' || github.event.inputs.service == 'marketing')) || (needs.changes.result == 'success' && needs.changes.outputs.marketing == 'true'))
     permissions:
       contents: read
       packages: write
@@ -392,7 +420,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, build-api, build-web, build-marketing]
     if: >-
-      always() && (needs.build-api.result == 'success' || needs.build-api.result == 'skipped') && (needs.build-web.result == 'success' || needs.build-web.result == 'skipped') && (needs.build-marketing.result == 'success' || needs.build-marketing.result == 'skipped') && !(needs.build-api.result == 'skipped' && needs.build-web.result == 'skipped' && needs.build-marketing.result == 'skipped')
+      github.ref == 'refs/heads/main' && always() && (needs.build-api.result == 'success' || needs.build-api.result == 'skipped') && (needs.build-web.result == 'success' || needs.build-web.result == 'skipped') && (needs.build-marketing.result == 'success' || needs.build-marketing.result == 'skipped') && !(needs.build-api.result == 'skipped' && needs.build-web.result == 'skipped' && needs.build-marketing.result == 'skipped')
     environment: production
     steps:
       - name: Determine which services changed
