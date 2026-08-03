@@ -14,8 +14,24 @@
 
 const rules = require('./session-rules');
 
-/** Regular cadence. Also triggered on reconnect, after a stop, and at launch. */
-const SYNC_INTERVAL_MS = 60 * 1000;
+/**
+ * Upload cadence — the ONLY routine trigger.
+ *
+ * Tracking is local and continuous; uploading is a periodic batch, deliberately.
+ * There are NO event-driven pushes any more (start / stop / project switch / idle
+ * resolve / midnight split / wake / reconnect all used to fire one), so the server
+ * is written to on a predictable schedule instead of on every user action.
+ *
+ * The only remaining out-of-band flushes are the ones that exist to protect data
+ * rather than to freshen a dashboard: app launch (upload the previous run's
+ * backlog), sign-out, quit, and pre-update — after those the process may not be
+ * around for the next tick.
+ *
+ * Consequence, by design: the web dashboard can lag reality by up to one interval —
+ * a running timer, its screenshots and its heartbeats (both FK to a synced entry)
+ * only appear after the next cycle.
+ */
+const SYNC_INTERVAL_MS = 10 * 60 * 1000;
 
 /** How often the purge scheduler checks whether the 05:00 boundary has passed. */
 const PURGE_CHECK_INTERVAL_MS = 5 * 60 * 1000;

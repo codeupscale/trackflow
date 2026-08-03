@@ -124,3 +124,57 @@ describe('idle discard splits the session locally', () => {
         expect(rules.isConfirmed(closed)).toBe(false);
     });
 });
+
+// The arithmetic above passed for weeks while the shipped code billed every idle
+// gap: it mirrors what handleIdleAction is SUPPOSED to do, and the real call site
+// computed `resumeIso` and then never passed it, so `closeAndReopen` reopened the
+// successor at idle-START and the gap simply moved into the new row.
+//
+// A mirror can only be trusted if something checks it against the wiring. That is
+// what these do. See bugs/desktop-idle-continue-still-bills-the-idle-gap.md.
+describe('the real call site actually splits at TWO instants', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const INDEX = fs.readFileSync(
+        path.join(__dirname, '..', 'src', 'main', 'index.js'),
+        'utf8',
+    );
+    const STORE = fs.readFileSync(
+        path.join(__dirname, '..', 'src', 'main', 'work-session-store.js'),
+        'utf8',
+    );
+    const flat = (s) => s.replace(/\s+/g, ' ');
+
+    test('the idle discard passes the resume instant to splitLocalSession', () => {
+        expect(flat(INDEX)).toMatch(
+            /splitLocalSession\( prevLocalId, idleStartIso, currentEntry\.project_id \|\| null, null, resumeIso, \)/,
+        );
+    });
+
+    test('splitLocalSession forwards a reopen instant to the store', () => {
+        expect(flat(INDEX)).toMatch(
+            /function splitLocalSession\( localId, atIso, projectId, taskId = null, reopenAtIso = null, \)/,
+        );
+        expect(flat(INDEX)).toMatch(
+            /closeAndReopen\(localId, atIso, \{ projectId, taskId, reopenAtIso, \}\)/,
+        );
+    });
+
+    test('closeAndReopen defaults to contiguous, and honours a later reopen', () => {
+        // Contiguous is right for a project switch and the midnight split: no instant
+        // may belong to no session. Idle is the one case that must leave a hole.
+        expect(flat(STORE)).toMatch(
+            /closeAndReopen\(id, atIso, \{ projectId, taskId = null, reopenAtIso = null \} = \{\}\)/,
+        );
+        expect(flat(STORE)).toMatch(/const startedAt = reopenAtIso \|\| atIso;/);
+        expect(flat(STORE)).toMatch(
+            /this\.close\(id, atIso\); return this\.open\(\{ projectId, taskId, startedAt \}\);/,
+        );
+    });
+
+    test('a reopen BEFORE the close instant is rejected, never silently accepted', () => {
+        expect(flat(STORE)).toMatch(
+            /if \(Date\.parse\(startedAt\) < Date\.parse\(atIso\)\) \{ throw new Error\(/,
+        );
+    });
+});
