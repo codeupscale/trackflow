@@ -24,6 +24,9 @@ class AgentController extends Controller
             // hours for anyone travelling or working outside the org's zone.
             'timezone' => $user->getTimezoneForDates(),
             'screenshot_interval' => $org->getSetting('screenshot_interval', 5),
+            // Number of screenshots the agent takes at random moments within each
+            // interval window (Hubstaff-style). Default 3; the agent clamps to [1,10].
+            'screenshots_per_interval' => (int) $org->getSetting('screenshots_per_interval', 3),
             'idle_timeout' => $idleTimeout,
             'idle_detection' => true,
             'keep_idle_time' => $org->getSetting('keep_idle_time', 'prompt'),

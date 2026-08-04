@@ -33,6 +33,8 @@ class SettingsController extends Controller
             'name' => 'sometimes|string|max:255',
             'settings' => 'sometimes|array',
             'settings.screenshot_interval' => 'sometimes|integer|in:5,10,15',
+            // Screenshots per interval window (Hubstaff-style multi-capture); agent clamps to [1,10].
+            'settings.screenshots_per_interval' => 'sometimes|integer|min:1|max:10',
             'settings.blur_screenshots' => 'sometimes|boolean',
             // Idle detection is always on; minimum 1 minute (no disable).
             'settings.idle_timeout' => 'sometimes|integer|min:1|max:30',
@@ -66,6 +68,7 @@ class SettingsController extends Controller
             $currentSettings = $org->settings ?? $org->getDefaultSettings();
             $allowedKeys = array_flip([
                 'screenshot_interval',
+                'screenshots_per_interval',
                 'blur_screenshots',
                 'idle_timeout',
                 'idle_alert_email_enabled',
