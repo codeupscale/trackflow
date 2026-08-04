@@ -213,6 +213,36 @@ function applyIdleLock(locked) {
     syncProjectSelectEnabled();
     updateStartBtnState();
   }
+  // Spec: "answer the idle prompt before doing ANYTHING in the app." The timer buttons
+  // above are only half of it — the popup also carries Open Dashboard, Sign out and the
+  // Pin toggle. Lock those too while the prompt is pending (the click handlers also
+  // no-op on _idleLocked as defence in depth). Links can't use .disabled, so they are
+  // gated with pointer-events + aria-disabled; the pin is a real <button>.
+  setIdlePeripheralsLocked(_idleLocked);
+}
+
+// Lock/unlock the non-timer controls (Dashboard, Sign out links; Pin button) during an
+// idle prompt. Guarded so it is safe to call before every element exists.
+function setIdlePeripheralsLocked(locked) {
+  for (const el of [dashboardLink, logoutLink]) {
+    if (!el) continue;
+    el.style.pointerEvents = locked ? 'none' : '';
+    el.style.opacity = locked ? '0.5' : '';
+    el.setAttribute('aria-disabled', locked ? 'true' : 'false');
+    el.setAttribute('tabindex', locked ? '-1' : '0');
+  }
+  const pin = document.getElementById('pinBtn');
+  if (pin) {
+    pin.disabled = locked;
+    pin.style.opacity = locked ? '0.5' : '';
+    pin.style.cursor = locked ? 'not-allowed' : '';
+    // Restore the pinned/unpinned tooltip on unlock instead of leaving the lock text.
+    pin.title = locked
+      ? 'Answer the idle prompt first'
+      : (pin.getAttribute('aria-pressed') === 'true'
+          ? 'Always on top — click to unpin'
+          : 'Keep window on top of other apps');
+  }
 }
 
 window.trackflow.onIdleLock?.((data) => applyIdleLock(data?.locked));
@@ -600,9 +630,15 @@ async function handleLogout() {
   stopTicking();
   await window.trackflow.logout();
 }
-logoutLink.addEventListener('click', handleLogout);
+logoutLink.addEventListener('click', () => {
+  if (_idleLocked) return; // idle prompt must be answered first
+  handleLogout();
+});
 logoutLink.title = `Sign out (${modKey}+Q)`;
-dashboardLink.addEventListener('click', () => window.trackflow.openDashboard());
+dashboardLink.addEventListener('click', () => {
+  if (_idleLocked) return; // idle prompt must be answered first
+  window.trackflow.openDashboard();
+});
 
 // ── Pin (Always on Top) Button Logic ──
 // The custom hide-to-tray and sign-out buttons that used to sit beside this one
@@ -634,6 +670,7 @@ window.trackflow.getPinState().then((state) => {
 }).catch(() => {});
 
 pinBtn.addEventListener('click', async () => {
+  if (_idleLocked) return; // idle prompt must be answered first
   try {
     const result = await window.trackflow.togglePin();
     if (result) updatePinUI(result.pinned);
