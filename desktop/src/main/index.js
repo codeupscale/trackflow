@@ -1194,9 +1194,21 @@ function applyTotalsFromServerStatus(status) {
     // never-scoped `all_projects_today_total`, falling back for older backends.
     // Bug: bugs/desktop-today-total-project-scoped-when-project-selected.md
     const allProjectsTotal = status.all_projects_today_total ?? globalTotal;
-    todayTotalGlobal = Math.max(0, allProjectsTotal - elapsed);
     const projectTotal = status.project_today_total ?? globalTotal;
-    todayTotalCurrentProject = Math.max(0, projectTotal - elapsed);
+    // Completed local rows the server has not synced yet are absent from its totals.
+    // Add them back — for the whole day and for the current project — or focusing the
+    // window (this runs on browser-window-focus) mid-session collapses the totals to a
+    // server figure that is up to one 10-minute sync interval stale, snapping the
+    // project display back toward 00:00. Same invariant the 10s poll obeys.
+    const pendingGlobalSecs = getUnsyncedCompletedSecondsForToday();
+    const pendingProjectSecs = currentEntry?.project_id
+        ? getLocalCompletedSecondsForProjectToday(currentEntry.project_id, {
+              unsyncedOnly: true,
+          })
+        : 0;
+    todayTotalGlobal = Math.max(0, allProjectsTotal - elapsed) + pendingGlobalSecs;
+    todayTotalCurrentProject =
+        Math.max(0, projectTotal - elapsed) + pendingProjectSecs;
 }
 
 /**
@@ -3976,13 +3988,26 @@ async function startTimer(projectId = null) {
         // which is still far better than zero. No network call: both inputs are cached
         // or local, so the start path stays offline by construction.
         const serverProjectBase = _serverProjectTodayTotals.get(projectId);
-        todayTotalCurrentProject =
+        // Two independent, self-consistent views of "this project's completed time
+        // today": the server figure (manual + purged, plus any local rows the server
+        // has since seen) with the still-unsynced local rows added on top, and the
+        // raw local-completed total for the project. Seed with the LARGER of the two
+        // (never below zero). Taking the max is what stops the display restarting at
+        // 00:00: `_serverProjectTodayTotals` is only populated by a stopped status
+        // tick for THIS exact project, so on a fresh launch → immediate Start it is
+        // empty and the old code fell straight through to the local total — which is
+        // itself 0 the moment those rows were purged or synced-away. Neither source
+        // double-counts the other (each is a complete total), so max() is safe, and
+        // afterStartTimer() refreshes it from the live server figure within a tick.
+        const seedFromServer =
             serverProjectBase != null
                 ? serverProjectBase +
                   getLocalCompletedSecondsForProjectToday(projectId, {
                       unsyncedOnly: true,
                   })
-                : getLocalCompletedSecondsForProjectToday(projectId);
+                : 0;
+        const seedFromLocal = getLocalCompletedSecondsForProjectToday(projectId);
+        todayTotalCurrentProject = Math.max(seedFromServer, seedFromLocal, 0);
         _pendingOfflineReassignIdleSec = 0;
         _timerStateVersion++;
 
@@ -4638,7 +4663,23 @@ function startTimerSync() {
                 todayTotalGlobal =
                     Math.max(0, globalTotal - elapsed) + pendingOfflineSecs;
                 const projectTotal = status.project_today_total ?? globalTotal;
-                todayTotalCurrentProject = Math.max(0, projectTotal - elapsed);
+                // Add THIS project's completed rows the server has not seen yet, exactly
+                // like todayTotalGlobal adds `pendingOfflineSecs` above. Without this the
+                // project total collapsed to the server's figure — which, with the
+                // 10-minute sync cadence, does NOT include completed work from earlier
+                // today that is still queued locally. That is the "display resets to
+                // 00:00 a few seconds after Start" bug: the good local seed set in
+                // startTimer() was overwritten here by a server number missing all
+                // unsynced project time. (CLAUDE.md invariant: a server total read after
+                // a local mutation must add the local unsynced seconds back on top.)
+                const projectPendingSecs = currentEntry?.project_id
+                    ? getLocalCompletedSecondsForProjectToday(
+                          currentEntry.project_id,
+                          { unsyncedOnly: true },
+                      )
+                    : 0;
+                todayTotalCurrentProject =
+                    Math.max(0, projectTotal - elapsed) + projectPendingSecs;
             } else {
                 todayTotalGlobal = globalTotal + pendingOfflineSecs;
                 todayTotalCurrentProject = 0;
@@ -5494,18 +5535,40 @@ async function handleIdleAction(
         });
 
         // Resolve the idle state — returns null if already resolved (stale action)
-        const resolved = idleDetector?.resolveIdle(actionId);
+        let resolved = idleDetector?.resolveIdle(actionId);
         if (!resolved && idleDetector?.state !== IDLE_STATE.STOPPED) {
-            console.warn(
-                `[handleIdleAction] Action "${action}" aborted — idle already resolved`,
-            );
-            if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
-                idleAlertWindow.webContents.send("idle-action-error", {
-                    message:
-                        "This idle alert has already been handled (e.g. auto-stop). Please check your timer.",
-                });
+            // A null result with a non-STOPPED detector means the renderer sent a
+            // STALE actionId: the detector re-ticked (_actionId++ in _check) or the
+            // alert was re-shown with a fresh id while the window was up, so the id
+            // the popup was holding no longer matches. This is NOT the same as a
+            // race lost to auto-stop — auto-stop leaves the timer STOPPED. If the
+            // timer is still running and merely PAUSED for idle, this is a genuine
+            // user click on a live timer, and bailing here (dismiss alert + return
+            // WITHOUT resuming) wedged the timer paused forever: "Continue did
+            // nothing, the timer never restarted." Re-resolve against the CURRENT
+            // action id so the pause is always lifted below.
+            if (isTimerRunning && isTimerPaused) {
+                console.warn(
+                    `[handleIdleAction] "${action}" — stale actionId ${actionId}; timer is live+paused, resolving current idle to avoid a stuck pause`,
+                );
+                resolved = idleDetector?.resolveIdle(
+                    idleDetector.getActionId(),
+                );
             }
-            return;
+            if (!resolved) {
+                // Truly already resolved (auto-stop won the race, or the timer is no
+                // longer running) — keep the original abort behavior.
+                console.warn(
+                    `[handleIdleAction] Action "${action}" aborted — idle already resolved`,
+                );
+                if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
+                    idleAlertWindow.webContents.send("idle-action-error", {
+                        message:
+                            "This idle alert has already been handled (e.g. auto-stop). Please check your timer.",
+                    });
+                }
+                return;
+            }
         }
 
         // Use idleStartedAt from the resolve result if available (more reliable
