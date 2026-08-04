@@ -1134,4 +1134,91 @@ describe('ScreenshotService', () => {
       expect(mockApiClient.presignScreenshot).not.toHaveBeenCalled();
     });
   });
+
+  // ── Multi-shot cadence (Hubstaff-style: N random shots per interval window) ──
+  describe('multi-shot cadence', () => {
+    const {
+      randomOffsetsAcrossWindow,
+      DEFAULT_SHOTS_PER_INTERVAL,
+      MAX_SHOTS_PER_INTERVAL,
+    } = require('../src/main/screenshot-service');
+
+    test('randomOffsetsAcrossWindow returns one offset per sub-slot, spread and in-bounds', () => {
+      const windowMs = 300000; // 5 min
+      const count = 3;
+      // rng = 0.5 → each offset lands at the middle of its sub-slot
+      const offsets = randomOffsetsAcrossWindow(count, windowMs, () => 0.5);
+      expect(offsets).toHaveLength(count);
+      const slot = windowMs / count;
+      offsets.forEach((off, i) => {
+        expect(off).toBeGreaterThanOrEqual(i * slot);
+        expect(off).toBeLessThan((i + 1) * slot);
+      });
+      // Strictly increasing → no clustering
+      for (let i = 1; i < offsets.length; i++) {
+        expect(offsets[i]).toBeGreaterThan(offsets[i - 1]);
+      }
+    });
+
+    test('randomOffsetsAcrossWindow clamps count to at least 1', () => {
+      expect(randomOffsetsAcrossWindow(0, 1000, () => 0)).toHaveLength(1);
+      expect(randomOffsetsAcrossWindow(-5, 1000, () => 0)).toHaveLength(1);
+    });
+
+    test('randomOffsetsAcrossWindow never returns an offset at or past the window', () => {
+      // rng just below 1 for every slot — the last offset must still be < windowMs
+      const offsets = randomOffsetsAcrossWindow(4, 1000, () => 0.999999);
+      offsets.forEach((off) => expect(off).toBeLessThan(1000));
+    });
+
+    test('takes DEFAULT_SHOTS_PER_INTERVAL captures within one window when config omits the count', async () => {
+      // config has no screenshots_per_interval → default (3)
+      const svc = new ScreenshotService(mockApiClient, mockConfig, mockOfflineQueue, mockGetIsAppVisible, mockActivityMonitor);
+      svc.start('entry-1'); // firstDelay=0 → immediate first capture, then _startInterval
+      await jest.advanceTimersByTimeAsync(10);
+      mockApiClient.presignScreenshot.mockClear();
+
+      // Advance one full window (5 min) — every scheduled shot in the window should fire
+      await jest.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalledTimes(DEFAULT_SHOTS_PER_INTERVAL);
+      svc.stop();
+    });
+
+    test('honors a configured screenshots_per_interval', async () => {
+      const cfg = { ...mockConfig, screenshots_per_interval: 5 };
+      const svc = new ScreenshotService(mockApiClient, cfg, mockOfflineQueue, mockGetIsAppVisible, mockActivityMonitor);
+      svc.start('entry-1');
+      await jest.advanceTimersByTimeAsync(10);
+      mockApiClient.presignScreenshot.mockClear();
+
+      await jest.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalledTimes(5);
+      svc.stop();
+    });
+
+    test('clamps an absurd configured count to MAX_SHOTS_PER_INTERVAL', async () => {
+      const cfg = { ...mockConfig, screenshots_per_interval: 9999 };
+      const svc = new ScreenshotService(mockApiClient, cfg, mockOfflineQueue, mockGetIsAppVisible, mockActivityMonitor);
+      svc.start('entry-1');
+      await jest.advanceTimersByTimeAsync(10);
+      mockApiClient.presignScreenshot.mockClear();
+
+      await jest.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(mockApiClient.presignScreenshot).toHaveBeenCalledTimes(MAX_SHOTS_PER_INTERVAL);
+      svc.stop();
+    });
+
+    test('stop() cancels shots still pending in the current window', async () => {
+      const cfg = { ...mockConfig, screenshots_per_interval: 3 };
+      const svc = new ScreenshotService(mockApiClient, cfg, mockOfflineQueue, mockGetIsAppVisible, mockActivityMonitor);
+      svc.start('entry-1');
+      await jest.advanceTimersByTimeAsync(10);
+      mockApiClient.presignScreenshot.mockClear();
+
+      // Stop partway into the window, then run the clock out — no shot may fire.
+      svc.stop();
+      await jest.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(mockApiClient.presignScreenshot).not.toHaveBeenCalled();
+    });
+  });
 });

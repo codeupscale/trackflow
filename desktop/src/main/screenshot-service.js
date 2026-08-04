@@ -56,6 +56,31 @@ function getSharp() {
 const MAX_CONSECUTIVE_FAILURES = 5;
 const FAILURE_PAUSE_MS = 5 * 60 * 1000;
 
+// Screenshots per interval window (Hubstaff/Time Doctor model): instead of a single
+// predictable capture per interval, take several captures at random moments spread
+// across each window. DEFAULT_SHOTS_PER_INTERVAL is used when the org config does not
+// specify `screenshots_per_interval`; the value is clamped to [1, MAX_SHOTS_PER_INTERVAL]
+// so a bad config can never spawn an unbounded number of timers or hammer the upload
+// throttle. Note each capture on a multi-monitor setup already fans out to one shot PER
+// DISPLAY, so N here means N capture *rounds* per window, not N images.
+const DEFAULT_SHOTS_PER_INTERVAL = 3;
+const MAX_SHOTS_PER_INTERVAL = 10;
+
+// Spread `count` capture instants across a window of `windowMs`: divide the window into
+// `count` equal sub-slots and pick one uniformly-random point inside each. This keeps the
+// shots spread out (no two clustering at the same instant) while staying unpredictable —
+// a predictable cadence is exactly what monitoring screenshots must avoid. Pure/testable:
+// no timers, no Date/Math side effects beyond the injectable rng.
+function randomOffsetsAcrossWindow(count, windowMs, rng = Math.random) {
+  const shots = Math.max(1, Math.floor(count));
+  const slot = windowMs / shots;
+  const offsets = [];
+  for (let i = 0; i < shots; i++) {
+    offsets.push(Math.floor(i * slot + rng() * slot));
+  }
+  return offsets;
+}
+
 // Number of consecutive identical capture hashes before flagging as wallpaper-only.
 // 3 captures means the exact same pixel content was returned 3 times in a row,
 // which is extremely unlikely for real screen content (the clock alone changes).
@@ -79,6 +104,10 @@ class ScreenshotService {
     this.getIsAppVisible = typeof getIsAppVisible === 'function' ? getIsAppVisible : null;
     this.activityMonitor = activityMonitor;
     this._intervalTimer = null;
+    // Pending per-shot timeouts for the CURRENT window (multi-shot cadence). Held
+    // separately from `_intervalTimer` (which only opens the next window) so both
+    // stop()/pause() can cancel every in-flight shot, not just the window boundary.
+    this._shotTimers = [];
     this.initialTimeout = null;
     this.currentEntryId = null;
     this._capturing = false;
@@ -234,21 +263,56 @@ class ScreenshotService {
     }
   }
 
+  // Number of capture rounds per interval window. Clamped to [1, MAX]; the DEV/TEST
+  // fast-interval override forces a single shot per (tiny) window so verification runs
+  // stay legible. A capture round may still fan out to one image per display.
+  _shotsPerWindow() {
+    const testIntervalSec = parseInt(process.env.TRACKFLOW_SCREENSHOT_TEST_INTERVAL_SEC, 10);
+    if (Number.isFinite(testIntervalSec) && testIntervalSec > 0) return 1;
+    const raw = Number(this.config.screenshots_per_interval);
+    if (!Number.isFinite(raw) || raw < 1) return DEFAULT_SHOTS_PER_INTERVAL;
+    return Math.min(Math.floor(raw), MAX_SHOTS_PER_INTERVAL);
+  }
+
+  _clearShotTimers() {
+    if (this._shotTimers && this._shotTimers.length) {
+      for (const t of this._shotTimers) clearTimeout(t);
+    }
+    this._shotTimers = [];
+  }
+
+  // Multi-shot cadence: each interval window fires `_shotsPerWindow()` captures at
+  // random moments spread across the window (Hubstaff/Time Doctor model), instead of a
+  // single predictable capture per interval. Windows are back-to-back and each one
+  // re-randomizes its own offsets, so the pattern never repeats. `_intervalTimer` only
+  // opens the next window; the per-shot timers live in `_shotTimers` so stop()/pause()
+  // can cancel mid-window captures too.
   _startInterval() {
     if (this._intervalTimer) clearTimeout(this._intervalTimer);
-    const scheduleNext = () => {
-      // Randomize within 60-100% of interval to prevent predictable capture timing
-      const minDelay = Math.floor(this._intervalMs * 0.6);
-      const maxDelay = this._intervalMs;
-      const delay = minDelay + Math.floor(Math.random() * (maxDelay - minDelay));
+    this._clearShotTimers();
+    const windowMs = this._intervalMs;
+    const shots = this._shotsPerWindow();
+
+    const scheduleWindow = () => {
+      this._clearShotTimers();
+      const offsets = randomOffsetsAcrossWindow(shots, windowMs);
+      for (const off of offsets) {
+        const t = setTimeout(() => {
+          if (!this.currentEntryId) return;
+          this.capture().catch(() => {});
+        }, off);
+        this._shotTimers.push(t);
+      }
+      // Open the next window one full window-length out; it picks fresh random offsets.
       this._intervalTimer = setTimeout(() => {
-        this.capture().finally(() => {
-          if (this.currentEntryId) scheduleNext();
-        });
-      }, delay);
+        if (this.currentEntryId) scheduleWindow();
+      }, windowMs);
     };
-    scheduleNext();
-    console.log(`[SS] Randomized interval started — ~${Math.round(this._intervalMs / 1000)}s (\u00b140%)`);
+
+    scheduleWindow();
+    console.log(
+      `[SS] Multi-shot interval started — ${shots} shot(s) per ~${Math.round(windowMs / 1000)}s window`,
+    );
   }
 
   stop() {
@@ -260,6 +324,9 @@ class ScreenshotService {
       clearTimeout(this._intervalTimer);
       this._intervalTimer = null;
     }
+    // Cancel any per-shot timers still pending in the current window, or a stop()
+    // (logout, project switch, idle pause) could fire a capture against a stale entry.
+    this._clearShotTimers();
     if (this._pauseTimeout) {
       clearTimeout(this._pauseTimeout);
       this._pauseTimeout = null;
@@ -935,6 +1002,9 @@ class ScreenshotService {
         clearTimeout(this._intervalTimer);
         this._intervalTimer = null;
       }
+      // Drop the rest of this window's scheduled shots — they would just keep failing
+      // and re-tripping the pause. _startInterval() re-seeds a fresh window on resume.
+      this._clearShotTimers();
       this._pauseTimeout = setTimeout(() => {
         this._pauseTimeout = null;
         this._consecutiveFailures = 0;
@@ -1087,3 +1157,8 @@ class ScreenshotService {
 }
 
 module.exports = ScreenshotService;
+// Pure helpers exposed for unit tests (the class itself needs Electron and can't load
+// under Jest — same constraint as the rest of the desktop main process).
+module.exports.randomOffsetsAcrossWindow = randomOffsetsAcrossWindow;
+module.exports.DEFAULT_SHOTS_PER_INTERVAL = DEFAULT_SHOTS_PER_INTERVAL;
+module.exports.MAX_SHOTS_PER_INTERVAL = MAX_SHOTS_PER_INTERVAL;
