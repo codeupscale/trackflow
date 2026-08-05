@@ -104,6 +104,13 @@ Every database query MUST be scoped by `organization_id`. The `GlobalOrganizatio
 - Desktop releases: GitHub Releases with `latest-mac.yml` / `latest.yml` manifests
 - CI: `.github/workflows/tests.yml` — PHPUnit + `composer audit` + `npm audit`
 
+### 8. Roles (RBAC)
+There are exactly **five system roles**, seeded per organization by `PermissionSeeder`: `owner` (priority 100), `org_manager` (75), `hr_manager` (65), `finance_manager` (60), `employee` (10). Orgs may also define **custom** roles, so the set is open — never `switch` over a role name without a default branch, and never hardcode a role list in a validation rule (validate against the org's `roles` table, as `InvitationController` and `UserController::update()` do).
+
+**`admin` and `manager` are RETIRED.** Migration `2026_05_13_000004` consolidated both into `org_manager`. A `users.role` string that matches no system role is not an error anywhere — it silently yields an **EMPTY permission map**, because `PermissionService::buildPermissionMap()` resolves permissions by matching that string against a role. The account authenticates normally and then sees a dashboard with nothing on it. That is the signature of this bug; treat "signed in but everything is gated" as a role-name mismatch first. Note the migration only rewrites EXISTING rows, so on a fresh `migrate --seed` it runs against an empty `users` table and protects nothing — anything that writes role strings must already be correct.
+
+`user_roles` is the authoritative assignment; `users.role` is a backward-compatible fallback used only when a user has no pivot row. Keep both in sync. `PermissionSeeder` **deletes and recreates** each org's system roles on every run and `user_roles.role_id` is `ON DELETE CASCADE` — so running it alone silently drops every assignment, and anything that assigns roles must run AFTER it (`DatabaseSeeder::assignSystemRoles()` does). Only an owner may grant `owner`. Demo accounts and the local-setup traps are in `LOCAL_DEV.md`; the full post-mortem is `bugs/seeder-demo-accounts-have-retired-role-names.md`.
+
 ## Multi-Organization Authentication
 
 Users can belong to multiple organizations (same email, different `organization_id` in `users` table). The auth system handles this:

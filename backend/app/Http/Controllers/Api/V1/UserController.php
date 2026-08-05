@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\Project;
+use App\Models\Role;
 use App\Models\User;
 use App\Services\PermissionService;
 use App\Services\RbacBootstrapService;
@@ -74,8 +75,8 @@ class UserController extends Controller
         if ($request->filled('search')) {
             $search = $request->input('search');
             $query->where(function ($q) use ($search) {
-                $q->where('name', 'ilike', '%' . $search . '%')
-                  ->orWhere('email', 'ilike', '%' . $search . '%');
+                $q->where('name', 'ilike', '%'.$search.'%')
+                    ->orWhere('email', 'ilike', '%'.$search.'%');
             });
         }
 
@@ -99,7 +100,7 @@ class UserController extends Controller
             } else {
                 $query->where(function ($q) {
                     $q->whereNull('last_active_at')
-                      ->orWhere('last_active_at', '<', now()->subHours(24));
+                        ->orWhere('last_active_at', '<', now()->subHours(24));
                 });
             }
         }
@@ -114,6 +115,7 @@ class UserController extends Controller
         $user = $request->user()->organization->users()
             ->with('teams')
             ->findOrFail($id);
+
         return response()->json(['user' => $user]);
     }
 
@@ -123,13 +125,45 @@ class UserController extends Controller
 
         $request->validate([
             'name' => 'sometimes|string|max:255',
-            'role' => 'sometimes|in:owner,admin,manager,employee',
+            'role' => 'sometimes|string',
             'timezone' => 'sometimes|string',
             'is_active' => 'sometimes|boolean',
         ]);
 
         if ($request->has('role')) {
             $this->authorize('manageRoles', User::class);
+
+            // Validate the role against the roles that actually exist in this
+            // organization, the same way InvitationController does.
+            //
+            // This used to be a hardcoded `in:owner,admin,manager,employee` rule, which
+            // named two roles that migration 2026_05_13_000004 retired and omitted the
+            // three current ones — so org_manager, hr_manager and finance_manager were
+            // rejected outright, and a custom role could never be assigned at all.
+            //
+            // An org predating the RBAC backfill may have no roles rows yet, and the
+            // check below would then reject every name; bootstrapOrg() is idempotent.
+            app(RbacBootstrapService::class)->bootstrapOrg($user->organization_id);
+
+            $roleModel = Role::where('organization_id', $user->organization_id)
+                ->where('name', $request->input('role'))
+                ->first();
+
+            if (! $roleModel) {
+                return response()->json([
+                    'message' => 'The selected role does not exist.',
+                    'errors' => ['role' => ['The selected role does not exist in your organization.']],
+                ], 422);
+            }
+
+            // Only an owner may grant the owner role — same guard as invitations.
+            // Without it, `manageRoles` alone would be enough to mint another owner.
+            if ($roleModel->name === 'owner' && $request->user()->role !== 'owner') {
+                return response()->json([
+                    'message' => 'Only owners can assign the owner role.',
+                    'errors' => ['role' => ['Only owners can assign the owner role.']],
+                ], 403);
+            }
         }
 
         $roleChanged = $request->has('role') && $request->input('role') !== $user->getRawOriginal('role');
@@ -164,6 +198,7 @@ class UserController extends Controller
             ->findOrFail($id);
         $this->authorize('delete', $user);
         $user->delete();
+
         return response()->json(['message' => 'User deactivated.']);
     }
 }
