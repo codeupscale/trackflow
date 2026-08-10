@@ -127,6 +127,35 @@
   html {
     @apply font-sans;
   }
+
+  /*
+    Tailwind v3's preflight set `button, [role="button"] { cursor: pointer }`.
+    v4 dropped that rule to match the raw browser default, so every button in
+    the app shows an arrow instead of a hand. This restores the old behaviour —
+    the same fix Tailwind recommends in its v4 upgrade guide.
+
+    Scoped with :not(:disabled) so disabled controls keep the arrow: a hand
+    cursor on something that cannot be clicked is worse than no hand at all.
+  */
+  button:not(:disabled),
+  [role="button"]:not(:disabled),
+  summary,
+  label[for] {
+    cursor: pointer;
+  }
+
+  /* Clickable form controls preflight never covered, in either version. */
+  select:not(:disabled),
+  input[type="file"]:not(:disabled),
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
 }
 
 /* Tabular figures for all numeric displays — prevents layout jitter on ticking timers */

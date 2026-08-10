@@ -18,7 +18,11 @@ class PositionController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $query = Position::where('organization_id', $request->user()->organization_id);
+        // Eager-load the department: the list renders its name, and without
+        // this every row showed "--" while show() (which does load it) looked
+        // perfectly fine.
+        $query = Position::where('organization_id', $request->user()->organization_id)
+            ->with('department:id,name,code');
 
         if ($request->filled('department_id')) {
             $query->where('department_id', $request->input('department_id'));

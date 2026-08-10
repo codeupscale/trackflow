@@ -24,8 +24,10 @@ use App\Http\Controllers\Api\V1\Hr\EmployeeSalaryController;
 use App\Http\Controllers\Api\V1\Hr\ShiftAssignmentController;
 use App\Http\Controllers\Api\V1\Hr\ShiftController;
 use App\Http\Controllers\Api\V1\Hr\ShiftSwapController;
+use App\Http\Controllers\Api\V1\Hr\JobPostingController;
 use App\Http\Controllers\Api\V1\InvitationController;
 use App\Http\Controllers\Api\V1\JobMonitorController;
+use App\Http\Controllers\Api\V1\Public\PublicJobPostingController;
 use App\Http\Controllers\Api\V1\PermissionController;
 use App\Http\Controllers\Api\V1\ProfileController;
 use App\Http\Controllers\Api\V1\RoleController;
@@ -44,6 +46,13 @@ Route::prefix('v1')->group(function () {
     // Health checks (public)
     Route::get('health', \App\Http\Controllers\Api\V1\HealthController::class);
     Route::get('health/live', fn () => response()->json(['status' => 'ok']));
+
+    // Public careers feed — consumed by the marketing site. Unauthenticated by
+    // design, so the controller scopes by organization explicitly: the model's
+    // GlobalOrganizationScope only fires for authenticated requests.
+    Route::prefix('public')->middleware('throttle:api')->group(function () {
+        Route::get('organizations/{slug}/job-postings', [PublicJobPostingController::class, 'index']);
+    });
 
     // Public auth routes (with stricter rate limiting)
     Route::prefix('auth')->middleware('throttle:auth')->group(function () {
@@ -278,6 +287,14 @@ Route::prefix('v1')->group(function () {
                 ->middleware('permission:departments.view');
             Route::apiResource('positions', PositionController::class)
                 ->middleware('permission:positions.view');
+
+            // Job postings. Publishing is its own route behind its own
+            // permission, so job_postings.edit cannot push a posting live.
+            Route::patch('job-postings/{job_posting}/publish', [JobPostingController::class, 'setPublished'])
+                ->middleware('permission:job_postings.publish');
+            Route::apiResource('job-postings', JobPostingController::class)
+                ->parameters(['job-postings' => 'job_posting'])
+                ->middleware('permission:job_postings.view');
 
             // Leave Management
             Route::get('leave-calendar', [LeaveCalendarController::class, 'index'])

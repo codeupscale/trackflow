@@ -19,6 +19,7 @@ import {
     Layers,
     LayoutDashboard,
     ListChecks,
+    Megaphone,
     Puzzle,
     Receipt,
     Settings,
@@ -107,6 +108,14 @@ export const navigationConfig: NavGroup[] = [
                 href: "/hr/positions",
                 icon: Briefcase,
                 requiredPermission: "positions.view",
+            },
+            // Job Postings — Owner, Org Manager, HR Manager manage; Finance Manager
+            // and Manager have read-only. Employees do not have job_postings.view.
+            {
+                name: "Job Postings",
+                href: "/hr/job-postings",
+                icon: Megaphone,
+                requiredPermission: "job_postings.view",
             },
             // Employees see own profile only (scoped at API level); managers+ see directory
             {

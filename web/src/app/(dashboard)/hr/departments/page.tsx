@@ -115,7 +115,8 @@ export default function DepartmentsPage() {
             <div className="flex flex-col gap-0">
               {/* Header skeleton */}
               <div className="flex items-center gap-4 px-4 py-3 border-b border-border">
-                {Array.from({ length: 6 }).map((_, i) => (
+                {/* Name, Code, Parent Department, Positions, Status */}
+                {Array.from({ length: 5 }).map((_, i) => (
                   <Skeleton key={i} className="h-4 w-24" />
                 ))}
               </div>
@@ -128,7 +129,6 @@ export default function DepartmentsPage() {
                   <Skeleton className="h-4 w-32" />
                   <Skeleton className="h-4 w-16" />
                   <Skeleton className="h-4 w-28" />
-                  <Skeleton className="h-4 w-24" />
                   <Skeleton className="h-4 w-12" />
                   <Skeleton className="h-5 w-16" />
                 </div>
@@ -157,12 +157,15 @@ export default function DepartmentsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    {/* Only Name is unconstrained, so it absorbs the spare
+                        width. Without widths the browser hands the slack to
+                        whichever column has the widest header, which left a
+                        large gap in the middle of the row. */}
                     <TableHead>Name</TableHead>
-                    <TableHead>Code</TableHead>
-                    <TableHead>Parent Department</TableHead>
-                    <TableHead>Manager</TableHead>
-                    <TableHead className="text-right">Positions</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead className="w-[140px]">Code</TableHead>
+                    <TableHead className="w-[220px]">Parent Department</TableHead>
+                    <TableHead className="w-[110px]">Positions</TableHead>
+                    <TableHead className="w-[120px]">Status</TableHead>
                     {canManage && (
                       <TableHead className="w-12">
                         <span className="sr-only">Actions</span>
@@ -183,9 +186,6 @@ export default function DepartmentsPage() {
                         {dept.parent_department?.name ?? '--'}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
-                        {dept.manager?.name ?? '--'}
-                      </TableCell>
-                      <TableCell className="text-right">
                         {dept.positions_count ?? 0}
                       </TableCell>
                       <TableCell>

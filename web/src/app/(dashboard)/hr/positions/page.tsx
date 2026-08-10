@@ -58,23 +58,6 @@ import {
   PaginationPrevious,
 } from '@/components/ui/pagination';
 
-function formatSalaryRange(
-  min: number | null,
-  max: number | null
-): string {
-  if (!min && !max) return '--';
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      maximumFractionDigits: 0,
-    }).format(n);
-  if (min && max) return `${fmt(min)} - ${fmt(max)}`;
-  if (min) return `${fmt(min)}+`;
-  if (max) return `Up to ${fmt(max)}`;
-  return '--';
-}
-
 export default function PositionsPage() {
   const { hasPermission } = usePermissionStore();
   const canManage = hasPermission('positions.create');
@@ -187,7 +170,9 @@ export default function PositionsPage() {
           <CardContent className="p-0">
             <div className="flex flex-col gap-0">
               <div className="flex items-center gap-4 px-4 py-3 border-b border-border">
-                {Array.from({ length: 7 }).map((_, i) => (
+                {/* Matches the six real columns: Title, Code, Department,
+                    Level, Employment Type, Status. */}
+                {Array.from({ length: 6 }).map((_, i) => (
                   <Skeleton key={i} className="h-4 w-20" />
                 ))}
               </div>
@@ -201,7 +186,6 @@ export default function PositionsPage() {
                   <Skeleton className="h-4 w-24" />
                   <Skeleton className="h-5 w-16" />
                   <Skeleton className="h-5 w-20" />
-                  <Skeleton className="h-4 w-28" />
                   <Skeleton className="h-5 w-16" />
                 </div>
               ))}
@@ -233,13 +217,14 @@ export default function PositionsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    {/* Title is unconstrained so it absorbs the spare width;
+                        the rest are fixed so the row does not develop a gap. */}
                     <TableHead>Title</TableHead>
-                    <TableHead>Code</TableHead>
-                    <TableHead>Department</TableHead>
-                    <TableHead>Level</TableHead>
-                    <TableHead>Employment Type</TableHead>
-                    <TableHead>Salary Range</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead className="w-[140px]">Code</TableHead>
+                    <TableHead className="w-[200px]">Department</TableHead>
+                    <TableHead className="w-[130px]">Level</TableHead>
+                    <TableHead className="w-[170px]">Employment Type</TableHead>
+                    <TableHead className="w-[120px]">Status</TableHead>
                     {canManage && (
                       <TableHead className="w-12">
                         <span className="sr-only">Actions</span>
@@ -266,9 +251,6 @@ export default function PositionsPage() {
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {employmentTypeLabels[pos.employment_type]}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {formatSalaryRange(pos.min_salary, pos.max_salary)}
                       </TableCell>
                       <TableCell>
                         <Badge

@@ -34,7 +34,7 @@ function createWrapper() {
 
 const mockPositions = {
   data: [
-    { id: 'pos-1', title: 'Senior Engineer', code: 'SE-001', department_id: 'dept-1', level: 'senior', employment_type: 'full_time', min_salary: null, max_salary: null, is_active: true, created_at: '2024-01-01', updated_at: '2024-01-01' },
+    { id: 'pos-1', title: 'Senior Engineer', code: 'SE-001', department_id: 'dept-1', level: 'senior', employment_type: 'full_time', is_active: true, created_at: '2024-01-01', updated_at: '2024-01-01' },
   ],
   meta: { current_page: 1, last_page: 1, total: 1, from: 1, to: 1 },
 };
@@ -84,7 +84,7 @@ describe('useCreatePosition', () => {
     const { result } = renderHook(() => useCreatePosition(), { wrapper: createWrapper() });
 
     await act(async () => {
-      result.current.mutate({ title: 'Junior Dev', code: 'JD-001', department_id: 'dept-1', level: 'junior', employment_type: 'full_time', min_salary: null, max_salary: null, is_active: true });
+      result.current.mutate({ title: 'Junior Dev', code: 'JD-001', department_id: 'dept-1', level: 'junior', employment_type: 'full_time', is_active: true });
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -99,7 +99,7 @@ describe('useCreatePosition', () => {
     const { result } = renderHook(() => useCreatePosition(), { wrapper: createWrapper() });
 
     await act(async () => {
-      result.current.mutate({ title: 'Test', code: 'T', department_id: 'd', level: 'mid', employment_type: 'full_time', min_salary: null, max_salary: null, is_active: true });
+      result.current.mutate({ title: 'Test', code: 'T', department_id: 'd', level: 'mid', employment_type: 'full_time', is_active: true });
     });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
@@ -115,7 +115,7 @@ describe('useUpdatePosition', () => {
     const { result } = renderHook(() => useUpdatePosition(), { wrapper: createWrapper() });
 
     await act(async () => {
-      result.current.mutate({ id: 'pos-1', title: 'Lead Engineer', code: 'LE-001', department_id: 'dept-1', level: 'lead', employment_type: 'full_time', min_salary: null, max_salary: null, is_active: true });
+      result.current.mutate({ id: 'pos-1', title: 'Lead Engineer', code: 'LE-001', department_id: 'dept-1', level: 'lead', employment_type: 'full_time', is_active: true });
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
