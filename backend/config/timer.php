@@ -122,6 +122,31 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Live Elapsed Grace (minutes)
+    |--------------------------------------------------------------------------
+    |
+    | How long an OPEN entry may go without proof that its agent is alive before
+    | `elapsed_seconds` stops being measured to now() and freezes at that last
+    | proof (`live_as_of`, with `elapsed_is_stale` set so the UI can say so).
+    |
+    | The desktop owns tracked time locally and uploads on a 10-minute batch, so
+    | between pushes the server's open entry can be a stale replica of state the
+    | agent has already changed — an idle gap it discarded, a session it stopped,
+    | a machine that died. Counting such an entry to now() does not lag, it
+    | INVENTS time and grows it every second.
+    |
+    | 3 minutes: comfortably above the agent's 30s heartbeat cadence (so a healthy
+    | online agent never freezes), well under the 10-minute upload interval, and
+    | far under `abandoned_after_minutes`.
+    |
+    | Used by: App\Services\TimerService::computeOpenEntryElapsed()
+    |
+    */
+
+    'live_elapsed_grace_minutes' => (int) env('TIMER_LIVE_ELAPSED_GRACE_MINUTES', 3),
+
+    /*
+    |--------------------------------------------------------------------------
     | Session Sync Batch Cap
     |--------------------------------------------------------------------------
     |
