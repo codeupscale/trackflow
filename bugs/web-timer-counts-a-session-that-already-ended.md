@@ -84,13 +84,32 @@ lookup only runs when that is already stale, so the healthy path costs no extra 
 shows `… · as of HH:MM`, drops the pulsing "live" dot and greys the figure, because a
 silently frozen counter reads exactly like a running one between ticks.
 
-## Known limits
+## Round 2 — the first fix was not enough (same day)
 
-Within the grace window the server still cannot know about a local change it has not
-received — that is inherent to the 10-minute cadence (owner decision, 2026-08-03). The
-fix stops the number GROWING and labels it as not-current; it does not make it match the
-desktop instantly. Closing that gap would need an out-of-band push on stop/idle-resolve,
-which was considered and deliberately not taken.
+Verified against the live dev stack and it still read wrong: desktop 18:55, dashboard
+29:51 "as of 08:00 pm". Two things were wrong with the clamp as first written.
+
+**It trusted the wrong signal.** `client_synced_at` says the agent PROCESS is up, not
+that anyone is working — and it keeps advancing on the 10-minute batch throughout an
+idle period. The session whose user stopped at 14:49:14 was credited all the way to the
+15:00:00 push. A bare heartbeat is no better: the agent keeps sending them with zero
+counters for the entire idle-threshold window (nine minutes, here) before the prompt
+appears. `liveAsOf()` now takes the last heartbeat carrying actual INPUT, and the grace
+is the org's own `idle_timeout` + 1 minute — the product's own definition of "still
+working", and the moment the desktop itself stops accruing. On the measured session that
+yields 14:49:20 − 14:30:19 = 19:01, against the desktop's 18:55.
+
+**Freezing was never going to be enough on its own.** After "Continue tracking" the
+dashboard read 41:21 against the desktop's 20:09, because the server was still holding
+the abandoned session — the boundary that ended it at 14:49 had not been uploaded. A
+frozen figure is honest; only telling the server makes it right. So the four instants
+at which a boundary moves — start, stop, idle-resolve, project-switch — now push
+immediately (`pushSessionBoundary()`), amending the 2026-08-03 periodic-only decision on
+the owner's instruction. Bulk data still rides the 10-minute batch and freshness-only
+triggers stay banned; `sync-cadence.test.js` enforces both halves.
+
+The clamp remains the safety net for the cases a push cannot cover: a crash, a
+force-quit, a dead machine, an offline stretch.
 
 ## Regression tests
 

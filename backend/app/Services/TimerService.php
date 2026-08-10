@@ -111,10 +111,11 @@ class TimerService
      *     reading 28:58 while the desktop showed the true 11:17)
      *   - after a force-quit or a dead machine, until the 60-minute abandoned backstop
      *
-     * So the elapsed clock stops at `liveAsOf()` once the agent has gone quiet for
-     * longer than `timer.live_elapsed_grace_minutes`. The figure then freezes at the
-     * last instant we have evidence for, which is the honest answer, and callers get
-     * `live_as_of` / `elapsed_is_stale` in the status payload so the UI can say so.
+     * So the elapsed clock stops at `liveAsOf()` — the last heartbeat carrying actual
+     * INPUT — once that is older than the org's idle threshold. The figure then freezes
+     * at the last instant we have evidence of work, which is the same instant the
+     * desktop anchors to, and callers get `live_as_of` / `elapsed_is_stale` in the
+     * status payload so the UI can say so rather than presenting it as current.
      */
     private function computeOpenEntryElapsed(TimeEntry $entry, ?Carbon $frozenAt = null): int
     {
@@ -130,47 +131,68 @@ class TimerService
      */
     private function liveElapsedEnd(TimeEntry $entry): Carbon
     {
-        $graceMinutes = max(1, (int) config('timer.live_elapsed_grace_minutes', 3));
-        $cutoff = now()->subMinutes($graceMinutes);
-
-        $liveAsOf = $this->liveAsOf($entry, $cutoff);
+        $cutoff = now()->subMinutes($this->liveElapsedGraceMinutes());
+        $liveAsOf = $this->liveAsOf($entry);
 
         return $liveAsOf->gte($cutoff) ? now() : $liveAsOf;
     }
 
     /**
-     * Most recent evidence that the agent owning this entry is alive.
+     * How long the entry may go without evidence of WORK before its clock stops.
      *
-     * `client_synced_at` is checked FIRST because it is a column on the row already —
-     * the sync endpoint stamps it on every push of the live session, including one
-     * carrying no change. Only when that is already stale do we pay for the heartbeat
-     * lookup (indexed by `al_time_entry_idx`), so the healthy path costs no extra query.
-     *
-     * Heartbeats matter because they are far fresher: the agent POSTs one every 30s
-     * while online, whereas `client_synced_at` only moves once per 10-minute upload.
+     * The org's own idle threshold, plus a minute for the agent's 30s heartbeat
+     * granularity. That is not an arbitrary window: `idle_timeout` is precisely the
+     * product's definition of "still working", and it is when the desktop raises the
+     * idle prompt and stops accruing. Matching it means the server freezes at the same
+     * moment the desktop does, instead of guessing.
      */
-    private function liveAsOf(TimeEntry $entry, ?Carbon $shortCircuitAfter = null): Carbon
+    private function liveElapsedGraceMinutes(): int
     {
-        $liveAsOf = $entry->started_at;
+        $user = Auth::user();
+        $idleTimeout = (int) ($user?->organization?->getSetting('idle_timeout', 0) ?? 0);
 
-        if ($entry->client_synced_at !== null && $entry->client_synced_at->gt($liveAsOf)) {
-            $liveAsOf = $entry->client_synced_at;
+        if ($idleTimeout >= 1) {
+            return min(30, $idleTimeout) + 1;
         }
 
-        if ($shortCircuitAfter !== null && $liveAsOf->gte($shortCircuitAfter)) {
-            return $liveAsOf;
+        return max(1, (int) config('timer.live_elapsed_grace_minutes', 3));
+    }
+
+    /**
+     * Most recent evidence that the USER was working — not that the agent process is up.
+     *
+     * The distinction is the whole fix. Two signals look like liveness and are not:
+     *
+     *   - `client_synced_at` only says the agent is running. It keeps advancing on the
+     *     10-minute upload batch throughout an idle period, so an entry whose user
+     *     walked away at 14:49:14 was still credited to the 15:00:00 push — the
+     *     dashboard read 29:51 while the desktop, anchored to the last input, read
+     *     18:55.
+     *   - ANY heartbeat says the agent is capturing, not that anyone is at the keyboard.
+     *     The agent keeps sending them, with zero counters, for the whole idle-threshold
+     *     window before the prompt appears (nine minutes of them, in the case above).
+     *
+     * A heartbeat carrying INPUT is the one signal that means work happened, and it is
+     * the same evidence the desktop anchors its own idle decision to. `started_at` is
+     * the floor, so a session too new to have reported yet reads as freshly alive.
+     */
+    private function liveAsOf(TimeEntry $entry): Carbon
+    {
+        $lastInputAt = ActivityLog::where('time_entry_id', $entry->id)
+            ->where(function ($q) {
+                $q->where('active_seconds', '>', 0)
+                    ->orWhere('keyboard_events', '>', 0)
+                    ->orWhere('mouse_events', '>', 0);
+            })
+            ->max('logged_at');
+
+        if ($lastInputAt === null) {
+            return $entry->started_at;
         }
 
-        $lastHeartbeat = ActivityLog::where('time_entry_id', $entry->id)->max('logged_at');
+        $inputAt = Carbon::parse($lastInputAt);
 
-        if ($lastHeartbeat !== null) {
-            $heartbeatAt = Carbon::parse($lastHeartbeat);
-            if ($heartbeatAt->gt($liveAsOf)) {
-                $liveAsOf = $heartbeatAt;
-            }
-        }
-
-        return $liveAsOf;
+        return $inputAt->gt($entry->started_at) ? $inputAt : $entry->started_at;
     }
 
     /**
@@ -266,7 +288,7 @@ class TimerService
         // clock above is frozen at `live_as_of`, and a client that keeps ticking from
         // `started_at` would re-introduce exactly the invented time the freeze removes.
         $liveAsOf = $this->liveAsOf($entry);
-        $isStale = $liveAsOf->lt(now()->subMinutes(max(1, (int) config('timer.live_elapsed_grace_minutes', 3))));
+        $isStale = $liveAsOf->lt(now()->subMinutes($this->liveElapsedGraceMinutes()));
 
         return [
             'state' => $timerState,

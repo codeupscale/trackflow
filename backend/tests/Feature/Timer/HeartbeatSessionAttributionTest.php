@@ -212,7 +212,10 @@ class HeartbeatSessionAttributionTest extends TestCase
         $status = $this->service->status();
 
         $this->assertTrue($status['elapsed_is_stale']);
-        // Frozen at the last push (9 min ago), not counting on to 29 minutes.
-        $this->assertSame(20 * 60, $status['elapsed_seconds']);
+        // Frozen at the last heartbeat carrying INPUT (25 min ago) — 4 minutes of
+        // evidenced work. Not the 29 minutes the wall clock would give, and not the 20
+        // the last sync push would give: a push only proves the agent process is up,
+        // and it keeps advancing on the 10-minute batch while the user is away.
+        $this->assertSame(4 * 60, $status['elapsed_seconds']);
     }
 }

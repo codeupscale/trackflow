@@ -6,6 +6,16 @@
  * out-of-band flushes left are the ones that protect data rather than freshen a
  * dashboard — launch (previous run's backlog), sign-out, quit, pre-update — because
  * after those the process may not be alive for the next tick.
+ *
+ * AMENDED 2026-08-10, on the owner's instruction after watching the dashboard read
+ * 41:21 against the desktop's 20:09: the four instants at which a session BOUNDARY
+ * moves — start, stop, idle resolution, project switch — are announced immediately.
+ * Everything else is unchanged. Bulk data (screenshots, heartbeats, the routine
+ * re-push of the live session) still rides the 10-minute batch; a boundary push is a
+ * handful of bytes for one row, and it is the only way the server can stop attributing
+ * work to a session the user already ended. The rule this file guards is therefore no
+ * longer "nothing but data-protection flushes" but "boundaries and data protection,
+ * and nothing else" — a periodic heartbeat of pushes for freshness is still banned.
  */
 
 const fs = require("fs");
@@ -25,27 +35,47 @@ describe("session upload cadence", () => {
         expect(SYNC_INTERVAL_MS).toBe(10 * 60 * 1000);
     });
 
-    test("no routine action triggers an upload", () => {
+    test("only data-protection flushes and session boundaries trigger an upload", () => {
         const reasons = [...SRC.matchAll(/syncNow\(\s*"([a-z-]+)"/g)].map(
             (m) => m[1],
         );
+        const boundaries = [
+            ...SRC.matchAll(/pushSessionBoundary\(\s*"([a-z-]+)"/g),
+        ].map((m) => m[1]);
+
         // Sorted for a stable failure message.
         expect(reasons.sort()).toEqual(
             ["logout", "pre-update", "quit", "startup"].sort(),
         );
+        expect(boundaries.sort()).toEqual(
+            [
+                "idle-resolved",
+                "project-switch",
+                "timer-start",
+                "timer-stop",
+            ].sort(),
+        );
     });
 
-    test.each([
-        "timer-start",
-        "timer-stop",
-        "project-switch",
-        "idle-discard",
-        "idle-resolved",
-        "midnight-split",
-        "wake",
-        "online",
-    ])("the %s trigger is gone", (reason) => {
-        expect(SRC).not.toContain(`syncNow("${reason}"`);
+    test.each(["midnight-split", "wake", "online", "tick", "reconnect"])(
+        "the %s trigger stays gone",
+        (reason) => {
+            // These are not boundaries the USER can see moving; they were freshness
+            // pushes, and re-adding one would walk back toward a push per event.
+            expect(SRC).not.toContain(`syncNow("${reason}"`);
+            expect(SRC).not.toContain(`pushSessionBoundary("${reason}")`);
+        },
+    );
+
+    test("a boundary push never blocks the local write, and ignores backoff", () => {
+        const helper = SRC.slice(
+            SRC.indexOf("function pushSessionBoundary("),
+            SRC.indexOf("function resumeTimerAfterIdle("),
+        );
+        // Tracked time is durable in SQLite before this runs; the push is announcement
+        // only, so it must not be awaited on any timer path.
+        expect(helper).toMatch(/ignoreBackoff: true/);
+        expect(SRC).not.toMatch(/await pushSessionBoundary\(/);
     });
 
     test("stopping the timer does not make the displayed total drop", () => {
