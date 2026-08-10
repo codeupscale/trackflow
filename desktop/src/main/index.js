@@ -69,6 +69,7 @@ const {
     unsyncedCompletedSecondsForDay,
     completedSecondsForProjectDay,
     staleLiveSessionDecision,
+    startOfZonedDay,
 } = require("./session-rules");
 const { WorkSessionStore } = require("./work-session-store");
 const { SessionSyncWorker } = require("./session-sync-worker");
@@ -1385,16 +1386,37 @@ function getActiveLocalTimer() {
     return store.getLive();
 }
 
+/**
+ * Start of "today" for local totals, in the ORGANIZATION's timezone.
+ *
+ * Must match the zone everything else buckets by: the server's today-total uses
+ * `TimezoneAwareDateRange` (org zone), and the midnight split closes sessions at org
+ * midnight. Using the MACHINE's midnight here — which it did — put the two out of step
+ * for anyone whose machine zone differs from the org's (travel, a remote contractor, a
+ * laptop left on UTC): between the two midnights the local credit either counted
+ * yesterday's rows into today's server figure or dropped today's, moving the displayed
+ * total by whole sessions.
+ */
+function startOfLocalTotalsDay() {
+    const tz = config?.timezone || DEFAULT_CONFIG.timezone;
+    try {
+        return startOfZonedDay(Date.now(), tz);
+    } catch {
+        // An unknown/garbage zone string must not take the totals down with it.
+        const fallback = new Date();
+        fallback.setHours(0, 0, 0, 0);
+        return fallback.getTime();
+    }
+}
+
 /** Seconds of completed local work the server has not seen yet, for today. */
 function getUnsyncedCompletedSecondsForToday() {
     const store = getWorkSessionStore();
     if (!store) return 0;
     try {
-        const startOfDay = new Date();
-        startOfDay.setHours(0, 0, 0, 0);
         return unsyncedCompletedSecondsForDay(
             store.getAll(),
-            startOfDay.getTime(),
+            startOfLocalTotalsDay(),
         );
     } catch (e) {
         console.warn("[LocalTimerDb] today unsynced total failed:", e.message);
@@ -1407,11 +1429,9 @@ function getLocalCompletedSecondsForProjectToday(projectId, opts) {
     const store = getWorkSessionStore();
     if (!store) return 0;
     try {
-        const startOfDay = new Date();
-        startOfDay.setHours(0, 0, 0, 0);
         return completedSecondsForProjectDay(
             store.getAll(),
-            startOfDay.getTime(),
+            startOfLocalTotalsDay(),
             projectId,
             opts,
         );
@@ -2086,14 +2106,28 @@ async function initializeApp() {
         // authoritative value instead of leaving the tray 1s ahead.
         if (!isTimerRunning && apiClient) {
             try {
-                const serverTotal = await apiClient.getTodayTotal(null);
-                if (serverTotal != null && serverTotal >= 0) {
-                    todayTotalGlobal = serverTotal;
+                // Reconnect is exactly when the server knows LEAST: the backlog has not
+                // been pushed yet (the interval owns that), so a bare server figure is
+                // missing every session tracked while offline. Assigning it raw made the
+                // total visibly collapse the moment the network came back — the reset
+                // this convergence step exists to avoid. Take the server's CLOSED sum
+                // (its live-entry elapsed stripped, since a locally-stopped session can
+                // still be open server-side) and add the local rows it has not confirmed.
+                const status = await apiClient.getTimerStatus(null);
+                const serverGlobal =
+                    status?.all_projects_today_total ?? status?.today_total;
+                if (serverGlobal != null && serverGlobal >= 0) {
+                    const converged =
+                        Math.max(
+                            0,
+                            serverGlobal - (status.elapsed_seconds ?? 0),
+                        ) + getUnsyncedCompletedSecondsForToday();
+                    todayTotalGlobal = converged;
                     updateTrayTitle();
                     notifyPopup("timer-stopped", {
                         entry: null,
-                        todayTotal: serverTotal,
-                        todayTotalGlobal: serverTotal,
+                        todayTotal: converged,
+                        todayTotalGlobal: converged,
                     });
                 }
             } catch {
@@ -2121,23 +2155,19 @@ async function initializeApp() {
 
         activityMonitor?.stop();
         stopTrayTimer();
-        if (policy === "always") {
-            idleDetector.resolveIdle(actionId);
-            idleDetector.start();
-            // Restore tray from idle state
-            updateTrayIcon(isTimerRunning);
-            if (isTimerRunning) updateTrayTitle();
-            activityMonitor?.start();
-            if (isTimerRunning && currentEntry) {
-                screenshotService?.start(currentEntry.id, {
-                    immediateCapture:
-                        config.screenshot_capture_immediate_after_idle === true,
-                });
-            }
-            startTrayTimer();
-            return;
-        }
-        if (policy === "never") {
+        // "always" (always KEEP idle time) was the last path in the product that still
+        // billed an idle gap as work. It simply resolved the idle cycle and carried on
+        // counting from the original start, so every idle minute stayed inside the
+        // entry — the exact outcome owner policy removed on 2026-07-16, when Keep and
+        // Reassign were dropped and the prompt was reduced to "Continue tracking" /
+        // "Stop timer", both of which discard the gap. An org that had this saved kept
+        // paying for idle time that the prompt no longer even offers to keep.
+        //
+        // It now means what its neighbours mean: resolve WITHOUT prompting, and discard
+        // the gap. `never` and `always` are therefore the same behaviour, which is why
+        // the web settings page no longer offers both, and why GET /agent/config folds
+        // `always` into `never` for older builds that still reach this branch.
+        if (policy === "always" || policy === "never") {
             handleIdleAction("discard", actionId, idleSeconds, null);
             dismissIdleAlert();
             return;
@@ -3583,6 +3613,9 @@ function setupIPC() {
                 const globalTotal = status.today_total ?? 0;
                 const allProjectsTotal =
                     status.all_projects_today_total ?? globalTotal;
+                // Elapsed of whatever entry the SERVER still holds open — ours, whether
+                // or not the desktop still considers it live.
+                const serverLiveElapsed = status.elapsed_seconds ?? 0;
 
                 // Timer STATE comes from local SQLite. The server's view is used only
                 // for totals (which include manual entries) — it can no longer clear a
@@ -3598,8 +3631,24 @@ function setupIPC() {
                     }
                 }
 
+                // `todayTotalGlobal` is the COMPLETED base — every consumer (tray tick,
+                // renderIdleFreeze) adds the live session's local elapsed on top. The
+                // server figure already includes its own open entry's elapsed, so strip
+                // it back out exactly like the 10s poll does; keeping it here counted the
+                // running session twice for as long as it took the next tick to repaint,
+                // and after an idle split the two elapsed figures are measured from
+                // different starts, which made the disagreement permanent-looking.
+                //
+                // Subtracted UNCONDITIONALLY, not only while the local timer runs: with a
+                // 10-minute upload cadence the server can still be holding an entry OPEN
+                // that the desktop closed minutes ago, and that row is already counted
+                // locally by getUnsyncedCompletedSecondsForToday(). Gating on
+                // `isTimerRunning` therefore double-counted the session the user had just
+                // stopped — and left the total CLIMBING after Stop, since the server keeps
+                // measuring its phantom-open entry to now().
                 todayTotalGlobal =
-                    allProjectsTotal + getUnsyncedCompletedSecondsForToday();
+                    Math.max(0, allProjectsTotal - serverLiveElapsed) +
+                    getUnsyncedCompletedSecondsForToday();
                 if (!isTimerRunning) todayTotalCurrentProject = 0;
 
                 // Remember this project's completed total while stopped, so Start can
@@ -3635,8 +3684,13 @@ function setupIPC() {
             entry: currentEntry,
             elapsed: elapsedForState,
             todayTotal: todayTotalForDisplay,
-            // Non-ticking all-projects sum for the secondary field.
-            todayTotalGlobal,
+            // All-projects sum for the secondary field. The renderer paints this value
+            // directly, so hand it the LIVE figure (completed base + the running
+            // session's elapsed, frozen at idle-start while paused) — the same number
+            // the next `timer-tick` will carry. `todayTotalGlobal` itself stays the
+            // completed base that every tick adds elapsed to.
+            todayTotalGlobal:
+                todayTotalGlobal + (isTimerRunning ? elapsedForState : 0),
             // True while an idle alert is waiting for an answer — the popup renders
             // itself locked so a re-opened window can never come back unlocked.
             idleLocked: isIdleAlertActive(),
@@ -4286,10 +4340,11 @@ async function _idleWatchdogTick() {
         if (isIdleAlertActive()) {
             return;
         }
-        // Respect the "always keep idle time" policy: those orgs intentionally
-        // credit presence, so awake-idle is not a phantom for them. (True sleep is
-        // still stopped by autoStopAfterSleepGap regardless of policy.)
-        if (config?.keep_idle_time === "always") return;
+        // The "always keep idle time" exemption used to live here — the watchdog stood
+        // down for those orgs because they intentionally credited presence. Nothing
+        // credits idle presence any more (`always` now resolves as a discard, same as
+        // `never`), so exempting them would only leave a wedged detector's session
+        // running with no backstop. Removed deliberately.
 
         let systemIdleSec;
         try {
@@ -4509,10 +4564,21 @@ async function stopTimer(options = {}) {
                 (todayTotalGlobal || 0) +
                 Math.max(0, sessionElapsed - pendingIdleAtStop);
             try {
-                const serverGlobal = await apiClient?.getTodayTotal(null);
+                // `/timer/status`, not `/timer/today-total`: the stop has NOT been
+                // pushed yet, so the server still holds this entry OPEN and folds its
+                // elapsed-to-now into every today figure — while the row we just closed
+                // is already counted locally below. `today-total` cannot express that
+                // overlap (it returns a bare number), so read the status payload and
+                // subtract the live elapsed it tells us it included.
+                const status = await apiClient?.getTimerStatus(null);
+                const serverGlobal =
+                    status?.all_projects_today_total ?? status?.today_total;
                 todayTotalGlobal =
                     serverGlobal != null && serverGlobal >= 0
-                        ? serverGlobal + getUnsyncedCompletedSecondsForToday()
+                        ? Math.max(
+                              0,
+                              serverGlobal - (status.elapsed_seconds ?? 0),
+                          ) + getUnsyncedCompletedSecondsForToday()
                         : localGlobal;
             } catch {
                 // Offline — keep the local accumulated total. NEVER 0, or a sleep
@@ -4681,7 +4747,15 @@ function startTimerSync() {
                 todayTotalCurrentProject =
                     Math.max(0, projectTotal - elapsed) + projectPendingSecs;
             } else {
-                todayTotalGlobal = globalTotal + pendingOfflineSecs;
+                // Not running LOCALLY — but the server may still be holding our last
+                // session open (it only learns about the stop on the next 10-minute
+                // push), and `globalTotal` counts that phantom entry's elapsed to NOW,
+                // growing every poll. The stopped row is already counted in
+                // `pendingOfflineSecs`, so strip the server's elapsed here too or the
+                // total both double-counts the finished session and keeps climbing
+                // after Stop.
+                todayTotalGlobal =
+                    Math.max(0, globalTotal - elapsed) + pendingOfflineSecs;
                 todayTotalCurrentProject = 0;
             }
 
@@ -5644,6 +5718,16 @@ async function handleIdleAction(
                         );
                         todayTotalCurrentProject =
                             (todayTotalCurrentProject || 0) +
+                            Math.max(0, preIdleSeconds);
+                        // The all-projects line has to move with it. It is the base the
+                        // tick adds the LIVE session's elapsed to, and that elapsed just
+                        // reset to 0 with the new row — leaving it untouched made "Today,
+                        // all projects" drop by the whole pre-idle span the instant the
+                        // user clicked "Continue tracking". Both bases are overwritten
+                        // from the server (plus local unconfirmed seconds) on the next
+                        // 10s status poll, so this cannot accumulate.
+                        todayTotalGlobal =
+                            (todayTotalGlobal || 0) +
                             Math.max(0, preIdleSeconds);
 
                         // A session that was idle almost from the moment it began

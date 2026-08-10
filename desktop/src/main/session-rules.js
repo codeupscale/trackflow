@@ -217,22 +217,48 @@ function nextBackoffMs(consecutiveFailures) {
 // ── Display totals ──────────────────────────────────────────────────────────
 
 /**
+ * Seconds of a COMPLETED row that the server's today-total does not contain yet.
+ *
+ * The server's today-total sums CLOSED entries only (`whereNotNull('ended_at')`) and
+ * then adds the OPEN entry's live elapsed separately — which the desktop strips back
+ * out (`total - status.elapsed_seconds`) because its own tick adds local elapsed. So
+ * the question this answers is not "has the server ever seen this row?" but "has the
+ * server durably stored this row AS CLOSED, at this duration?".
+ *
+ * Keying on `server_entry_id` got that wrong for the row an idle discard closes. That
+ * row was pushed earlier while it was still LIVE, so it carries a `server_entry_id`
+ * and was skipped here — while server-side it is still the open entry, whose elapsed
+ * the desktop subtracts. Its pre-idle work therefore vanished from both today-totals
+ * within one 10s status poll of the user clicking "Continue tracking", and only came
+ * back when the next 10-MINUTE session sync finally closed it server-side.
+ * See bugs/desktop-idle-continue-deducts-pre-idle-time-from-total.md.
+ *
+ * DIRTY (`synced_revision <> revision`) is the correct test: the server has not
+ * acknowledged the row's current state, so the close is not in its closed sum. What it
+ * DID acknowledge is `server_duration_seconds` (null for a row acked while open, since
+ * the sync endpoint echoes `duration_seconds` = null for an open entry), so credit only
+ * the difference and a partially-known row can never be counted twice.
+ */
+function unconfirmedCompletedSeconds(row) {
+    if (!row || row.ended_at == null) return 0;
+    if (!isDirty(row)) return 0;
+    const local = Number(row.duration_seconds) || 0;
+    const serverKnown = Number(row.server_duration_seconds) || 0;
+    return Math.max(0, local - serverKnown);
+}
+
+/**
  * Seconds of completed local work the SERVER does not know about yet, for the given
  * local day. Added to the displayed today-total so time tracked offline stays visible
  * instead of the total appearing to reset on reconnect.
- *
- * Only rows the server has NEVER acknowledged are counted (`server_entry_id` absent):
- * once an entry exists server-side it is already inside the fetched today-total, and
- * adding it again would double-count.
  */
 function unsyncedCompletedSecondsForDay(rows, startOfDayMs) {
     let total = 0;
     for (const r of Array.isArray(rows) ? rows : []) {
         if (!r || r.ended_at == null) continue;
-        if (r.server_entry_id) continue;
         const startMs = Date.parse(r.started_at);
         if (Number.isFinite(startMs) && startMs >= startOfDayMs) {
-            total += Number(r.duration_seconds) || 0;
+            total += unconfirmedCompletedSeconds(r);
         }
     }
     return total;
@@ -257,14 +283,49 @@ function completedSecondsForProjectDay(
     let total = 0;
     for (const r of Array.isArray(rows) ? rows : []) {
         if (!r || r.ended_at == null) continue;
-        if (unsyncedOnly && r.server_entry_id) continue;
         if (String(r.project_id ?? "") !== want) continue;
         const startMs = Date.parse(r.started_at);
-        if (Number.isFinite(startMs) && startMs >= startOfDayMs) {
-            total += Number(r.duration_seconds) || 0;
-        }
+        if (!Number.isFinite(startMs) || startMs < startOfDayMs) continue;
+        total += unsyncedOnly
+            ? unconfirmedCompletedSeconds(r)
+            : Number(r.duration_seconds) || 0;
     }
     return total;
+}
+
+/**
+ * Never offer the server more than ONE open session in a batch.
+ *
+ * `POST /timer/sessions/sync` 422s the WHOLE batch when it sees two open sessions
+ * (`assertAtMostOneOpenSession`) — correctly, since `idx_one_active_timer_per_user`
+ * allows a single open entry. But the agent can hold two open rows after a phantom
+ * stop: in-memory state says "not running" while SQLite still has a live row, and a
+ * user clicking Start before the next poll adopts it opens a second. Nothing closes
+ * the older one (`getLive()` only ever returns the newest), so without this the 422
+ * repeats every cycle and NO tracked time uploads at all — for any session — until a
+ * human intervenes. One corrupt row must never be able to hold the whole backlog
+ * hostage.
+ *
+ * The dropped rows are kept locally and stay dirty; they are not uploadable in any
+ * case (the server would refuse them), and the startup stale-close / watchdog paths
+ * are what legitimately resolve them into closed rows that then sync normally.
+ *
+ * Keeps the newest open row — the one `getLive()` would pick, so the row the user is
+ * actually tracking into is always the one that reaches the server.
+ */
+function limitToOneOpenSession(rows) {
+    const list = (Array.isArray(rows) ? rows : []).filter(Boolean);
+    const open = list.filter((r) => r.ended_at == null);
+    if (open.length <= 1) return list;
+
+    const rank = (r) => [Date.parse(r.created_at) || 0, Date.parse(r.started_at) || 0];
+    let keep = open[0];
+    for (const r of open) {
+        const [rc, rs] = rank(r);
+        const [kc, ks] = rank(keep);
+        if (rc > kc || (rc === kc && rs >= ks)) keep = r;
+    }
+    return list.filter((r) => r.ended_at != null || r === keep);
 }
 
 /** True if any completed row still needs syncing — drives the retry-until-synced loop. */
@@ -336,6 +397,8 @@ module.exports = {
     isPurgeDue,
     nextBackoffMs,
     BACKOFF_SCHEDULE_MS,
+    limitToOneOpenSession,
+    unconfirmedCompletedSeconds,
     unsyncedCompletedSecondsForDay,
     completedSecondsForProjectDay,
     hasPendingCompletedSession,

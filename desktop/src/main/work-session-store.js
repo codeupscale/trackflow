@@ -334,6 +334,14 @@ class WorkSessionStore {
      * server learns the agent is still alive (it refreshes client_synced_at), which is
      * what stops CleanupStaleEntries and the login-time stale-close from force-closing a
      * perfectly healthy session.
+     *
+     * `attempts ASC` before `started_at ASC` is anti-STARVATION, not a preference. A row
+     * the server refuses permanently (a clock outside `timer.max_past_skew`, a uuid owned
+     * by another user) stays dirty forever by design — we never delete tracked time over a
+     * rejection. Ordered by age alone, 100+ such rows would sit at the head of every batch
+     * for the rest of the install's life and newer sessions would never be reached. A
+     * failing row drifts to the back instead, and `markConfirmed` resets `attempts` to 0
+     * so a row that recovers returns to its chronological place.
      */
     getDirty(limit = 100) {
         try {
@@ -344,10 +352,13 @@ class WorkSessionStore {
                       WHERE (synced_revision IS NULL OR synced_revision <> revision
                              OR ended_at IS NULL)` +
                         own.sql +
-                        ' ORDER BY started_at ASC LIMIT ?',
+                        ' ORDER BY attempts ASC, started_at ASC LIMIT ?',
                 )
                 .all(...own.params, limit);
-            return rows || [];
+            // A batch carrying two open sessions is 422'd in full by the server, which
+            // would stall EVERY upload behind one corrupt row. See the rule for why the
+            // dropped rows are safe to hold back.
+            return rules.limitToOneOpenSession(rows || []);
         } catch (e) {
             console.error('[WorkSessionStore] getDirty failed:', e.message);
             return [];

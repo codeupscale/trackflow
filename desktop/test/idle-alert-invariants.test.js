@@ -86,3 +86,52 @@ describe("idle alert — exactly one window", () => {
         expect(dismiss).toMatch(/_destroyAllIdleAlertWindows\(\);/);
     });
 });
+
+/**
+ * Idle time is NEVER credited as work — including under the retired "always keep idle
+ * time" org setting.
+ *
+ * Owner policy (2026-07-16) removed Keep and Reassign; the prompt offers only
+ * "Continue tracking" and "Stop timer", and both discard the gap. `keep_idle_time =
+ * always` predates that and was the last path that still billed it: it resolved the
+ * idle cycle and kept counting from the original start, so every idle minute stayed
+ * inside the entry. It now resolves as a DISCARD, exactly like `never`.
+ */
+describe("keep_idle_time policy — no path credits idle time", () => {
+    const handler = SRC.slice(
+        SRC.indexOf("idleDetector.onIdleDetected("),
+        SRC.indexOf("idleDetector.onAutoStop("),
+    );
+
+    test("the idle-detected handler is reachable and reads the policy", () => {
+        expect(handler).toMatch(/config\.keep_idle_time \|\| "prompt"/);
+    });
+
+    test('"always" resolves through the discard split, not a bare resolveIdle', () => {
+        expect(handler).toMatch(
+            /policy === "always" \|\| policy === "never"[\s\S]*?handleIdleAction\(\s*"discard"/,
+        );
+    });
+
+    test('"always" never re-arms tracking without splitting the session', () => {
+        // The old branch called resolveIdle() + start() directly and returned, leaving
+        // the live row anchored at its original start with the idle gap inside it.
+        const flatHandler = handler.replace(/\s+/g, " ");
+        expect(flatHandler).not.toMatch(
+            /policy === "always" \) \{ idleDetector\.resolveIdle/,
+        );
+    });
+
+    test("the idle watchdog no longer exempts the retired policy", () => {
+        // The exemption existed only because those orgs credited presence. With nothing
+        // crediting idle time, exempting them just removes the backstop for a wedged
+        // detector.
+        const watchdog = SRC.slice(
+            SRC.indexOf("async function _idleWatchdogTick()"),
+            SRC.indexOf("function startIdleWatchdog()"),
+        );
+        expect(watchdog).not.toMatch(
+            /if \(config\?\.keep_idle_time === "always"\) return;/,
+        );
+    });
+});
