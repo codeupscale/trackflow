@@ -77,12 +77,41 @@ class LiveElapsedClampTest extends TestCase
             'logged_at' => $at,
             'keyboard_events' => 5,
             'mouse_events' => 5,
+            'active_seconds' => 12,
             'activity_score' => 50,
         ]);
     }
 
-    public function test_a_live_agent_still_counts_to_now(): void
+    /**
+     * A heartbeat the agent keeps sending while nobody is at the keyboard. These flow
+     * for the whole idle-threshold window before the prompt appears.
+     */
+    private function idleHeartbeat(TimeEntry $entry, Carbon $at): void
     {
+        ActivityLog::create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'time_entry_id' => $entry->id,
+            'logged_at' => $at,
+            'keyboard_events' => 0,
+            'mouse_events' => 0,
+            'active_seconds' => 0,
+            'activity_score' => 0,
+        ]);
+    }
+
+    private function setIdleTimeout(int $minutes): void
+    {
+        $this->org->settings = array_merge($this->org->settings ?? [], [
+            'idle_timeout' => $minutes,
+        ]);
+        $this->org->save();
+        $this->user->refresh();
+    }
+
+    public function test_a_working_user_still_counts_to_now(): void
+    {
+        $this->setIdleTimeout(10);
         $entry = $this->openSession(now()->subMinutes(20));
         // Heartbeats arrive every 30s while the agent is online.
         $this->heartbeat($entry, now()->subSeconds(20));
@@ -93,26 +122,59 @@ class LiveElapsedClampTest extends TestCase
         $this->assertFalse($status['elapsed_is_stale']);
     }
 
-    public function test_a_quiet_agent_freezes_the_clock_at_its_last_heartbeat(): void
+    public function test_a_pause_shorter_than_the_idle_threshold_keeps_counting(): void
     {
-        // The dev case: started 29 min ago, agent went quiet 25 min ago (idle, then the
-        // local session was split without the server hearing about it yet).
-        $entry = $this->openSession(now()->subMinutes(29));
-        $this->heartbeat($entry, now()->subMinutes(25));
+        // Reading a document for four minutes with a ten-minute threshold is work by the
+        // product's own definition — the desktop has not raised the prompt, so the web
+        // must not freeze either, or the counter would flicker constantly.
+        $this->setIdleTimeout(10);
+        $entry = $this->openSession(now()->subMinutes(20));
+        $this->heartbeat($entry, now()->subMinutes(4));
 
         $status = $this->service->status();
 
-        // 29 - 25 = 4 minutes of time we actually have evidence for, NOT 29.
-        $this->assertSame(240, $status['elapsed_seconds']);
+        $this->assertSame(1200, $status['elapsed_seconds']);
+        $this->assertFalse($status['elapsed_is_stale']);
+    }
+
+    /**
+     * THE REPORTED CASE, to the second.
+     *
+     * Session started 14:30:19. Last real input 14:49:14. The org's idle threshold is
+     * 10 minutes, so the agent went on sending zero-activity heartbeats until it raised
+     * the prompt at 14:58:50, and its 10-minute batch pushed at 15:00:00 while the user
+     * was still away. At 15:08:30 the desktop showed 18:55 (measured to the last input)
+     * and the dashboard showed 29:51 (measured to that sync push).
+     */
+    public function test_it_freezes_at_the_last_input_not_the_last_sync_or_heartbeat(): void
+    {
+        $this->setIdleTimeout(10);
+        $startedAt = Carbon::parse('2026-08-10 14:30:19', 'UTC');
+        $this->travelTo(Carbon::parse('2026-08-10 15:08:30', 'UTC'));
+
+        // The push that happened while the user was idle — proof the AGENT is up, and
+        // the signal that produced the wrong 29:51.
+        $entry = $this->openSession($startedAt, Carbon::parse('2026-08-10 15:00:00', 'UTC'));
+
+        $this->heartbeat($entry, Carbon::parse('2026-08-10 14:49:14', 'UTC'));
+        // Zero-activity heartbeats through the idle-threshold window.
+        $this->idleHeartbeat($entry, Carbon::parse('2026-08-10 14:55:00', 'UTC'));
+        $this->idleHeartbeat($entry, Carbon::parse('2026-08-10 14:58:50', 'UTC'));
+
+        $status = $this->service->status();
+
+        // 14:49:14 - 14:30:19 = 18m55s. The exact figure the desktop showed.
+        $this->assertSame(18 * 60 + 55, $status['elapsed_seconds']);
         $this->assertTrue($status['elapsed_is_stale']);
         $this->assertSame(
-            now()->subMinutes(25)->toISOString(),
+            Carbon::parse('2026-08-10 14:49:14', 'UTC')->toISOString(),
             $status['live_as_of'],
         );
     }
 
     public function test_the_frozen_figure_does_not_grow_with_the_wall_clock(): void
     {
+        $this->setIdleTimeout(10);
         $entry = $this->openSession(now()->subMinutes(29));
         $this->heartbeat($entry, now()->subMinutes(25));
 
@@ -125,16 +187,21 @@ class LiveElapsedClampTest extends TestCase
         $this->assertSame($first, $second);
     }
 
-    public function test_a_sync_push_alone_counts_as_proof_of_life(): void
+    /**
+     * A sync push says the AGENT is running, which is a different question. It keeps
+     * advancing on the 10-minute batch throughout an idle period, so treating it as
+     * liveness credits exactly the time the desktop has already stopped counting.
+     */
+    public function test_a_sync_push_is_not_proof_the_user_is_working(): void
     {
-        // No heartbeats at all (they FK to a synced entry and can lag), but the agent
-        // pushed its live session a moment ago — that push stamps client_synced_at.
-        $entry = $this->openSession(now()->subMinutes(20), now()->subSeconds(30));
+        $this->setIdleTimeout(10);
+        $entry = $this->openSession(now()->subMinutes(40), now()->subSeconds(30));
+        $this->heartbeat($entry, now()->subMinutes(35));
 
         $status = $this->service->status();
 
-        $this->assertSame(1200, $status['elapsed_seconds']);
-        $this->assertFalse($status['elapsed_is_stale']);
+        $this->assertSame(300, $status['elapsed_seconds']);
+        $this->assertTrue($status['elapsed_is_stale']);
     }
 
     public function test_today_totals_stop_inflating_too(): void

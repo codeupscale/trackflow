@@ -1257,6 +1257,39 @@ function pauseTimerForIdle(idleStartedAtIso) {
 }
 
 /**
+ * Tell the server a session BOUNDARY moved — a start, a stop, an idle resolution, a
+ * project switch.
+ *
+ * This is deliberately narrow, and it is not a reversal of the periodic-upload decision
+ * (2026-08-03): bulk data — screenshots, heartbeats, the routine re-push of the live
+ * session — still rides the 10-minute batch. Only the four instants at which the shape
+ * of the timeline changes are announced immediately, and each is a handful of bytes for
+ * one row.
+ *
+ * Without it the server's open entry stays wrong for up to a full interval, and every
+ * consumer of it is wrong with it. The dashboard cannot show anything better than what
+ * the server holds: after "Continue tracking" it kept counting the ABANDONED session,
+ * reading 41:21 against the desktop's 20:09, because the boundary that ended it at
+ * 14:49 had not been uploaded. Freezing that figure (the live-elapsed clamp) makes it
+ * honest; only telling the server makes it right.
+ *
+ * Fire-and-forget by contract: `syncNow()` never throws and never rejects, and tracked
+ * time is already durable in SQLite before this is called. A failed push costs nothing —
+ * the row stays dirty and the next interval carries it.
+ */
+function pushSessionBoundary(reason) {
+    if (!sessionSyncWorker) return;
+    // `ignoreBackoff` matters here: a boundary is exactly the moment a stale server view
+    // becomes user-visible, so a backoff window from earlier failures must not stand
+    // between the user and a correct dashboard.
+    Promise.resolve(
+        sessionSyncWorker.syncNow(reason, { ignoreBackoff: true }),
+    ).catch((e) =>
+        console.warn(`[SessionBoundary] ${reason} push failed:`, e?.message),
+    );
+}
+
+/**
  * Resume tracking after the user resolved the idle prompt. Purely local; the caller has
  * already rewritten the local session rows to exclude the idle gap.
  */
@@ -3896,7 +3929,9 @@ async function switchProject(projectId) {
         });
         updateTrayTitle();
 
-        // No upload here — the interval owns that.
+        // The boundary just moved: the old row closed and a new one opened. Announce it
+        // so the dashboard is not left attributing this work to the previous project.
+        pushSessionBoundary("project-switch");
 
         return {
             success: true,
@@ -4077,9 +4112,11 @@ async function startTimer(projectId = null) {
         }
         setImmediate(() => afterStartTimer(projectId, todayTotalCurrentProject));
 
-        // NO upload here. Tracking is local; the sync worker pushes on its own
-        // interval (see SYNC_INTERVAL_MS). The session is already durable in SQLite,
-        // so the only cost of waiting is dashboard freshness.
+        // A start is a boundary. The session is already durable in SQLite — this is
+        // announcement, not persistence — but until the server has it, the dashboard
+        // shows the user as not tracking, and heartbeats for this session are refused
+        // (they FK to an entry that does not exist yet) and queue up instead.
+        pushSessionBoundary("timer-start");
 
         return {
             success: true,
@@ -4550,12 +4587,18 @@ async function stopTimer(options = {}) {
         // Post-stop async work (non-blocking). The session is already durable; this
         // only refreshes the DISPLAYED totals and nudges the upload.
         (async () => {
-            // NO upload here — uploads happen on the sync interval only. The stop is
-            // already durable in SQLite; this block just refreshes the DISPLAYED
-            // totals.
+            // A stop is a boundary: until the server hears it, its open entry keeps
+            // accruing and the dashboard shows the user still tracking. Announced
+            // BEFORE the totals are re-read below, so the figures fetched are the
+            // corrected ones rather than the phantom-open ones.
+            pushSessionBoundary("timer-stop");
+
+            // The totals below are still assembled defensively. The push above is fired
+            // and not awaited, and it can fail (offline, backoff, a 5xx), so the server
+            // figure read here may STILL be missing the session that just ended.
             //
-            // Because the just-stopped session has NOT been pushed yet, the server
-            // total does not contain it. Adding the local unsynced-completed seconds
+            // Because the just-stopped session may not have been pushed yet, the server
+            // total may not contain it. Adding the local unsynced-completed seconds
             // on top is what stops the total visibly DROPPING by the length of the
             // session the user just finished — the same rule the status poll uses.
             // The server figure is still needed because it includes MANUAL entries,
@@ -5802,8 +5845,11 @@ async function handleIdleAction(
                 });
                 break;
         }
-        // No upload here either: the split rows are durable locally and the sync
-        // worker's interval owns every routine push.
+        // The idle decision moved a boundary — the live session ended back at
+        // `idleStartedAt`, and (for "continue") a new one opened at the resume. Announce
+        // it: this is the exact case where a server left holding the abandoned session
+        // shows the user time they did not work, and keeps counting it.
+        pushSessionBoundary("idle-resolved");
         // FIX D7: Increment state version on successful idle action
         _timerStateVersion++;
     } finally {
