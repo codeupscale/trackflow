@@ -56,8 +56,22 @@ describe("session upload cadence", () => {
             SRC.indexOf("Post-stop async work"),
             SRC.indexOf("Post-stop async work") + 2500,
         );
-        expect(stopBlock).toMatch(
-            /serverGlobal \+ getUnsyncedCompletedSecondsForToday\(\)/,
+        expect(stopBlock).toMatch(/getUnsyncedCompletedSecondsForToday\(\)/);
+    });
+
+    test("stopping the timer does not double-count the session it just closed", () => {
+        // The mirror of the test above. The stop is not pushed, so the server still
+        // holds the entry OPEN and folds its elapsed-to-now into every today figure —
+        // while the row is ALSO counted locally. The refresh must therefore read the
+        // status payload (which reports that elapsed) and subtract it; reading the bare
+        // `/timer/today-total` number cannot express the overlap, and left the total
+        // counting the finished session twice and climbing after Stop.
+        const stopBlock = SRC.slice(
+            SRC.indexOf("Post-stop async work"),
+            SRC.indexOf("Post-stop async work") + 2500,
         );
+        expect(stopBlock).toMatch(/getTimerStatus\(null\)/);
+        expect(stopBlock).toMatch(/serverGlobal - \(status\.elapsed_seconds/);
+        expect(stopBlock).not.toMatch(/getTodayTotal\(null\)/);
     });
 });

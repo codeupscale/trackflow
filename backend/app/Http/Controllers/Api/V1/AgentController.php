@@ -29,7 +29,7 @@ class AgentController extends Controller
             'screenshots_per_interval' => (int) $org->getSetting('screenshots_per_interval', 3),
             'idle_timeout' => $idleTimeout,
             'idle_detection' => true,
-            'keep_idle_time' => $org->getSetting('keep_idle_time', 'prompt'),
+            'keep_idle_time' => $this->idlePolicy($org),
             'blur_screenshots' => $org->getSetting('blur_screenshots', false),
             // Idle alert auto-stop (minutes) for prompt mode
             'idle_alert_auto_stop_min' => (int) ($org->getSetting('idle_alert_auto_stop_min', 10) ?? 10),
@@ -45,6 +45,33 @@ class AgentController extends Controller
             'capture_only_when_visible' => (bool) $org->getSetting('capture_only_when_visible', false),
             'capture_multi_monitor' => (bool) $org->getSetting('capture_multi_monitor', false),
         ]);
+    }
+
+    /**
+     * The idle policy handed to the agent, with `always` folded into `never`.
+     *
+     * Crediting idle time as work was removed by owner policy (2026-07-16): the desktop
+     * offers only "Continue tracking" and "Stop timer", and both drop the idle gap. The
+     * `always` ("always keep idle time") setting predates that decision and was the one
+     * surviving path that still billed it — an org with it saved kept paying for idle
+     * minutes long after the prompt stopped offering to.
+     *
+     * Normalising HERE rather than only in the agent is deliberate: this is the single
+     * place every build reads its policy from, so an older desktop that still honours
+     * `always` is corrected too, without waiting for a release to roll out.
+     *
+     * The stored value is left untouched — this is a read-side clamp, so nothing is
+     * destroyed if the policy is ever revisited.
+     */
+    private function idlePolicy($org): string
+    {
+        $policy = (string) ($org->getSetting('keep_idle_time', 'prompt') ?: 'prompt');
+
+        if (! in_array($policy, ['prompt', 'always', 'never'], true)) {
+            return 'prompt';
+        }
+
+        return $policy === 'always' ? 'never' : $policy;
     }
 
     public function myShift(Request $request): JsonResponse

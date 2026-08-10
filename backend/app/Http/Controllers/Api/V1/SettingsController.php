@@ -41,6 +41,11 @@ class SettingsController extends Controller
             'settings.idle_alert_email_enabled' => 'sometimes|boolean',
             // Clamp via validation; job also defensively clamps.
             'settings.idle_alert_email_cooldown_min' => 'sometimes|integer|min:5|max:1440',
+            // `always` ("always keep idle time") is RETIRED — idle time is never credited
+            // as work (owner policy, 2026-07-16). It is still ACCEPTED so an org holding
+            // the old value, or an older client that echoes settings back, is not 422'd
+            // mid-migration; AgentController::idlePolicy() folds it into `never` on read,
+            // and the settings page no longer offers it.
             'settings.keep_idle_time' => 'sometimes|string|in:prompt,always,never',
             // 0 = disabled (idle popup never auto-stops); max 240 min (4 hours) when enabled
             'settings.idle_alert_auto_stop_min' => 'sometimes|integer|min:0|max:240',

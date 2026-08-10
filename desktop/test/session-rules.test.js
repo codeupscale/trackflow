@@ -335,28 +335,121 @@ describe('nextBackoffMs', () => {
     });
 });
 
+describe('limitToOneOpenSession', () => {
+    // The server 422s an entire batch that carries two open sessions, so one orphaned
+    // open row (phantom stop → user clicks Start again) would otherwise block EVERY
+    // upload, for every session, on every cycle.
+    const closed = (id, started) => ({
+        id,
+        started_at: started,
+        created_at: started,
+        ended_at: started,
+    });
+    const open = (id, started, created = started) => ({
+        id,
+        started_at: started,
+        created_at: created,
+        ended_at: null,
+    });
+
+    test('passes a batch with a single open row through untouched', () => {
+        const rows = [closed('a', '2026-08-10T01:00:00Z'), open('b', '2026-08-10T02:00:00Z')];
+        expect(rules.limitToOneOpenSession(rows)).toEqual(rows);
+    });
+
+    test('keeps only the newest open row and every closed row', () => {
+        const orphan = open('orphan', '2026-08-09T09:00:00Z');
+        const live = open('live', '2026-08-10T08:00:00Z');
+        const done = closed('done', '2026-08-10T01:00:00Z');
+        const kept = rules.limitToOneOpenSession([orphan, done, live]);
+        expect(kept.map((r) => r.id)).toEqual(['done', 'live']);
+    });
+
+    test('never drops a closed row, however many open ones there are', () => {
+        const rows = [
+            closed('c1', '2026-08-10T01:00:00Z'),
+            open('o1', '2026-08-10T02:00:00Z'),
+            open('o2', '2026-08-10T03:00:00Z'),
+            open('o3', '2026-08-10T04:00:00Z'),
+            closed('c2', '2026-08-10T05:00:00Z'),
+        ];
+        const kept = rules.limitToOneOpenSession(rows);
+        expect(kept.filter((r) => r.ended_at == null)).toHaveLength(1);
+        expect(kept.map((r) => r.id)).toEqual(['c1', 'o3', 'c2']);
+    });
+
+    test('handles an empty / non-array input', () => {
+        expect(rules.limitToOneOpenSession(null)).toEqual([]);
+        expect(rules.limitToOneOpenSession([])).toEqual([]);
+    });
+});
+
 describe('display totals', () => {
     const startOfDay = iso('2026-07-30T00:00:00Z');
 
     test('counts completed rows the server has never seen', () => {
         const rows = [
-            { ended_at: 'x', started_at: '2026-07-30T01:00:00Z', duration_seconds: 600, server_entry_id: null },
-            { ended_at: 'x', started_at: '2026-07-30T02:00:00Z', duration_seconds: 900, server_entry_id: null },
+            { ended_at: 'x', started_at: '2026-07-30T01:00:00Z', duration_seconds: 600, server_entry_id: null, revision: 2, synced_revision: null },
+            { ended_at: 'x', started_at: '2026-07-30T02:00:00Z', duration_seconds: 900, server_entry_id: null, revision: 2, synced_revision: null },
         ];
         expect(rules.unsyncedCompletedSecondsForDay(rows, startOfDay)).toBe(1500);
     });
 
-    test('excludes rows the server already knows about (no double-count)', () => {
+    test('excludes rows the server has confirmed at this revision (no double-count)', () => {
         const rows = [
-            { ended_at: 'x', started_at: '2026-07-30T01:00:00Z', duration_seconds: 600, server_entry_id: 'srv' },
+            {
+                ended_at: 'x',
+                started_at: '2026-07-30T01:00:00Z',
+                duration_seconds: 600,
+                server_entry_id: 'srv',
+                revision: 2,
+                synced_revision: 2,
+                server_duration_seconds: 600,
+            },
         ];
         expect(rules.unsyncedCompletedSecondsForDay(rows, startOfDay)).toBe(0);
     });
 
+    // THE IDLE-DISCARD ROW. It was pushed while it was still LIVE, so it has a
+    // server_entry_id — but server-side it is the OPEN entry, absent from the closed
+    // sum the desktop reads and whose live elapsed the desktop subtracts back out.
+    // Skipping it here deducted the user's pre-idle work from both today-totals within
+    // 10s of clicking "Continue tracking", until the next 10-minute session sync.
+    // Bug: bugs/desktop-idle-continue-deducts-pre-idle-time-from-total.md
+    test('counts a row synced while OPEN and since closed locally', () => {
+        const rows = [
+            {
+                ended_at: '2026-07-30T02:40:00Z',
+                started_at: '2026-07-30T02:00:00Z',
+                duration_seconds: 2400,
+                server_entry_id: 'srv',
+                revision: 3,
+                synced_revision: 2,
+                server_duration_seconds: null,
+            },
+        ];
+        expect(rules.unsyncedCompletedSecondsForDay(rows, startOfDay)).toBe(2400);
+    });
+
+    test('credits only what the server has not already stored for a partially-known row', () => {
+        const rows = [
+            {
+                ended_at: 'x',
+                started_at: '2026-07-30T02:00:00Z',
+                duration_seconds: 900,
+                server_entry_id: 'srv',
+                revision: 4,
+                synced_revision: 3,
+                server_duration_seconds: 600,
+            },
+        ];
+        expect(rules.unsyncedCompletedSecondsForDay(rows, startOfDay)).toBe(300);
+    });
+
     test('excludes live rows and earlier days', () => {
         const rows = [
-            { ended_at: null, started_at: '2026-07-30T01:00:00Z', duration_seconds: null, server_entry_id: null },
-            { ended_at: 'x', started_at: '2026-07-29T01:00:00Z', duration_seconds: 600, server_entry_id: null },
+            { ended_at: null, started_at: '2026-07-30T01:00:00Z', duration_seconds: null, server_entry_id: null, revision: 1, synced_revision: null },
+            { ended_at: 'x', started_at: '2026-07-29T01:00:00Z', duration_seconds: 600, server_entry_id: null, revision: 2, synced_revision: null },
         ];
         expect(rules.unsyncedCompletedSecondsForDay(rows, startOfDay)).toBe(0);
     });
@@ -403,13 +496,41 @@ describe('display totals', () => {
         // The start seed adds ONLY unsynced local rows on top of the server's figure.
         // Counting synced rows there would double-count them against the server total
         // and overstate the day.
-        test('unsyncedOnly skips rows the server already has', () => {
+        test('unsyncedOnly skips rows the server has confirmed at this revision', () => {
             const rows = [
-                { ended_at: 'x', started_at: '2026-07-30T01:00:00Z', duration_seconds: 600, project_id: 'p1', server_entry_id: 'srv' },
-                { ended_at: 'x', started_at: '2026-07-30T02:00:00Z', duration_seconds: 900, project_id: 'p1', server_entry_id: null },
+                {
+                    ended_at: 'x',
+                    started_at: '2026-07-30T01:00:00Z',
+                    duration_seconds: 600,
+                    project_id: 'p1',
+                    server_entry_id: 'srv',
+                    revision: 2,
+                    synced_revision: 2,
+                    server_duration_seconds: 600,
+                },
+                { ended_at: 'x', started_at: '2026-07-30T02:00:00Z', duration_seconds: 900, project_id: 'p1', server_entry_id: null, revision: 2, synced_revision: null },
             ];
             expect(rules.completedSecondsForProjectDay(rows, startOfDay, 'p1', { unsyncedOnly: true })).toBe(900);
             expect(rules.completedSecondsForProjectDay(rows, startOfDay, 'p1')).toBe(1500);
+        });
+
+        // Same regression as the day-total: the pre-idle row still counts toward the
+        // PROJECT total until the server has it closed, or the project display drops by
+        // the pre-idle span right after "Continue tracking".
+        test('unsyncedOnly counts a row synced while OPEN and since closed locally', () => {
+            const rows = [
+                {
+                    ended_at: '2026-07-30T02:40:00Z',
+                    started_at: '2026-07-30T02:00:00Z',
+                    duration_seconds: 2400,
+                    project_id: 'p1',
+                    server_entry_id: 'srv',
+                    revision: 3,
+                    synced_revision: 2,
+                    server_duration_seconds: null,
+                },
+            ];
+            expect(rules.completedSecondsForProjectDay(rows, startOfDay, 'p1', { unsyncedOnly: true })).toBe(2400);
         });
     });
 

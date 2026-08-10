@@ -150,9 +150,16 @@ export default function SettingsPage() {
                 ![5, 10, 20].includes(settings.idle_timeout)
                     ? String(settings.idle_timeout)
                     : "",
+            // `always` ("always keep idle time") is retired — idle time is never
+            // credited as work (owner policy, 2026-07-16), so the agent and
+            // GET /agent/config both treat it as `never`. Show it as what it now
+            // DOES, so an org still holding the old value sees the truth and saving
+            // migrates the stored setting instead of silently re-writing a lie.
             keepIdleTime:
-                (settings?.keep_idle_time as "prompt" | "always" | "never") ??
-                "prompt",
+                settings?.keep_idle_time === "always"
+                    ? "never"
+                    : ((settings?.keep_idle_time as "prompt" | "never") ??
+                      "prompt"),
             idleAlertAutoStopEnabled:
                 (settings?.idle_alert_auto_stop_min ?? 10) > 0,
             idleAlertAutoStopMin:
@@ -196,9 +203,12 @@ export default function SettingsPage() {
     const [screenshotBlur, setScreenshotBlur] = useState(false);
     const [idleTimeout, setIdleTimeout] = useState("5");
     const [idleTimeoutCustom, setIdleTimeoutCustom] = useState("");
-    const [keepIdleTime, setKeepIdleTime] = useState<
-        "prompt" | "always" | "never"
-    >("prompt");
+    // No "always": keeping idle time as work was retired (owner policy, 2026-07-16).
+    // The API still ACCEPTS the old value so no org is locked out mid-migration; it is
+    // normalised to "never" on read here and in GET /agent/config.
+    const [keepIdleTime, setKeepIdleTime] = useState<"prompt" | "never">(
+        "prompt",
+    );
     const [idleAlertAutoStopEnabled, setIdleAlertAutoStopEnabled] =
         useState(true);
     const [idleAlertAutoStopMin, setIdleAlertAutoStopMin] = useState("10");
@@ -1415,10 +1425,7 @@ export default function SettingsPage() {
                                         onValueChange={(v) => {
                                             if (v)
                                                 setKeepIdleTime(
-                                                    v as
-                                                        | "prompt"
-                                                        | "always"
-                                                        | "never",
+                                                    v as "prompt" | "never",
                                                 );
                                         }}
                                         disabled={!isAdmin}
@@ -1428,11 +1435,8 @@ export default function SettingsPage() {
                                         </SelectTrigger>
                                         <SelectContent>
                                             <SelectItem value="prompt">
-                                                Prompt (ask Keep / Discard /
-                                                Reassign / Stop)
-                                            </SelectItem>
-                                            <SelectItem value="always">
-                                                Always keep idle time
+                                                Prompt (Continue tracking /
+                                                Stop timer)
                                             </SelectItem>
                                             <SelectItem value="never">
                                                 Always discard idle time
@@ -1440,8 +1444,10 @@ export default function SettingsPage() {
                                         </SelectContent>
                                     </Select>
                                     <p className="text-xs text-muted-foreground">
-                                        Whether to show the idle alert or
-                                        auto-keep / auto-discard
+                                        Whether to ask before discarding the
+                                        idle period, or discard it silently and
+                                        keep tracking. Idle time is never
+                                        counted as work either way.
                                     </p>
                                 </div>
                                 <div className="grid gap-2 max-w-xs">
