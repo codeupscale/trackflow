@@ -21,10 +21,23 @@ export function TimerWidget() {
     projectTodayTotalSeconds,
     todayTotalSeconds,
     projectName,
+    liveAsOf,
+    elapsedIsStale,
     fetchStatus,
     startPolling,
     stopPolling,
   } = useTimerStore();
+
+  // The agent has gone quiet, so the counter is frozen at the last instant the server
+  // can vouch for. Say so rather than presenting a stopped clock as a live one — a
+  // silently frozen timer reads exactly like a running one that is simply between ticks.
+  const staleLabel =
+    elapsedIsStale && liveAsOf
+      ? new Date(liveAsOf).toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      : null;
 
   // Fetch status on mount and poll for updates from the desktop agent
   useEffect(() => {
@@ -47,11 +60,25 @@ export function TimerWidget() {
       >
         {isRunning ? (
           <div className="flex items-center gap-2">
+            {/* No ping animation while frozen — a pulsing dot is the one cue that
+                says "this number is moving", and it is not. */}
             <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+              {!staleLabel && (
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+              )}
+              <span
+                className={cn(
+                  'relative inline-flex rounded-full h-2 w-2',
+                  staleLabel ? 'bg-muted-foreground' : 'bg-green-500'
+                )}
+              />
             </span>
-            <Monitor className="h-3.5 w-3.5 text-green-400" />
+            <Monitor
+              className={cn(
+                'h-3.5 w-3.5',
+                staleLabel ? 'text-muted-foreground' : 'text-green-400'
+              )}
+            />
           </div>
         ) : isPaused ? (
           <div className="flex items-center gap-2">
@@ -78,17 +105,24 @@ export function TimerWidget() {
         <span
           className={cn(
             'font-mono text-sm font-medium tabular-nums',
-            isRunning
+            isRunning && !staleLabel
               ? 'text-emerald-600 dark:text-emerald-400'
               : isPaused
                 ? 'text-amber-700 dark:text-amber-400'
                 : 'text-muted-foreground'
           )}
+          title={
+            staleLabel
+              ? `The desktop agent last reported at ${staleLabel}. It uploads in batches, so this figure is held at its last confirmed value instead of counting on.`
+              : undefined
+          }
         >
           {isPaused
             ? `Paused · ${formatDuration(projectTodayTotalSeconds)}`
             : isRunning
-              ? formatDuration(projectTodayTotalSeconds)
+              ? staleLabel
+                ? `${formatDuration(projectTodayTotalSeconds)} · as of ${staleLabel}`
+                : formatDuration(projectTodayTotalSeconds)
               : todayTotalSeconds > 0
                 ? formatDuration(todayTotalSeconds)
                 : 'Not tracking'}

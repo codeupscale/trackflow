@@ -68,6 +68,12 @@ class TimerController extends Controller
             // log lands at the right moment (FIX B2). Skew bounds enforced in the service.
             'logged_at' => 'nullable|date',
             'captured_at' => 'nullable|date',
+            // The agent's OWN id for the session this heartbeat belongs to (the
+            // client-generated `idempotency_key` the sync endpoint upserts on). Without
+            // it the server can only guess from its Redis pointer, which lags every
+            // local session change by up to one upload interval and lands the activity
+            // on the previous entry. Nullable: agent builds that predate it still work.
+            'session_uuid' => 'nullable|uuid',
         ]);
 
         try {

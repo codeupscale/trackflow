@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\ActivityLog;
+use App\Models\Scopes\GlobalOrganizationScope;
 use App\Models\TimeEntry;
 use App\Models\User;
 use App\Services\Concerns\HandlesTimeEntryState;
@@ -97,13 +98,79 @@ class TimerService
 
     /**
      * Elapsed seconds for an open entry, optionally frozen at paused_at.
+     *
+     * NEVER extrapolates past the agent's last proof of life. `now() - started_at` is
+     * only true while the agent is still reporting; the desktop uploads on a 10-minute
+     * batch and owns tracked time locally, so between pushes the server's open entry can
+     * be a stale replica of state the agent has already changed. Counting it to now()
+     * does not merely lag — it INVENTS time and grows it every second:
+     *
+     *   - after an idle discard, the whole idle gap the agent already dropped
+     *   - after Stop, up to a full cadence of "still tracking" (observed on dev:
+     *     an entry closed locally at 12:37:16 was still being counted at 13:02:36,
+     *     reading 28:58 while the desktop showed the true 11:17)
+     *   - after a force-quit or a dead machine, until the 60-minute abandoned backstop
+     *
+     * So the elapsed clock stops at `liveAsOf()` once the agent has gone quiet for
+     * longer than `timer.live_elapsed_grace_minutes`. The figure then freezes at the
+     * last instant we have evidence for, which is the honest answer, and callers get
+     * `live_as_of` / `elapsed_is_stale` in the status payload so the UI can say so.
      */
     private function computeOpenEntryElapsed(TimeEntry $entry, ?Carbon $frozenAt = null): int
     {
-        $end = $frozenAt ?? now();
+        $end = $frozenAt ?? $this->liveElapsedEnd($entry);
         $elapsed = max(0, (int) $entry->started_at->diffInSeconds($end, false));
 
         return min($elapsed, $this->maxEntryDuration());
+    }
+
+    /**
+     * The instant an open entry's elapsed may be measured to: now() while the agent is
+     * demonstrably alive, otherwise its last proof of life.
+     */
+    private function liveElapsedEnd(TimeEntry $entry): Carbon
+    {
+        $graceMinutes = max(1, (int) config('timer.live_elapsed_grace_minutes', 3));
+        $cutoff = now()->subMinutes($graceMinutes);
+
+        $liveAsOf = $this->liveAsOf($entry, $cutoff);
+
+        return $liveAsOf->gte($cutoff) ? now() : $liveAsOf;
+    }
+
+    /**
+     * Most recent evidence that the agent owning this entry is alive.
+     *
+     * `client_synced_at` is checked FIRST because it is a column on the row already —
+     * the sync endpoint stamps it on every push of the live session, including one
+     * carrying no change. Only when that is already stale do we pay for the heartbeat
+     * lookup (indexed by `al_time_entry_idx`), so the healthy path costs no extra query.
+     *
+     * Heartbeats matter because they are far fresher: the agent POSTs one every 30s
+     * while online, whereas `client_synced_at` only moves once per 10-minute upload.
+     */
+    private function liveAsOf(TimeEntry $entry, ?Carbon $shortCircuitAfter = null): Carbon
+    {
+        $liveAsOf = $entry->started_at;
+
+        if ($entry->client_synced_at !== null && $entry->client_synced_at->gt($liveAsOf)) {
+            $liveAsOf = $entry->client_synced_at;
+        }
+
+        if ($shortCircuitAfter !== null && $liveAsOf->gte($shortCircuitAfter)) {
+            return $liveAsOf;
+        }
+
+        $lastHeartbeat = ActivityLog::where('time_entry_id', $entry->id)->max('logged_at');
+
+        if ($lastHeartbeat !== null) {
+            $heartbeatAt = Carbon::parse($lastHeartbeat);
+            if ($heartbeatAt->gt($liveAsOf)) {
+                $liveAsOf = $heartbeatAt;
+            }
+        }
+
+        return $liveAsOf;
     }
 
     /**
@@ -195,12 +262,20 @@ class TimerService
         $entry->loadMissing('project:id,name,color');
         $timerState = $isPaused ? 'paused' : 'running';
 
+        // How far the elapsed figure can be trusted. When the agent has gone quiet the
+        // clock above is frozen at `live_as_of`, and a client that keeps ticking from
+        // `started_at` would re-introduce exactly the invented time the freeze removes.
+        $liveAsOf = $this->liveAsOf($entry);
+        $isStale = $liveAsOf->lt(now()->subMinutes(max(1, (int) config('timer.live_elapsed_grace_minutes', 3))));
+
         return [
             'state' => $timerState,
             'running' => ! $isPaused,
             'paused' => $isPaused,
             'entry' => $entry,
             'elapsed_seconds' => $currentElapsed,
+            'live_as_of' => $liveAsOf->toISOString(),
+            'elapsed_is_stale' => $isStale,
             'today_total' => $todayTotal,
             'all_projects_today_total' => $allProjectsTodayTotal,
             'project_today_total' => $projectTodayTotal,
@@ -259,6 +334,9 @@ class TimerService
                 'paused' => false,
                 'entry' => null,
                 'elapsed_seconds' => 0,
+                // Nothing is open, so there is no extrapolation to qualify.
+                'live_as_of' => null,
+                'elapsed_is_stale' => false,
                 'today_total' => $todayTotal,
                 'all_projects_today_total' => $allProjectsTodayTotal,
                 'project_today_total' => $projectId !== null ? $todayTotal : 0,
@@ -347,14 +425,52 @@ class TimerService
         $timerInfo = json_decode($timerData, true);
         $entryId = $timerInfo['entry_id'] ?? null;
 
-        // FIX B2: Resolve the entry as an OPEN session. A heartbeat (especially one
-        // flushed from the offline queue) must NEVER land on a CLOSED entry — doing so
-        // would create ActivityLog rows on a finalized session and mutate its
-        // activity_score after the fact. If the entry is closed or gone, reject with the
-        // same "No timer is currently running" signal the desktop already handles.
-        $entry = $entryId
-            ? TimeEntry::whereNull('ended_at')->find($entryId)
-            : null;
+        // WHICH SESSION IS THIS HEARTBEAT FOR?
+        //
+        // The Redis pointer answers "which entry did the agent last tell us about",
+        // which is NOT the same question once the agent tracks locally and uploads on a
+        // 10-minute batch. Every local session change — an idle discard, a stop/start, a
+        // project switch, the midnight split — leaves the pointer aimed at the previous
+        // entry until the next push.
+        //
+        // Measured on dev: an entry the agent closed locally at 12:37:16 collected 25
+        // heartbeats between 12:43:39 and 13:03:28, stopping the instant its successor
+        // synced. Those logs spanned an idle gap and nine minutes of the NEXT session.
+        // Two things break as a result: `computeFinalActivityScore()` finalises the
+        // closed entry from activity that is not its own, and the fresh logs make a
+        // stale entry look alive to the live-elapsed clamp — which is why the dashboard
+        // kept counting a session that had already ended.
+        //
+        // So prefer the agent's OWN identifier for the session. `session_uuid` is the
+        // client-generated `idempotency_key` the sync endpoint upserts on, so it names
+        // the session unambiguously and independently of what the server last heard.
+        $sessionUuid = isset($data['session_uuid']) ? (string) $data['session_uuid'] : null;
+
+        if ($sessionUuid !== null && $sessionUuid !== '') {
+            $entry = TimeEntry::withoutGlobalScope(GlobalOrganizationScope::class)
+                ->where('organization_id', $user->organization_id)
+                ->where('user_id', $user->id)
+                ->where('idempotency_key', $sessionUuid)
+                ->whereNull('ended_at')
+                ->first();
+
+            if (! $entry) {
+                // The agent is demonstrably alive, but on a session this server has not
+                // received yet (or one it believes is closed). Attaching the heartbeat to
+                // the Redis-pointed entry is exactly the misattribution above, so refuse
+                // it — the desktop queues a rejected heartbeat and replays it once the
+                // owning session syncs, which is the same path offline heartbeats take.
+                throw new \RuntimeException('Heartbeat is for a session that has not synced yet.');
+            }
+        } else {
+            // No uuid: an agent build that predates this field. Keep the original
+            // behaviour so it goes on working — FIX B2's rule still applies, a heartbeat
+            // must never land on a CLOSED entry and mutate a finalised activity_score.
+            $entry = $entryId
+                ? TimeEntry::whereNull('ended_at')->find($entryId)
+                : null;
+        }
+
         if (! $entry) {
             throw new \RuntimeException('No timer is currently running.');
         }

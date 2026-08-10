@@ -241,6 +241,11 @@ class TimerServiceTest extends TestCase
             'user_id' => $this->user->id,
             'started_at' => $startedAt,
             'type' => 'tracked',
+            // An entry only exists server-side because the agent pushed it, and every
+            // push stamps this. Omitting it made the fixture describe a state that
+            // cannot occur — and one the live-elapsed clamp now (correctly) treats as
+            // an agent with no proof of life, freezing elapsed at 0.
+            'client_synced_at' => now()->subSeconds(20),
         ]);
 
         Redis::del("timer:{$this->user->id}");
