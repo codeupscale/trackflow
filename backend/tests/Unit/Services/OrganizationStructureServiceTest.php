@@ -187,8 +187,6 @@ class OrganizationStructureServiceTest extends TestCase
             'code' => 'SE-001',
             'level' => 'senior',
             'employment_type' => 'full_time',
-            'min_salary' => '80000',
-            'max_salary' => '120000',
         ]);
 
         $this->assertInstanceOf(Position::class, $pos);
@@ -200,7 +198,7 @@ class OrganizationStructureServiceTest extends TestCase
         $this->assertTrue($pos->is_active);
     }
 
-    public function test_create_position_with_salary_fields(): void
+    public function test_create_position_persists_and_is_retrievable(): void
     {
         $org = $this->createOrganization();
         $dept = Department::factory()->create(['organization_id' => $org->id]);
@@ -211,11 +209,8 @@ class OrganizationStructureServiceTest extends TestCase
             'code' => 'LE-001',
             'level' => 'lead',
             'employment_type' => 'full_time',
-            'min_salary' => '100000',
-            'max_salary' => '150000',
         ]);
 
-        // Salary fields are stored (encrypted at model level via casts)
         $freshPos = Position::find($pos->id);
         $this->assertNotNull($freshPos);
         $this->assertEquals($pos->id, $freshPos->id);

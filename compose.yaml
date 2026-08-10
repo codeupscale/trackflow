@@ -1,34 +1,95 @@
+# TrackFlow — local development stack
+#
+# ONE file, two supported workflows.
+#
+#   1. Infra only (the default — backend and frontends run natively on your machine):
+#
+#          docker compose up -d
+#          docker compose up -d pgsql redis mailpit minio   # same thing, explicit
+#
+#   2. Everything in Docker (nothing runs natively except the Electron desktop agent,
+#      which is a GUI app and cannot be containerised):
+#
+#          docker compose --profile app up -d
+#
+# Services in the "app" profile never start unless you ask for them — either with
+# --profile app, or by naming one directly (`docker compose up -d web`).
+#
+# ── Why the app containers override DB_HOST / REDIS_HOST / MAIL_HOST ────────────
+# backend/.env is written for NATIVE development: 127.0.0.1:5433 for Postgres,
+# 127.0.0.1:6380 for Redis. Inside a container 127.0.0.1 is the container itself, so
+# those values cannot work there. Laravel loads .env through an *immutable* repository,
+# which means a real environment variable always beats a value from the .env file.
+# Setting them here therefore fixes the containers WITHOUT touching backend/.env — the
+# same file keeps serving native developers unchanged, and there is no second env file
+# to keep in sync. Next.js behaves the same way: real env vars beat .env.local.
+#
+# ── Ports (chosen so Docker mode and native mode are interchangeable) ───────────
+#   API 8000 (same as `artisan serve`)   web 3000   marketing 3001   reverb 8081
+#   postgres 5433   redis 6380   mailpit 1025/8025   minio 9000/9001
+# Because Docker mode reuses the native ports, the two modes cannot run at the same
+# time — the port collision tells you immediately instead of failing silently.
+
+x-backend-env: &backend-env
+    WWWUSER: '${WWWUSER:-1000}'
+    LARAVEL_SAIL: 1
+    APP_URL: 'http://localhost:${APP_PORT:-8000}'
+    # Container-internal service names — these are the overrides described above.
+    DB_HOST: pgsql
+    DB_PORT: 5432
+    REDIS_HOST: redis
+    REDIS_PORT: 6379
+    MAIL_HOST: mailpit
+    MAIL_PORT: 1025
+    # Local S3 via MinIO, so Docker mode never writes to the real AWS bucket.
+    AWS_ACCESS_KEY_ID: '${MINIO_ROOT_USER:-trackflow}'
+    AWS_SECRET_ACCESS_KEY: '${MINIO_ROOT_PASSWORD:-trackflow-local}'
+    AWS_DEFAULT_REGION: us-east-1
+    AWS_BUCKET: '${MINIO_BUCKET:-trackflow-local}'
+    AWS_ENDPOINT: 'http://minio:9000'
+    AWS_URL: 'http://localhost:${FORWARD_MINIO_PORT:-9000}/${MINIO_BUCKET:-trackflow-local}'
+    AWS_USE_PATH_STYLE_ENDPOINT: 'true'
+
+x-backend: &backend
+    build:
+        context: ./backend/docker/8.5
+        dockerfile: Dockerfile
+        args:
+            WWWGROUP: '${WWWGROUP:-1000}'
+    image: sail-8.5/app
+    extra_hosts:
+        - 'host.docker.internal:host-gateway'
+    env_file: ./backend/.env
+    volumes:
+        - './backend:/var/www/html'
+    networks:
+        - sail
+    profiles: ['app']
+    restart: unless-stopped
+    depends_on:
+        pgsql:
+            condition: service_healthy
+        redis:
+            condition: service_healthy
+        minio-init:
+            condition: service_completed_successfully
+
+x-frontend: &frontend
+    # Node 24 matches both the host toolchain and the Node bundled in the Sail image.
+    image: 'node:24-alpine'
+    working_dir: /app
+    networks:
+        - sail
+    profiles: ['app']
+    restart: unless-stopped
+
 services:
-    laravel.test:
-        build:
-            context: ./backend/docker/8.5
-            dockerfile: Dockerfile
-            args:
-                WWWGROUP: '${WWWGROUP}'
-        image: sail-8.5/app
-        extra_hosts:
-            - 'host.docker.internal:host-gateway'
-        ports:
-            - '${APP_PORT:-80}:80'
-            - '${VITE_PORT:-5173}:${VITE_PORT:-5173}'
-        environment:
-            WWWUSER: '${WWWUSER}'
-            LARAVEL_SAIL: 1
-            XDEBUG_MODE: '${SAIL_XDEBUG_MODE:-off}'
-            XDEBUG_CONFIG: '${SAIL_XDEBUG_CONFIG:-client_host=host.docker.internal}'
-            IGNITION_LOCAL_SITES_PATH: '${PWD}'
-        volumes:
-            - './backend:/var/www/html'
-        networks:
-            - sail
-        depends_on:
-            - pgsql
-            - redis
-            - mailpit
+    # ══════════════════════ infrastructure — no profile, always available ══════
     pgsql:
         image: 'postgres:18-alpine'
+        restart: unless-stopped
         ports:
-            - '${FORWARD_DB_PORT:-5432}:5432'
+            - '${FORWARD_DB_PORT:-5433}:5432'
         environment:
             PGPASSWORD: '${DB_PASSWORD:-secret}'
             POSTGRES_DB: '${DB_DATABASE}'
@@ -40,108 +101,187 @@ services:
         networks:
             - sail
         healthcheck:
-            test:
-                - CMD
-                - pg_isready
-                - '-q'
-                - '-d'
-                - '${DB_DATABASE}'
-                - '-U'
-                - '${DB_USERNAME}'
-            retries: 3
+            test: ['CMD', 'pg_isready', '-q', '-d', '${DB_DATABASE}', '-U', '${DB_USERNAME}']
+            interval: 10s
+            retries: 5
             timeout: 5s
+
     redis:
         image: 'redis:alpine'
+        restart: unless-stopped
         ports:
-            - '${FORWARD_REDIS_PORT:-6379}:6379'
+            - '${FORWARD_REDIS_PORT:-6380}:6379'
         volumes:
             - 'sail-redis:/data'
         networks:
             - sail
         healthcheck:
-            test:
-                - CMD
-                - redis-cli
-                - ping
+            test: ['CMD', 'redis-cli', 'ping']
+            interval: 10s
             retries: 3
             timeout: 5s
+
     mailpit:
         image: 'axllent/mailpit:latest'
+        restart: unless-stopped
         ports:
             - '${FORWARD_MAILPIT_PORT:-1025}:1025'
             - '${FORWARD_MAILPIT_DASHBOARD_PORT:-8025}:8025'
         networks:
             - sail
-    horizon:
-        build:
-            context: ./backend/docker/8.5
-            dockerfile: Dockerfile
-            args:
-                WWWGROUP: '${WWWGROUP}'
-        image: sail-8.5/app
-        extra_hosts:
-            - 'host.docker.internal:host-gateway'
-        environment:
-            WWWUSER: '${WWWUSER}'
-            LARAVEL_SAIL: 1
-            APP_ENV: '${APP_ENV}'
-        volumes:
-            - './backend:/var/www/html'
-        networks:
-            - sail
-        depends_on:
-            - pgsql
-            - redis
-        command: 'php artisan horizon'
-    reverb:
-        build:
-            context: ./backend/docker/8.5
-            dockerfile: Dockerfile
-            args:
-                WWWGROUP: '${WWWGROUP}'
-        image: sail-8.5/app
-        extra_hosts:
-            - 'host.docker.internal:host-gateway'
+
+    # Local S3. LOCAL_DEV.md has told developers to start `minio` for a while, but no
+    # compose file ever defined it — so local uploads have been going to the real
+    # codeupscale-trackflow-media bucket with the live AWS keys from the root .env.
+    minio:
+        image: 'minio/minio:latest'
+        restart: unless-stopped
+        command: server /data --console-address ":9001"
         ports:
-            - '${REVERB_PORT:-8080}:8080'
+            - '${FORWARD_MINIO_PORT:-9000}:9000'
+            - '${FORWARD_MINIO_CONSOLE_PORT:-9001}:9001'
         environment:
-            WWWUSER: '${WWWUSER}'
-            LARAVEL_SAIL: 1
-            APP_ENV: '${APP_ENV}'
+            MINIO_ROOT_USER: '${MINIO_ROOT_USER:-trackflow}'
+            MINIO_ROOT_PASSWORD: '${MINIO_ROOT_PASSWORD:-trackflow-local}'
         volumes:
-            - './backend:/var/www/html'
+            - 'sail-minio:/data'
         networks:
             - sail
+        healthcheck:
+            test: ['CMD', 'mc', 'ready', 'local']
+            interval: 10s
+            retries: 5
+            timeout: 5s
+
+    # Runs once, creates the bucket, exits. The app services wait for it to succeed.
+    minio-init:
+        image: 'minio/mc:latest'
         depends_on:
-            - pgsql
-            - redis
-        command: 'php artisan reverb:start --host=0.0.0.0 --port=8080'
+            minio:
+                condition: service_healthy
+        entrypoint: >
+            /bin/sh -c "
+            mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-trackflow} $${MINIO_ROOT_PASSWORD:-trackflow-local} &&
+            mc mb --ignore-existing local/$${MINIO_BUCKET:-trackflow-local} &&
+            mc anonymous set download local/$${MINIO_BUCKET:-trackflow-local}
+            "
+        environment:
+            MINIO_ROOT_USER: '${MINIO_ROOT_USER:-trackflow}'
+            MINIO_ROOT_PASSWORD: '${MINIO_ROOT_PASSWORD:-trackflow-local}'
+            MINIO_BUCKET: '${MINIO_BUCKET:-trackflow-local}'
+        networks:
+            - sail
+        restart: 'no'
+
+    # ══════════════════════ application — profile: app ═════════════════════════
+    laravel.test:
+        <<: *backend
+        ports:
+            - '${APP_PORT:-8000}:80'
+            - '${VITE_PORT:-5173}:${VITE_PORT:-5173}'
+        environment:
+            <<: *backend-env
+            XDEBUG_MODE: '${SAIL_XDEBUG_MODE:-off}'
+            XDEBUG_CONFIG: '${SAIL_XDEBUG_CONFIG:-client_host=host.docker.internal}'
+            IGNITION_LOCAL_SITES_PATH: '${PWD}'
+        healthcheck:
+            # Route exists at backend/routes/api.php:46 and touches no database,
+            # so it goes healthy as soon as PHP is serving.
+            test: ['CMD', 'curl', '-f', 'http://localhost/api/v1/health/live']
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 30s
+
+    horizon:
+        <<: *backend
+        command: 'php artisan horizon'
+        environment:
+            <<: *backend-env
+
     scheduler:
-        build:
-            context: ./backend/docker/8.5
-            dockerfile: Dockerfile
-            args:
-                WWWGROUP: '${WWWGROUP}'
-        image: sail-8.5/app
-        extra_hosts:
-            - 'host.docker.internal:host-gateway'
-        environment:
-            WWWUSER: '${WWWUSER}'
-            LARAVEL_SAIL: 1
-            APP_ENV: '${APP_ENV}'
-        volumes:
-            - './backend:/var/www/html'
-        networks:
-            - sail
-        depends_on:
-            - pgsql
-            - redis
+        <<: *backend
         command: '/bin/sh -c "while true; do php artisan schedule:run --no-interaction; sleep 60; done"'
+        environment:
+            <<: *backend-env
+
+    reverb:
+        <<: *backend
+        command: 'php artisan reverb:start --host=0.0.0.0 --port=8080'
+        ports:
+            - '${REVERB_PORT:-8081}:8080'
+        environment:
+            <<: *backend-env
+
+    web:
+        <<: *frontend
+        # npm ci (not npm install) so the lockfile is authoritative — relevant given the
+        # 2026-08 supply-chain incident. Only runs when node_modules is empty, so a
+        # restart is fast. Add --ignore-scripts if you want to go further, but check
+        # nothing in the tree needs a postinstall step first.
+        command: sh -c 'if [ ! -d node_modules/next ]; then npm ci; fi; exec npm run dev -- -H 0.0.0.0'
+        ports:
+            - '${WEB_PORT:-3000}:3000'
+        volumes:
+            - './web:/app'
+            # Named volumes keep the container's Linux node_modules/.next away from the
+            # host's macOS copies, so native and Docker mode never corrupt each other.
+            - 'web-node-modules:/app/node_modules'
+            - 'web-next:/app/.next'
+        environment:
+            # Browser-facing, so it must be a HOST url, not a container name.
+            NEXT_PUBLIC_API_URL: 'http://localhost:${APP_PORT:-8000}/api/v1'
+            NEXT_PUBLIC_REVERB_APP_KEY: '${REVERB_APP_KEY:-trackflow-key}'
+            NEXT_PUBLIC_REVERB_HOST: localhost
+            NEXT_PUBLIC_REVERB_PORT: '${REVERB_PORT:-8081}'
+            NEXT_PUBLIC_GOOGLE_CLIENT_ID: '${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-}'
+            # Bind-mounted source on macOS does not deliver inotify events reliably.
+            WATCHPACK_POLLING: 'true'
+        depends_on:
+            laravel.test:
+                condition: service_healthy
+        healthcheck:
+            test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3000/']
+            interval: 30s
+            timeout: 10s
+            retries: 5
+            start_period: 120s
+
+    marketing:
+        <<: *frontend
+        # `npm run dev` here is `next dev --port 3001`, so the container port is 3001.
+        command: sh -c 'if [ ! -d node_modules/next ]; then npm ci; fi; exec npm run dev -- -H 0.0.0.0'
+        ports:
+            - '${MARKETING_PORT:-3001}:3001'
+        volumes:
+            - './marketing:/app'
+            - 'marketing-node-modules:/app/node_modules'
+            - 'marketing-next:/app/.next'
+        environment:
+            WATCHPACK_POLLING: 'true'
+        healthcheck:
+            test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3001/']
+            interval: 30s
+            timeout: 10s
+            retries: 5
+            start_period: 120s
+
 networks:
     sail:
         driver: bridge
+
 volumes:
     sail-pgsql:
         driver: local
     sail-redis:
+        driver: local
+    sail-minio:
+        driver: local
+    web-node-modules:
+        driver: local
+    web-next:
+        driver: local
+    marketing-node-modules:
+        driver: local
+    marketing-next:
         driver: local

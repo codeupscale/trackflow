@@ -59,8 +59,6 @@ class OrganizationStructureService
             'code' => $data['code'],
             'level' => $data['level'],
             'employment_type' => $data['employment_type'],
-            'min_salary' => $data['min_salary'] ?? null,
-            'max_salary' => $data['max_salary'] ?? null,
             'is_active' => $data['is_active'] ?? true,
         ]);
     }

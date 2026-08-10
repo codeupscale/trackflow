@@ -21,8 +21,6 @@ class PositionFactory extends Factory
             'code' => fake()->unique()->bothify('POS-???##'),
             'level' => fake()->randomElement(['junior', 'mid', 'senior', 'lead', 'manager', 'director', 'vp', 'c_level']),
             'employment_type' => fake()->randomElement(['full_time', 'part_time', 'contract', 'intern']),
-            'min_salary' => null,
-            'max_salary' => null,
             'is_active' => true,
         ];
     }
