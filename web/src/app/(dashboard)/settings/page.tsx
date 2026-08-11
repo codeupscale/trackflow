@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import {
     Camera,
+    Copy,
     CreditCard,
     Github,
     Linkedin,
@@ -460,6 +461,26 @@ export default function SettingsPage() {
 
     const handleSaveUserTimezone = () => {
         updateProfileMutation.mutate({ timezone: userTimezone });
+    };
+
+    /**
+     * The slug is generated as `Str::slug(name)-Str::random(6)`, so the suffix
+     * is mixed-case base62 and the server matches it case-sensitively. Copying
+     * it is the only safe way to move it into a config file — retyping it is
+     * how you end up with a silent 404.
+     */
+    const handleCopySlug = async () => {
+        const slug = data?.organization.slug;
+        if (!slug) return;
+
+        try {
+            await navigator.clipboard.writeText(slug);
+            toast.success("Organization slug copied");
+        } catch {
+            // Clipboard access fails on insecure origins and when the browser
+            // withholds permission. Say so rather than appearing to succeed.
+            toast.error("Could not copy — select the text and copy manually");
+        }
     };
 
     const validatePasswordForm = (): boolean => {
@@ -1080,6 +1101,48 @@ export default function SettingsPage() {
                                     className="bg-background/50"
                                 />
                             </div>
+
+                            {/*
+                                Read-only: the slug is assigned once at signup
+                                and PUT /settings accepts only name + settings.
+                                Shown because it is the organization's public
+                                identifier — the careers feed is keyed on it —
+                                and nothing else in the app surfaces it.
+                            */}
+                            <div className="grid gap-2 max-w-md">
+                                <Label htmlFor="org-slug">
+                                    Organization Slug
+                                </Label>
+                                <div className="flex items-center gap-2">
+                                    <Input
+                                        id="org-slug"
+                                        value={data?.organization.slug ?? ""}
+                                        readOnly
+                                        // Case matters here, so render it in a
+                                        // face where I/l and O/0 are tellable
+                                        // apart.
+                                        className="bg-background/50 font-mono"
+                                        onFocus={(e) => e.target.select()}
+                                    />
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="icon"
+                                        onClick={handleCopySlug}
+                                        disabled={!data?.organization.slug}
+                                        aria-label="Copy organization slug"
+                                        title="Copy organization slug"
+                                    >
+                                        <Copy className="h-4 w-4" />
+                                    </Button>
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                    Public identifier for this organization,
+                                    used in your careers page feed. Case
+                                    sensitive — copy it rather than retyping.
+                                </p>
+                            </div>
+
                             <div className="grid gap-2 max-w-md">
                                 <Label
                                     htmlFor="org-tz"
