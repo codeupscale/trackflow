@@ -595,6 +595,8 @@ class ActivityScoreTest extends TestCase
 
     public function test_today_total_includes_all_completed_entries(): void
     {
+        $this->travelTo(now()->startOfDay()->addHours(12));
+
         TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
             'user_id' => $this->user->id,

@@ -24,11 +24,13 @@ class ReportTest extends TestCase
 
     public function test_can_get_summary_report(): void
     {
+        $refDate = now()->subDays(2)->startOfDay()->addHours(10);
+
         TimeEntry::factory()->count(3)->create([
             'organization_id' => $this->org->id,
             'user_id' => $this->employee->id,
-            'started_at' => now()->subHours(2),
-            'ended_at' => now()->subHour(),
+            'started_at' => $refDate,
+            'ended_at' => $refDate->copy()->addHour(),
             'duration_seconds' => 3600,
         ]);
 
@@ -36,7 +38,7 @@ class ReportTest extends TestCase
 
         $response = $this->getJson('/api/v1/reports/summary?' . http_build_query([
             'date_from' => now()->subDays(7)->toDateString(),
-            'date_to' => now()->toDateString(),
+            'date_to' => now()->addDay()->toDateString(),
         ]));
 
         $response->assertOk()
@@ -45,11 +47,13 @@ class ReportTest extends TestCase
 
     public function test_employee_only_sees_own_summary(): void
     {
+        $refDate = now()->subDays(2)->startOfDay()->addHours(10);
+
         TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
             'user_id' => $this->employee->id,
-            'started_at' => now()->subHours(2),
-            'ended_at' => now()->subHour(),
+            'started_at' => $refDate,
+            'ended_at' => $refDate->copy()->addHour(),
             'duration_seconds' => 3600,
         ]);
 
@@ -57,7 +61,7 @@ class ReportTest extends TestCase
 
         $response = $this->getJson('/api/v1/reports/summary?' . http_build_query([
             'date_from' => now()->subDays(7)->toDateString(),
-            'date_to' => now()->toDateString(),
+            'date_to' => now()->addDay()->toDateString(),
             'user_id' => $this->owner->id, // Try to see owner's data
         ]));
 
@@ -71,7 +75,7 @@ class ReportTest extends TestCase
 
         $response = $this->getJson('/api/v1/reports/team?' . http_build_query([
             'date_from' => now()->subDays(7)->toDateString(),
-            'date_to' => now()->toDateString(),
+            'date_to' => now()->addDay()->toDateString(),
         ]));
 
         $response->assertStatus(403);
@@ -84,12 +88,14 @@ class ReportTest extends TestCase
             'created_by' => $this->owner->id,
         ]);
 
+        $refDate = now()->subDays(2)->startOfDay()->addHours(10);
+
         TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
             'user_id' => $this->employee->id,
             'project_id' => $project->id,
-            'started_at' => now()->subHours(2),
-            'ended_at' => now()->subHour(),
+            'started_at' => $refDate,
+            'ended_at' => $refDate->copy()->addHour(),
             'duration_seconds' => 3600,
         ]);
 
@@ -97,7 +103,7 @@ class ReportTest extends TestCase
 
         $response = $this->getJson('/api/v1/reports/projects?' . http_build_query([
             'date_from' => now()->subDays(7)->toDateString(),
-            'date_to' => now()->toDateString(),
+            'date_to' => now()->addDay()->toDateString(),
         ]));
 
         $response->assertOk()
@@ -155,7 +161,7 @@ class ReportTest extends TestCase
             'type' => 'summary',
             'format' => 'csv',
             'date_from' => now()->subDays(7)->toDateString(),
-            'date_to' => now()->toDateString(),
+            'date_to' => now()->addDay()->toDateString(),
         ]);
 
         $response->assertOk();
@@ -171,7 +177,7 @@ class ReportTest extends TestCase
 
         $response = $this->getJson('/api/v1/reports/payroll?' . http_build_query([
             'date_from' => now()->subDays(30)->toDateString(),
-            'date_to' => now()->toDateString(),
+            'date_to' => now()->addDay()->toDateString(),
         ]));
 
         $response->assertStatus(403);
