@@ -152,6 +152,46 @@ class CheckInService
     }
 
     /**
+     * The official off-time INSTANT for a record's day, in the schedule timezone.
+     *
+     * An OVERNIGHT shift — one whose end time is at or before its start time, e.g. the
+     * 16:00 → 01:00 evening shift — finishes on the day AFTER the one it started, so its
+     * off time must be rolled forward a day. Anchoring it to the record's own date instead
+     * put the off time ~15 hours BEFORE the shift even began, and every checkout then read
+     * as "at or after the off time" — a 23:59 finish on a 16:00–01:00 shift was booked as
+     * ~23 hours of overtime rather than an hour short of the end.
+     *
+     * Mirrors the overnight guard AttendanceService::generateDailyAttendance() has always
+     * applied to the tracker-derived figures, so the two attendance signals finally agree.
+     */
+    private function offTimeFor(string $recordDate, CheckInSchedule $schedule, string $tz): Carbon
+    {
+        $startAt = Carbon::parse("{$recordDate} {$schedule->check_in_time}", $tz);
+        $offAt = Carbon::parse("{$recordDate} {$schedule->checkout_time}", $tz);
+
+        return $offAt->lte($startAt) ? $offAt->addDay() : $offAt;
+    }
+
+    /**
+     * Is the shift owning this record still running right now?
+     *
+     * Only ever true for an OVERNIGHT shift, whose off time falls on the day after the
+     * record's own date — a same-day shift is always finished once its date is past.
+     * Guards the midnight force-checkout from cutting a shift short (see
+     * autoCheckOutOpenSessions).
+     */
+    private function shiftStillRunning(AttendanceRecord $record): bool
+    {
+        $recordDate = $record->date instanceof Carbon
+            ? $record->date->toDateString()
+            : Carbon::parse((string) $record->date)->toDateString();
+
+        $schedule = $this->resolveSchedule($record->organization_id, $record->user_id, $recordDate);
+
+        return now()->lt($this->offTimeFor($recordDate, $schedule, $schedule->timezone));
+    }
+
+    /**
      * Auto check-in triggered by the desktop starting a timer.
      *
      * Records a check-in AT the moment tracking began ($startedAt), for the
@@ -444,6 +484,7 @@ class CheckInService
      *     instant diff so a session spanning midnight is counted correctly).
      *   - check_in_at    = the FIRST session's check-in (drives "late" — owned by checkIn).
      *   - check_out_at   = the LAST CLOSED session's checkout (drives early/overtime).
+     *   - the off time of an OVERNIGHT shift lands on the NEXT calendar day (see below).
      *
      * MUST NOT touch check_in_status / check_in_late_minutes / check_in_flags / status —
      * those are first-check-in-owned and set once in checkIn().
@@ -471,7 +512,7 @@ class CheckInService
         /** @var Carbon|null $lastClosedOut */
         $lastClosedOut = $closed->max('check_out_at');
 
-        $offAt = Carbon::parse("{$recordDate} {$schedule->checkout_time}", $tz);
+        $offAt = $this->offTimeFor($recordDate, $schedule, $tz);
 
         $isEarly = false;
         $earlyMinutes = 0;
@@ -723,6 +764,14 @@ class CheckInService
      * inside a per-record transaction with lockForUpdate and re-checks the open state
      * under lock, so a racing manual checkout is never double-closed.
      *
+     * A past `date` alone does not mean the work day is over: an OVERNIGHT shift owns a
+     * record dated YESTERDAY right up to its off time, so at the org-local midnight this
+     * job fires, a 16:00–01:00 worker is still an hour from finishing. Closing them then
+     * is exactly the "closed early" this method promises never to do — it truncated the
+     * final hour every night and booked the stub as the day's checkout. Records whose
+     * shift has not reached its off time are therefore skipped and picked up on a later
+     * run (or by the user's own checkout, which is the point).
+     *
      * @return int number of sessions force-closed.
      */
     public function autoCheckOutOpenSessions(string $orgId): int
@@ -742,6 +791,10 @@ class CheckInService
 
         $closed = 0;
         foreach ($stale as $record) {
+            if ($this->shiftStillRunning($record)) {
+                continue;
+            }
+
             $closed += $this->forceCloseRecordOpenSessions($record);
         }
 
@@ -789,17 +842,22 @@ class CheckInService
             $schedule = $this->resolveSchedule($locked->organization_id, $locked->user_id, $recordDate);
 
             // 3. Resolve the day's last tracked-activity instant once (shared by every
-            //    open session on the record — normally just one).
+            //    open session on the record — normally just one). The shift's off time
+            //    widens the search window for an overnight shift and is the fallback
+            //    checkout, so it is resolved once here and shared by both.
+            $offAt = $this->offTimeFor($recordDate, $schedule, $schedule->timezone);
+
             $lastActivity = $this->lastTrackedActivityInstant(
                 $locked->organization_id,
                 $locked->user_id,
                 $recordDate,
-                $schedule->timezone
+                $schedule->timezone,
+                $offAt
             );
 
             $count = 0;
             foreach ($openSessions as $session) {
-                $checkoutAt = $this->resolveForcedCheckoutInstant($session, $lastActivity, $recordDate, $schedule);
+                $checkoutAt = $this->resolveForcedCheckoutInstant($session, $lastActivity, $offAt);
                 $session->update(['check_out_at' => $checkoutAt]);
                 $count++;
             }
@@ -836,13 +894,27 @@ class CheckInService
      *
      * The heartbeat is the finest-grained record of real work and, crucially, is the ONLY
      * signal available when a tracked entry is still open (null `ended_at`) — so an entry
-     * left running gives a truthful last-seen instant instead of nothing. Both are bounded
-     * to the org-local day. Returns null when the user had no tracked activity that day.
+     * left running gives a truthful last-seen instant instead of nothing.
+     *
+     * The window opens at the record's org-local midnight and closes at the later of that
+     * day's end and the shift's OFF TIME, so an OVERNIGHT shift keeps the hours it works
+     * past midnight. Bounded to the calendar day, the search cut a 16:00–01:00 worker off
+     * at 23:59:59 and the forced checkout inherited that stub, discarding the final hour of
+     * genuine work. The off time is a deliberate ceiling — a fabricated checkout is never
+     * stamped beyond the end of the shift it belongs to (which also stops the window
+     * bleeding into the NEXT day's shift), so overtime past the off time is left to the
+     * user's own checkout or a regularization.
+     *
+     * Returns null when the user had no tracked activity in that window.
      */
-    private function lastTrackedActivityInstant(string $orgId, string $userId, string $recordDate, string $tz): ?Carbon
+    private function lastTrackedActivityInstant(string $orgId, string $userId, string $recordDate, string $tz, ?Carbon $offAt = null): ?Carbon
     {
         $dayStart = Carbon::parse("{$recordDate} 00:00:00", $tz)->utc();
         $dayEnd = Carbon::parse("{$recordDate} 23:59:59", $tz)->utc();
+
+        if ($offAt !== null && $offAt->copy()->utc()->gt($dayEnd)) {
+            $dayEnd = $offAt->copy()->utc();
+        }
 
         $maxEnded = TimeEntry::withoutGlobalScopes()
             ->where('organization_id', $orgId)
@@ -871,8 +943,13 @@ class CheckInService
      *   2. else the user's SHIFT checkout_time (end_time) for that day, when after check-in;
      *   3. else check_in_at + 1s — a degenerate guard (e.g. a very late-evening check-in
      *      with no later activity) so the checkout is ALWAYS strictly after the check-in.
+     *
+     * $offAt comes from offTimeFor(), so an OVERNIGHT shift's off time rolls to the next
+     * day. Anchored to the record's own date it landed before the check-in on every evening
+     * shift, step 2 could never win, and a forgotten checkout collapsed to the 1-second
+     * guard — erasing the whole day's worked time instead of closing it at the shift end.
      */
-    private function resolveForcedCheckoutInstant(CheckInSession $session, ?Carbon $lastActivity, string $recordDate, CheckInSchedule $schedule): Carbon
+    private function resolveForcedCheckoutInstant(CheckInSession $session, ?Carbon $lastActivity, Carbon $offAt): Carbon
     {
         $checkInAt = $session->check_in_at;
 
@@ -880,9 +957,9 @@ class CheckInService
             return $lastActivity->copy();
         }
 
-        $offAt = Carbon::parse("{$recordDate} {$schedule->checkout_time}", $schedule->timezone)->utc();
-        if ($offAt->gt($checkInAt)) {
-            return $offAt;
+        $offAtUtc = $offAt->copy()->utc();
+        if ($offAtUtc->gt($checkInAt)) {
+            return $offAtUtc;
         }
 
         return $checkInAt->copy()->addSecond();

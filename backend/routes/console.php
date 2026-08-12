@@ -105,13 +105,23 @@ Schedule::call(function () {
         });
 })->dailyAt('03:00')->name('close-stale-check-ins');
 
-// Feature B: force-checkout open check-in sessions at 00:00 Asia/Karachi (= 19:00 UTC).
-// Stamps a real check_out_at (last tracked activity, else policy checkout_time) on every
-// open session whose org-local day has ended — unlike close-stale-check-ins (03:00), which
-// only flags the record and leaves the session open as a secondary backstop.
+// Feature B: force-checkout open check-in sessions. Stamps a real check_out_at (last
+// tracked activity, else the shift's off time) on every open session whose SHIFT has
+// ended — unlike close-stale-check-ins (03:00), which only flags the record and leaves
+// the session open as a secondary backstop.
+//
+// TWO sweeps, because one midnight pass cannot serve both shift shapes:
+//   00:00 PKT (19:00 UTC) — closes the day shift the moment its day is over.
+//   06:00 PKT (01:00 UTC) — catches the OVERNIGHT shift. A 16:00–01:00 worker is still
+//                           on shift at midnight, so autoCheckOutOpenSessions() skips
+//                           them there (shiftStillRunning); without a later sweep their
+//                           session would stay open until the next midnight.
+// The job is idempotent — it only touches records that still carry an OPEN session, and
+// re-checks that under lock — so the second sweep is a no-op for anyone already closed.
+//
 // NOTE: the Laravel scheduler is DISABLED on dev and only runs in prod — do not rely on
 // this firing in tests; test autoCheckOutOpenSessions() directly.
-Schedule::call(function () {
+$forceCheckOutOpenSessions = function () {
     Organization::query()
         ->select('id')
         ->chunkById(500, function ($orgs) {
@@ -119,7 +129,10 @@ Schedule::call(function () {
                 ForceCheckOutOpenSessionsJob::dispatch($org->id);
             }
         });
-})->dailyAt('19:00')->name('force-checkout-open-sessions');
+};
+
+Schedule::call($forceCheckOutOpenSessions)->dailyAt('19:00')->name('force-checkout-open-sessions');
+Schedule::call($forceCheckOutOpenSessions)->dailyAt('01:00')->name('force-checkout-open-sessions-overnight');
 
 // FIX B11: Watchdog — close stale open entries (no heartbeat for 2+ hours)
 // (removed) close-stale-timer-entries — CloseStaleTimerEntriesJob duplicated
