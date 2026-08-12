@@ -20,6 +20,20 @@ interface TimerState {
   projectName: string | null;
   startedAt: string | null;
   elapsedSeconds: number;
+  /**
+   * Last instant the SERVER has proof the desktop agent was alive, or null when nothing
+   * is running. The web is a read-only viewer: the desktop owns tracked time locally and
+   * uploads on a 10-minute batch, so an entry that is still open server-side may already
+   * have been closed, split at an idle discard, or stopped on the machine.
+   */
+  liveAsOf: string | null;
+  /**
+   * True when the agent has gone quiet for longer than the server's grace window. The
+   * counter is FROZEN while this is set — ticking from `startedAt` would re-invent the
+   * time the server just refused to extrapolate (a discarded idle gap, or minutes of
+   * "still tracking" after the user pressed Stop).
+   */
+  elapsedIsStale: boolean;
   /** Today's cumulative total across ALL projects (all completed entries + current session). Used by dashboard "Today's Hours" card. */
   todayTotalSeconds: number;
   /** Base today total from completed entries (excludes current session). Used for tick calculation. */
@@ -58,6 +72,8 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
   projectName: null,
   startedAt: null,
   elapsedSeconds: 0,
+  liveAsOf: null,
+  elapsedIsStale: false,
   todayTotalSeconds: 0,
   todayTotalBase: 0,
   projectTodayTotalSeconds: 0,
@@ -97,6 +113,8 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
           projectName: runningProjectName,
           startedAt: res.data.entry?.started_at,
           elapsedSeconds: currentElapsed,
+          liveAsOf: res.data.live_as_of ?? null,
+          elapsedIsStale: res.data.elapsed_is_stale === true,
           todayTotalSeconds: todayTotal,
           todayTotalBase: base,
           projectTodayTotalSeconds: projectTodayTotal,
@@ -125,6 +143,8 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
           projectName: runningProjectName,
           startedAt: res.data.entry?.started_at,
           elapsedSeconds: currentElapsed,
+          liveAsOf: res.data.live_as_of ?? null,
+          elapsedIsStale: res.data.elapsed_is_stale === true,
           todayTotalSeconds: todayTotal,
           todayTotalBase: base,
           projectTodayTotalSeconds: projectTodayTotal,
@@ -156,6 +176,8 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
           projectName: null,
           startedAt: null,
           elapsedSeconds: 0,
+          liveAsOf: null,
+          elapsedIsStale: false,
           todayTotalSeconds: todayTotal,
           todayTotalBase: todayTotal,
           projectTodayTotalSeconds: 0,
@@ -211,6 +233,8 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
               projectName: state.projectName,
               startedAt: state.startedAt,
               elapsedSeconds: state.elapsedSeconds,
+              liveAsOf: state.liveAsOf ?? null,
+              elapsedIsStale: state.elapsedIsStale === true,
               todayTotalSeconds: state.todayTotalSeconds,
               todayTotalBase: state.todayTotalBase,
               projectTodayTotalSeconds: state.projectTodayTotalSeconds,
@@ -306,6 +330,15 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       return;
     }
+    // Same principle, applied to the AGENT rather than the browser: the server has told
+    // us it can no longer vouch for this entry (no heartbeat, no sync, past its grace
+    // window), so it froze `elapsed_seconds` at the last proof of life. Ticking on from
+    // `startedAt` here would re-invent precisely the time the server refused to claim —
+    // a discarded idle gap, or minutes of "still tracking" after Stop. Hold the frozen
+    // value; the next poll unfreezes it the moment the agent reports in again.
+    if (get().elapsedIsStale) {
+      return;
+    }
     const { startedAt, todayTotalBase, projectTodayTotalBase } = get();
     if (startedAt) {
       const currentElapsed = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
@@ -380,6 +413,8 @@ export const useTimerStore = create<TimerState>()((set, get) => ({
       projectName: null,
       startedAt: null,
       elapsedSeconds: 0,
+      liveAsOf: null,
+      elapsedIsStale: false,
       todayTotalSeconds: 0,
       todayTotalBase: 0,
       projectTodayTotalSeconds: 0,

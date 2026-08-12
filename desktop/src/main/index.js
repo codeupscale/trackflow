@@ -67,7 +67,12 @@ const NetworkMonitor = require("./network-monitor");
 const {
     hasPendingCompletedSession,
     unsyncedCompletedSecondsForDay,
-} = require("./timer-session-sync");
+    completedSecondsForProjectDay,
+    staleLiveSessionDecision,
+    startOfZonedDay,
+} = require("./session-rules");
+const { WorkSessionStore } = require("./work-session-store");
+const { SessionSyncWorker } = require("./session-sync-worker");
 const {
     resolveWatchTarget,
     shouldStopForRemoval,
@@ -121,11 +126,28 @@ try {
     );
 } catch {}
 
+// JSON.stringify(new Error('boom')) is "{}" — message, stack and every SQLite
+// detail (code, errno) are non-enumerable, so the naive stringify below used to
+// erase exactly the information a crash log exists to carry. Electron's own
+// "Error occurred in handler for 'x'" lines arrived as literal `{}`, which made an
+// IPC throw undiagnosable from a user's log. Serialize Errors explicitly.
+function _serializeLogArg(a) {
+    if (typeof a === "string") return a;
+    if (a instanceof Error) {
+        const extra = [a.code, a.errno].filter((v) => v !== undefined).join("/");
+        return `${a.stack || `${a.name}: ${a.message}`}${extra ? ` (${extra})` : ""}`;
+    }
+    try {
+        return JSON.stringify(a);
+    } catch {
+        // Circular or otherwise unserializable — never let logging throw.
+        return String(a);
+    }
+}
+
 function logToFile(level, ...args) {
     const ts = new Date().toISOString();
-    const msg = args
-        .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
-        .join(" ");
+    const msg = args.map(_serializeLogArg).join(" ");
     const line = `[${ts}] [${level}] ${msg}\n`;
     try {
         fs.appendFileSync(getLogFile(), line);
@@ -170,6 +192,9 @@ const MIN_ENTRY_DURATION_SEC = 5;
 
 // Default configuration values — single source of truth
 const DEFAULT_CONFIG = {
+    // Day-boundary zone for the midnight session split. Replaced by the org value from
+    // GET /agent/config; this fallback only applies before the first successful fetch.
+    timezone: "Asia/Karachi",
     screenshot_interval: 5,
     // Offline fallback only — the real value comes from GET /agent/config
     // (Settings → Idle detection) and is re-read every ~5 min.
@@ -252,6 +277,32 @@ function loadLastActiveAt() {
     return loadUserPrefs().lastActiveAt || null;
 }
 
+/**
+ * Stamp "last real input" from the OS idle counter — no network, no server ack.
+ *
+ * Called from the 1s tray tick and throttled to one disk write per 30s (the stamp
+ * feeds auto-stop back-dating, which is not sensitive to sub-30s precision, and
+ * writing user-prefs every second would be gratuitous I/O).
+ */
+let _lastActiveStampAt = 0;
+const LAST_ACTIVE_STAMP_INTERVAL_MS = 30_000;
+
+function _stampLastActiveFromOsIdle() {
+    const now = Date.now();
+    if (now - _lastActiveStampAt < LAST_ACTIVE_STAMP_INTERVAL_MS) return;
+    let idleSec;
+    try {
+        idleSec = powerMonitor.getSystemIdleTime();
+    } catch {
+        // Some Linux/Wayland sessions can throw — fall back to "now" rather than
+        // letting the stamp rot, which would make a live session look dead.
+        idleSec = 0;
+    }
+    if (!Number.isFinite(idleSec) || idleSec < 0) idleSec = 0;
+    _lastActiveStampAt = now;
+    touchLastActiveAt(new Date(now - idleSec * 1000).toISOString());
+}
+
 function saveAutoStopReason(reason) {
     saveUserPrefsPatch({
         lastAutoStopReason: reason,
@@ -269,14 +320,20 @@ function getStartupGapThresholdSec() {
 // ── Always-on-Top (Pin) Persistence ──────────────────────────────────────────
 // Persists the "always on top" / "pin" state so it survives app restarts.
 // Uses the same user-prefs.json file as lastSelectedProjectId.
+// DEFAULT CHANGED to unpinned. While this was a frameless tray popup, pinning it
+// on top was the only way to keep it visible while you worked — hide-on-blur
+// made an unpinned popup vanish the moment you clicked away. The main window is
+// now an ordinary window that stays put on its own, so floating it above every
+// other application by default is simply intrusive. Users who explicitly pinned
+// it keep their choice: only the "never chose" case flips.
 function loadAlwaysOnTop() {
     try {
         const p = getPrefsPath();
-        if (!p || !fs.existsSync(p)) return true; // default: pinned
+        if (!p || !fs.existsSync(p)) return false; // default: unpinned
         const data = JSON.parse(fs.readFileSync(p, "utf8"));
-        return data.alwaysOnTop !== undefined ? !!data.alwaysOnTop : true;
+        return data.alwaysOnTop !== undefined ? !!data.alwaysOnTop : false;
     } catch {
-        return true;
+        return false;
     }
 }
 
@@ -365,6 +422,13 @@ function clearRestartState() {
 let _screenPermissionDeclinedThisSession = false;
 let _screenPermissionGranted = null; // null = not checked yet, true/false after check
 
+// Set once the user answers "Skip for Now" to the pre-start permission onboarding.
+// Without it the gate re-probed and re-opened the SAME modal on every single Start,
+// so a user who had deliberately chosen to track without screenshots was blocked by
+// a dialog they had already dismissed. Session-scoped on purpose: it is cleared the
+// moment permission is actually confirmed, and a relaunch asks once more.
+let _screenPermissionSkippedThisSession = false;
+
 function checkScreenRecordingPermission() {
     if (process.platform !== "darwin") {
         _screenPermissionGranted = true;
@@ -384,6 +448,13 @@ function checkScreenRecordingPermission() {
         if (status === "granted") {
             _screenPermissionGranted = true;
             console.log("[Permission] Screen recording API status: granted");
+            // Broadcast + persist, exactly as the probe's granted path does. Without
+            // this, a banner raised earlier in the session (while status was still
+            // 'denied') was never taken down once permission actually landed, so the
+            // UI kept demanding a permission the user had already given.
+            saveScreenPermissionState(true);
+            _screenPermissionSkippedThisSession = false;
+            notifyPopup("permission-status", { granted: true });
             return true;
         }
         // For 'denied' or 'not-determined', don't trust it — force probe (API often
@@ -520,6 +591,7 @@ async function probeScreenRecordingPermission() {
                 );
                 _screenPermissionGranted = true;
                 saveScreenPermissionState(true);
+                _screenPermissionSkippedThisSession = false;
                 // Clear any "permission needed" banner — permission is confirmed.
                 notifyPopup("permission-status", { granted: true });
                 return true;
@@ -533,8 +605,136 @@ async function probeScreenRecordingPermission() {
         );
         return false;
     } catch (e) {
-        console.warn("[Permission] Probe failed:", e.message);
+        // Log the ERROR, not e.message. On macOS 12.3+ Electron captures via
+        // ScreenCaptureKit, and a TCC denial rejects getSources() outright with an
+        // empty message — so "Probe failed: " told us nothing. The full error carries
+        // the name/code that distinguishes a denial from a timeout or a real fault.
+        // (It also means the "sources returned, thumbnails empty" branch above is
+        // effectively dead on modern macOS: denial rejects rather than resolving.)
+        console.warn("[Permission] Probe failed:", e);
         return false;
+    }
+}
+
+// ── Re-checking permission after the user visits System Settings ────────────
+// macOS caches a process's Screen Recording verdict for the life of that process.
+// Granting the permission while TrackFlow is running does NOT make getSources()
+// start working — that is why macOS itself offers "Quit & Reopen". Nothing in the
+// app ever re-asked, and nothing could clear the amber banner except a SUCCESSFUL
+// screenshot, which is impossible while the permission is missing. So the banner
+// stayed up forever and every Start re-opened the same modal even though the user
+// had already granted the permission. Fixed by three things: a free
+// getMediaAccessStatus() re-check on every window focus, one rate-limited probe
+// after the user comes back from System Settings, and — when the probe still
+// fails after that — the relaunch offer that actually clears the cached verdict.
+
+// The row to toggle is named after the RUNNING BINARY, not the product. A dev run
+// is `electron .`, so macOS lists it as "Electron" — telling that user to look for
+// "TrackFlow" sends them hunting for a row that does not exist. macOS 15 also
+// renamed the pane to "Screen & System Audio Recording".
+const SCREEN_PERMISSION_ENTRY_NAME = app.isPackaged ? "TrackFlow" : "Electron";
+const SCREEN_PERMISSION_SETTINGS_PATH =
+    "System Settings ▸ Privacy & Security ▸ Screen & System Audio Recording";
+
+let _screenPermissionProbeAt = 0;
+let _screenPermissionRelaunchOfferedAt = 0;
+let _openedScreenSettings = false;
+const SCREEN_PERMISSION_PROBE_MIN_INTERVAL_MS = 3000;
+// The relaunch offer must NOT be once-per-session. Observed in a real session:
+// the user tabbed back from System Settings BEFORE granting, got the offer,
+// declined it (correctly — they had granted nothing yet), and a once-per-session
+// flag then suppressed the offer permanently. Seconds later the grant landed and
+// the app had no way left to tell them a restart was needed, which is the very
+// dead end this whole change exists to remove. So it re-offers, on a cooldown
+// long enough not to nag.
+const SCREEN_PERMISSION_RELAUNCH_REOFFER_MS = 45000;
+
+async function refreshScreenPermissionOnFocus() {
+    if (process.platform !== "darwin") return;
+    if (_screenPermissionGranted === true) return;
+
+    // Every branch below logs why it stopped. An earlier version of this function
+    // was silent, which made it impossible to tell from a user's log whether the
+    // re-check had even run — the same failure mode as the swallowed probe error.
+    console.log(
+        `[Permission] Focus re-check (openedSettings=${_openedScreenSettings}, lastRelaunchOffer=${_screenPermissionRelaunchOfferedAt || "never"})`,
+    );
+
+    // Free, never shows a dialog. For a properly signed build this alone flips
+    // the moment the user toggles TrackFlow on, and it clears the banner itself.
+    if (checkScreenRecordingPermission()) {
+        console.log("[Permission] Focus re-check: API now reports granted");
+        return;
+    }
+
+    // For ad-hoc signed builds getMediaAccessStatus() lies and reports 'denied'
+    // even when the permission IS granted, so the probe is the only truth. Only
+    // run it when we actually sent the user to Settings: a denied probe can raise
+    // the native macOS prompt, and doing that on every focus would be spam.
+    if (!_openedScreenSettings) {
+        console.log(
+            "[Permission] Focus re-check: still denied, not probing (user has not been sent to System Settings)",
+        );
+        return;
+    }
+
+    const now = Date.now();
+    if (now - _screenPermissionProbeAt < SCREEN_PERMISSION_PROBE_MIN_INTERVAL_MS) {
+        console.log("[Permission] Focus re-check: probe rate-limited");
+        return;
+    }
+    _screenPermissionProbeAt = now;
+
+    if (await probeScreenRecordingPermission()) {
+        console.log(
+            "[Permission] Focus re-check: probe now succeeds — permission confirmed",
+        );
+        _openedScreenSettings = false;
+        return;
+    }
+
+    // Granted in System Settings but this process still cannot capture: the
+    // cached TCC verdict. A relaunch is the ONLY way out, so offer it rather
+    // than leaving the user in the loop that caused this bug.
+    if (
+        _screenPermissionRelaunchOfferedAt &&
+        now - _screenPermissionRelaunchOfferedAt <
+            SCREEN_PERMISSION_RELAUNCH_REOFFER_MS
+    ) {
+        console.log(
+            "[Permission] Focus re-check: still denied; relaunch offer on cooldown",
+        );
+        return;
+    }
+    _screenPermissionRelaunchOfferedAt = now;
+    console.log(
+        "[Permission] Focus re-check: still denied after visiting Settings — offering relaunch",
+    );
+
+    const { response } = await dialog.showMessageBox({
+        type: "info",
+        title: "Restart TrackFlow",
+        message: "Restart TrackFlow to finish enabling screenshots",
+        detail:
+            `macOS only applies Screen Recording permission when an app restarts — a grant made ` +
+            `while ${SCREEN_PERMISSION_ENTRY_NAME} is running is invisible to it until then.\n\n` +
+            `If you have already switched ${SCREEN_PERMISSION_ENTRY_NAME} on in\n` +
+            `${SCREEN_PERMISSION_SETTINGS_PATH}\n` +
+            `then restart now to finish enabling screenshots.\n\n` +
+            "Your tracked time is saved locally and will not be lost.",
+        buttons: ["Restart Now", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+    });
+
+    if (response === 0) {
+        console.log("[Permission] User chose to relaunch — restarting now");
+        saveRestartState();
+        isQuitting = true;
+        app.relaunch();
+        app.exit(0);
+    } else {
+        console.log("[Permission] User declined the relaunch offer");
     }
 }
 
@@ -543,20 +743,23 @@ async function showScreenPermissionOnboarding(options = {}) {
 
     if (_screenPermissionDeclinedThisSession && !isPreStart) return "declined";
 
+    const steps =
+        "Steps to enable:\n" +
+        '1. Click "Open System Settings" below\n' +
+        `2. Go to ${SCREEN_PERMISSION_SETTINGS_PATH}\n` +
+        `3. Find "${SCREEN_PERMISSION_ENTRY_NAME}" in the list and switch it ON\n` +
+        "4. Return to TrackFlow — you will be offered a restart, which is what\n" +
+        "   actually applies the permission. macOS ignores it until then.\n";
+
     const detail = isPreStart
         ? "TrackFlow needs Screen Recording access to capture activity screenshots for your employer.\n\n" +
-          "Steps to enable:\n" +
-          '1. Click "Open System Settings" below\n' +
-          '2. Find "TrackFlow" in the list and toggle it ON\n' +
-          '3. macOS will ask you to "Quit & Reopen" — click it\n' +
+          "Tracking still works without it — only screenshots are affected.\n\n" +
+          steps +
           (wasTracking
               ? "\nDon't worry — your tracking session will resume automatically after restart."
               : "\nAfter restarting, you can start tracking right away.")
         : "Screen Recording permission is required to capture screenshots.\n\n" +
-          "Steps to enable:\n" +
-          '1. Click "Open System Settings" below\n' +
-          '2. Find "TrackFlow" in the list and toggle it ON\n' +
-          '3. macOS will ask you to "Quit & Reopen" — click it\n' +
+          steps +
           "\nYour selected project will be remembered after restart.";
 
     const result = await dialog.showMessageBox({
@@ -572,6 +775,13 @@ async function showScreenPermissionOnboarding(options = {}) {
     if (result.response === 0) {
         // Save state before directing user to settings (they may need to restart)
         saveRestartState();
+        // Arms the focus re-check: coming back from System Settings IS a focus
+        // event, and it is the only moment worth spending a probe on.
+        _openedScreenSettings = true;
+        _screenPermissionProbeAt = 0;
+        // A fresh trip to System Settings means a fresh chance the grant landed,
+        // so any earlier decline of the restart offer must not silence the next one.
+        _screenPermissionRelaunchOfferedAt = 0;
         shell.openExternal(
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
         );
@@ -614,12 +824,22 @@ async function showAgentUpgradeRequired(error) {
     }
 }
 
+/**
+ * Delete a local session outright.
+ *
+ * The ONLY legitimate caller is the agent-upgrade rollback below: the server has
+ * refused this build, so the session it just opened represents no real tracked time and
+ * must not linger as an unsyncable row. Nothing else may delete a session — the 05:00
+ * purge (confirmed rows only) is the sole other deletion path.
+ */
 function deleteLocalTimerSession(localId) {
     if (!localId) return;
     const db = _getLocalTimerDb();
     if (!db) return;
     try {
-        db.prepare("DELETE FROM timer_sessions WHERE id = ?").run(localId);
+        db.prepare(
+            "DELETE FROM timer_sessions WHERE id = ? AND server_entry_id IS NULL",
+        ).run(localId);
     } catch (e) {
         console.error("[LocalTimerDb] deleteSession failed:", e.message);
     }
@@ -673,55 +893,63 @@ let tray = null;
 let popupWindow = null;
 let loginWindow = null;
 
-// Popup window size. Defined ONCE and shared by BOTH the initial creation and the
-// re-show reposition, so the two can never drift apart (the bug where the window
-// launched at one size and then resized itself on the next tray click).
-// ── Popup sizing (Windows QA enhancement #10) ────────────────────────────────
-// QA asked for the popup to behave like a normal Windows app window (drag the
-// edges/corners to resize). Frameless windows on Windows support native edge
-// resizing when `resizable: true` + the default thick frame (WS_THICKFRAME) is
-// kept, so we only enable it there. macOS/Linux (incl. Wayland, where window
-// geometry is compositor-owned) stay at the fixed 320x400 design size — QA only
-// requested Windows and enabling elsewhere risks regressing the frameless tray
-// popup behaviour (blur-hide, positioning, DPI anti-shrink from issue #7).
-// The dimensions and clamp/resolve rules live in ./popup-size (unit-tested).
-const PopupSize = require("./popup-size");
-const POPUP_WIDTH = PopupSize.POPUP_WIDTH;
-const POPUP_HEIGHT = PopupSize.POPUP_HEIGHT;
-const POPUP_MIN_WIDTH = PopupSize.POPUP_MIN_WIDTH;
-const POPUP_MIN_HEIGHT = PopupSize.POPUP_MIN_HEIGHT;
-const POPUP_MAX_WIDTH = PopupSize.POPUP_MAX_WIDTH;
-const POPUP_MAX_HEIGHT = PopupSize.POPUP_MAX_HEIGHT;
-const IS_POPUP_RESIZABLE = process.platform === "win32";
+// ── Main window geometry ─────────────────────────────────────────────────────
+// The main window is an ordinary resizable desktop window with native minimise /
+// maximise / close on all three platforms — not the old frameless, tray-anchored
+// 320x480 popup. Its full rect (position + size) is persisted and restored, and
+// a rect stranded off-screen by an unplugged monitor is re-centred rather than
+// restored invisibly. The dimensions and resolve rules live in
+// ./window-geometry (unit-tested, no Electron import).
+const WindowGeometry = require("./window-geometry");
+// Windows-only: decides when a PINNED window must be moved onto the virtual
+// desktop the user switched to (see _evaluateVirtualDesktopFollow below).
+const VirtualDesktopFollow = require("./virtual-desktop-follow");
+const WINDOW_WIDTH = WindowGeometry.WINDOW_WIDTH;
+const WINDOW_HEIGHT = WindowGeometry.WINDOW_HEIGHT;
+const WINDOW_MIN_WIDTH = WindowGeometry.WINDOW_MIN_WIDTH;
+const WINDOW_MIN_HEIGHT = WindowGeometry.WINDOW_MIN_HEIGHT;
 
-// Windows-only: the user's chosen size persisted in user-prefs.json. On every
-// other platform this always resolves to the fixed design size, so callers can
-// use it unconditionally without regressing macOS/Linux.
-function loadPopupSize() {
+// The user's window rect persisted in user-prefs.json.
+function loadWindowBounds() {
     let persisted = null;
     try {
-        persisted = loadUserPrefs().popupSize;
+        persisted = loadUserPrefs().windowBounds;
     } catch {}
-    return PopupSize.resolvePopupSize(persisted, IS_POPUP_RESIZABLE);
+    let displays = [];
+    let primary = null;
+    try {
+        displays = screen.getAllDisplays();
+        primary = screen.getPrimaryDisplay();
+    } catch {}
+    return WindowGeometry.resolveWindowBounds(persisted, displays, primary);
 }
 
-function savePopupSize(width, height) {
-    if (!IS_POPUP_RESIZABLE) return;
+function saveWindowBounds(bounds) {
+    if (!bounds) return;
     try {
+        const size = WindowGeometry.clampWindowSize(
+            bounds.width,
+            bounds.height,
+        );
         saveUserPrefsPatch({
-            popupSize: PopupSize.clampPopupSize(width, height),
+            windowBounds: {
+                x: Math.round(bounds.x),
+                y: Math.round(bounds.y),
+                width: size.width,
+                height: size.height,
+            },
         });
     } catch (e) {
-        console.error("Failed to save popup size:", e.message);
+        console.error("Failed to save window bounds:", e.message);
     }
 }
 
 let idleAlertWindow = null;
-// ISSUE 4 FIX: On multi-monitor setups the idle alert must appear on EVERY display
-// so it is never missed on the screen the user is actually looking at. `idleAlertWindow`
-// is the PRIMARY, interactive window (on the display under the cursor); these are the
-// mirror windows shown on the other displays. All are torn down together on resolve.
-let _idleAlertExtraWindows = [];
+// The idle alert is a SINGLETON: exactly one window, on the display the cursor is
+// on. It used to be mirrored onto every monitor (one window per display), which is
+// how a user who locked the laptop and came back an hour later found a stack of
+// idle windows. A single window is enough because the alert floats above every
+// app and is visible on every Space / virtual desktop — see showIdleAlert().
 // Bug B: snapshot of the idle state preserved across a sleep/lock while an idle
 // alert is genuinely pending. Set in onSuspendCleanup, consumed (and cleared) in
 // onResumeAfterSleep to re-enter ALERTING with the SAME idleStartedAt. null when
@@ -733,6 +961,9 @@ let screenshotService = null;
 let idleDetector = null;
 let offlineQueue = null;
 let networkMonitor = null;
+// Uploads local work sessions and runs the 05:00 purge. The ONLY component that talks
+// to the server about tracked time — the timer itself never does.
+let sessionSyncWorker = null;
 let isTimerRunning = false;
 let isTimerPaused = false;
 let currentEntry = null;
@@ -812,18 +1043,16 @@ function refreshProjectsOnOpen(onUpdated) {
         .catch(() => {});
 }
 
-// ISSUE 4 FIX: every live idle-alert window (primary + per-display mirrors).
+// The live idle-alert window, as a list — there is at most one, but the reveal /
+// hide / broadcast / sweep call sites all iterate, which is what keeps the
+// singleton rule enforceable in one place.
 function _getAllIdleAlertWindows() {
-    const all = [];
     if (idleAlertWindow && !idleAlertWindow.isDestroyed())
-        all.push(idleAlertWindow);
-    for (const w of _idleAlertExtraWindows) {
-        if (w && !w.isDestroyed()) all.push(w);
-    }
-    return all;
+        return [idleAlertWindow];
+    return [];
 }
 
-// Send an IPC message to every idle-alert window (all displays).
+// Send an IPC message to the idle-alert window.
 function _broadcastToIdleAlerts(channel, payload) {
     for (const w of _getAllIdleAlertWindows()) {
         try {
@@ -832,17 +1061,22 @@ function _broadcastToIdleAlerts(channel, payload) {
     }
 }
 
-// Destroy the mirror (non-primary) idle-alert windows and clear the list.
-function _destroyIdleAlertExtras() {
-    for (const w of _idleAlertExtraWindows) {
-        if (w && !w.isDestroyed()) {
-            w._dismissedProgrammatically = true;
-            try {
-                w.destroy();
-            } catch {}
-        }
+/**
+ * Destroy EVERY idle-alert window that is still alive.
+ *
+ * This is what enforces "exactly one idle window, ever". It used to reap only the
+ * per-display MIRRORS, so a stale primary left behind by an interrupted cycle
+ * (lock the machine mid-alert, come back an hour later) could coexist with the
+ * freshly created one — the user came back to a stack of idle windows.
+ */
+function _destroyAllIdleAlertWindows() {
+    for (const w of _getAllIdleAlertWindows()) {
+        w._dismissedProgrammatically = true;
+        try {
+            w.destroy();
+        } catch {}
     }
-    _idleAlertExtraWindows = [];
+    idleAlertWindow = null;
 }
 
 function pushProjectsToIdleAlert(projects) {
@@ -898,13 +1132,11 @@ let _idleFreezeAnchorMs = null;
 // project's total. Null when the backend predates the field (then the existing
 // todayTotalGlobal — already the correct completed sum — is simply kept).
 let _startAllProjectsTotal = null;
-// DISPLAY-ONLY: seconds of idle that an OFFLINE reassign moved to another project but
-// the server split has not yet been applied (timer is offline). The local timer is
-// still anchored at the original start (we must NOT re-anchor offline — that breaks
-// the reconnect split and gets reverted by reconcile), so the live elapsed wrongly
-// includes the reassigned idle on the origin project. We subtract this from the
-// DISPLAYED total only; it touches no entry/session/reconcile state and is cleared
-// once the reassign syncs (reanchorFromOfflineIdle), or on stop/start.
+// Retired with the offline idle-reassign replay. Idle is now resolved entirely in local
+// SQLite — the session is split on the spot — so the displayed elapsed is already
+// correct the instant the user answers and there is nothing to subtract. It stays at 0
+// for the whole process lifetime; the remaining resets are harmless no-ops kept so the
+// tray/popup total expressions read the same as before.
 let _pendingOfflineReassignIdleSec = 0;
 // Tray click timestamp — used to suppress spurious blur events on macOS/Windows
 let _lastTrayClickAt = 0;
@@ -920,24 +1152,11 @@ let _stopTimerInProgress = false;
 // mutate timer state (currentEntry, _cachedStartedAtMs, isTimerRunning) concurrently.
 let _timerStateMutationInProgress = false;
 
-/**
- * BUG 2 FIX: Adopt a server `started_at` into the display anchor ONLY when it does
- * not move the anchor LATER than the local source of truth. The local SQLite
- * `started_at` is immutable truth; the server must never push the visible start
- * forward (which causes the timer to jump backward). We accept a server start
- * only when there is no local cached start yet, or the server start is
- * earlier-or-equal (never lose time, never jump).
- */
-function adoptServerStartedAt(serverStartedAtIso) {
-    const serverMs = serverStartedAtIso
-        ? new Date(serverStartedAtIso).getTime()
-        : null;
-    if (serverMs == null || Number.isNaN(serverMs)) return;
-    if (_cachedStartedAtMs == null || serverMs <= _cachedStartedAtMs) {
-        _cachedStartedAtMs = serverMs;
-    }
-    // else: server start is LATER than local truth — keep local anchor (immutable).
-}
+// adoptServerStartedAt() lived here. It reconciled a server-supplied `started_at`
+// against the local anchor ("earlier-or-equal wins") so a skewed server clock could
+// never push the visible start forward. There is no server-supplied start any more —
+// the local SQLite timestamp is the only one that exists — so the reconciliation it
+// performed is not merely unused, it is unrepresentable.
 
 /** Restore in-memory timer state from an open SQLite timer_sessions row (phantom-stop recovery). */
 function restoreInMemoryFromLocalActive(localActive) {
@@ -956,10 +1175,18 @@ function restoreInMemoryFromLocalActive(localActive) {
 }
 
 /**
- * Apply a running /timer/status payload to local state without overwriting the
- * local started_at anchor (BUG 2). Mirrors startup + startTimerSync logic.
+ * Refresh the displayed today-totals from a /timer/status payload.
+ *
+ * This is now the ONLY thing the desktop takes from the server about the timer. Server
+ * status no longer drives isTimerRunning / currentEntry / the started_at anchor — local
+ * SQLite is the source of truth for all of that, so there is nothing left to "adopt"
+ * and no divergence to reconcile.
+ *
+ * We still read totals because they include MANUAL time entries, which the agent does
+ * not own and cannot compute locally.
  */
-function applyRunningStatusFromServer(status) {
+function applyTotalsFromServerStatus(status) {
+    if (!status) return;
     const globalTotal = status.today_total ?? 0;
     const elapsed = status.elapsed_seconds ?? 0;
     // `today_total` is PROJECT-SCOPED whenever the status call passed a project id
@@ -968,174 +1195,35 @@ function applyRunningStatusFromServer(status) {
     // never-scoped `all_projects_today_total`, falling back for older backends.
     // Bug: bugs/desktop-today-total-project-scoped-when-project-selected.md
     const allProjectsTotal = status.all_projects_today_total ?? globalTotal;
-    todayTotalGlobal = Math.max(0, allProjectsTotal - elapsed);
     const projectTotal = status.project_today_total ?? globalTotal;
-    todayTotalCurrentProject = Math.max(0, projectTotal - elapsed);
-
-    const serverPaused = status.state === "paused" || status.paused === true;
-    if ((!status.running && !serverPaused) || !status.entry) return false;
-
-    isTimerRunning = true;
-    // IDLE GUARD: while an idle decision is pending, the LOCAL pause is authoritative.
-    // The pause POST can fail (offline at the moment idle was detected), leaving the
-    // server entry "running"; adopting that state un-paused the timer behind the still
-    // open idle alert and tracking silently resumed without the user choosing anything.
-    // See bugs/desktop-idle-alert-timer-resumes-on-reconnect.md.
-    isTimerPaused = isIdlePauseAuthoritative() ? true : serverPaused;
-    const localActive = getActiveLocalTimer();
-    const previousLocalId = currentEntry?._localId || localActive?.id;
-    currentEntry = {
-        ...status.entry,
-        _localId: previousLocalId,
-        idempotency_key:
-            currentEntry?.idempotency_key || localActive?.idempotency_key,
-    };
-    if (localActive && !localActive.ended_at && localActive.started_at) {
-        _cachedStartedAtMs = new Date(localActive.started_at).getTime();
-        adoptServerStartedAt(status.entry?.started_at);
-    } else {
-        adoptServerStartedAt(status.entry?.started_at);
-        if (_cachedStartedAtMs == null && status.entry?.started_at) {
-            _cachedStartedAtMs = new Date(status.entry.started_at).getTime();
-        }
-    }
-    return true;
-}
-
-function isServerTimerPaused(status) {
-    return status?.state === "paused" || status?.paused === true;
-}
-
-function isServerTimerOpen(status) {
-    return status?.running === true || isServerTimerPaused(status);
+    // Completed local rows the server has not synced yet are absent from its totals.
+    // Add them back — for the whole day and for the current project — or focusing the
+    // window (this runs on browser-window-focus) mid-session collapses the totals to a
+    // server figure that is up to one 10-minute sync interval stale, snapping the
+    // project display back toward 00:00. Same invariant the 10s poll obeys.
+    const pendingGlobalSecs = getUnsyncedCompletedSecondsForToday();
+    const pendingProjectSecs = currentEntry?.project_id
+        ? getLocalCompletedSecondsForProjectToday(currentEntry.project_id, {
+              unsyncedOnly: true,
+          })
+        : 0;
+    todayTotalGlobal = Math.max(0, allProjectsTotal - elapsed) + pendingGlobalSecs;
+    todayTotalCurrentProject =
+        Math.max(0, projectTotal - elapsed) + pendingProjectSecs;
 }
 
 /**
- * Adopt an open server timer (running or paused) and align capture services.
+ * Pause tracking locally while an idle decision is pending.
+ *
+ * No server call. The entry stays open locally and its ended_at is decided when the
+ * user answers the prompt — "continue tracking" trims the idle gap out, "stop timer"
+ * closes at the idle start. Either way idle time is never credited as work, which is
+ * the policy the old server-side /timer/idle wall existed to enforce.
  */
-function syncOpenTimerFromServerStatus(status, { notify = "auto" } = {}) {
-    if (!isServerTimerOpen(status) || !status.entry) return false;
-    // IDLE GUARD: never adopt server state while an idle alert is waiting for the
-    // user. Two ways this used to resurrect tracking behind the open alert:
-    //   1. the idle pause POST failed (offline) → server still says "running" while
-    //      local is paused → the sync tick adopted "running" and restarted capture;
-    //   2. `!isTimerRunning` transient → the "server open, local stopped" branch
-    //      re-opened the timer.
-    // Instead: keep local state and re-push the pause so the server converges to us.
-    if (isIdlePauseAuthoritative()) {
-        console.log(
-            "[TimerSync] Idle alert active — server timer state ignored, re-pushing idle pause",
-        );
-        retryIdlePauseIfUnsynced();
-        return false;
-    }
-    const wasRunning = isTimerRunning;
-    const wasPaused = isTimerPaused;
-    if (!applyRunningStatusFromServer(status)) return false;
-
-    if (isTimerPaused) {
-        activityMonitor?.stop();
-        screenshotService?.stop();
-        if (!isIdleAlertActive()) idleDetector?.stop();
-        stopTrayTimer();
-        updateTrayIcon(true);
-        const shouldNotify =
-            notify === "pause" ||
-            (notify === "auto" && (!wasRunning || !wasPaused));
-        if (shouldNotify) {
-            notifyPopup("timer-paused", {
-                entry: currentEntry,
-                elapsed: status.elapsed_seconds ?? 0,
-                todayTotal: todayTotalCurrentProject,
-            });
-        }
-    } else {
-        activityMonitor?.start();
-        if (currentEntry?.id) screenshotService?.start(currentEntry.id);
-        idleDetector?.start();
-        startTrayTimer();
-        updateTrayIcon(true);
-        const shouldNotify =
-            notify === "start" || (notify === "auto" && !wasRunning);
-        if (shouldNotify) {
-            notifyPopup("timer-started", {
-                ...currentEntry,
-                todayTotal: todayTotalCurrentProject,
-            });
-        }
-    }
-    return true;
-}
-
-/** True when server says stopped but local SQLite / idle state says keep running. */
-function shouldPreserveLocalRunningWhenServerStopped() {
-    if (isTimerPaused) return true;
-    if (isIdleAlertActive()) return true;
-    if (idleDetector?.isIdleActive()) return true;
-    const localActive = getActiveLocalTimer();
-    if (isTimerRunning && localActive && !localActive.synced_start) return true;
-    // Phantom-stop cleared in-memory state but SQLite still has an open session.
-    if (!isTimerRunning && localActive && !localActive.ended_at) return true;
-    return false;
-}
-
-function scheduleReconcileAndFlush() {
-    if (networkMonitor?.isOnline && offlineQueue && apiClient) {
-        setImmediate(() => {
-            reconcileTimerState()
-                .then(() => offlineQueue.flush(apiClient))
-                .catch(() => {});
-        });
-    }
-}
-
-/**
- * True while an idle decision is pending AND the local "paused" state must win over
- * whatever the server reports. The server can legitimately still say "running" here
- * because the pause POST is best-effort (it fails when idle is detected offline), so
- * adopting the server view would silently resume tracking behind the open alert.
- */
-function isIdlePauseAuthoritative() {
-    return _isHandlingIdleAction || isIdleAlertActive();
-}
-
-/**
- * Re-push the idle pause when the original POST /timer/pause never landed (offline at
- * idle-detection time). Back-dated to idleStartedAt so the server freezes elapsed at
- * the true idle start, not at reconnect time. Fire-and-forget; safe to call on every
- * sync tick — it self-gates on the unsynced flag and a single in-flight attempt.
- */
-function retryIdlePauseIfUnsynced() {
-    if (_idlePauseSynced || _idlePauseRetryInFlight) return;
-    if (!isTimerPaused || !isIdleAlertActive()) return;
-    if (!apiClient || !currentEntry?.id) return;
-    if (String(currentEntry.id).startsWith("local-")) return; // start not synced yet
-    if (networkMonitor && !networkMonitor.isOnline) return;
-
-    const idleStartedAt = idleDetector?.idleStartedAt;
-    const pausedAt = idleStartedAt
-        ? new Date(idleStartedAt).toISOString()
-        : new Date().toISOString();
-    _idlePauseRetryInFlight = true;
-    apiClient
-        .pauseTimer({ pausedAt, reason: "idle" })
-        .then(() => {
-            _idlePauseSynced = true;
-            console.log("[Timer] Idle pause re-synced to server");
-        })
-        .catch((e) => {
-            console.warn("[Timer] Idle pause retry failed:", e.message);
-        })
-        .finally(() => {
-            _idlePauseRetryInFlight = false;
-        });
-}
-
-async function pauseTimerForIdle(idleStartedAtIso) {
+function pauseTimerForIdle(idleStartedAtIso) {
     if (!isTimerRunning || isTimerPaused) return;
     isTimerPaused = true;
-    _idlePauseSynced = false;
-    // Capture the freeze anchor BEFORE any await — displayAnchorMs() (tray tick,
+    // Capture the freeze anchor BEFORE anything else — displayAnchorMs() (tray tick,
     // get-timer-state, renderIdleFreeze) reads it the moment isTimerPaused flips.
     _idleFreezeAnchorMs = idleStartedAtIso
         ? new Date(idleStartedAtIso).getTime()
@@ -1148,24 +1236,7 @@ async function pauseTimerForIdle(idleStartedAtIso) {
     activityMonitor?.stop();
     screenshotService?.stop();
     stopTrayTimer();
-    if (
-        apiClient &&
-        currentEntry?.id &&
-        !String(currentEntry.id).startsWith("local-")
-    ) {
-        try {
-            await apiClient.pauseTimer({
-                pausedAt: idleStartedAtIso || new Date().toISOString(),
-                reason: "idle",
-            });
-            _idlePauseSynced = true;
-        } catch (e) {
-            console.warn(
-                "[Timer] Server pause failed (will retry on reconcile):",
-                e.message,
-            );
-        }
-    }
+
     // Freeze the popup at the IDLE-START elapsed (active time when the user stopped
     // interacting), NOT at pause time. Pause fires ~5 min later (after the idle
     // threshold), so `now - startedAt` bakes the threshold minutes into the frozen
@@ -1185,23 +1256,48 @@ async function pauseTimerForIdle(idleStartedAtIso) {
     });
 }
 
-async function resumeTimerAfterIdle() {
+/**
+ * Tell the server a session BOUNDARY moved — a start, a stop, an idle resolution, a
+ * project switch.
+ *
+ * This is deliberately narrow, and it is not a reversal of the periodic-upload decision
+ * (2026-08-03): bulk data — screenshots, heartbeats, the routine re-push of the live
+ * session — still rides the 10-minute batch. Only the four instants at which the shape
+ * of the timeline changes are announced immediately, and each is a handful of bytes for
+ * one row.
+ *
+ * Without it the server's open entry stays wrong for up to a full interval, and every
+ * consumer of it is wrong with it. The dashboard cannot show anything better than what
+ * the server holds: after "Continue tracking" it kept counting the ABANDONED session,
+ * reading 41:21 against the desktop's 20:09, because the boundary that ended it at
+ * 14:49 had not been uploaded. Freezing that figure (the live-elapsed clamp) makes it
+ * honest; only telling the server makes it right.
+ *
+ * Fire-and-forget by contract: `syncNow()` never throws and never rejects, and tracked
+ * time is already durable in SQLite before this is called. A failed push costs nothing —
+ * the row stays dirty and the next interval carries it.
+ */
+function pushSessionBoundary(reason) {
+    if (!sessionSyncWorker) return;
+    // `ignoreBackoff` matters here: a boundary is exactly the moment a stale server view
+    // becomes user-visible, so a backoff window from earlier failures must not stand
+    // between the user and a correct dashboard.
+    Promise.resolve(
+        sessionSyncWorker.syncNow(reason, { ignoreBackoff: true }),
+    ).catch((e) =>
+        console.warn(`[SessionBoundary] ${reason} push failed:`, e?.message),
+    );
+}
+
+/**
+ * Resume tracking after the user resolved the idle prompt. Purely local; the caller has
+ * already rewritten the local session rows to exclude the idle gap.
+ */
+function resumeTimerAfterIdle() {
     if (!isTimerRunning) return;
     isTimerPaused = false;
-    _idlePauseSynced = true; // no pending pause to re-push once the user resumed
     _idleFreezeAnchorMs = null; // idle cycle resolved — display follows the clock again
     logToFile("info", "[TIMER_RESUME] after idle action");
-    if (
-        apiClient &&
-        currentEntry?.id &&
-        !String(currentEntry.id).startsWith("local-")
-    ) {
-        try {
-            await apiClient.resumeTimer();
-        } catch (e) {
-            console.warn("[Timer] Server resume failed:", e.message);
-        }
-    }
     notifyPopup("timer-resumed", {
         ...currentEntry,
         todayTotal: todayTotalCurrentProject,
@@ -1210,10 +1306,17 @@ async function resumeTimerAfterIdle() {
 // NOTE: _suspendedAt is declared inside initializeApp() as a closure variable
 // co-located with the powerMonitor handlers that use it. Do not re-declare here.
 
-// ── Local Timer State (SQLite) ──────────────────────────────────────────────
-// Persists timer state locally so no time is lost during network outages.
-// Uses the same offline-queue.db via a lazy-initialized reference.
+// ── Local Work Sessions (SQLite) ────────────────────────────────────────────
+// The SOURCE OF TRUTH for tracked time. Timer start/stop/switch and idle decisions
+// write here and return — no network call is on any of those paths, so a connectivity
+// failure can delay an upload but can never affect or lose tracked time.
+//
+// SessionSyncWorker pushes rows to the server on its own schedule and marks them
+// confirmed; the 05:00 purge is the only thing that deletes, and only what the server
+// has acknowledged. Storage lives in WorkSessionStore (see work-session-store.js); the
+// wrappers below are the seams the rest of this file calls through.
 let _localTimerDb = null;
+let workSessionStore = null;
 
 function _getLocalTimerDb() {
     if (_localTimerDb) return _localTimerDb;
@@ -1223,34 +1326,6 @@ function _getLocalTimerDb() {
         _localTimerDb = new Database(dbPath);
         _localTimerDb.pragma("journal_mode = WAL");
         _localTimerDb.pragma("busy_timeout = 5000");
-
-        // Create timer_sessions table for local-first timer state
-        _localTimerDb.exec(`
-      CREATE TABLE IF NOT EXISTS timer_sessions (
-        id TEXT PRIMARY KEY,
-        idempotency_key TEXT NOT NULL UNIQUE,
-        project_id TEXT,
-        started_at TEXT NOT NULL,
-        ended_at TEXT,
-        duration_seconds INTEGER,
-        synced_start INTEGER NOT NULL DEFAULT 0,
-        synced_stop INTEGER NOT NULL DEFAULT 0,
-        server_entry_id TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      )
-    `);
-        // OWNERSHIP: sessions are tagged with the user that recorded them so a sign-out
-        // no longer has to WIPE the table to stay safe for the next account. Added by
-        // migration because the table predates it; legacy rows keep user_id NULL and
-        // stay visible to whoever is signed in (they can only have come from this
-        // install's own pre-upgrade session).
-        try {
-            _localTimerDb.exec(
-                "ALTER TABLE timer_sessions ADD COLUMN user_id TEXT",
-            );
-        } catch {
-            // Column already exists — expected on every launch after the first.
-        }
         return _localTimerDb;
     } catch (e) {
         console.error("[LocalTimerDb] Init failed:", e.message);
@@ -1258,288 +1333,187 @@ function _getLocalTimerDb() {
     }
 }
 
+/** Lazily build the session store over the shared offline-queue database. */
+function getWorkSessionStore() {
+    if (workSessionStore) return workSessionStore;
+    const db = _getLocalTimerDb();
+    if (!db) return null;
+    try {
+        workSessionStore = new WorkSessionStore(db);
+        workSessionStore.setUserId(_sessionUserId);
+        return workSessionStore;
+    } catch (e) {
+        console.error("[LocalTimerDb] Store init failed:", e.message);
+        return null;
+    }
+}
+
 /**
- * Id of the signed-in user, used to tag and scope local timer sessions. Set right
- * after the token is validated (getMe) and cleared on logout.
+ * Id of the signed-in user, used to tag and scope local sessions. Set right after the
+ * token is validated (getMe) and cleared on logout.
  */
 let _sessionUserId = null;
 
-/** SQL fragment + params scoping a timer_sessions query to the signed-in user. */
-function _ownRowsClause(prefix = "AND") {
-    if (!_sessionUserId) return { sql: "", params: [] };
-    return {
-        sql: ` ${prefix} (user_id IS NULL OR user_id = ?)`,
-        params: [_sessionUserId],
-    };
+function setSessionUserId(userId) {
+    _sessionUserId = userId || null;
+    getWorkSessionStore()?.setUserId(_sessionUserId);
 }
 
-function generateIdempotencyKey() {
-    return crypto.randomUUID();
+/** Open a new live session. Returns the row, or null when storage is unavailable. */
+function openLocalSession(projectId, startedAtIso = null, taskId = null) {
+    const store = getWorkSessionStore();
+    if (!store) return null;
+    return store.open({ projectId, taskId, startedAt: startedAtIso });
 }
 
-function saveLocalTimerStart(id, idempotencyKey, projectId, startedAt) {
-    const db = _getLocalTimerDb();
-    if (!db) return;
-    try {
-        db.prepare(
-            "INSERT OR REPLACE INTO timer_sessions (id, idempotency_key, project_id, started_at, user_id) VALUES (?, ?, ?, ?, ?)",
-        ).run(id, idempotencyKey, projectId, startedAt, _sessionUserId);
-    } catch (e) {
-        console.error("[LocalTimerDb] saveStart failed:", e.message);
-    }
-}
-
-function markLocalTimerStartSynced(localId, serverEntryId) {
-    const db = _getLocalTimerDb();
-    if (!db) return;
-    try {
-        db.prepare(
-            "UPDATE timer_sessions SET synced_start = 1, server_entry_id = ? WHERE id = ?",
-        ).run(serverEntryId, localId);
-    } catch (e) {
-        console.error("[LocalTimerDb] markStartSynced failed:", e.message);
-    }
-}
-
-function saveLocalTimerStop(localId, endedAt, durationSeconds) {
-    const db = _getLocalTimerDb();
-    if (!db) return;
-    try {
-        db.prepare(
-            "UPDATE timer_sessions SET ended_at = ?, duration_seconds = ? WHERE id = ?",
-        ).run(endedAt, durationSeconds, localId);
-    } catch (e) {
-        console.error("[LocalTimerDb] saveStop failed:", e.message);
-    }
-}
-
-function markLocalTimerStopSynced(localId) {
-    const db = _getLocalTimerDb();
-    if (!db) return;
-    try {
-        db.prepare(
-            "UPDATE timer_sessions SET synced_stop = 1 WHERE id = ?",
-        ).run(localId);
-    } catch (e) {
-        console.error("[LocalTimerDb] markStopSynced failed:", e.message);
-    }
-}
-
-function getUnsyncedTimerSessions() {
-    const db = _getLocalTimerDb();
-    if (!db) return [];
-    try {
-        const own = _ownRowsClause();
-        return db
-            .prepare(
-                "SELECT * FROM timer_sessions WHERE (synced_start = 0 OR (ended_at IS NOT NULL AND synced_stop = 0))" +
-                    own.sql +
-                    " ORDER BY created_at ASC",
-            )
-            .all(...own.params);
-    } catch (e) {
-        console.error("[LocalTimerDb] getUnsynced failed:", e.message);
-        return [];
-    }
+/** Close a session at `endedAtIso`. Bumps its revision so the next sync carries it. */
+function closeLocalSession(localId, endedAtIso = null) {
+    const store = getWorkSessionStore();
+    if (!store || !localId) return null;
+    return store.close(localId, endedAtIso);
 }
 
 /**
- * True when a session that was created AND stopped locally still needs syncing —
- * either the start never reached the server (synced_start = 0) or the start synced
- * but the stop didn't (synced_stop = 0). Drives the periodic retry-until-synced loop
- * so a fully-offline start+stop is flushed even when no NetworkMonitor 'online'
- * transition fires (net.isOnline() stays true, or the offline window is sub-poll).
+ * Close the live session and open a fresh one at the same instant, atomically.
+ * Used by project switch, idle "continue tracking", and the midnight split.
  */
-function hasPendingCompletedOfflineSessions() {
-    const db = _getLocalTimerDb();
-    if (!db) return false;
-    try {
-        const own = _ownRowsClause();
-        const rows = db
-            .prepare(
-                "SELECT synced_start, synced_stop, ended_at FROM timer_sessions WHERE ended_at IS NOT NULL AND (synced_start = 0 OR synced_stop = 0)" +
-                    own.sql +
-                    " LIMIT 1",
-            )
-            .all(...own.params);
-        return hasPendingCompletedSession(rows);
-    } catch (e) {
-        console.warn(
-            "[LocalTimerDb] hasPendingCompletedOfflineSessions failed:",
-            e.message,
-        );
-        return false;
-    }
+/**
+ * Close the live session at `atIso` and open its successor.
+ *
+ * `reopenAtIso` defaults to `atIso` (contiguous — project switch, midnight split).
+ * The IDLE discard passes the resume instant so the idle span belongs to no session.
+ */
+function splitLocalSession(
+    localId,
+    atIso,
+    projectId,
+    taskId = null,
+    reopenAtIso = null,
+) {
+    const store = getWorkSessionStore();
+    if (!store || !localId) return null;
+    return store.closeAndReopen(localId, atIso, {
+        projectId,
+        taskId,
+        reopenAtIso,
+    });
+}
+
+/** Discard a just-closed session too short to be real work. Never touches synced rows. */
+function dropTrivialLocalSession(localId) {
+    const store = getWorkSessionStore();
+    if (!store || !localId) return false;
+    return store.dropIfTrivial(localId);
 }
 
 /**
- * Seconds from completed offline sessions the SERVER has no knowledge of yet
- * (synced_start = 0), started today (local day). The server's today_total excludes
- * these, so they are added to the displayed total to keep the offline time visible
- * until the retry loop syncs it — instead of the total visibly "resetting" to the
- * server value the moment the app reconnects. Only synced_start = 0 rows are counted:
- * once the start is on the server the entry is part of the server total (double-count
- * guard), and stop-only-pending rows are already reflected server-side as open time.
+ * The live local session, or null.
+ *
+ * Unlike the old implementation this NEVER discards a long-running row as implausible:
+ * the midnight split turns a session left open for days into real per-day rows, so an
+ * old open row is recoverable work rather than garbage.
  */
+function getActiveLocalTimer() {
+    const store = getWorkSessionStore();
+    if (!store) return null;
+    return store.getLive();
+}
+
+/**
+ * Start of "today" for local totals, in the ORGANIZATION's timezone.
+ *
+ * Must match the zone everything else buckets by: the server's today-total uses
+ * `TimezoneAwareDateRange` (org zone), and the midnight split closes sessions at org
+ * midnight. Using the MACHINE's midnight here — which it did — put the two out of step
+ * for anyone whose machine zone differs from the org's (travel, a remote contractor, a
+ * laptop left on UTC): between the two midnights the local credit either counted
+ * yesterday's rows into today's server figure or dropped today's, moving the displayed
+ * total by whole sessions.
+ */
+function startOfLocalTotalsDay() {
+    const tz = config?.timezone || DEFAULT_CONFIG.timezone;
+    try {
+        return startOfZonedDay(Date.now(), tz);
+    } catch {
+        // An unknown/garbage zone string must not take the totals down with it.
+        const fallback = new Date();
+        fallback.setHours(0, 0, 0, 0);
+        return fallback.getTime();
+    }
+}
+
+/** Seconds of completed local work the server has not seen yet, for today. */
 function getUnsyncedCompletedSecondsForToday() {
-    const db = _getLocalTimerDb();
-    if (!db) return 0;
+    const store = getWorkSessionStore();
+    if (!store) return 0;
     try {
-        const startOfDay = new Date();
-        startOfDay.setHours(0, 0, 0, 0);
-        const own = _ownRowsClause();
-        const rows = db
-            .prepare(
-                "SELECT started_at, duration_seconds, synced_start, ended_at FROM timer_sessions WHERE ended_at IS NOT NULL AND synced_start = 0" +
-                    own.sql,
-            )
-            .all(...own.params);
-        return unsyncedCompletedSecondsForDay(rows, startOfDay.getTime());
-    } catch (e) {
-        console.warn(
-            "[LocalTimerDb] getUnsyncedCompletedSecondsForToday failed:",
-            e.message,
+        return unsyncedCompletedSecondsForDay(
+            store.getAll(),
+            startOfLocalTotalsDay(),
         );
+    } catch (e) {
+        console.warn("[LocalTimerDb] today unsynced total failed:", e.message);
+        return 0;
+    }
+}
+
+/** Seconds already completed locally for one project today. */
+function getLocalCompletedSecondsForProjectToday(projectId, opts) {
+    const store = getWorkSessionStore();
+    if (!store) return 0;
+    try {
+        return completedSecondsForProjectDay(
+            store.getAll(),
+            startOfLocalTotalsDay(),
+            projectId,
+            opts,
+        );
+    } catch (e) {
+        console.warn("[LocalTimerDb] project today total failed:", e.message);
         return 0;
     }
 }
 
 /**
- * True when the local DB has a STOP for `serverEntryId` that hasn't synced yet
- * (ended_at set, synced_stop = 0). A server status that still reports this entry as
- * "open" is then STALE — the user stopped it locally but the stop didn't reach the
- * server (slow/failed network). The sync loop must NOT re-adopt it as running (that
- * is the self-restart-after-stop bug); reconcile pushes the pending stop instead.
+ * The project-scoped today total the SERVER last reported while NO timer was running.
+ *
+ * This is the number already on screen before Start, and the only sound seed for it.
+ * Local SQLite holds only THIS device's un-purged rows — measured on a real machine,
+ * 78s locally for a project the server knew had 443s — so seeding from local alone
+ * showed ~01:18 and then visibly jumped to ~07:23 when the next status tick landed.
+ * Only captured while stopped: once a timer runs the server figure starts including
+ * that live entry's elapsed, which would double-count against the ticking display.
  */
-function hasUnsyncedLocalStopForEntry(serverEntryId) {
-    if (!serverEntryId) return false;
-    const db = _getLocalTimerDb();
-    if (!db) return false;
+const _serverProjectTodayTotals = new Map();
+
+/** True while any completed session still needs uploading. */
+function hasPendingCompletedOfflineSessions() {
+    const store = getWorkSessionStore();
+    if (!store) return false;
     try {
-        const row = db
-            .prepare(
-                "SELECT 1 FROM timer_sessions WHERE server_entry_id = ? AND ended_at IS NOT NULL AND synced_stop = 0 LIMIT 1",
-            )
-            .get(String(serverEntryId));
-        return !!row;
-    } catch (e) {
-        console.warn(
-            "[LocalTimerDb] hasUnsyncedLocalStopForEntry failed:",
-            e.message,
-        );
+        return hasPendingCompletedSession(store.getAll());
+    } catch {
         return false;
     }
 }
 
-// An open local session older than this is implausible (sleep/lock auto-stop and
-// the startup-gap close cap real sessions well under a day) — it's a stale row left
-// by a killed/old session (possibly a different account, since timer_sessions has no
-// user_id). Never restore it as a live timer; close it so it can't show up as a
-// phantom "Tracking 149:47:48".
-const MAX_PLAUSIBLE_OPEN_SESSION_MS = 24 * 60 * 60 * 1000;
-
-function getActiveLocalTimer() {
-    const db = _getLocalTimerDb();
-    if (!db) return null;
-    try {
-        const own = _ownRowsClause();
-        const row =
-            db
-                .prepare(
-                    "SELECT * FROM timer_sessions WHERE ended_at IS NULL" +
-                        own.sql +
-                        " ORDER BY created_at DESC LIMIT 1",
-                )
-                .get(...own.params) || null;
-        if (row && row.started_at) {
-            const ageMs = Date.now() - new Date(row.started_at).getTime();
-            if (
-                !Number.isFinite(ageMs) ||
-                ageMs > MAX_PLAUSIBLE_OPEN_SESSION_MS
-            ) {
-                // Stale/garbage open session — close it instead of restoring it live.
-                console.warn(
-                    `[LocalTimerDb] Discarding stale open session ${row.id} (age ${Math.round(ageMs / 3600000)}h) — not restoring as a live timer`,
-                );
-                const endedAt = row.started_at; // zero-duration close; never counts time
-                saveLocalTimerStop(row.id, endedAt, 0);
-                return null;
-            }
-        }
-        return row;
-    } catch (e) {
-        console.error("[LocalTimerDb] getActive failed:", e.message);
-        return null;
-    }
-}
-
-function cleanOldLocalTimerSessions() {
-    const db = _getLocalTimerDb();
-    if (!db) return;
-    try {
-        // Remove fully synced sessions older than 7 days
-        db.prepare(
-            "DELETE FROM timer_sessions WHERE synced_start = 1 AND synced_stop = 1 AND created_at < datetime('now', '-7 days')",
-        ).run();
-    } catch (e) {
-        console.error("[LocalTimerDb] cleanup failed:", e.message);
-    }
-}
-
 /**
- * Clear local timer sessions at logout WITHOUT throwing away tracked time.
- *
- * The old behaviour was `DELETE FROM timer_sessions` — needed because the table had
- * no owner and a stale OPEN row was restored on the next login as a phantom
- * "Tracking HH:MM:SS" timer. But it also deleted rows whose start/stop had never
- * reached the server, so signing out while offline silently DESTROYED that tracked
- * time: nothing was left for reconcile to push on the next launch.
- *
- * Now that rows carry `user_id`, keep exactly what still has to be uploaded — the
- * signed-in user's CLOSED but unsynced sessions — and delete everything else
- * (open rows, fully-synced rows, and any other account's rows). Kept rows are
- * invisible to another account (every read is scoped by `_ownRowsClause()`), and
- * they cannot resurrect a live timer because they are closed. `reconcileTimerState()`
- * pushes them the next time this user signs in.
+ * Sign-out cleanup. Keeps EVERY unconfirmed row for the signed-in user so nothing
+ * tracked offline is lost; removes other accounts' rows and this user's confirmed ones.
+ * The caller closes the live session first, so a kept row can never resurrect as a
+ * phantom live timer on the next launch.
  */
 function clearLocalTimerSessions() {
-    const db = _getLocalTimerDb();
-    if (!db) return;
-    try {
-        if (_sessionUserId) {
-            const kept = db
-                .prepare(
-                    "DELETE FROM timer_sessions WHERE NOT (user_id = ? AND ended_at IS NOT NULL AND (synced_start = 0 OR synced_stop = 0))",
-                )
-                .run(_sessionUserId);
-            const pending = db
-                .prepare("SELECT COUNT(*) AS n FROM timer_sessions")
-                .get();
-            if (pending?.n > 0) {
-                console.warn(
-                    `[LocalTimerDb] Kept ${pending.n} unsynced session(s) for upload on next sign-in (deleted ${kept.changes} others)`,
-                );
-            }
-        } else {
-            // No known user (pre-migration rows / forced logout before getMe) — fall
-            // back to the original wipe rather than leaving unattributable rows.
-            db.prepare("DELETE FROM timer_sessions").run();
-        }
-    } catch (e) {
-        console.error(
-            "[LocalTimerDb] clearLocalTimerSessions failed:",
-            e.message,
-        );
-    }
+    getWorkSessionStore()?.clearForLogout();
 }
 
 /**
- * FIX D1/D2: Resolve a queued item's time_entry_id to the REAL server entry id.
- * A heartbeat/screenshot queued during an offline start carries a `local-…` id
- * (the timer_sessions row id) until reconcile syncs the start. Look the session
- * up by its local id OR idempotency_key and return its server_entry_id once known.
- * Returns null while the start is still unsynced, so the offline queue HOLDS the
- * item instead of sending an unresolvable id (which the server 422s and drops).
+ * Resolve a queued screenshot/heartbeat's `local-…` placeholder to a real server entry
+ * id, once the owning session has synced.
+ *
+ * Returns null while the session is still unsynced, so the offline queue HOLDS the item
+ * instead of sending an unresolvable id (which the server 422s and drops). This is why
+ * the sync worker flushes sessions BEFORE the queue.
  */
 function resolveServerEntryIdForQueue(meta) {
     const db = _getLocalTimerDb();
@@ -1553,14 +1527,14 @@ function resolveServerEntryIdForQueue(meta) {
         if (localId) {
             row = db
                 .prepare(
-                    "SELECT server_entry_id FROM timer_sessions WHERE id = ? AND synced_start = 1 AND server_entry_id IS NOT NULL LIMIT 1",
+                    "SELECT server_entry_id FROM timer_sessions WHERE id = ? AND server_entry_id IS NOT NULL LIMIT 1",
                 )
                 .get(localId);
         }
         if (!row && idemKey) {
             row = db
                 .prepare(
-                    "SELECT server_entry_id FROM timer_sessions WHERE idempotency_key = ? AND synced_start = 1 AND server_entry_id IS NOT NULL LIMIT 1",
+                    "SELECT server_entry_id FROM timer_sessions WHERE idempotency_key = ? AND server_entry_id IS NOT NULL LIMIT 1",
                 )
                 .get(idemKey);
         }
@@ -1578,105 +1552,6 @@ function resolveServerEntryIdForQueue(meta) {
         );
     }
     return null;
-}
-
-/**
- * FIX D3: Re-anchor local timer state to the post-split entry returned by a
- * queued idle_discard/idle_reassign that flushed after reconnect. Mirrors the
- * ONLINE re-anchor in handleIdleAction so the desktop never stays bound to the
- * now-closed entry. Guarded by the same mutexes so it can't race reconcile or a
- * live idle action.
- */
-function reanchorFromOfflineIdle(payload, newEntry) {
-    if (!newEntry || !newEntry.started_at) return;
-    if (_timerStateMutationInProgress || _isHandlingIdleAction) {
-        console.log(
-            "[OfflineIdle] Skipping re-anchor — timer state mutation/idle action in progress",
-        );
-        return;
-    }
-    // Only re-anchor when we still have a running local timer to move. If the timer
-    // was stopped meanwhile, the queue's isLocalTimerActive() guard already dropped
-    // the item; this is a defensive second check.
-    const localActive = getActiveLocalTimer();
-    if (!isTimerRunning && !(localActive && !localActive.ended_at)) {
-        console.log("[OfflineIdle] No active local timer — skipping re-anchor");
-        return;
-    }
-
-    _timerStateMutationInProgress = true;
-    try {
-        const idleStartedAtMs = payload?.idle_started_at
-            ? new Date(payload.idle_started_at).getTime()
-            : null;
-        const prevLocalId = currentEntry?._localId || localActive?.id || null;
-        const prevStartIso =
-            currentEntry?.started_at || localActive?.started_at || null;
-
-        // Close the stale local session at idle-start (server already split it).
-        if (prevLocalId && idleStartedAtMs && prevStartIso) {
-            const preIdleDuration = Math.max(
-                0,
-                Math.floor(
-                    (idleStartedAtMs - new Date(prevStartIso).getTime()) / 1000,
-                ),
-            );
-            saveLocalTimerStop(
-                prevLocalId,
-                new Date(idleStartedAtMs).toISOString(),
-                preIdleDuration,
-            );
-            markLocalTimerStopSynced(prevLocalId);
-        }
-
-        // Adopt the new (post-idle) server entry as the source of truth.
-        currentEntry = { ...newEntry };
-        _cachedStartedAtMs = new Date(newEntry.started_at).getTime();
-        isTimerRunning = true;
-        isTimerPaused = false;
-        // The offline reassign just synced and the anchor now sits at idle-end, so the
-        // display-only subtraction is no longer needed — clear it (otherwise the live
-        // total would under-count by the reassigned idle from here on).
-        _pendingOfflineReassignIdleSec = 0;
-
-        // Open a fresh local session anchored at the new entry's start.
-        const newLocalId = `local-${Date.now()}-${Math.random()
-            .toString(36)
-            .slice(2, 6)}`;
-        const newIdempotencyKey =
-            newEntry.idempotency_key || generateIdempotencyKey();
-        saveLocalTimerStart(
-            newLocalId,
-            newIdempotencyKey,
-            newEntry.project_id || null,
-            newEntry.started_at,
-        );
-        if (newEntry.id && !String(newEntry.id).startsWith("local-")) {
-            markLocalTimerStartSynced(newLocalId, newEntry.id);
-        }
-        currentEntry._localId = newLocalId;
-        currentEntry.idempotency_key = newIdempotencyKey;
-
-        // FIX D2: rebind the live screenshot service to the new server entry id
-        // so post-reanchor captures don't keep the stale id.
-        if (newEntry.id && !String(newEntry.id).startsWith("local-")) {
-            screenshotService?.rebindEntryId(newEntry.id);
-        }
-
-        _timerStateVersion++;
-        console.log(
-            `[OfflineIdle] Re-anchored to post-idle entry ${newEntry.id} (start=${newEntry.started_at})`,
-        );
-        notifyPopup("timer-started", {
-            ...currentEntry,
-            todayTotal: todayTotalCurrentProject,
-            _splitFromIdle: true,
-        });
-    } catch (e) {
-        console.error("[OfflineIdle] Re-anchor failed:", e.message);
-    } finally {
-        _timerStateMutationInProgress = false;
-    }
 }
 
 // ── Global Error Handlers ────────────────────────────────────────────────────
@@ -1751,13 +1626,70 @@ app.on("window-all-closed", () => {
     // Don't quit — keep running in system tray
 });
 
+// Clicking the Dock (macOS) or taskbar (Windows/Linux) icon must bring the
+// window back. The window is a real, taskbar-visible application window now and
+// its close button HIDES rather than destroys, so without this the icon stays in
+// the Dock with no way to reopen from it — the user would have to go find the
+// tray. `showPopup()` also handles the not-yet-authenticated case (login window)
+// and un-minimises.
+app.on("activate", () => {
+    if (!app.isReady()) return;
+    showPopup();
+});
+
+// Returning from System Settings raises exactly this event, which is why the
+// permission re-check hangs off it. Registered here — NOT in the per-session
+// setup — because permission is a property of the machine, not of the signed-in
+// user; `removeSessionListeners()` re-attaches it after its removeAllListeners()
+// sweep so signing out cannot leave the app permanently unable to notice a grant.
+function onFocusRecheckScreenPermission() {
+    refreshScreenPermissionOnFocus().catch(() => {});
+}
+app.on("browser-window-focus", onFocusRecheckScreenPermission);
+
+// ── Termination signals ──────────────────────────────────────────────────────
+// "Force quit by any means must not leave the session open."
+//
+// Every termination the OS lets us SEE is routed into the same graceful path as
+// tray > Quit: `app.quit()` runs the `before-quit` handler below, which closes the
+// live session locally and flushes within a bounded budget. That covers `kill`
+// (SIGTERM), Ctrl+C (SIGINT), a closing terminal (SIGHUP), Activity Monitor's
+// "Quit", Task Manager's "End task", and an OS logout/shutdown.
+//
+// SIGKILL — macOS "Force Quit" dialog, `kill -9`, a pulled battery — runs NO
+// JavaScript, on any platform, by design of the kernel. Nothing can close anything
+// at that instant. What protects the user there is local-first recovery: the row is
+// already durable in SQLite, and the next launch closes it at the last real input
+// (`detectAndCloseStaleSessionOnStartup`), as does the stale-session guard in
+// maybeSplitAtMidnight() if the app comes back long afterwards.
+for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+    process.on(signal, () => {
+        console.log(`[Quit] ${signal} received — closing session gracefully.`);
+        logToFile("info", `[SIGNAL_QUIT] ${signal}`);
+        try {
+            app.quit();
+        } catch (e) {
+            console.error("[Quit] app.quit() failed:", e.message);
+        }
+    });
+}
+
 // Stop timer gracefully before quitting (with timeout to avoid hanging)
 app.on("before-quit", async (e) => {
     if (isQuitting) return; // Prevent re-entry
 
+    // Commit to the quit BEFORE anything else can bail out. popupWindow's 'close'
+    // handler deliberately hides instead of closing unless this flag is set, and
+    // the flag used to be set ONLY on the timer-running branch below. So quitting
+    // while signed in and NOT tracking — the most ordinary state there is — had
+    // Electron ask the window to close, our own handler preventDefault() it, and
+    // the quit was silently cancelled: the app merely hid. Signing out first
+    // appeared to "fix" it only because that destroys this window and leaves the
+    // login window, which has no hide-on-close rule.
+    isQuitting = true;
+
     if (isTimerRunning && apiClient) {
         e.preventDefault();
-        isQuitting = true;
         console.log(
             "[Quit] Timer running — recording local stop, then exiting",
         );
@@ -1783,47 +1715,28 @@ app.on("before-quit", async (e) => {
                       Math.floor((Date.now() - _cachedStartedAtMs) / 1000),
                   )
                 : 0;
+        // Closing the session locally IS the stop, and it is already durable at this
+        // point — the quit can no longer race a network call for it.
         if (localId) {
-            saveLocalTimerStop(localId, quitEndedAt, quitDuration);
+            closeLocalSession(localId, quitEndedAt);
         }
-        try {
-            // BUG 3 FIX: target the specific server entry so we never close a newer one.
-            const stopPayload = currentEntry?._localId
-                ? {
-                      started_at: currentEntry?.started_at,
-                      ended_at: quitEndedAt,
-                  }
-                : {};
-            if (
-                currentEntry?.id &&
-                !String(currentEntry.id).startsWith("local-")
-            )
-                stopPayload.time_entry_id = currentEntry.id;
-            if (currentEntry?.idempotency_key)
-                stopPayload.idempotency_key = currentEntry.idempotency_key;
-            await Promise.race([
-                apiClient.stopTimer(stopPayload),
-                new Promise((resolve) => setTimeout(resolve, 2000)),
-            ]);
-            if (localId) markLocalTimerStopSynced(localId);
-        } catch {}
         isTimerRunning = false;
         isTimerPaused = false;
         currentEntry = null;
         activityMonitor?.stop();
         screenshotService?.stop();
         idleDetector?.stop();
-        // UPLOAD ON QUIT: the direct stop above only lands when the server already
-        // knows the entry. A session that STARTED offline has no server entry to stop,
-        // so push start+stop (and any queued heartbeats/screenshots) before we exit —
-        // otherwise that time sits locally until the app is next launched. Bounded so
-        // Quit still exits promptly; anything left over is synced by reconcile on the
-        // next launch (unchanged local-first guarantee).
+        // UPLOAD ON QUIT: push the just-closed session (and any queued
+        // heartbeats/screenshots) before we exit, so the time appears on the dashboard
+        // without waiting for the next launch. Bounded so Quit still exits promptly;
+        // anything left over stays in SQLite and uploads next launch.
         if (apiClient && networkMonitor?.isOnline !== false) {
             await withTimeout(
                 (async () => {
                     try {
-                        await reconcileTimerState();
+                        await sessionSyncWorker?.syncNow("quit", {
+                            ignoreBackoff: true,
+                        });
                     } catch {}
                     try {
                         await offlineQueue?.flush(apiClient);
@@ -1869,6 +1782,10 @@ function removeSessionListeners() {
     PowerManager.unregisterPowerHandlers();
     stopIdleWatchdog();
     app.removeAllListeners("browser-window-focus");
+    // Screen-recording permission is machine state, not session state — put its
+    // focus re-check back after the sweep above, or a logout would silently
+    // disable the only thing that can take the permission banner down.
+    app.on("browser-window-focus", onFocusRecheckScreenPermission);
     // Reset tracking-state notification dedup so the NEXT login always re-notifies
     // (and no post-logout resume can suppress a fresh state notif).
     _lastStateNotifAt = 0;
@@ -1890,18 +1807,7 @@ async function forceLogout() {
 
     const localActive = getActiveLocalTimer();
     if (localActive && !localActive.ended_at) {
-        const endedAt = new Date().toISOString();
-        const dur = localActive.started_at
-            ? Math.max(
-                  0,
-                  Math.floor(
-                      (Date.now() -
-                          new Date(localActive.started_at).getTime()) /
-                          1000,
-                  ),
-              )
-            : 0;
-        saveLocalTimerStop(localActive.id, endedAt, dur);
+        closeLocalSession(localActive.id, new Date().toISOString());
     }
 
     isTimerRunning = false;
@@ -1922,8 +1828,11 @@ async function forceLogout() {
     }
     stopTrayTimer();
 
-    // Wipe local timer_sessions on forced logout too — the next account must not
-    // inherit a stale row (no user_id on the table). See clearLocalTimerSessions().
+    sessionSyncWorker?.stop();
+
+    // KEEPS every unconfirmed session for this user so nothing tracked offline is
+    // lost; removes other accounts' rows and this user's already-confirmed ones.
+    // See WorkSessionStore.clearForLogout().
     clearLocalTimerSessions();
 
     if (offlineQueue) {
@@ -1937,7 +1846,12 @@ async function forceLogout() {
     screenshotService = null;
     idleDetector = null;
     networkMonitor = null;
+    sessionSyncWorker = null;
+    workSessionStore = null;
     clearProjectsCache();
+    // Cached per-project server totals belong to the signed-in user — clearing them
+    // here keeps the next account from ever seeding a timer with someone else's hours.
+    _serverProjectTodayTotals.clear();
     todayTotalGlobal = 0;
     todayTotalCurrentProject = 0;
     config = {};
@@ -1945,7 +1859,7 @@ async function forceLogout() {
     // Cleared AFTER clearLocalTimerSessions() above so this user's unsynced sessions
     // are correctly attributed and kept — the token is dead, so they can only be
     // uploaded when the same user signs in again.
-    _sessionUserId = null;
+    setSessionUserId(null);
 
     _stopUnpinnedFocusWatch();
     if (popupWindow && !popupWindow.isDestroyed()) {
@@ -2010,6 +1924,10 @@ function startSelfRemovalWatcher() {
 }
 
 async function initializeApp() {
+    // Install the application menu before any window exists, so Electron's stock
+    // default menu never gets a chance to render into a framed window.
+    buildAppMenu();
+
     // Register theme handler early — needed by both login and main windows
     ipcMain.removeHandler("get-theme");
     ipcMain.handle("get-theme", () => getOSTheme());
@@ -2058,7 +1976,7 @@ async function initializeApp() {
             // Tag local timer sessions with their owner so a sign-out can keep this
             // user's unsynced time instead of wiping the table (see
             // clearLocalTimerSessions).
-            _sessionUserId = user?.id ? String(user.id) : null;
+            setSessionUserId(user?.id ? String(user.id) : null);
             break;
         } catch (e) {
             if (isAgentUpgradeRequiredError(e)) {
@@ -2124,16 +2042,26 @@ async function initializeApp() {
     // FIX D1/D2: Let the offline queue resolve a `local-…` time_entry_id to the
     // real server entry id via timer_sessions before sending heartbeats/screenshots.
     offlineQueue.resolveServerEntryId = resolveServerEntryIdForQueue;
-    // FIX D3: When a queued idle_discard flushes and the server splits the entry,
-    // re-anchor local timer state to the new (post-idle) entry — same as online.
-    offlineQueue.onIdleReanchor = reanchorFromOfflineIdle;
-    // FIX D3: A queued idle_discard must be dropped if the timer was stopped before
-    // it flushed (no active local session) — replaying it would resurrect the timer.
+    // The idle_discard queue type is gone: idle is resolved entirely in local SQLite,
+    // so there is no server split to replay and nothing to re-anchor to afterwards.
+    // isLocalTimerActive is still consulted by legacy rows left in the queue by a
+    // pre-upgrade build, which must be dropped rather than replayed.
     offlineQueue.isLocalTimerActive = () => {
         if (isTimerRunning) return true;
         const la = getActiveLocalTimer();
         return !!(la && !la.ended_at);
     };
+    // Uploads sessions, then the dependent queue, then purges confirmed rows at 05:00.
+    // getTimeZone reads `config` live so an org timezone change takes effect on the next
+    // config refetch without restarting the worker.
+    sessionSyncWorker = new SessionSyncWorker({
+        store: getWorkSessionStore(),
+        apiClient,
+        offlineQueue,
+        getTimeZone: () => config?.timezone || DEFAULT_CONFIG.timezone,
+    });
+    sessionSyncWorker.start();
+
     activityMonitor = new ActivityMonitor(apiClient, offlineQueue);
     activityMonitor.setOnHeartbeatSuccess(() => touchLastActiveAt());
     // Anchor offline-queued heartbeats to the live entry (local id + idempotency_key)
@@ -2199,14 +2127,9 @@ async function initializeApp() {
     // Initialize network monitor for online/offline detection
     networkMonitor = new NetworkMonitor();
     networkMonitor.on("online", async () => {
-        console.log("[Network] Back online — reconciling and flushing");
-        // An idle pause raised while offline never reached the server — push it FIRST,
-        // before anything reads server state, so the entry is frozen at idleStartedAt
-        // and no reconnect path can mistake "server says running" for "resume".
-        retryIdlePauseIfUnsynced();
-        // Reconcile local timer state with server before flushing queue
-        await reconcileTimerState();
-        await offlineQueue?.flush(apiClient);
+        console.log("[Network] Back online");
+        // No upload on reconnect: the interval will pick the backlog up within one
+        // cycle, and a cycle that failed while offline is already retried there.
         // Notify renderer of status change
         notifyPopup("network-status", { online: true });
         // CONVERGENCE: after an offline stop/discard syncs, the tray title still
@@ -2216,14 +2139,28 @@ async function initializeApp() {
         // authoritative value instead of leaving the tray 1s ahead.
         if (!isTimerRunning && apiClient) {
             try {
-                const serverTotal = await apiClient.getTodayTotal(null);
-                if (serverTotal != null && serverTotal >= 0) {
-                    todayTotalGlobal = serverTotal;
+                // Reconnect is exactly when the server knows LEAST: the backlog has not
+                // been pushed yet (the interval owns that), so a bare server figure is
+                // missing every session tracked while offline. Assigning it raw made the
+                // total visibly collapse the moment the network came back — the reset
+                // this convergence step exists to avoid. Take the server's CLOSED sum
+                // (its live-entry elapsed stripped, since a locally-stopped session can
+                // still be open server-side) and add the local rows it has not confirmed.
+                const status = await apiClient.getTimerStatus(null);
+                const serverGlobal =
+                    status?.all_projects_today_total ?? status?.today_total;
+                if (serverGlobal != null && serverGlobal >= 0) {
+                    const converged =
+                        Math.max(
+                            0,
+                            serverGlobal - (status.elapsed_seconds ?? 0),
+                        ) + getUnsyncedCompletedSecondsForToday();
+                    todayTotalGlobal = converged;
                     updateTrayTitle();
                     notifyPopup("timer-stopped", {
                         entry: null,
-                        todayTotal: serverTotal,
-                        todayTotalGlobal: serverTotal,
+                        todayTotal: converged,
+                        todayTotalGlobal: converged,
                     });
                 }
             } catch {
@@ -2251,42 +2188,57 @@ async function initializeApp() {
 
         activityMonitor?.stop();
         stopTrayTimer();
-        if (policy === "always") {
-            idleDetector.resolveIdle(actionId);
-            idleDetector.start();
-            // Restore tray from idle state
-            updateTrayIcon(isTimerRunning);
-            if (isTimerRunning) updateTrayTitle();
-            activityMonitor?.start();
-            if (isTimerRunning && currentEntry) {
-                screenshotService?.start(currentEntry.id, {
-                    immediateCapture:
-                        config.screenshot_capture_immediate_after_idle === true,
-                });
-            }
-            startTrayTimer();
-            return;
-        }
-        if (policy === "never") {
+        // "always" (always KEEP idle time) was the last path in the product that still
+        // billed an idle gap as work. It simply resolved the idle cycle and carried on
+        // counting from the original start, so every idle minute stayed inside the
+        // entry — the exact outcome owner policy removed on 2026-07-16, when Keep and
+        // Reassign were dropped and the prompt was reduced to "Continue tracking" /
+        // "Stop timer", both of which discard the gap. An org that had this saved kept
+        // paying for idle time that the prompt no longer even offers to keep.
+        //
+        // It now means what its neighbours mean: resolve WITHOUT prompting, and discard
+        // the gap. `never` and `always` are therefore the same behaviour, which is why
+        // the web settings page no longer offers both, and why GET /agent/config folds
+        // `always` into `never` for older builds that still reach this branch.
+        if (policy === "always" || policy === "never") {
             handleIdleAction("discard", actionId, idleSeconds, null);
             dismissIdleAlert();
             return;
         }
-        // Raise the pause FIRST: it flips isTimerPaused and stamps the freeze anchor
-        // synchronously (its `await` only covers the best-effort server POST), so the
-        // repaint below — and every later tray/popup repaint — measures elapsed to the
-        // idle-start instant instead of the wall clock. Tray shows the TRACKED TIME
-        // frozen at the moment idle began (e.g. "⏸ 02:26:40"), NOT "Idle (5m)"; the
-        // popup gets the same value so the two never disagree. The idle interval is not
-        // counted yet (pending keep/discard/reassign) — resumeTimerAfterIdle() clears
-        // the freeze and startTrayTimer() re-arms the live count.
-        pauseTimerForIdle(
-            idleStartedAt
-                ? new Date(idleStartedAt).toISOString()
-                : new Date().toISOString(),
-        ).catch(() => {});
+        // Raise the pause FIRST: it flips isTimerPaused and stamps the freeze anchor,
+        // so the repaint below — and every later tray/popup repaint — measures elapsed
+        // to the idle-start instant instead of the wall clock. Tray shows the TRACKED
+        // TIME frozen at the moment idle began (e.g. "⏸ 02:26:40"), NOT "Idle (5m)";
+        // the popup gets the same value so the two never disagree. The idle interval is
+        // not counted yet (pending continue/stop) — resumeTimerAfterIdle() clears the
+        // freeze and startTrayTimer() re-arms the live count.
+        //
+        // `pauseTimerForIdle()` is SYNCHRONOUS and returns undefined: since the
+        // local-first refactor the idle pause is a pure SQLite/in-memory operation
+        // with no server call. It used to be `async` and this line used to end in
+        // `.catch(() => {})` — which, once it stopped returning a promise, threw
+        // `Cannot read properties of undefined (reading 'catch')` on EVERY idle
+        // detection, before showIdleAlert() could run. The idle window then never
+        // appeared on any OS, and the detector was left wedged in DETECTED (see the
+        // matching guard in idle-detector._check()). Never chain a promise method here.
+        try {
+            pauseTimerForIdle(
+                idleStartedAt
+                    ? new Date(idleStartedAt).toISOString()
+                    : new Date().toISOString(),
+            );
+        } catch (e) {
+            // A failed pause must never cost the user the alert itself — the alert is
+            // the only way they can resolve the idle period.
+            console.error("[Idle] pauseTimerForIdle failed:", e.message);
+        }
         renderIdleFreeze();
-        showIdleAlert(idleSeconds, idleStartedAt, actionId);
+        // Wrapped in Promise.resolve() so this survives showIdleAlert() ever becoming
+        // synchronous, and so a rejection is LOGGED rather than swallowed as an
+        // unhandled rejection — a silently lost alert is exactly what this bug was.
+        Promise.resolve(
+            showIdleAlert(idleSeconds, idleStartedAt, actionId),
+        ).catch((e) => console.error("[Idle] showIdleAlert failed:", e?.message));
     });
 
     idleDetector.onAutoStop((totalIdleSeconds, actionId) => {
@@ -2431,28 +2383,22 @@ async function initializeApp() {
         );
     }
 
-    // BUG 3 FIX (#7): Reconcile local unsynced sessions BEFORE adopting server
-    // status. A local offline session that never synced (start and/or stop) must
-    // be flushed to the server first — otherwise it sits and collides later when
-    // a new session opens. reconcileTimerState() binds stops to specific entry ids
-    // and sends real local started_at, so this is safe and lossless.
+    // Upload any backlog left by the previous run before doing anything else, so a
+    // session tracked offline yesterday reaches the server promptly. Best-effort: the
+    // rows are durable and the worker retries on its own schedule.
     try {
-        await reconcileTimerState();
+        await sessionSyncWorker?.syncNow("startup", { ignoreBackoff: true });
     } catch (e) {
-        console.warn("[Startup] reconcileTimerState failed:", e.message);
+        console.warn("[Startup] Session sync failed:", e.message);
     }
 
-    // Check timer status on server
+    // Read the server totals for display only (they include MANUAL entries). Timer
+    // STATE is restored from local SQLite by restoreTimerFromLocalSession() below —
+    // the server is never consulted about whether a timer is running.
     try {
         const status = await apiClient.getTimerStatus();
-        const globalTotal = status.today_total ?? 0;
-        if (isServerTimerOpen(status)) {
-            syncOpenTimerFromServerStatus(status);
-        } else {
-            todayTotalGlobal = globalTotal;
-            todayTotalCurrentProject = 0;
-            updateTrayTitle();
-        }
+        applyTotalsFromServerStatus(status);
+        updateTrayTitle();
     } catch {}
 
     // ── Sleep / Wake / Lock — pause capture; timer keeps running ─────────────
@@ -2551,16 +2497,8 @@ async function initializeApp() {
                     updateTrayTitle();
                 }
             }
-            // Reconcile runs only after any gap-stop above has fully settled —
-            // otherwise it would see a still-running local session and push the
-            // stale started_at back to the server, resurrecting the phantom.
-            if (networkMonitor?.isOnline && offlineQueue && apiClient) {
-                setImmediate(() => {
-                    reconcileTimerState()
-                        .then(() => offlineQueue.flush(apiClient))
-                        .catch(() => {});
-                });
-            }
+            // No upload on wake — the interval resumes with the machine and pushes
+            // whatever the sleep left behind on its next cycle.
             // Tell the user their CURRENT state on wake/unlock. Self-suppresses if
             // the sleep-gap/watchdog just auto-stopped (markAutoStopNotified ran
             // above) or if an idle alert is being re-shown — one message, no
@@ -2582,74 +2520,21 @@ async function initializeApp() {
     // next polling cycle.
     const triggerImmediateSync = () => {
         if (!apiClient) return;
-        // Re-use the same sync logic as startTimerSync but fire once immediately
+        // Refresh the DISPLAYED totals only. Timer state is local, so focusing the
+        // window can no longer adopt — or clobber — a running session based on a
+        // stale server view. That branch is what produced both the
+        // self-restart-after-stop and the phantom-stop desync.
         (async () => {
             try {
                 const status = await apiClient.getTimerStatus();
-                const globalTotal = status.today_total ?? 0;
-                const elapsed = status.elapsed_seconds ?? 0;
-                if (isServerTimerOpen(status)) {
-                    todayTotalGlobal = Math.max(0, globalTotal - elapsed);
-                    const projectTotal =
-                        status.project_today_total ?? globalTotal;
-                    todayTotalCurrentProject = Math.max(
-                        0,
-                        projectTotal - elapsed,
-                    );
-                } else {
-                    todayTotalGlobal = globalTotal;
+                applyTotalsFromServerStatus(status);
+                if (!isTimerRunning) {
+                    todayTotalGlobal =
+                        (status.today_total ?? 0) +
+                        getUnsyncedCompletedSecondsForToday();
                     todayTotalCurrentProject = 0;
                 }
-
-                if (isServerTimerOpen(status) && !isTimerRunning) {
-                    if (hasUnsyncedLocalStopForEntry(status.entry?.id)) {
-                        // User stopped this entry locally but the stop hasn't reached the
-                        // server (slow/failed network), so the server still reports it open.
-                        // Do NOT re-adopt it as running — that is the self-restart-after-stop
-                        // bug. Push the pending stop via reconcile; keep the UI stopped.
-                        console.log(
-                            "[ImmediateSync] Server shows entry open but a local stop is pending — pushing stop, not re-opening",
-                        );
-                        scheduleReconcileAndFlush();
-                    } else {
-                        syncOpenTimerFromServerStatus(status);
-                    }
-                } else if (
-                    isServerTimerOpen(status) &&
-                    isTimerRunning &&
-                    isServerTimerPaused(status) !== isTimerPaused
-                ) {
-                    syncOpenTimerFromServerStatus(status, {
-                        notify: isServerTimerPaused(status) ? "pause" : "start",
-                    });
-                } else if (
-                    !isServerTimerOpen(status) &&
-                    (isTimerRunning || isTimerPaused)
-                ) {
-                    if (shouldPreserveLocalRunningWhenServerStopped()) {
-                        console.log(
-                            "[ImmediateSync] Server says stopped but local idle/paused/unsynced state preserved — keeping local state",
-                        );
-                        return;
-                    }
-                    isTimerRunning = false;
-                    isTimerPaused = false;
-                    currentEntry = null;
-                    _cachedStartedAtMs = null;
-                    todayTotalCurrentProject = 0;
-                    activityMonitor?.stop();
-                    screenshotService?.stop();
-                    idleDetector?.stop();
-                    dismissIdleAlert();
-                    stopTrayTimer();
-                    updateTrayTitle();
-                    updateTrayIcon(false);
-                    notifyPopup("timer-stopped", {
-                        entry: null,
-                        todayTotal: globalTotal,
-                        todayTotalGlobal: globalTotal,
-                    });
-                }
+                updateTrayTitle();
             } catch {}
         })();
     };
@@ -2665,6 +2550,96 @@ async function initializeApp() {
     // auto-resume that starts a timer ~2s later fires its own state notif (the
     // state genuinely changes, so the debounce lets it through).
     notifyTrackingState("startup");
+}
+
+/**
+ * Install the application menu.
+ *
+ * Previously no menu was ever set, so Electron installed its stock default. That
+ * was invisible while the window was frameless, but a real window would render
+ * that default menu bar (File/Edit/View/Window/Help, complete with Reload and
+ * Toggle DevTools) INSIDE the frame on Windows/Linux — clutter on a compact
+ * tracker, and it hands end users a reload button.
+ *
+ *   - Windows/Linux: no menu at all. Chromium still handles clipboard and
+ *     undo/redo inside text inputs natively, so the login form is unaffected.
+ *   - macOS: a menu is NOT optional — without one, Cmd+C/V/A, Cmd+W, Cmd+M and
+ *     Cmd+Q all stop working, because on macOS those live in the menu bar rather
+ *     than in the window. This builds the minimum standard set.
+ *
+ * Cmd+W maps to the window's close, which HIDES to tray (see the 'close' handler
+ * in createPopupWindow) — so it tucks the window away without stopping a timer,
+ * exactly like the red button.
+ */
+function buildAppMenu() {
+    if (process.platform !== "darwin") {
+        Menu.setApplicationMenu(null);
+        return;
+    }
+
+    // Every user-facing name here is the LITERAL "TrackFlow", never `app.name`.
+    //
+    // `app.name` is "trackflow-agent" — package.json's `name`. The capitalised
+    // "TrackFlow" lives in `build.productName`, which is electron-builder config
+    // that Electron never reads at runtime, so the menu would otherwise read
+    // "trackflow-agent" / "Hide trackflow-agent" / "Quit trackflow-agent" in the
+    // packaged app. The roles below derive their default labels from `app.name`
+    // too, hence the explicit overrides.
+    //
+    // Do NOT "fix" this by adding a top-level `productName` or calling
+    // app.setName(): `app.getPath('userData')` is built from app.name, so
+    // renaming it moves the data directory from
+    // ~/Library/Application Support/trackflow-agent to .../TrackFlow and orphans
+    // every existing install's tokens.enc (forced re-login for everyone),
+    // offline-queue.db (PERMANENT loss of time tracked offline but not yet
+    // synced), offline-screenshots/ and user-prefs.json. Same failure class as
+    // bugs/desktop-signout-quit-unsynced-time-lost.md. The cosmetic win is not
+    // worth the data.
+    const APP_LABEL = "TrackFlow";
+
+    Menu.setApplicationMenu(
+        Menu.buildFromTemplate([
+            {
+                label: APP_LABEL,
+                submenu: [
+                    { role: "about", label: `About ${APP_LABEL}` },
+                    { type: "separator" },
+                    { role: "hide", label: `Hide ${APP_LABEL}` },
+                    { role: "hideOthers" },
+                    { role: "unhide" },
+                    { type: "separator" },
+                    // 'quit' runs before-quit → graceful timer stop + queue flush.
+                    { role: "quit", label: `Quit ${APP_LABEL}` },
+                ],
+            },
+            {
+                label: "Edit",
+                submenu: [
+                    { role: "undo" },
+                    { role: "redo" },
+                    { type: "separator" },
+                    { role: "cut" },
+                    { role: "copy" },
+                    { role: "paste" },
+                    { role: "selectAll" },
+                ],
+            },
+            {
+                label: "Window",
+                submenu: [
+                    { role: "minimize" },
+                    // Hides to tray rather than destroying — the timer keeps running.
+                    { role: "close", label: "Close Window" },
+                    { type: "separator" },
+                    {
+                        label: "Show TrackFlow",
+                        accelerator: "CmdOrCtrl+Shift+T",
+                        click: () => showPopup(),
+                    },
+                ],
+            },
+        ]),
+    );
 }
 
 function createTray() {
@@ -2853,16 +2828,17 @@ function buildTrayContextMenu() {
 // Interval reference for the pin keepalive (macOS-only workaround)
 let _pinKeepalive = null;
 
-// ── ISSUE 8: focus-loss watch so an UNPINNED popup closes on a desktop/wallpaper click ──
-// On macOS, clicking the desktop/wallpaper does not reliably emit a 'blur' on an
-// accessory-app popup, so an unpinned popup could linger until the next click landed on
-// a real window ("stays open until you click somewhere"). While the popup is visible and
-// unpinned we poll focus; two consecutive unfocused samples hide it — this catches
-// clicking another app AND clicking the desktop. Windows/Linux keep using the window
-// 'blur' event (which DOES fire on desktop clicks there); a poll is intentionally NOT
-// used on those platforms because an open native <select> steals window focus and a poll
-// would wrongly hide the popup mid-selection. macOS renders <select> as an in-window
-// overlay that keeps webContents focused, so the poll is safe there.
+// ── ISSUE 8 (RETIRED): focus-loss watch that hid an unpinned popup on a click-away ──
+// This polled focus on macOS and hid the window after ~600ms of sustained
+// unfocus, so that clicking the desktop/wallpaper dismissed the tray popup the
+// same way clicking another app did.
+//
+// The main window is no longer a tray popup — it is an ordinary application
+// window with native minimise/maximise/close — so auto-hiding it when the user
+// clicks elsewhere is exactly the wrong behaviour: no desktop app disappears
+// because you looked at your browser. The watchdog is retired rather than
+// deleted so the several call sites (tray pin toggle, logout teardown) keep
+// working and any timer left over from an older session is still cleared.
 let _unpinnedFocusWatch = null;
 let _unpinnedUnfocusedTicks = 0;
 
@@ -2875,42 +2851,8 @@ function _stopUnpinnedFocusWatch() {
 }
 
 function _startUnpinnedFocusWatch() {
-    if (process.platform !== "darwin") return;
+    // Intentionally a no-op: never auto-hide the main window on focus loss.
     _stopUnpinnedFocusWatch();
-    if (isAlwaysOnTop) return; // pinned popups stay open (ISSUE 9)
-    _unpinnedFocusWatch = setInterval(() => {
-        if (
-            !popupWindow ||
-            popupWindow.isDestroyed() ||
-            !popupWindow.isVisible() ||
-            isAlwaysOnTop
-        ) {
-            _stopUnpinnedFocusWatch();
-            return;
-        }
-        const focused =
-            popupWindow.isFocused() ||
-            (popupWindow.webContents &&
-                !popupWindow.webContents.isDestroyed() &&
-                popupWindow.webContents.isFocused());
-        if (focused) {
-            _unpinnedUnfocusedTicks = 0;
-            return;
-        }
-        _unpinnedUnfocusedTicks++;
-        // ~2 ticks (~600ms) of sustained unfocus → the user clicked away (another app
-        // OR the desktop). Hide to tray.
-        if (_unpinnedUnfocusedTicks >= 2) {
-            _stopUnpinnedFocusWatch();
-            if (
-                popupWindow &&
-                !popupWindow.isDestroyed() &&
-                !popupWindow.isFocused()
-            ) {
-                popupWindow.hide();
-            }
-        }
-    }, 300);
 }
 
 function _applyAlwaysOnTop(win, pinned) {
@@ -2965,86 +2907,129 @@ function _applyAlwaysOnTop(win, pinned) {
             `[Pin] setAlwaysOnTop(false) called. isAlwaysOnTop()=${win.isAlwaysOnTop()}`,
         );
     }
+
+    // Windows virtual desktops: a fresh pin starts from a clean slate, and
+    // unpinning stops the follow entirely.
+    _resetVirtualDesktopFollow();
 }
 
-/**
- * Calculate the popup window x,y position anchored to the PRIMARY display.
- * Uses tray bounds only to determine whether the taskbar is at the top or
- * bottom, so the popup opens near the correct edge of the primary display.
- */
-function _calcPopupPosition(trayBounds, windowWidth, windowHeight) {
-    try {
-        const primary = screen.getPrimaryDisplay();
-        const workArea = primary.workArea;
+// ── Windows virtual desktops: a pinned window follows the user ────────────────
+// On macOS/Linux `setVisibleOnAllWorkspaces()` puts the pinned window on every
+// Space/workspace. On Windows that call is a documented NO-OP and there is no
+// supported API to pin a window across virtual desktops, so a pinned window
+// stayed stranded on the desktop it was opened on — visible on Desktop 1 and
+// simply absent on Desktops 2/3. (This is about the Windows "multiple desktops"
+// feature, not multiple monitors — a second monitor already works, because the
+// window keeps whatever rect the user dragged it to.)
+//
+// Instead of being on all desktops at once, the pinned window is moved to
+// whichever desktop the user is on: Windows re-assigns a window to the ACTIVE
+// virtual desktop when it is shown, so hide() + showInactive() teleports it.
+// The renderer tells us when the window stopped being painted (Chromium marks a
+// window on another virtual desktop as occluded — see the `report-composited`
+// probe in index-renderer.js); the decision itself lives in the pure, unit
+// tested ./virtual-desktop-follow.
+let _offDesktopSince = null; // epoch ms the window stopped being composited
+let _lastDesktopMoveAt = 0;
+let _followAttempts = 0; // consecutive moves that did not bring it back
+let _followEvalTimer = null;
 
-        // Detect top vs bottom taskbar.
-        // macOS: the menu bar (and tray) is ALWAYS at the top — anchor top-right
-        // unconditionally. Relying on tray.getBounds() here is fragile: on first run
-        // the bounds can be {0,0,0,0} before the icon has rendered, and on multi-
-        // monitor setups getDisplayNearestPoint({0,0}) can resolve the wrong display,
-        // which flipped the test and opened the popup at the BOTTOM-right.
-        // Windows/Linux: the taskbar can be top or bottom, so detect from tray bounds
-        // when available; if bounds aren't ready, default to bottom (typical taskbar).
-        let trayIsAtTop;
-        if (process.platform === "darwin") {
-            trayIsAtTop = true;
-        } else if (trayBounds.height > 0) {
-            const trayCenter = trayBounds.y + trayBounds.height / 2;
-            const trayDisplay = screen.getDisplayNearestPoint({
-                x: trayBounds.x,
-                y: trayBounds.y,
-            });
-            const screenCenter =
-                trayDisplay.workArea.y + trayDisplay.workArea.height / 2;
-            trayIsAtTop = trayCenter < screenCenter;
-        } else {
-            trayIsAtTop = false;
-        }
-
-        // Right-align on primary display (mirrors macOS Menu Bar convention)
-        const x = workArea.x + workArea.width - windowWidth - 8;
-        let y;
-
-        if (trayIsAtTop) {
-            y = workArea.y + 4;
-        } else {
-            y = workArea.y + workArea.height - windowHeight - 4;
-        }
-
-        return { x, y };
-    } catch {
-        // Last-resort fallback: top-right corner of screen
-        return { x: 8, y: 8 };
+function _resetVirtualDesktopFollow() {
+    _offDesktopSince = null;
+    _followAttempts = 0;
+    if (_followEvalTimer) {
+        clearTimeout(_followEvalTimer);
+        _followEvalTimer = null;
     }
 }
 
 /**
- * Move an existing popup window back onto the primary display.
- * Called when showing an already-created window that may have been
- * left on an extended display from a previous session.
+ * True when we believe the window is sitting on a virtual desktop the user is
+ * NOT looking at. Used by showPopup() so a tray click brings the window here
+ * instead of yanking the user across to another desktop.
  */
-function _repositionToPrimaryDisplay(win, windowWidth, windowHeight) {
+function _isPopupOffCurrentVirtualDesktop() {
+    return process.platform === "win32" && _offDesktopSince !== null;
+}
+
+/**
+ * Re-show the window so Windows re-assigns it to the active virtual desktop.
+ * showInactive(), never show()/focus() — the user is typing in another app and
+ * a pinned tracker must not steal their keystrokes.
+ */
+function _moveWindowToCurrentVirtualDesktop(win) {
+    const bounds = win.getBounds();
+    win.hide();
+    win.showInactive();
+    // Some window managers nudge the rect across a hide/show cycle. Put it back
+    // exactly where the user left it rather than letting the window walk.
+    const after = win.getBounds();
+    if (after.x !== bounds.x || after.y !== bounds.y) {
+        try {
+            win.setBounds(bounds, false);
+        } catch {}
+    }
+    // A re-show can drop the topmost flag; the window is pinned, so re-assert it.
+    if (isAlwaysOnTop) win.setAlwaysOnTop(true);
+}
+
+function _evaluateVirtualDesktopFollow() {
+    if (_followEvalTimer) {
+        clearTimeout(_followEvalTimer);
+        _followEvalTimer = null;
+    }
+    const win = popupWindow;
+    if (!win || win.isDestroyed()) {
+        _resetVirtualDesktopFollow();
+        return;
+    }
+
+    const decision = VirtualDesktopFollow.decideFollowAction({
+        platform: process.platform,
+        pinned: isAlwaysOnTop,
+        windowVisible: win.isVisible(),
+        minimized: win.isMinimized(),
+        offDesktopSince: _offDesktopSince,
+        lastMoveAt: _lastDesktopMoveAt,
+        attempts: _followAttempts,
+        now: Date.now(),
+    });
+
+    if (decision.action === "wait") {
+        _followEvalTimer = setTimeout(
+            _evaluateVirtualDesktopFollow,
+            Math.max(50, decision.retryInMs || 200),
+        );
+        return;
+    }
+    if (decision.action !== "move") return;
+
+    _lastDesktopMoveAt = Date.now();
+    _followAttempts += 1;
+    console.log(
+        `[Pin] Pinned window is off the active virtual desktop — moving it here (attempt ${_followAttempts}).`,
+    );
     try {
-        if (!win || win.isDestroyed()) return;
-        const trayBounds = tray
-            ? tray.getBounds()
-            : { x: 0, y: 0, width: 0, height: 0 };
-        const { x, y } = _calcPopupPosition(
-            trayBounds,
-            windowWidth,
-            windowHeight,
-        );
-        // SHRINK FIX: re-assert BOTH position AND size on every show. On Windows
-        // fractional-DPI displays (125%/150%), Electron 42 rounds a frameless,
-        // non-resizable window's bounds down by the scale factor each time it is
-        // re-shown, so repeated taskbar/tray clicks shrank the popup a little more
-        // every click. Pinning the full bounds to the intended size here resets it
-        // to windowWidth x windowHeight each time instead of letting it drift.
-        win.setBounds(
-            { x, y, width: windowWidth, height: windowHeight },
-            false,
-        );
-    } catch {}
+        _moveWindowToCurrentVirtualDesktop(win);
+    } catch (e) {
+        console.warn(`[Pin] Virtual-desktop follow failed: ${e.message}`);
+    }
+}
+
+/**
+ * Renderer report: is this window actually being composited (i.e. on the desktop
+ * the user is looking at)? False also covers "hidden to tray" and "minimised",
+ * which is why the decision layer checks isVisible()/isMinimized() before acting.
+ */
+function _onRendererComposited(composited) {
+    if (process.platform !== "win32") return;
+    if (composited) {
+        // Back on screen — the follow worked (or the user came back to us).
+        _resetVirtualDesktopFollow();
+        return;
+    }
+    if (_offDesktopSince === null) _offDesktopSince = Date.now();
+    _evaluateVirtualDesktopFollow();
 }
 
 function showPopup() {
@@ -3054,26 +3039,40 @@ function showPopup() {
     }
 
     if (popupWindow && !popupWindow.isDestroyed()) {
-        // Reposition to primary display before showing (handles cases where a
-        // previous show placed it on an extended monitor). On Windows the popup
-        // is user-resizable, so re-assert the persisted size (not the fixed
-        // design size) — otherwise the SHRINK/anti-drift setBounds below would
-        // snap a user-resized window back to 320x400 on every reshow. On
-        // macOS/Linux loadPopupSize() returns the fixed design size, so this is
-        // identical to the previous behaviour there.
-        const showSize = loadPopupSize();
-        _repositionToPrimaryDisplay(
-            popupWindow,
-            showSize.width,
-            showSize.height,
-        );
-        if (typeof popupWindow.moveTop === "function") {
-            // Windows: moveTop() while a native <select> is open dismisses the
-            // dropdown; only re-assert z-order on macOS where the tray popup
-            // can slip behind other windows without it.
-            if (process.platform === "darwin") {
-                popupWindow.moveTop();
+        // Show the window where the user left it. It is NOT re-anchored to the
+        // tray or forced back onto the primary display any more — dragging it to
+        // a second monitor and having it jump home on the next show was popup
+        // behaviour, not window behaviour. The only correction applied is the
+        // off-screen rescue (a monitor unplugged while the window was hidden),
+        // which restores the saved size centred on the primary display.
+        try {
+            const b = popupWindow.getBounds();
+            if (
+                !WindowGeometry.isVisibleOnAnyDisplay(b, screen.getAllDisplays())
+            ) {
+                popupWindow.setBounds(
+                    WindowGeometry.centerOnDisplay(
+                        screen.getPrimaryDisplay(),
+                        b.width,
+                        b.height,
+                    ),
+                    false,
+                );
             }
+        } catch {}
+        // A window minimised to the Dock/taskbar must come back, not just focus.
+        if (popupWindow.isMinimized()) popupWindow.restore();
+        // Windows: if the window is parked on another virtual desktop, show()
+        // would drag the USER over to that desktop. Hide first so the following
+        // show() re-assigns the window to the desktop they are on instead.
+        if (
+            _isPopupOffCurrentVirtualDesktop() &&
+            popupWindow.isVisible() &&
+            !popupWindow.isMinimized()
+        ) {
+            try {
+                popupWindow.hide();
+            } catch {}
         }
         popupWindow.show();
         popupWindow.focus();
@@ -3102,32 +3101,29 @@ function showPopup() {
         return;
     }
 
-    const trayBounds = tray.getBounds();
-    // Use the shared POPUP_WIDTH/POPUP_HEIGHT so the initial size matches the
-    // re-show reposition exactly (no launch-large / reshow-small jump). The earlier
-    // bump to 380x520 was a workaround for a Windows dropdown clip that has since
-    // been fixed separately (dropdown rebuild + pin-keepalive fixes).
-    // On Windows, restore the user's last chosen size (clamped to min/max);
-    // everywhere else this resolves to the fixed POPUP_WIDTH/POPUP_HEIGHT.
-    const initialSize = loadPopupSize();
-    const windowWidth = initialSize.width;
-    const windowHeight = initialSize.height;
-
-    // MULTI-MONITOR FIX: Always position on the PRIMARY display regardless of
-    // which monitor the tray icon is on. Extended/secondary displays are excluded.
-    // We still use the tray position to detect top-vs-bottom taskbar placement.
-    const { x, y } = _calcPopupPosition(trayBounds, windowWidth, windowHeight);
+    // Restore the window where the user last left it (size AND position). A rect
+    // stranded off-screen by an unplugged monitor is re-centred on the primary
+    // display instead of restored invisibly — see window-geometry.js.
+    const initialBounds = loadWindowBounds();
+    const windowWidth = initialBounds.width;
+    const windowHeight = initialBounds.height;
 
     const popupOptions = {
         width: windowWidth,
         height: windowHeight,
-        x,
-        y,
-        frame: false,
-        resizable: IS_POPUP_RESIZABLE,
-        skipTaskbar: true,
+        x: initialBounds.x,
+        y: initialBounds.y,
+        minWidth: WINDOW_MIN_WIDTH,
+        minHeight: WINDOW_MIN_HEIGHT,
+        // A real app window: resizable and maximisable everywhere, present in
+        // the Dock / taskbar so it can be reached without the tray.
+        resizable: true,
+        maximizable: true,
+        minimizable: true,
+        skipTaskbar: false,
         show: false,
-        backgroundColor: "#0a0a0a", // Prevent white flash on all platforms
+        title: "TrackFlow",
+        backgroundColor: "#121110", // matches --bg-primary; no white flash
         webPreferences: {
             preload: path.join(__dirname, "..", "preload", "index.js"),
             contextIsolation: true,
@@ -3137,19 +3133,14 @@ function showPopup() {
         },
     };
 
-    // Windows: enable native edge/corner resizing on the frameless popup.
-    // `thickFrame: true` (the default) keeps the WS_THICKFRAME window style that
-    // gives Chromium the resize borders and Aero-snap without drawing a caption
-    // bar. Min size pins the designed layout floor; max keeps it a compact
-    // utility window. macOS/Linux keep resizable:false — no size constraints
-    // applied so their fixed-size behaviour is untouched.
-    if (IS_POPUP_RESIZABLE) {
-        popupOptions.thickFrame = true;
-        popupOptions.minWidth = POPUP_MIN_WIDTH;
-        popupOptions.minHeight = POPUP_MIN_HEIGHT;
-        popupOptions.maxWidth = POPUP_MAX_WIDTH;
-        popupOptions.maxHeight = POPUP_MAX_HEIGHT;
-    }
+    // Native window controls, styled per platform — see resolveWindowChrome().
+    Object.assign(
+        popupOptions,
+        WindowGeometry.resolveWindowChrome(process.platform, {
+            background: "#121110",
+            symbol: "#a8a29e",
+        }),
+    );
 
     popupWindow = new BrowserWindow(popupOptions);
 
@@ -3157,44 +3148,27 @@ function showPopup() {
     // On macOS, use 'floating' level + relativeLevel 1 for reliable z-order.
     _applyAlwaysOnTop(popupWindow, isAlwaysOnTop);
 
-    // Windows-only: persist the user's chosen size so it survives hide/show and
-    // app restarts. Debounced so a resize drag (many 'resize' events) writes
-    // once when it settles. `_repositionToPrimaryDisplay` also fires 'resize'
-    // when it re-asserts the persisted size on reshow, but that writes back the
-    // same clamped value, so it's a harmless no-op.
-    if (IS_POPUP_RESIZABLE) {
-        let _resizeSaveTimer = null;
-        popupWindow.on("resize", () => {
-            if (_resizeSaveTimer) clearTimeout(_resizeSaveTimer);
-            _resizeSaveTimer = setTimeout(() => {
-                _resizeSaveTimer = null;
-                if (!popupWindow || popupWindow.isDestroyed()) return;
-                const [w, h] = popupWindow.getContentSize();
-                savePopupSize(w, h);
-            }, 400);
-        });
-    }
+    // Persist the window rect (position AND size) so it survives hide/show and
+    // app restarts. Debounced so a resize/move drag — which fires a burst of
+    // events — writes once when it settles. A maximised window is deliberately
+    // NOT recorded: we want to restore the underlying restored-size rect, not a
+    // full-screen-sized one that would un-maximise to fill the display.
+    let _boundsSaveTimer = null;
+    const _persistBounds = () => {
+        if (_boundsSaveTimer) clearTimeout(_boundsSaveTimer);
+        _boundsSaveTimer = setTimeout(() => {
+            _boundsSaveTimer = null;
+            if (!popupWindow || popupWindow.isDestroyed()) return;
+            if (popupWindow.isMaximized() || popupWindow.isMinimized()) return;
+            saveWindowBounds(popupWindow.getBounds());
+        }, 400);
+    };
+    popupWindow.on("resize", _persistBounds);
+    popupWindow.on("move", _persistBounds);
 
     popupWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
 
     popupWindow.once("ready-to-show", () => {
-        // ISSUE 7 FIX (preserved): re-assert the exact content size on first show.
-        // A frameless window can be created a few px smaller than requested when a
-        // fresh popup is built AFTER a logout/login on a fractional-DPI display
-        // (Electron rounds the bounds by the scale factor). That shrunk height
-        // clipped the footer (Sign out / Dashboard) when the activity section
-        // appears on Start — but only post-relogin, where the window is rebuilt
-        // mid-session. Pinning the content size guarantees the same layout as a
-        // fresh launch. On Windows (resizable) we re-assert the user's PERSISTED
-        // size instead of the fixed design size — still never below the minimum
-        // (loadPopupSize clamps to POPUP_MIN_*), so the footer can't clip. On
-        // macOS/Linux loadPopupSize() === {POPUP_WIDTH, POPUP_HEIGHT}, so this is
-        // byte-for-byte the previous issue #7 behaviour. No-op where there is no
-        // DPI drift (macOS, Linux, 100%-scale Windows).
-        if (popupWindow && !popupWindow.isDestroyed()) {
-            const readySize = loadPopupSize();
-            popupWindow.setContentSize(readySize.width, readySize.height);
-        }
         popupWindow.show();
         if (process.env.NODE_ENV === "development") {
             popupWindow.webContents.openDevTools({ mode: "detach" });
@@ -3214,46 +3188,33 @@ function showPopup() {
         });
     });
 
-    // Hide on blur — debounced on all platforms to prevent show-then-immediately-hide
-    // race when the tray icon click steals focus before the popup can render.
-    let blurTimeout = null;
-    popupWindow.on("blur", () => {
-        if (blurTimeout) {
-            clearTimeout(blurTimeout);
-            blurTimeout = null;
-        }
-        // PIN FIX: when the window is pinned (always-on-top), the user explicitly
-        // wants it to stay visible while they work in other apps. Auto-hiding on
-        // blur here is what made "Pin" look broken — you'd click pin, click into
-        // another window, and the popup would vanish anyway. While pinned, never
-        // hide on blur; the user dismisses it via the tray click or close button.
-        if (isAlwaysOnTop) return;
-        if (Date.now() - _lastTrayClickAt < 300) return;
-        blurTimeout = setTimeout(() => {
-            if (
-                popupWindow &&
-                !popupWindow.isDestroyed() &&
-                !popupWindow.isFocused()
-            ) {
-                popupWindow.hide();
+    // NO hide-on-blur. This is an ordinary window now: clicking into another app
+    // must leave it exactly where it is, the same as any other desktop app. The
+    // old debounced blur->hide (plus the macOS unfocused-ticks watchdog that
+    // backed it up) was the single biggest reason the window felt like a
+    // fly-away popup rather than an application.
+
+    // Close (native red/X button) HIDES the window instead of destroying it, so
+    // a running timer is never silently killed by tidying up your desktop. The
+    // app keeps running in the tray; quitting is deliberate — tray > Quit, or
+    // Cmd/Ctrl+Q — and that path already stops the timer and flushes the offline
+    // queue in `before-quit`.
+    popupWindow.on("close", (e) => {
+        if (isQuitting) return; // real quit: let it through and tear down
+        e.preventDefault();
+        // Persist the final rect before hiding — the debounced move/resize saver
+        // may still have a pending write when the user closes right after a drag.
+        try {
+            if (!popupWindow.isMaximized() && !popupWindow.isMinimized()) {
+                saveWindowBounds(popupWindow.getBounds());
             }
-        }, 150);
+        } catch {}
+        popupWindow.hide();
     });
-    popupWindow.on("focus", () => {
-        if (blurTimeout) {
-            clearTimeout(blurTimeout);
-            blurTimeout = null;
-        }
-        _unpinnedUnfocusedTicks = 0;
-    });
-    // ISSUE 8: keep the macOS focus-loss watch tied to the popup's visibility.
-    // 'show' fires on both the initial show and every re-show (tray click), so this
-    // covers all show paths without touching the existing-window branch.
-    popupWindow.on("show", () => _startUnpinnedFocusWatch());
-    popupWindow.on("hide", () => _stopUnpinnedFocusWatch());
 
     popupWindow.on("closed", () => {
         popupWindow = null;
+        _resetVirtualDesktopFollow();
     });
 }
 
@@ -3322,30 +3283,29 @@ async function performLogout() {
                           ),
                       )
                     : 0;
-                saveLocalTimerStop(localActive.id, endedAt, dur);
+                closeLocalSession(localActive.id, endedAt);
             }
         }
-    } else if (apiClient) {
-        try {
-            await apiClient.stopTimer();
-        } catch {}
     }
 
-    // UPLOAD BEFORE TEARDOWN: the stop above is recorded locally first, so at this
-    // point the server may still be missing this session's start/stop (offline start,
-    // failed stop) and the offline queue may still hold heartbeats/screenshots. Push
-    // both NOW — after this function the apiClient is nulled and the queue closed, so
-    // nothing else can send them until the next sign-in. Bounded so a slow or
-    // unreachable server can never wedge sign-out; whatever doesn't make it stays in
-    // SQLite and is pushed by reconcile the next time this user signs in.
+    // UPLOAD BEFORE TEARDOWN: the stop above is recorded locally, so at this point the
+    // server may still be missing this session (and the offline queue may still hold
+    // heartbeats/screenshots). Push NOW — after this function the apiClient is nulled
+    // and the queue closed, so nothing else can send until the next sign-in. Bounded so
+    // a slow or unreachable server can never wedge sign-out; whatever does not make it
+    // STAYS in SQLite (clearForLogout keeps every unconfirmed row) and uploads the next
+    // time this user signs in. ignoreBackoff: sign-out is exactly when a pending
+    // backoff window must not stand between the user and their tracked time.
     if (apiClient && networkMonitor?.isOnline !== false) {
         console.log("[Logout] Flushing tracked time before sign-out");
         await withTimeout(
             (async () => {
                 try {
-                    await reconcileTimerState();
+                    await sessionSyncWorker?.syncNow("logout", {
+                        ignoreBackoff: true,
+                    });
                 } catch (e) {
-                    console.warn("[Logout] reconcile failed:", e.message);
+                    console.warn("[Logout] session sync failed:", e.message);
                 }
                 try {
                     await offlineQueue?.flush(apiClient);
@@ -3378,6 +3338,10 @@ async function performLogout() {
     }
     stopTrayTimer();
 
+    // Stop the worker BEFORE closing the queue it flushes through, so a cycle cannot
+    // fire against a half-torn-down session.
+    sessionSyncWorker?.stop();
+
     // CRITICAL: Clear and close offline queue BEFORE deleting tokens.
     // Prevents queued heartbeats/screenshots from being uploaded under a different user.
     if (offlineQueue) {
@@ -3391,12 +3355,17 @@ async function performLogout() {
     screenshotService = null;
     idleDetector = null;
     networkMonitor = null;
+    sessionSyncWorker = null;
+    workSessionStore = null;
     clearProjectsCache();
+    // Cached per-project server totals belong to the signed-in user — clearing them
+    // here keeps the next account from ever seeding a timer with someone else's hours.
+    _serverProjectTodayTotals.clear();
     todayTotalGlobal = 0;
     todayTotalCurrentProject = 0;
     config = {};
     currentShift = null;
-    _sessionUserId = null;
+    setSessionUserId(null);
 
     _stopUnpinnedFocusWatch();
     if (popupWindow && !popupWindow.isDestroyed()) {
@@ -3452,14 +3421,23 @@ function setupIPC() {
     ipcMain.removeHandler("install-update");
 
     ipcMain.handle("hide-window", () => {
-        // ISSUE 9 FIX: the close button is disabled while pinned; enforce it in the
-        // main process too so a pinned modal can only be closed after unpinning.
-        // (Tray-toggle and blur-to-hide call popupWindow.hide() directly, not this
-        // IPC, so they are unaffected.)
-        if (isAlwaysOnTop) return;
+        // Backs the Escape shortcut. The pin no longer blocks hiding: pinning
+        // means "float above other apps", not "refuse to close" — that coupling
+        // only existed because the pinned popup had no other dismiss affordance.
+        // The window now has a native close button, so blocking this IPC while
+        // pinned would just make Escape silently do nothing.
         if (popupWindow && !popupWindow.isDestroyed()) {
             popupWindow.hide();
         }
+    });
+
+    // Cmd/Ctrl+Q must QUIT, the way it does in every other desktop app. It used
+    // to be wired to sign-out in the renderer, which was survivable while this
+    // was a transient tray popup and is not now that it is a normal window with
+    // a Dock/taskbar entry. app.quit() runs the `before-quit` handler, which
+    // stops the timer and flushes the offline queue before exiting.
+    ipcMain.handle("quit-app", () => {
+        app.quit();
     });
 
     ipcMain.handle("toggle-pin", (_, forceState) => {
@@ -3486,6 +3464,24 @@ function setupIPC() {
 
     ipcMain.handle("get-pin-state", () => {
         return { pinned: isAlwaysOnTop };
+    });
+
+    // Windows virtual-desktop follow. The renderer reports whether the window is
+    // actually being painted; Chromium treats a window sitting on another virtual
+    // desktop as occluded, which is the only signal Electron gives us on Windows.
+    // `on` (not `handle`) — fire-and-forget, and it can arrive many times, so the
+    // previous listener is dropped before re-registering.
+    ipcMain.removeAllListeners("report-composited");
+    ipcMain.on("report-composited", (event, composited) => {
+        // Only the main window drives this — ignore the login/idle windows.
+        if (
+            !popupWindow ||
+            popupWindow.isDestroyed() ||
+            event.sender !== popupWindow.webContents
+        ) {
+            return;
+        }
+        _onRendererComposited(!!composited);
     });
 
     ipcMain.handle("check-screen-permission", async () => {
@@ -3520,6 +3516,13 @@ function setupIPC() {
         console.log(
             "[Permission] User clicked Fix — opening Screen Recording settings",
         );
+        // Same arming as the onboarding dialog: the user is leaving for System
+        // Settings, so the next focus event is worth a probe.
+        _openedScreenSettings = true;
+        _screenPermissionProbeAt = 0;
+        // A fresh trip to System Settings means a fresh chance the grant landed,
+        // so any earlier decline of the restart offer must not silence the next one.
+        _screenPermissionRelaunchOfferedAt = 0;
         shell.openExternal(
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
         );
@@ -3560,28 +3563,18 @@ function setupIPC() {
                   )
                 : 0;
             if (localId) {
-                saveLocalTimerStop(localId, updateEndedAt, updateDuration);
+                closeLocalSession(localId, updateEndedAt);
             }
             try {
-                // BUG 3 FIX: target the specific server entry so we never close a newer one.
-                const stopPayload = currentEntry?._localId
-                    ? {
-                          started_at: currentEntry?.started_at,
-                          ended_at: updateEndedAt,
-                      }
-                    : {};
-                if (
-                    currentEntry?.id &&
-                    !String(currentEntry.id).startsWith("local-")
-                )
-                    stopPayload.time_entry_id = currentEntry.id;
-                if (currentEntry?.idempotency_key)
-                    stopPayload.idempotency_key = currentEntry.idempotency_key;
+                // Best-effort upload before the update restarts the app. Bounded: an
+                // unreachable server must not delay the install. Anything left over is
+                // still in SQLite and uploads after the restart.
                 await Promise.race([
-                    apiClient?.stopTimer(stopPayload) ?? Promise.resolve(),
+                    sessionSyncWorker?.syncNow("pre-update", {
+                        ignoreBackoff: true,
+                    }) ?? Promise.resolve(),
                     new Promise((resolve) => setTimeout(resolve, 3000)),
                 ]);
-                if (localId) markLocalTimerStopSynced(localId);
             } catch {}
         }
 
@@ -3650,60 +3643,59 @@ function setupIPC() {
                 // (historical API semantics). `all_projects_today_total` is ALWAYS the global
                 // sum — use it for the "Today, all projects" line + tray so a selected project
                 // never scopes those. Falls back to today_total for older backends.
-                // Bug: bugs/desktop-today-total-project-scoped-when-project-selected.md
                 const globalTotal = status.today_total ?? 0;
                 const allProjectsTotal =
                     status.all_projects_today_total ?? globalTotal;
+                // Elapsed of whatever entry the SERVER still holds open — ours, whether
+                // or not the desktop still considers it live.
+                const serverLiveElapsed = status.elapsed_seconds ?? 0;
 
-                if (isServerTimerOpen(status)) {
-                    applyRunningStatusFromServer(status);
-                } else if (shouldPreserveLocalRunningWhenServerStopped()) {
+                // Timer STATE comes from local SQLite. The server's view is used only
+                // for totals (which include manual entries) — it can no longer clear a
+                // running timer, which is what the old "else" branch did whenever the
+                // server view was merely stale.
+                if (!isTimerRunning && !isTimerPaused) {
                     const localActive = getActiveLocalTimer();
-                    if (
-                        !isTimerRunning &&
-                        localActive &&
-                        !localActive.ended_at
-                    ) {
+                    if (localActive && !localActive.ended_at) {
                         console.log(
                             "[get-timer-state] Restoring orphaned local session after phantom stop",
                         );
                         restoreInMemoryFromLocalActive(localActive);
-                        todayTotalGlobal = allProjectsTotal;
-                        const sessionElapsed = _cachedStartedAtMs
-                            ? Math.floor(
-                                  (Date.now() - _cachedStartedAtMs) / 1000,
-                              )
-                            : 0;
-                        todayTotalCurrentProject = Math.max(
-                            0,
-                            globalTotal - sessionElapsed,
-                        );
-                        scheduleReconcileAndFlush();
-                    } else {
-                        todayTotalGlobal = allProjectsTotal;
                     }
-                } else {
-                    todayTotalGlobal = allProjectsTotal;
-                    todayTotalCurrentProject = 0;
-                    isTimerRunning = false;
-                    isTimerPaused = false;
-                    currentEntry = null;
-                    _cachedStartedAtMs = null;
+                }
+
+                // `todayTotalGlobal` is the COMPLETED base — every consumer (tray tick,
+                // renderIdleFreeze) adds the live session's local elapsed on top. The
+                // server figure already includes its own open entry's elapsed, so strip
+                // it back out exactly like the 10s poll does; keeping it here counted the
+                // running session twice for as long as it took the next tick to repaint,
+                // and after an idle split the two elapsed figures are measured from
+                // different starts, which made the disagreement permanent-looking.
+                //
+                // Subtracted UNCONDITIONALLY, not only while the local timer runs: with a
+                // 10-minute upload cadence the server can still be holding an entry OPEN
+                // that the desktop closed minutes ago, and that row is already counted
+                // locally by getUnsyncedCompletedSecondsForToday(). Gating on
+                // `isTimerRunning` therefore double-counted the session the user had just
+                // stopped — and left the total CLIMBING after Stop, since the server keeps
+                // measuring its phantom-open entry to now().
+                todayTotalGlobal =
+                    Math.max(0, allProjectsTotal - serverLiveElapsed) +
+                    getUnsyncedCompletedSecondsForToday();
+                if (!isTimerRunning) todayTotalCurrentProject = 0;
+
+                // Remember this project's completed total while stopped, so Start can
+                // seed the display with the very number the user is looking at.
+                if (!isTimerRunning && validProjectId) {
+                    _serverProjectTodayTotals.set(validProjectId, globalTotal);
                 }
 
                 if (isTimerRunning && currentEntry?.project_id) {
-                    if (status.running || isServerTimerPaused(status)) {
-                        todayTotalForDisplay =
-                            status.project_today_total ?? globalTotal;
-                    } else {
-                        const sessionElapsed = _cachedStartedAtMs
-                            ? Math.floor(
-                                  (Date.now() - _cachedStartedAtMs) / 1000,
-                              )
-                            : 0;
-                        todayTotalForDisplay =
-                            todayTotalCurrentProject + sessionElapsed;
-                    }
+                    const sessionElapsed = _cachedStartedAtMs
+                        ? Math.floor((Date.now() - _cachedStartedAtMs) / 1000)
+                        : 0;
+                    todayTotalForDisplay =
+                        todayTotalCurrentProject + sessionElapsed;
                 } else {
                     todayTotalForDisplay = globalTotal;
                 }
@@ -3725,8 +3717,13 @@ function setupIPC() {
             entry: currentEntry,
             elapsed: elapsedForState,
             todayTotal: todayTotalForDisplay,
-            // Non-ticking all-projects sum for the secondary field.
-            todayTotalGlobal,
+            // All-projects sum for the secondary field. The renderer paints this value
+            // directly, so hand it the LIVE figure (completed base + the running
+            // session's elapsed, frozen at idle-start while paused) — the same number
+            // the next `timer-tick` will carry. `todayTotalGlobal` itself stays the
+            // completed base that every tick adds elapsed to.
+            todayTotalGlobal:
+                todayTotalGlobal + (isTimerRunning ? elapsedForState : 0),
             // True while an idle alert is waiting for an answer — the popup renders
             // itself locked so a re-opened window can never come back unlocked.
             idleLocked: isIdleAlertActive(),
@@ -3871,44 +3868,58 @@ function afterStartTimer(projectIdForTotal, todayTotalForPopup) {
  * Atomically switch the running timer to a different project via a single
  * server-side transaction (zero gap between projects).
  */
+/**
+ * Move tracking to a different project.
+ *
+ * Purely local: the live session is closed and a new one opened at the SAME instant, in
+ * one SQLite transaction. That atomicity is what keeps the timeline contiguous — there
+ * is never a moment with two open sessions or none, which is exactly the invariant the
+ * old server-side atomic switch existed to provide, now without a network dependency.
+ */
 async function switchProject(projectId) {
-    if (!isTimerRunning || !apiClient) return { error: "No timer running" };
+    if (!isTimerRunning) return { error: "No timer running" };
+
+    const live = getActiveLocalTimer();
+    if (!live) return { error: "No timer running" };
 
     try {
-        // Send final heartbeat for the old entry before switching
+        // Final heartbeat for the OLD entry before the boundary moves.
         if (activityMonitor) {
             await activityMonitor.sendFinalHeartbeat().catch(() => {});
         }
 
-        const result = await apiClient.switchProject(projectId);
-        const newEntry = result.entry;
+        const switchAt = new Date().toISOString();
+        const next = splitLocalSession(live.id, switchAt, projectId, null);
+        if (!next) return { error: "Could not switch project" };
 
-        // Update local state to the new entry
-        currentEntry = newEntry;
-        _cachedStartedAtMs = newEntry?.started_at
-            ? new Date(newEntry.started_at).getTime()
-            : null;
-        todayTotalCurrentProject = result.today_total ?? 0;
-        // Keep the "Today, all projects" line global across a project switch — the
-        // response's `today_total` is scoped to the NEW project.
-        if (result.all_projects_today_total != null) {
-            todayTotalGlobal = Math.max(0, result.all_projects_today_total);
-        }
+        // A switch performed within a second or two of starting leaves behind a
+        // zero-ish session that is pure noise. Drop it, but only while the server has
+        // never seen it.
+        dropTrivialLocalSession(live.id);
 
-        posthog.capture(newEntry?.user_id || "unknown", "timer_switched", {
+        const newEntry = {
+            id: next.id,
+            started_at: next.started_at,
             project_id: projectId,
-            stopped_entry_id: result.stopped_entry?.id,
+            idempotency_key: next.idempotency_key,
+            _localId: next.id,
+        };
+
+        currentEntry = newEntry;
+        _cachedStartedAtMs = new Date(next.started_at).getTime();
+        todayTotalCurrentProject = 0;
+        _timerStateVersion++;
+
+        posthog.capture(currentEntry?.user_id || "unknown", "timer_switched", {
+            project_id: projectId,
+            stopped_entry_id: live.id,
         });
 
-        // Restart screenshot service with new entry ID
+        // Rebind capture services to the new session.
         screenshotService?.stop();
         screenshotService?.start(newEntry.id);
-
-        // Restart activity monitor for the new entry
         activityMonitor?.stop();
         activityMonitor?.start();
-
-        // Restart idle detector for the new entry (reset idle tracking state)
         idleDetector?.stop();
         idleDetector?.start();
 
@@ -3918,17 +3929,18 @@ async function switchProject(projectId) {
         });
         updateTrayTitle();
 
+        // The boundary just moved: the old row closed and a new one opened. Announce it
+        // so the dashboard is not left attributing this work to the previous project.
+        pushSessionBoundary("project-switch");
+
         return {
             success: true,
             entry: newEntry,
             todayTotal: todayTotalCurrentProject,
         };
     } catch (e) {
-        const upgradeResult = await handleAgentUpgradeRequired(e);
-        if (upgradeResult) return upgradeResult;
-
         console.error("[switchProject] Failed:", e.message);
-        return { error: e.response?.data?.message || e.message };
+        return { error: e.message };
     }
 }
 
@@ -3961,9 +3973,16 @@ async function startTimer(projectId = null) {
         // ── Pre-start permission gate (macOS only) ──────────────────────────────
         // Check screen recording permission BEFORE starting the timer so the user
         // is not surprised by a permission prompt mid-tracking.
+        // Screen Recording gates SCREENSHOTS, never TIME. This used to return an
+        // error when the user chose "Open System Settings", so Start did nothing at
+        // all — combined with the banner that could never clear, the user simply
+        // could not track time. The prompt now runs at most ONCE per session and the
+        // timer starts regardless of how it is answered: a missing screenshot
+        // permission degrades evidence capture, it must never cost tracked hours.
         if (
             process.platform === "darwin" &&
-            _screenPermissionGranted !== true
+            _screenPermissionGranted !== true &&
+            !_screenPermissionSkippedThisSession
         ) {
             checkScreenRecordingPermission();
             if (!_screenPermissionGranted) {
@@ -3978,19 +3997,17 @@ async function startTimer(projectId = null) {
                     console.log(
                         "[Timer] Screen recording permission not granted — showing onboarding",
                     );
-                    const permResult = await showScreenPermissionOnboarding({
+                    // Asked once per session whichever button is pressed. Keying this
+                    // on "Skip for Now" alone was the bug: choosing "Open System
+                    // Settings" left the flag false, so the SAME modal re-opened on
+                    // every subsequent Start.
+                    _screenPermissionSkippedThisSession = true;
+                    await showScreenPermissionOnboarding({
                         isPreStart: true,
                         wasTracking: false,
                     });
-                    if (permResult === "opened-settings") {
-                        // User went to settings — don't start timer yet. They need to restart.
-                        return {
-                            error: "Please grant Screen Recording permission and restart the app. Your project selection will be remembered.",
-                        };
-                    }
-                    // User clicked "Skip for Now" — let them track without screenshots
                     console.log(
-                        "[Timer] User skipped permission — starting timer without screenshot capability",
+                        "[Timer] Starting timer without screenshot capability",
                     );
                     // Notify renderer that permission is not granted so it can show a warning
                     notifyPopup("permission-status", { granted: false });
@@ -3998,160 +4015,114 @@ async function startTimer(projectId = null) {
             }
         }
 
-        // LOCAL-FIRST: Record timer start in SQLite immediately.
-        // The local timestamp is the source of truth — never overwritten.
-        const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-        const idempotencyKey = generateIdempotencyKey();
-        const localStartedAt = new Date().toISOString();
-        _cachedStartedAtMs = Date.now();
+        // ── Project authorization, checked locally ──────────────────────────
+        // The server used to reject a start on an unassigned project. There is no
+        // start call any more, so the check happens against the cached project list
+        // (loadProjects()). A stale cache is not a data-integrity risk: the sync
+        // endpoint re-checks assignment and stores the entry with project_id = null
+        // rather than rejecting it, so the TIME survives either way.
+        // `cachedProjects` is the module-level cache loadProjects() fills. Reading a
+        // bare `projects` here threw ReferenceError on EVERY start — an undeclared
+        // identifier always throws — which aborted the handler before the session was
+        // ever written, so the timer could not start at all.
+        if (projectId && Array.isArray(cachedProjects) && cachedProjects.length > 0) {
+            const known = cachedProjects.some(
+                (p) => String(p.id) === String(projectId),
+            );
+            if (!known) {
+                _startTimerInProgress = false;
+                return { error: "You are not assigned to this project." };
+            }
+        }
 
-        saveLocalTimerStart(localId, idempotencyKey, projectId, localStartedAt);
+        // LOCAL-FIRST: the session is written to SQLite and that is the whole of it.
+        // No network call is on this path, so nothing about starting can fail, hang,
+        // or be lost because of connectivity. The sync worker uploads it later.
+        const session = openLocalSession(projectId);
+        if (!session) {
+            _startTimerInProgress = false;
+            return { error: "Could not start the timer — local storage unavailable." };
+        }
+
+        const localId = session.id;
+        const localStartedAt = session.started_at;
+        _cachedStartedAtMs = new Date(localStartedAt).getTime();
+
         touchLastActiveAt(localStartedAt);
         console.log(
-            `[Timer] Local start recorded: ${localId}, key=${idempotencyKey}`,
+            `[Timer] Session opened locally: ${localId} (uuid=${session.idempotency_key})`,
         );
 
-        // Set local state immediately — timer is running regardless of network
         const localEntry = {
             id: localId,
             started_at: localStartedAt,
             project_id: projectId,
-            idempotency_key: idempotencyKey,
-            _offline: true,
+            idempotency_key: session.idempotency_key,
             _localId: localId,
         };
         currentEntry = localEntry;
         isTimerRunning = true;
         isTimerPaused = false;
-        todayTotalCurrentProject = 0;
+        // Seed the project's COMPLETED base instead of zeroing it. Hardcoding 0 meant
+        // the start response carried `todayTotal: 0` and the display restarted from
+        // 00:00:00 on a project that already had hours today.
+        //
+        // The seed must MATCH what is already on screen, or Start produces a visible
+        // jump a few seconds later when the status tick corrects it. So: prefer the
+        // server's last stopped-state figure for this project (it includes manual
+        // entries and work this device has since purged) and add only the local rows
+        // the server has NOT seen — mirroring how todayTotalGlobal is assembled. Local
+        // completed rows alone are NOT a proxy for the day's total. Falls back to the
+        // full local total when there is no server figure yet (first run, or offline),
+        // which is still far better than zero. No network call: both inputs are cached
+        // or local, so the start path stays offline by construction.
+        const serverProjectBase = _serverProjectTodayTotals.get(projectId);
+        // Two independent, self-consistent views of "this project's completed time
+        // today": the server figure (manual + purged, plus any local rows the server
+        // has since seen) with the still-unsynced local rows added on top, and the
+        // raw local-completed total for the project. Seed with the LARGER of the two
+        // (never below zero). Taking the max is what stops the display restarting at
+        // 00:00: `_serverProjectTodayTotals` is only populated by a stopped status
+        // tick for THIS exact project, so on a fresh launch → immediate Start it is
+        // empty and the old code fell straight through to the local total — which is
+        // itself 0 the moment those rows were purged or synced-away. Neither source
+        // double-counts the other (each is a complete total), so max() is safe, and
+        // afterStartTimer() refreshes it from the live server figure within a tick.
+        const seedFromServer =
+            serverProjectBase != null
+                ? serverProjectBase +
+                  getLocalCompletedSecondsForProjectToday(projectId, {
+                      unsyncedOnly: true,
+                  })
+                : 0;
+        const seedFromLocal = getLocalCompletedSecondsForProjectToday(projectId);
+        todayTotalCurrentProject = Math.max(seedFromServer, seedFromLocal, 0);
         _pendingOfflineReassignIdleSec = 0;
+        _timerStateVersion++;
 
-        // Try to sync with server (non-blocking for the user)
-        try {
-            // BUG 1 FIX: send the REAL local started_at so the server records the true
-            // start (not now()). Critical for offline starts that sync minutes/hours later.
-            const result = await apiClient.startTimer(
-                projectId,
-                idempotencyKey,
-                localStartedAt,
-            );
-            // Server confirmed — update local state with server entry, but keep the
-            // local started_at as the display anchor (BUG 2: never jump the start forward).
-            currentEntry = {
-                ...result.entry,
-                _localId: localId,
-                idempotency_key: idempotencyKey,
-            };
-            adoptServerStartedAt(currentEntry?.started_at);
-            todayTotalCurrentProject = result.today_total ?? 0;
-            _startAllProjectsTotal = result.all_projects_today_total ?? null;
-            markLocalTimerStartSynced(localId, result.entry.id);
-            posthog.capture(
-                currentEntry?.user_id || "unknown",
-                "timer_started",
-                { project_id: projectId },
-            );
-            // FIX D7: Increment state version on successful start
-            _timerStateVersion++;
+        posthog.capture(currentEntry?.user_id || "unknown", "timer_started", {
+            project_id: projectId,
+        });
 
-            const todayTotalForPopup = todayTotalCurrentProject;
+        if (_timerStateVersion === startVersion + 1) {
             notifyPopup("timer-started", {
-                ...currentEntry,
-                todayTotal: todayTotalForPopup,
+                ...localEntry,
+                todayTotal: todayTotalCurrentProject,
             });
-            setImmediate(() => afterStartTimer(projectId, todayTotalForPopup));
-            return {
-                success: true,
-                entry: currentEntry,
-                todayTotal: todayTotalForPopup,
-            };
-        } catch (e) {
-            const status = e.response?.status;
-
-            const upgradeResult = await handleAgentUpgradeRequired(e, {
-                localId,
-            });
-            if (upgradeResult) {
-                return upgradeResult;
-            }
-
-            // 409 = timer already running on server — sync local state
-            if (status === 409) {
-                try {
-                    await apiClient.stopTimer();
-                } catch {}
-
-                try {
-                    // BUG 1 FIX: preserve the real local start on the retry too
-                    const retryResult = await apiClient.startTimer(
-                        projectId,
-                        idempotencyKey,
-                        localStartedAt,
-                    );
-                    currentEntry = {
-                        ...retryResult.entry,
-                        _localId: localId,
-                        idempotency_key: idempotencyKey,
-                    };
-                    adoptServerStartedAt(currentEntry?.started_at);
-                    isTimerRunning = true;
-                    isTimerPaused = false;
-                    todayTotalCurrentProject = retryResult.today_total ?? 0;
-                    _startAllProjectsTotal =
-                        retryResult.all_projects_today_total ?? null;
-                    markLocalTimerStartSynced(localId, retryResult.entry.id);
-                    notifyPopup("timer-started", {
-                        ...currentEntry,
-                        todayTotal: todayTotalCurrentProject,
-                    });
-                    setImmediate(() =>
-                        afterStartTimer(projectId, todayTotalCurrentProject),
-                    );
-                    return {
-                        success: true,
-                        entry: currentEntry,
-                        todayTotal: todayTotalCurrentProject,
-                    };
-                } catch (retryErr) {
-                    const upgradeResult = await handleAgentUpgradeRequired(
-                        retryErr,
-                        { localId },
-                    );
-                    if (upgradeResult) {
-                        return upgradeResult;
-                    }
-                    // Still offline or server error — timer is running locally
-                    console.warn(
-                        "[Timer] 409 retry failed, continuing locally:",
-                        retryErr.message,
-                    );
-                }
-            }
-
-            // Network failure or any other error — timer is already running locally
-            console.log(
-                "[Timer] API start failed, continuing in local-first mode:",
-                e.message,
-            );
-            // Timer start is already saved in timer_sessions SQLite table via saveLocalTimerStart().
-            // reconcileTimerState() will sync it on reconnect. Do NOT also queue in offlineQueue
-            // to avoid dual-replay causing duplicate time entries.
-            if (_timerStateVersion === startVersion) {
-                notifyPopup("timer-started", {
-                    ...localEntry,
-                    todayTotal: 0,
-                    offline: true,
-                    _stateVersion: startVersion,
-                });
-            }
-            setImmediate(() => afterStartTimer(projectId, 0));
-            return {
-                success: true,
-                entry: localEntry,
-                todayTotal: 0,
-                offline: true,
-            };
         }
+        setImmediate(() => afterStartTimer(projectId, todayTotalCurrentProject));
+
+        // A start is a boundary. The session is already durable in SQLite — this is
+        // announcement, not persistence — but until the server has it, the dashboard
+        // shows the user as not tracking, and heartbeats for this session are refused
+        // (they FK to an entry that does not exist yet) and queue up instead.
+        pushSessionBoundary("timer-start");
+
+        return {
+            success: true,
+            entry: localEntry,
+            todayTotal: todayTotalCurrentProject,
+        };
     } finally {
         _startTimerInProgress = false;
     }
@@ -4404,13 +4375,13 @@ async function _idleWatchdogTick() {
         // idle detection disabled, or the detector wedged with no alert on screen.
         // See bugs/desktop-idle-alert-closed-by-idle-watchdog.md.
         if (isIdleAlertActive()) {
-            retryIdlePauseIfUnsynced();
             return;
         }
-        // Respect the "always keep idle time" policy: those orgs intentionally
-        // credit presence, so awake-idle is not a phantom for them. (True sleep is
-        // still stopped by autoStopAfterSleepGap regardless of policy.)
-        if (config?.keep_idle_time === "always") return;
+        // The "always keep idle time" exemption used to live here — the watchdog stood
+        // down for those orgs because they intentionally credited presence. Nothing
+        // credits idle presence any more (`always` now resolves as a discard, same as
+        // `never`), so exempting them would only leave a wedged detector's session
+        // running with no backstop. Removed deliberately.
 
         let systemIdleSec;
         try {
@@ -4566,72 +4537,26 @@ async function stopTimer(options = {}) {
             await activityMonitor.sendFinalHeartbeat().catch(() => {});
         }
 
-        // LOCAL-FIRST: Record stop in SQLite immediately with precise timestamps.
+        // LOCAL-FIRST: closing the session in SQLite IS the stop. There is no server
+        // call here, so a stop can never fail, hang, or be lost to the network — the
+        // failure mode that motivated this whole refactor.
         const localEndedAt = new Date(endedAtMs).toISOString();
-        const localDuration = sessionElapsed;
-        const localStartedAtIso = currentEntry?.started_at || localEndedAt;
         const localId = currentEntry?._localId || null;
 
         if (localId) {
-            saveLocalTimerStop(localId, localEndedAt, localDuration);
+            closeLocalSession(localId, localEndedAt);
             console.log(
-                `[Timer] Local stop recorded: ${localId}, duration=${localDuration}s`,
+                `[Timer] Session closed locally: ${localId}, duration=${sessionElapsed}s`,
             );
-        }
-
-        // Try to sync stop with server (non-blocking for local state)
-        let serverResult = null;
-        let serverStopFailed = false;
-        try {
-            const stopPayload = {};
-            // BUG 3 FIX: Target the SPECIFIC server entry id so the server closes THIS
-            // session and never a newer/live one opened after it. Only send a REAL server
-            // id (a `local-…` placeholder means the start never synced — in that case the
-            // live stop may 404 (handled as success) and reconcileTimerState() will later
-            // sync the full start+stop against the real server id).
-            if (
-                stoppedEntryId &&
-                !String(stoppedEntryId).startsWith("local-")
-            ) {
-                stopPayload.time_entry_id = stoppedEntryId;
-            }
-            // Idempotency: makes a replayed stop (lost response on weak network) safe —
-            // the server matches the key and won't re-close a different entry.
-            if (currentEntry?.idempotency_key)
-                stopPayload.idempotency_key = currentEntry.idempotency_key;
-            // Send local timestamps for offline sync accuracy (local started_at is truth)
-            if (currentEntry?._offline || currentEntry?._localId) {
-                stopPayload.started_at = localStartedAtIso;
-                stopPayload.ended_at = localEndedAt;
-            }
-            serverResult = await apiClient.stopTimer(stopPayload);
-            // Mark synced in local DB
-            if (localId) markLocalTimerStopSynced(localId);
-        } catch (e) {
-            serverStopFailed = true;
-            if (e.response?.status === 404) {
-                // BUG 3 FIX: 404 = entry already closed / not found on server. Treat as
-                // already-synced success — do NOT retry against whatever is now latest.
-                serverStopFailed = false;
-                if (localId) markLocalTimerStopSynced(localId);
-                console.log(
-                    "[Timer] Server stop returned 404 (already synced) — treating as success",
-                );
-            } else if (!e.response || e.code === "ECONNABORTED") {
-                // Network error or timeout — stop is already saved in timer_sessions via saveLocalTimerStop().
-                // reconcileTimerState() will sync it on reconnect. Do NOT also queue in offlineQueue
-                // to avoid dual-replay causing duplicate time entries.
-                console.warn(
-                    "[Timer] Server stop failed (offline/timeout) — saved locally, will reconcile on reconnect",
-                );
-            } else {
-                // Server returned an error but we already stopped locally
-                // timer_sessions has the stop recorded; reconcileTimerState() handles sync.
-                console.error("[Timer] Server stop returned error:", e.message);
+            // An idle-split artifact or a mis-click leaves a sub-second session that is
+            // noise, not work. Drop it — but only while the server has never seen it;
+            // anything already uploaded is the server's to keep.
+            if (isZeroDurationEntry) {
+                dropTrivialLocalSession(localId);
             }
         }
 
-        // Now update local state (server confirmed stop, or we timed out)
+        // Now update local state
         isTimerRunning = false;
         isTimerPaused = false;
         currentEntry = null;
@@ -4659,70 +4584,71 @@ async function stopTimer(options = {}) {
                 Math.max(0, sessionElapsed - pendingIdleAtStop),
         });
 
-        // Post-stop async work (non-blocking)
+        // Post-stop async work (non-blocking). The session is already durable; this
+        // only refreshes the DISPLAYED totals and nudges the upload.
         (async () => {
-            const result = serverStopFailed ? null : serverResult;
-            // BUG-001: If the entry had near-zero duration (artifact from idle split),
-            // delete it from the server to keep the timesheet clean.
-            if (isZeroDurationEntry && stoppedEntryId && !serverStopFailed) {
-                try {
-                    await apiClient.deleteTimeEntry(stoppedEntryId);
-                    console.log(
-                        `[Timer] Deleted zero-duration entry ${stoppedEntryId} (${sessionElapsed}s)`,
-                    );
-                } catch (e) {
-                    // Deletion is now forbidden system-wide (server policy returns 403).
-                    // That's expected — don't log it as an error; just leave the tiny entry.
-                    const status = e && e.response && e.response.status;
-                    if (status === 403) {
-                        console.log(
-                            `[Timer] Zero-duration entry ${stoppedEntryId} left in place (deletion disabled by policy)`,
-                        );
-                    } else {
-                        console.warn(
-                            "[Timer] Failed to delete zero-duration entry:",
-                            e.message,
-                        );
-                    }
-                }
-            }
+            // A stop is a boundary: until the server hears it, its open entry keeps
+            // accruing and the dashboard shows the user still tracking. Announced
+            // BEFORE the totals are re-read below, so the figures fetched are the
+            // corrected ones rather than the phantom-open ones.
+            pushSessionBoundary("timer-stop");
+
+            // The totals below are still assembled defensively. The push above is fired
+            // and not awaited, and it can fail (offline, backoff, a 5xx), so the server
+            // figure read here may STILL be missing the session that just ended.
+            //
+            // Because the just-stopped session may not have been pushed yet, the server
+            // total may not contain it. Adding the local unsynced-completed seconds
+            // on top is what stops the total visibly DROPPING by the length of the
+            // session the user just finished — the same rule the status poll uses.
+            // The server figure is still needed because it includes MANUAL entries,
+            // which the agent does not own and cannot compute locally.
+            const localGlobal =
+                (todayTotalGlobal || 0) +
+                Math.max(0, sessionElapsed - pendingIdleAtStop);
             try {
-                todayTotalGlobal = await apiClient.getTodayTotal(null);
+                // `/timer/status`, not `/timer/today-total`: the stop has NOT been
+                // pushed yet, so the server still holds this entry OPEN and folds its
+                // elapsed-to-now into every today figure — while the row we just closed
+                // is already counted locally below. `today-total` cannot express that
+                // overlap (it returns a bare number), so read the status payload and
+                // subtract the live elapsed it tells us it included.
+                const status = await apiClient?.getTimerStatus(null);
+                const serverGlobal =
+                    status?.all_projects_today_total ?? status?.today_total;
+                todayTotalGlobal =
+                    serverGlobal != null && serverGlobal >= 0
+                        ? Math.max(
+                              0,
+                              serverGlobal - (status.elapsed_seconds ?? 0),
+                          ) + getUnsyncedCompletedSecondsForToday()
+                        : localGlobal;
             } catch {
-                if (result?.today_total != null) {
-                    todayTotalGlobal = result.today_total;
-                } else {
-                    // Offline: the server total is unreachable. todayTotalGlobal is the
-                    // base (excludes the running session), so add the just-stopped
-                    // session locally — otherwise the stopped display / get-timer-state
-                    // would show 00:00:00 even though the time was saved (sleep auto-stop).
-                    todayTotalGlobal =
-                        (todayTotalGlobal || 0) +
-                        Math.max(0, sessionElapsed - pendingIdleAtStop);
-                }
+                // Offline — keep the local accumulated total. NEVER 0, or a sleep
+                // auto-stop would show 00:00:00 despite the time being safely saved.
+                todayTotalGlobal = localGlobal;
             }
             updateTrayTitle();
-            // Fall back to the LOCAL accumulated total, never 0. This async block
-            // re-emits timer-stopped after the sync stop already showed the correct
-            // local total; if the server stop returned nothing AND getTodayTotal fails
-            // (flaky network), `?? 0` here would overwrite the correct stopped total
-            // with 00:00:00 in the popup. Keep the local total instead.
-            let todayTotalForPopup =
-                result?.today_total ?? localStoppedProjectTotal;
+
+            let todayTotalForPopup = localStoppedProjectTotal;
             try {
                 const serverTotal =
-                    await apiClient.getTodayTotal(stoppedProjectId);
+                    await apiClient?.getTodayTotal(stoppedProjectId);
+                // There is no project-scoped unsynced sum, so take whichever source
+                // knows more: the server (manual entries) or the local figure (which
+                // already includes the session that has not been uploaded yet).
                 if (serverTotal != null && serverTotal >= 0) {
-                    todayTotalForPopup = serverTotal;
+                    todayTotalForPopup = Math.max(
+                        serverTotal,
+                        localStoppedProjectTotal,
+                    );
                 }
             } catch {
-                // Network failed — keep the local accumulated total (not 0).
                 todayTotalForPopup = localStoppedProjectTotal;
             }
             notifyPopup("timer-stopped", {
-                entry: result?.entry ?? null,
+                entry: null,
                 todayTotal: todayTotalForPopup,
-                // Refreshed all-projects sum (server-authoritative when online).
                 todayTotalGlobal,
             });
         })().catch(() => {});
@@ -4737,299 +4663,21 @@ async function stopTimer(options = {}) {
     }
 }
 
-// ── Reconciliation on Reconnect ─────────────────────────────────────────────
-// When network comes back, compare local SQLite timer state vs server state.
-// Preference: never lose time.
-/**
- * BUG 3 FIX: Sync a completed local session's stop to the server, ALWAYS binding
- * to the specific server entry id (`time_entry_id`) so the server closes THIS
- * entry and never a newer/live one. Sends local timestamps + idempotency key.
- * Returns true if synced (or already-synced via 404), false to retry later.
- */
-async function syncSessionStop(session) {
-    const payload = {
-        started_at: session.started_at,
-        ended_at: session.ended_at,
-    };
-    if (session.server_entry_id)
-        payload.time_entry_id = session.server_entry_id;
-    if (session.idempotency_key)
-        payload.idempotency_key = session.idempotency_key;
-    try {
-        await apiClient.stopTimer(payload);
-        markLocalTimerStopSynced(session.id);
-        return true;
-    } catch (e) {
-        if (e.response?.status === 404) {
-            // Entry already closed/gone on server — treat as already-synced success.
-            markLocalTimerStopSynced(session.id);
-            return true;
-        }
-        console.warn(
-            `[Reconcile] Session ${session.id} stop sync failed:`,
-            e.message,
-        );
-        return false;
-    }
-}
-
-async function reconcileTimerState() {
-    if (!apiClient) return;
-    // FIX D4: Skip reconcile if idle action is in progress to prevent race conditions
-    if (_isHandlingIdleAction) {
-        console.log("[Reconcile] Skipping — idle action in progress");
-        return;
-    }
-    if (isIdleAlertActive()) {
-        console.log("[Reconcile] Skipping — idle alert active");
-        return;
-    }
-    // START-RACE FIX: while startTimer() is mid-flight it has already written the
-    // local start and is calling the API itself (and will mark it synced). If a
-    // TimerSync tick drives reconcile in that ~150ms window, reconcile would ALSO
-    // push the still-"unsynced" start → a second, duplicate server entry (the
-    // 1-second straggler overlapping the real entry). Defer to startTimer.
-    if (_startTimerInProgress) {
-        console.log("[Reconcile] Skipping — startTimer in progress");
-        return;
-    }
-    // BUG 3 FIX: Shared guard — reconcile and the startTimerSync loop must not
-    // mutate timer state (currentEntry / _cachedStartedAtMs / isTimerRunning)
-    // concurrently. Whichever runs first wins; the other defers to the next tick.
-    if (_timerStateMutationInProgress) {
-        console.log(
-            "[Reconcile] Skipping — timer state mutation already in progress",
-        );
-        return;
-    }
-    _timerStateMutationInProgress = true;
-    try {
-        const serverStatus = await apiClient.getTimerStatus();
-        // FIX D8: Update clock offset for server time sync (telemetry only — NOT
-        // applied to stored or displayed timestamps; see adoptServerStartedAt / tray).
-        if (serverStatus.server_time) {
-            _clockOffsetMs =
-                new Date(serverStatus.server_time).getTime() - Date.now();
-        }
-        const localActive = getActiveLocalTimer();
-
-        // ── Phase 1: Sync completed (stopped) sessions FIRST ──────────────────
-        // This ensures stopped sessions are flushed to the server BEFORE we push
-        // any new starts. Prevents the Redis key mismatch bug where pushing a new
-        // start auto-stops the wrong entry on the server.
-        const unsynced = getUnsyncedTimerSessions();
-
-        // Pass 1a: sync sessions that have a synced start but unsynced stop (stop-only)
-        for (const session of unsynced) {
-            if (session.id === currentEntry?._localId) continue; // Skip active session
-            if (
-                session.synced_start &&
-                session.ended_at &&
-                !session.synced_stop
-            ) {
-                // BUG 3 FIX: bind stop to the specific server entry id (inside helper).
-                await syncSessionStop(session);
-            }
-        }
-
-        // Pass 1b: sync sessions that need both start + stop (fully unsynced, completed)
-        for (const session of unsynced) {
-            if (session.id === currentEntry?._localId) continue; // Skip active session
-            // LIVE-TIMER GUARD: a session whose START never synced can only be created
-            // via POST /timer/start, which the server force-CLOSES the currently-open
-            // timer to honor (one-open-timer-per-user). If a timer is live right now,
-            // pushing this historical start would auto-stop and truncate it — the
-            // "new time entry lost after stop→start" bug. Defer: the row stays in
-            // timer_sessions (its time stays visible via the pending-offline total) and
-            // syncs on a later reconcile once no timer is open. Pass 1a (stop-only,
-            // synced_start=1) is unaffected — it targets a specific entry, never auto-stops.
-            if (!session.synced_start && (isTimerRunning || isTimerPaused)) {
-                continue;
-            }
-            if (!session.synced_start) {
-                try {
-                    // BUG 1 FIX: send the REAL local started_at so the server records the
-                    // true offline start instead of defaulting to now() at reconcile time.
-                    const result = await apiClient.startTimer(
-                        session.project_id || null,
-                        session.idempotency_key,
-                        session.started_at,
-                    );
-                    markLocalTimerStartSynced(session.id, result.entry.id);
-                    if (session.ended_at) {
-                        // BUG 3 FIX: now that server_entry_id is known, bind the stop to it.
-                        await syncSessionStop({
-                            ...session,
-                            server_entry_id: result.entry.id,
-                        });
-                    }
-                } catch (e) {
-                    const upgradeResult = await handleAgentUpgradeRequired(e, {
-                        localId: session.id,
-                    });
-                    if (upgradeResult) return;
-
-                    console.warn(
-                        `[Reconcile] Session ${session.id} sync failed:`,
-                        e.message,
-                    );
-                }
-            }
-        }
-
-        // ── Phase 2: Handle the currently active timer ────────────────────────
-        if (localActive && !localActive.synced_start) {
-            // Local has an unsynced start — push it to server
-            console.log("[Reconcile] Pushing unsynced local start to server");
-            try {
-                // BUG 1 FIX: send the REAL local started_at (offline start time).
-                const result = await apiClient.startTimer(
-                    localActive.project_id || null,
-                    localActive.idempotency_key,
-                    localActive.started_at,
-                );
-                markLocalTimerStartSynced(localActive.id, result.entry.id);
-                // If this is the active in-memory entry, capture the resolved server id
-                // so any subsequent stop binds to it (BUG 3).
-                if (localActive.id === currentEntry?._localId && currentEntry) {
-                    currentEntry.id = result.entry.id;
-                    // FIX D2: rebind the live screenshot service off the stale `local-…`
-                    // id so subsequent live captures presign against the real entry id
-                    // (without restarting the capture cadence).
-                    screenshotService?.rebindEntryId(result.entry.id);
-                }
-
-                // If local also has an unsynced stop, push that too — bound to server id.
-                if (localActive.ended_at && !localActive.synced_stop) {
-                    await syncSessionStop({
-                        ...localActive,
-                        server_entry_id: result.entry.id,
-                    });
-                }
-            } catch (startErr) {
-                const upgradeResult = await handleAgentUpgradeRequired(
-                    startErr,
-                    { localId: localActive.id },
-                );
-                if (upgradeResult) return;
-
-                if (startErr.response?.status === 409) {
-                    // Server already has a running timer — check if it's ours (idempotency)
-                    console.log("[Reconcile] Server has running timer (409)");
-                } else {
-                    console.warn(
-                        "[Reconcile] Start sync failed, will retry:",
-                        startErr.message,
-                    );
-                }
-            }
-        } else if (
-            !isServerTimerOpen(serverStatus) &&
-            isTimerRunning &&
-            currentEntry?._localId
-        ) {
-            // Server has NEITHER a running NOR a paused entry, but local does — push
-            // start with the original timestamp.
-            //
-            // MUST use isServerTimerOpen() (running OR paused), not raw
-            // !serverStatus.running: an idle-PAUSED server timer is still an OPEN
-            // entry. Treating "paused" as "no timer" here pushed a DUPLICATE start on
-            // reconnect (a second overlapping entry) AND changed the Redis entry id —
-            // which then 409'd and DROPPED a queued offline reassign that still
-            // referenced the original entry. See
-            // bugs/idle-reassign-offline-reconcile-duplicate.md.
-            console.log(
-                "[Reconcile] Server has no timer but local is running — pushing start",
-            );
-            const key =
-                currentEntry?.idempotency_key || generateIdempotencyKey();
-            // BUG 1 FIX: derive the REAL local start (from cached anchor or the entry)
-            // and send it so the server records the true start, not now().
-            const localStartIso =
-                currentEntry?.started_at ||
-                (_cachedStartedAtMs
-                    ? new Date(_cachedStartedAtMs).toISOString()
-                    : null);
-            try {
-                const result = await apiClient.startTimer(
-                    currentEntry?.project_id || null,
-                    key,
-                    localStartIso,
-                );
-                if (currentEntry?._localId) {
-                    markLocalTimerStartSynced(
-                        currentEntry._localId,
-                        result.entry.id,
-                    );
-                }
-                // Update local entry with server data, but keep the local start anchor
-                // immutable (BUG 2: never push the displayed start forward).
-                currentEntry = {
-                    ...result.entry,
-                    _localId: currentEntry?._localId,
-                    idempotency_key: key,
-                };
-                adoptServerStartedAt(result.entry?.started_at);
-                // FIX D2: rebind live screenshot capture to the resolved server id.
-                screenshotService?.rebindEntryId(result.entry?.id);
-            } catch (e) {
-                const upgradeResult = await handleAgentUpgradeRequired(e, {
-                    localId: currentEntry?._localId,
-                });
-                if (upgradeResult) return;
-
-                console.warn("[Reconcile] Push start failed:", e.message);
-            }
-        } else if (isServerTimerOpen(serverStatus) && isTimerRunning) {
-            // Server has an OPEN entry (running OR idle-paused) and local is running.
-            // Adopt the server ENTRY (id, project) so stops AND any queued offline
-            // reassign target the SAME entry instead of pushing a duplicate. A paused
-            // entry is resumed by the self-heal below; binding currentEntry to it here
-            // is what lets the queued reassign match (no 409). BUG 2 FIX: the local
-            // started_at is immutable truth — adoptServerStartedAt enforces
-            // "earlier-or-equal wins", so a skewed/wrong server now()-start can never
-            // make the visible timer jump backward.
-            currentEntry = {
-                ...serverStatus.entry,
-                _localId: currentEntry?._localId,
-            };
-            adoptServerStartedAt(serverStatus.entry?.started_at);
-        }
-
-        // FIX D4: Self-heal a stuck server-side pause. Idle pause calls
-        // apiClient.pauseTimer() server-side; on an offline 'keep' the matching
-        // resumeTimer() throws and is swallowed with no durable retry, so the server
-        // stays paused → the next sync re-pauses the UI (frozen timer) and totals are
-        // computed off the frozen elapsed. If the server still reports paused while we
-        // are locally running and NOT paused, replay the resume (idempotent). This runs
-        // every reconcile (online handler + scheduleReconcileAndFlush), so it converges.
-        if (
-            isServerTimerPaused(serverStatus) &&
-            isTimerRunning &&
-            !isTimerPaused &&
-            currentEntry?.id &&
-            !String(currentEntry.id).startsWith("local-")
-        ) {
-            try {
-                console.log(
-                    "[Reconcile] Server paused but local is running — replaying resume (self-heal)",
-                );
-                await apiClient.resumeTimer();
-            } catch (e) {
-                console.warn(
-                    "[Reconcile] Resume replay failed (will retry next reconcile):",
-                    e.message,
-                );
-            }
-        }
-
-        cleanOldLocalTimerSessions();
-    } catch (e) {
-        console.error("[Reconcile] Failed:", e.message);
-    } finally {
-        _timerStateMutationInProgress = false;
-    }
-}
+// ── Reconciliation on Reconnect — DELETED ───────────────────────────────────
+// reconcileTimerState() and syncSessionStop() lived here: ~290 lines that compared
+// local SQLite against GET /timer/status and tried to repair whichever had diverged,
+// guarded by three interlocking mutexes to stop the repairs racing each other.
+//
+// They are gone because the divergence they existed to fix cannot occur any more.
+// The desktop is the SOLE writer of tracked time: sessions are created, mutated and
+// closed in SQLite, and SessionSyncWorker pushes them up as an idempotent upsert keyed
+// on a client-generated uuid. There is no second writer, so there is nothing to
+// reconcile — the server simply converges on local state.
+//
+// Every bug this layer accumulated (duplicate entries from a racing start, a stop
+// replayed onto a newer session, an idle pause resuming behind an open alert, offline
+// time destroyed at sign-out) was a symptom of split ownership rather than a defect in
+// the repair logic. See bugs/offline-first-time-sync-refactor.md.
 
 // Periodically sync timer state with server to stay in sync with web dashboard
 let _configRefetchCycle = 0;
@@ -5104,76 +4752,61 @@ function startTimerSync() {
         _timerStateMutationInProgress = true;
 
         try {
+            // The ONLY thing taken from the server here is the today-totals, because
+            // they include MANUAL time entries the agent does not own. Timer STATE
+            // (running / entry / anchor) comes from local SQLite — the server no
+            // longer has an opinion the desktop needs to adopt, so the whole
+            // adopt-and-repair ladder that used to live here is gone.
             const status = await apiClient.getTimerStatus();
-            // Server reachable — if an idle pause failed to land earlier, push it now.
-            retryIdlePauseIfUnsynced();
             const globalTotal = status.today_total ?? 0;
             const elapsed = status.elapsed_seconds ?? 0;
-            // Completed offline sessions the server hasn't seen yet aren't in its
-            // today_total — add them so the offline time stays visible instead of the
-            // total "resetting" to the server value the instant we reconnect.
+
+            // Completed local sessions the server has not seen yet are not in its
+            // total — add them so offline time stays visible instead of the figure
+            // appearing to reset the instant we reconnect.
             const pendingOfflineSecs = getUnsyncedCompletedSecondsForToday();
-            if (isServerTimerOpen(status)) {
+
+            if (isTimerRunning) {
+                // A live session's elapsed is added by the tray tick, so strip the
+                // server's own elapsed to avoid counting it twice.
                 todayTotalGlobal =
                     Math.max(0, globalTotal - elapsed) + pendingOfflineSecs;
                 const projectTotal = status.project_today_total ?? globalTotal;
-                todayTotalCurrentProject = Math.max(0, projectTotal - elapsed);
+                // Add THIS project's completed rows the server has not seen yet, exactly
+                // like todayTotalGlobal adds `pendingOfflineSecs` above. Without this the
+                // project total collapsed to the server's figure — which, with the
+                // 10-minute sync cadence, does NOT include completed work from earlier
+                // today that is still queued locally. That is the "display resets to
+                // 00:00 a few seconds after Start" bug: the good local seed set in
+                // startTimer() was overwritten here by a server number missing all
+                // unsynced project time. (CLAUDE.md invariant: a server total read after
+                // a local mutation must add the local unsynced seconds back on top.)
+                const projectPendingSecs = currentEntry?.project_id
+                    ? getLocalCompletedSecondsForProjectToday(
+                          currentEntry.project_id,
+                          { unsyncedOnly: true },
+                      )
+                    : 0;
+                todayTotalCurrentProject =
+                    Math.max(0, projectTotal - elapsed) + projectPendingSecs;
             } else {
-                todayTotalGlobal = globalTotal + pendingOfflineSecs;
+                // Not running LOCALLY — but the server may still be holding our last
+                // session open (it only learns about the stop on the next 10-minute
+                // push), and `globalTotal` counts that phantom entry's elapsed to NOW,
+                // growing every poll. The stopped row is already counted in
+                // `pendingOfflineSecs`, so strip the server's elapsed here too or the
+                // total both double-counts the finished session and keeps climbing
+                // after Stop.
+                todayTotalGlobal =
+                    Math.max(0, globalTotal - elapsed) + pendingOfflineSecs;
                 todayTotalCurrentProject = 0;
             }
 
-            // RETRY-UNTIL-SYNCED: a session created AND stopped while offline lives in
-            // timer_sessions with synced_start/synced_stop = 0 and is flushed ONLY by
-            // reconcileTimerState(). That historically ran only on a NetworkMonitor
-            // 'online' transition, which never fires when net.isOnline() stays true
-            // (interface up but server was unreachable) or when the offline window is
-            // shorter than the monitor's poll — so the offline session was never synced
-            // and its time appeared to reset. Reaching here means the status fetch just
-            // succeeded (server is reachable), so drive reconcile every tick until any
-            // completed-but-unsynced session lands on the server. scheduleReconcileAndFlush()
-            // defers to the shared mutation guard (runs after this tick releases it).
-            //
-            // CRITICAL: only drain while NO timer is live. Pushing a historical
-            // synced_start=0 start via POST /timer/start force-closes the currently-open
-            // server timer (one-open-timer-per-user), which would auto-stop and truncate
-            // the running session (the "new entry lost after stop→start" bug). While a
-            // timer runs/pauses the pending row stays local (its time still shows via
-            // pendingOfflineSecs) and syncs once the timer stops. Belt-and-suspenders with
-            // the Pass 1b live-timer guard in reconcileTimerState().
-            if (
-                !isTimerRunning &&
-                !isTimerPaused &&
-                hasPendingCompletedOfflineSessions()
-            ) {
-                scheduleReconcileAndFlush();
-            }
-
-            if (isServerTimerOpen(status) && !isTimerRunning) {
-                if (hasUnsyncedLocalStopForEntry(status.entry?.id)) {
-                    // Local stop pending (server status is stale) — push the stop instead
-                    // of re-adopting the timer as running (self-restart-after-stop bug).
-                    console.log(
-                        "[TimerSync] Server shows entry open but a local stop is pending — pushing stop, not re-opening",
-                    );
-                    scheduleReconcileAndFlush();
-                } else {
-                    syncOpenTimerFromServerStatus(status, { notify: "none" });
-                }
-            } else if (
-                isServerTimerOpen(status) &&
-                isTimerRunning &&
-                isServerTimerPaused(status) !== isTimerPaused
-            ) {
-                syncOpenTimerFromServerStatus(status, {
-                    notify: isServerTimerPaused(status) ? "pause" : "start",
-                });
-            } else if (
-                !isServerTimerOpen(status) &&
-                !isTimerRunning &&
-                !isTimerPaused
-            ) {
-                // Phantom-stop recovery: in-memory state was cleared but SQLite still has an open session.
+            // Phantom-stop recovery: in-memory state was cleared (a renderer glitch,
+            // an exception mid-stop) but SQLite still holds an open session. SQLite
+            // wins — restore from it. This is the one repair still worth making, and
+            // it needs no server input at all.
+            if (!isTimerRunning && !isTimerPaused) {
                 const orphanLocal = getActiveLocalTimer();
                 if (orphanLocal && !orphanLocal.ended_at) {
                     console.log(
@@ -5197,70 +4830,7 @@ function startTimerSync() {
                         ...currentEntry,
                         todayTotal: todayTotalCurrentProject,
                     });
-                    _isSyncing = false;
-                    _timerStateMutationInProgress = false;
-                    scheduleReconcileAndFlush();
-                    return;
                 }
-            } else if (
-                !isServerTimerOpen(status) &&
-                (isTimerRunning || isTimerPaused)
-            ) {
-                // Don't kill a live idle decision (ALERTING/SUSPENDED/hidden window),
-                // a server-paused idle timer, or an unsynced local-first start.
-                if (shouldPreserveLocalRunningWhenServerStopped()) {
-                    console.log(
-                        "[TimerSync] Server says stopped but local idle/paused/unsynced state preserved — keeping local state",
-                    );
-                    _isSyncing = false;
-                    _timerStateMutationInProgress = false;
-                    return;
-                }
-                // BUG FIX (phantom-stop-local-first-desync): a local-first start that has not
-                // synced yet means the server has never seen it — its "not running" is stale.
-                // Killing the timer here is what produced the "Start shown while timer still runs"
-                // desync. Keep local state, AND actively push the unsynced start so we don't wait
-                // for an offline→online transition (which never fires when the original POST failed
-                // transiently while net.isOnline() stayed true). reconcileTimerState() owns the
-                // correct push logic (real local started_at + idempotency_key), but it early-returns
-                // while _timerStateMutationInProgress is held — so we MUST release both guards first,
-                // then schedule reconcile via setImmediate (mirrors the pattern at the resume/idle
-                // paths). Gate on isOnline: when genuinely offline the 'online' handler will catch it.
-                const _localActive = getActiveLocalTimer();
-                if (_localActive && !_localActive.synced_start) {
-                    console.log(
-                        "[TimerSync] Server says stopped but local start is unsynced — keeping local state and driving reconcile",
-                    );
-                    _isSyncing = false;
-                    _timerStateMutationInProgress = false;
-                    if (networkMonitor?.isOnline && offlineQueue && apiClient) {
-                        setImmediate(() => {
-                            reconcileTimerState()
-                                .then(() => offlineQueue.flush(apiClient))
-                                .catch(() => {});
-                        });
-                    }
-                    return;
-                }
-                isTimerRunning = false;
-                isTimerPaused = false;
-                currentEntry = null;
-                _cachedStartedAtMs = null;
-                todayTotalCurrentProject = 0;
-                activityMonitor?.stop();
-                screenshotService?.stop();
-                idleDetector?.stop();
-                dismissIdleAlert();
-                stopTrayTimer();
-                updateTrayTitle();
-                updateTrayIcon(false);
-                // Carry the state version so the renderer's stale-notification guard can reject
-                // this stop if a newer start has already landed.
-                notifyPopup("timer-stopped", {
-                    entry: null,
-                    todayTotal: globalTotal,
-                    _stateVersion: _timerStateVersion,
-                });
             }
         } catch (err) {
             if (isTransientTimerSyncError(err)) {
@@ -5405,6 +4975,85 @@ function renderIdleFreeze() {
     }
 }
 
+/**
+ * Split the live session at any org-local midnight it has crossed, and re-point the
+ * in-memory timer at the resulting new session.
+ *
+ * The displayed elapsed necessarily resets at midnight — the current SESSION really did
+ * just begin. The day's accumulated total resets at the same moment, so the two agree.
+ */
+function maybeSplitAtMidnight() {
+    if (!isTimerRunning || isTimerPaused || !sessionSyncWorker) return;
+    if (_stopTimerInProgress || _isHandlingIdleAction) return;
+
+    // NEVER split a corpse. If the machine has been dead since before the idle
+    // threshold — force-killed, power cut, or asleep with no suspend event — the live
+    // row is not work in progress, it is an unclosed session. Splitting it at every
+    // midnight it spans is how a Friday-evening session nobody stopped became
+    // 24h + 24h + 11.7h = 63 hours of "tracked work" by Monday morning.
+    //
+    // Close it at the last real input instead, exactly like every other auto-stop.
+    // `loadLastActiveAt()` is stamped from the OS idle counter (see the tray tick),
+    // so this stays correct with no network at all — an offline user is NOT a corpse.
+    const lastActiveIso = loadLastActiveAt();
+    const stale = staleLiveSessionDecision({
+        lastActiveAtMs: lastActiveIso ? Date.parse(lastActiveIso) : NaN,
+        nowMs: Date.now(),
+        thresholdSec: getSleepGapThresholdSec(),
+        sessionStartedAtMs: _cachedStartedAtMs,
+    });
+    if (stale.stale && stale.closeAtMs != null) {
+        console.warn(
+            `[Timer] Live session dead for ${stale.deadSec}s — closing at last activity instead of splitting it across midnights.`,
+        );
+        logToFile(
+            "warn",
+            `[STALE_SESSION_STOP] deadSec=${stale.deadSec} stopAt=${new Date(stale.closeAtMs).toISOString()}`,
+        );
+        screenshotService?.stop();
+        activityMonitor?.stop();
+        idleDetector?.stop();
+        dismissIdleAlert();
+        autoStopTimerForPowerEvent("stale-session", stale.closeAtMs).catch(
+            (e) =>
+                console.error("[Timer] stale-session stop failed:", e.message),
+        );
+        return;
+    }
+
+    const result = sessionSyncWorker.splitAtMidnightIfNeeded();
+    if (!result || result.splits === 0 || !result.live) return;
+
+    const live = result.live;
+    currentEntry = {
+        id: live.id,
+        started_at: live.started_at,
+        project_id: live.project_id || null,
+        idempotency_key: live.idempotency_key,
+        _localId: live.id,
+    };
+    _cachedStartedAtMs = new Date(live.started_at).getTime();
+    todayTotalCurrentProject = 0;
+    todayTotalGlobal = 0;
+    _timerStateVersion++;
+
+    // Rebind capture so screenshots/heartbeats attach to the NEW session rather than
+    // the one that just closed at the boundary.
+    screenshotService?.rebindEntryId(live.id);
+
+    console.log(
+        `[Timer] Crossed midnight — continuing on a new session (${live.id})`,
+    );
+    notifyPopup("timer-started", {
+        ...currentEntry,
+        todayTotal: todayTotalCurrentProject,
+        _splitAtMidnight: true,
+    });
+
+    // No upload here — the split is a local correctness operation; the interval
+    // uploads both rows on its next cycle.
+}
+
 function startTrayTimer() {
     stopTrayTimer();
     // Hard gate: several paths (wake-from-sleep, idle-alert window closed, phantom
@@ -5434,6 +5083,34 @@ function startTrayTimer() {
             return;
         }
         if (!_cachedStartedAtMs) return;
+
+        // ── Last real activity, stamped LOCALLY ─────────────────────────────
+        // Every back-dated auto-stop (crash recovery on launch, sleep gap, idle
+        // watchdog, the stale-session guard below) closes the entry at this stamp, so
+        // it decides how much time a force-kill can cost the user.
+        //
+        // It used to advance ONLY when a heartbeat was ACKNOWLEDGED by the server
+        // (`setOnHeartbeatSuccess`). That was survivable while sessions synced every
+        // 60s; with a 10-minute upload cadence a heartbeat cannot even be accepted
+        // until its session exists server-side, so the stamp could sit 10+ minutes in
+        // the past while the user typed — and a crash would then discard real work,
+        // or the guard below would read a live session as dead.
+        //
+        // The OS idle counter is the truth here, costs nothing, and needs no network.
+        _stampLastActiveFromOsIdle();
+
+        // ── Midnight split ──────────────────────────────────────────────────
+        // Close the live session at 00:00 (ORG timezone) and reopen it, so no entry
+        // ever spans two calendar days and daily reports, attendance rollups and
+        // payroll stay exact. Loops internally, so a machine that slept from Friday
+        // to Monday produces one row per day rather than one impossible row.
+        //
+        // Driven from this 1s tick rather than the sync worker's timer because it is
+        // a purely LOCAL correctness operation: it must happen promptly and whether
+        // or not the network is up.
+        maybeSplitAtMidnight();
+        if (!_cachedStartedAtMs) return;
+
         // BUG 2 FIX (clock-skew consistency): `_cachedStartedAtMs` is the LOCAL
         // started_at (local source of truth, stored uncorrected). Elapsed time must
         // therefore be measured against the LOCAL clock too — `Date.now()`. Adding
@@ -5614,9 +5291,7 @@ function isIdleAlertActive() {
     const detectorSuspended =
         idleDetector?.state === "SUSPENDED" ||
         (_idleSuspendState && _idleSuspendState.isIdle);
-    const windowLive =
-        (idleAlertWindow && !idleAlertWindow.isDestroyed()) ||
-        _idleAlertExtraWindows.some((w) => w && !w.isDestroyed());
+    const windowLive = !!(idleAlertWindow && !idleAlertWindow.isDestroyed());
     return !!(detectorIdle || detectorSuspended || windowLive);
 }
 
@@ -5715,24 +5390,33 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
     // fresh list is pushed via idle-data when it arrives.
     refreshProjectsOnOpen(pushProjectsToIdleAlert);
 
-    // ISSUE 4 FIX: show one idle alert per display. Clear any stray mirrors from a
-    // previous cycle first, then pick the display under the cursor as the PRIMARY
-    // (interactive) window and mirror the alert onto every other display.
-    _destroyIdleAlertExtras();
+    // EXACTLY ONE idle window. Anything left alive from an earlier cycle is torn
+    // down first — a lock/sleep that interrupts an alert, or a re-show racing a
+    // teardown, must never leave a second window behind. Reported by the owner
+    // after locking the laptop and returning an hour later to a stack of them.
+    //
+    // This also retires the per-display MIRRORS (one alert on every monitor).
+    // Mirroring was added so a user working on a second monitor couldn't miss the
+    // alert, but the alert already floats above every app, on every Space/virtual
+    // desktop, and it is now placed on the display the CURSOR is on — the one the
+    // user is actually looking at. Two identical modal windows is a worse answer
+    // to that problem than one that shows up in the right place.
+    _destroyAllIdleAlertWindows();
 
-    let displays;
-    let primaryDisplay;
+    let alertDisplay;
     try {
-        displays = screen.getAllDisplays();
-        primaryDisplay = screen.getDisplayNearestPoint(
+        alertDisplay = screen.getDisplayNearestPoint(
             screen.getCursorScreenPoint(),
         );
     } catch {
-        displays = [];
-        primaryDisplay = null;
+        alertDisplay = null;
     }
-    if (!Array.isArray(displays) || displays.length === 0) {
-        displays = primaryDisplay ? [primaryDisplay] : [];
+    if (!alertDisplay) {
+        try {
+            alertDisplay = screen.getPrimaryDisplay();
+        } catch {
+            alertDisplay = null;
+        }
     }
 
     const IDLE_W = 380;
@@ -5783,59 +5467,16 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
             opts.fullScreenable = false;
         }
         const win = new BrowserWindow(opts);
-        // ALL-WORKSPACES FIX: make the alert follow the user everywhere, exactly
-        // like the tray popup. Must be applied to EVERY alert window (primary +
-        // per-display mirrors), which is why it lives here in the shared factory.
+        // ALL-WORKSPACES FIX: make the alert follow the user everywhere. This is
+        // what lets a SINGLE window replace the per-display mirrors — it floats
+        // over fullscreen apps and appears on whichever Space / virtual desktop
+        // the user is on.
         _applyIdleAlertEverywhereVisible(win);
         return win;
     }
 
-    // Order displays so the cursor's display is created first (becomes primary).
-    const orderedDisplays = [];
-    if (primaryDisplay) orderedDisplays.push(primaryDisplay);
-    for (const d of displays) {
-        if (!primaryDisplay || d.id !== primaryDisplay.id)
-            orderedDisplays.push(d);
-    }
-    if (orderedDisplays.length === 0) orderedDisplays.push(null);
-
-    // Create every display's window. The first (cursor display) is the primary,
-    // interactive window and carries the full close/re-show state machine; the
-    // rest are mirrors that share the same resolve path via the preload bridge.
-    idleAlertWindow = _createIdleWindowOnDisplay(orderedDisplays[0]);
-    for (let i = 1; i < orderedDisplays.length; i++) {
-        const mirror = _createIdleWindowOnDisplay(orderedDisplays[i]);
-        mirror._actionId = alertActionId;
-        mirror._dismissedProgrammatically = false;
-        let mirrorShown = false;
-        const showMirror = () => {
-            if (mirrorShown || mirror.isDestroyed()) return;
-            mirrorShown = true;
-            // Same platform reveal treatment as the primary (macOS re-assert /
-            // Windows flashFrame+moveTop) so every display's alert surfaces.
-            _revealIdleAlertWindow(mirror);
-            mirror.webContents.send(
-                "idle-data",
-                buildIdleAlertPayload(_idleAlertShownAt),
-            );
-        };
-        mirror.once("ready-to-show", showMirror);
-        mirror.webContents.once("did-finish-load", showMirror);
-        mirror.on("closed", () => {
-            _idleAlertExtraWindows = _idleAlertExtraWindows.filter(
-                (w) => w !== mirror,
-            );
-        });
-        mirror
-            .loadFile(path.join(__dirname, "..", "renderer", "idle-alert.html"))
-            .catch((err) => {
-                console.error(
-                    "[IdleAlert] Failed to load idle-alert.html (mirror):",
-                    err.message,
-                );
-            });
-        _idleAlertExtraWindows.push(mirror);
-    }
+    // ONE window, on the display the cursor is on.
+    idleAlertWindow = _createIdleWindowOnDisplay(alertDisplay);
 
     // Keep a local reference so the ready-to-show / did-finish-load callbacks
     // always operate on the window they were registered on, even if the outer
@@ -5876,9 +5517,9 @@ async function showIdleAlert(idleSeconds, idleStartedAt, actionId = null) {
 
     win.on("closed", () => {
         idleAlertWindow = null;
-        // The primary is gone — tear down any mirror windows so no orphan idle
-        // alert is left on another display.
-        _destroyIdleAlertExtras();
+        // Sweep anything else that somehow survived, so no orphan idle alert is
+        // ever left behind on another display or Space.
+        _destroyAllIdleAlertWindows();
         if (!win._dismissedProgrammatically) {
             if (idleDetector?.isIdleActive() && isTimerRunning) {
                 console.log(
@@ -5933,15 +5574,10 @@ function dismissIdleAlert() {
     // torn down (resolve/stop/logout) — clear it so a later resume never re-shows
     // a stale idle window.
     _idleSuspendState = null;
-    // ISSUE 4 FIX: tear down every display's idle alert together so none is orphaned.
-    _destroyIdleAlertExtras();
-    if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
-        // Mark as programmatic dismissal so the 'closed' handler doesn't
-        // re-arm the idle detector (handleIdleAction already did that).
-        idleAlertWindow._dismissedProgrammatically = true;
-        idleAlertWindow.destroy();
-    }
-    idleAlertWindow = null;
+    // Tear down every idle-alert window there is. `_dismissedProgrammatically` is
+    // set inside the sweeper, so the 'closed' handler does not re-arm the idle
+    // detector (handleIdleAction already did that).
+    _destroyAllIdleAlertWindows();
     // Alert is gone — release the popup lock (recomputed, so a still-ALERTING
     // detector with a hidden window keeps the popup locked).
     notifyIdleLockState();
@@ -6016,18 +5652,40 @@ async function handleIdleAction(
         });
 
         // Resolve the idle state — returns null if already resolved (stale action)
-        const resolved = idleDetector?.resolveIdle(actionId);
+        let resolved = idleDetector?.resolveIdle(actionId);
         if (!resolved && idleDetector?.state !== IDLE_STATE.STOPPED) {
-            console.warn(
-                `[handleIdleAction] Action "${action}" aborted — idle already resolved`,
-            );
-            if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
-                idleAlertWindow.webContents.send("idle-action-error", {
-                    message:
-                        "This idle alert has already been handled (e.g. auto-stop). Please check your timer.",
-                });
+            // A null result with a non-STOPPED detector means the renderer sent a
+            // STALE actionId: the detector re-ticked (_actionId++ in _check) or the
+            // alert was re-shown with a fresh id while the window was up, so the id
+            // the popup was holding no longer matches. This is NOT the same as a
+            // race lost to auto-stop — auto-stop leaves the timer STOPPED. If the
+            // timer is still running and merely PAUSED for idle, this is a genuine
+            // user click on a live timer, and bailing here (dismiss alert + return
+            // WITHOUT resuming) wedged the timer paused forever: "Continue did
+            // nothing, the timer never restarted." Re-resolve against the CURRENT
+            // action id so the pause is always lifted below.
+            if (isTimerRunning && isTimerPaused) {
+                console.warn(
+                    `[handleIdleAction] "${action}" — stale actionId ${actionId}; timer is live+paused, resolving current idle to avoid a stuck pause`,
+                );
+                resolved = idleDetector?.resolveIdle(
+                    idleDetector.getActionId(),
+                );
             }
-            return;
+            if (!resolved) {
+                // Truly already resolved (auto-stop won the race, or the timer is no
+                // longer running) — keep the original abort behavior.
+                console.warn(
+                    `[handleIdleAction] Action "${action}" aborted — idle already resolved`,
+                );
+                if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
+                    idleAlertWindow.webContents.send("idle-action-error", {
+                        message:
+                            "This idle alert has already been handled (e.g. auto-stop). Please check your timer.",
+                    });
+                }
+                return;
+            }
         }
 
         // Use idleStartedAt from the resolve result if available (more reliable
@@ -6056,187 +5714,94 @@ async function handleIdleAction(
 
             case "discard":
             case "reassign":
-                if (apiClient && currentEntry && effectiveIdleStartedAt) {
-                    // REASSIGN counts the FULL time the user was away — idle-start
-                    // → now (the reassign click) — toward the chosen project,
-                    // INCLUDING the time the idle dialog stayed open. The user was
-                    // away doing that other work, so capping at the idle threshold
-                    // (_idleAlertShownAt) under-counted it (e.g. showed the 5-min
-                    // threshold when the user was away 9–12 min). The "never"-policy
-                    // auto-discard has no dialog, so now() matches its old value.
-                    const idleEndedAt = Date.now();
-                    const idleSeconds = Math.floor(
-                        (idleEndedAt - effectiveIdleStartedAt) / 1000,
-                    );
-                    const payload = {
-                        time_entry_id: currentEntry.id,
-                        idle_started_at: new Date(
-                            effectiveIdleStartedAt,
-                        ).toISOString(),
-                        idle_ended_at: new Date(idleEndedAt).toISOString(),
-                        idle_seconds: Math.max(1, idleSeconds),
-                        action:
-                            action === "reassign" && reassignProjectId
-                                ? "reassign"
-                                : "discard",
-                    };
-                    if (payload.action === "reassign")
-                        payload.project_id = reassignProjectId;
+                // Both land here as a DISCARD. Crediting idle time as work was removed
+                // by owner policy (2026-07-16); the desktop only ever offers "continue
+                // tracking" and "stop timer", both of which drop the idle gap. The
+                // reassign case is kept only so an older renderer cannot smuggle idle
+                // time onto another project.
+                if (currentEntry && effectiveIdleStartedAt) {
+                    const idleStartIso = new Date(
+                        effectiveIdleStartedAt,
+                    ).toISOString();
+                    const resumeIso = new Date().toISOString();
 
-                    try {
-                        const result = await apiClient.reportIdleTime(payload);
+                    // LOCAL SPLIT — no network. Close the live session at the instant
+                    // the user went idle and open a fresh one AT THE RESUME INSTANT,
+                    // so the idle span belongs to no session at all. Both rows sync
+                    // normally.
+                    //
+                    // `resumeIso` is the entire point of the split and was previously
+                    // computed and then NOT passed, so the successor opened at
+                    // idle-START: the gap was never discarded, only moved into the new
+                    // row and billed anyway. Verified on a real session — 13 idle
+                    // minutes sat inside the entry that opened when the user clicked
+                    // "Continue tracking". See
+                    // bugs/desktop-idle-continue-still-bills-the-idle-gap.md.
+                    const prevLocalId = currentEntry._localId || null;
+                    const prevStartIso = currentEntry.started_at;
 
-                        // FIX D10: Handle null new_entry — timer was stopped remotely during idle
-                        if (!result?.new_entry) {
-                            console.warn(
-                                "[IdleAction] Server returned no new entry — timer was already stopped remotely",
-                            );
-                            dismissIdleAlert();
-                            _idleAlertShownAt = null;
-                            _isHandlingIdleAction = false;
-                            setImmediate(() => reconcileTimerState());
-                            return;
-                        }
+                    const next = prevLocalId
+                        ? splitLocalSession(
+                              prevLocalId,
+                              idleStartIso,
+                              currentEntry.project_id || null,
+                              null,
+                              resumeIso,
+                          )
+                        : null;
 
-                        // FIX D5: Update todayTotalCurrentProject immediately after discard.
-                        // Measure pre-idle work to idle-START (not idle-end): the server
-                        // closes the original tracked entry at idle_started_at and the idle
-                        // gap [idle_started_at, idle_ended_at] is excluded (audit-only `idle`
-                        // entry). Using idleEndedAt here double-counts the discarded idle gap
-                        // — the new live entry already counts from idle_ended_at, so the
-                        // display total would inflate to the full elapsed (the "desktop ~20m
-                        // while portal ~16m after discard" bug).
+                    if (next) {
+                        // Credit only the PRE-IDLE work to the running total. Measuring
+                        // to idle-START (never idle-end) is what stops the discarded gap
+                        // being counted twice — the new session already counts from now.
                         const preIdleSeconds = Math.floor(
                             (effectiveIdleStartedAt -
-                                new Date(currentEntry.started_at).getTime()) /
+                                new Date(prevStartIso).getTime()) /
                                 1000,
                         );
                         todayTotalCurrentProject =
                             (todayTotalCurrentProject || 0) +
                             Math.max(0, preIdleSeconds);
+                        // The all-projects line has to move with it. It is the base the
+                        // tick adds the LIVE session's elapsed to, and that elapsed just
+                        // reset to 0 with the new row — leaving it untouched made "Today,
+                        // all projects" drop by the whole pre-idle span the instant the
+                        // user clicked "Continue tracking". Both bases are overwritten
+                        // from the server (plus local unconfirmed seconds) on the next
+                        // 10s status poll, so this cannot accumulate.
+                        todayTotalGlobal =
+                            (todayTotalGlobal || 0) +
+                            Math.max(0, preIdleSeconds);
 
-                        // Re-anchor the LOCAL source of truth to the resumed
-                        // (post-idle) entry. The server split the session at the idle
-                        // boundary and opened a NEW entry at idle-end; the local
-                        // timer_sessions row MUST follow. Otherwise the next reconcile
-                        // / phantom-stop recovery re-reads the OLD row's pre-idle
-                        // started_at and — via the never-move-forward guard in
-                        // adoptServerStartedAt() — re-anchors elapsed back to the
-                        // original start, inflating the displayed time by the excluded
-                        // idle (+ pre-idle) duration. This is the root cause of the
-                        // "desktop shows ~25m while web shows ~14m" report.
-                        const prevLocalId = currentEntry._localId || null;
-                        const prevStartIso = currentEntry.started_at;
+                        // A session that was idle almost from the moment it began
+                        // leaves a sub-second stub — drop it rather than upload noise.
+                        dropTrivialLocalSession(prevLocalId);
 
-                        currentEntry = result.new_entry;
+                        currentEntry = {
+                            id: next.id,
+                            started_at: next.started_at,
+                            project_id: next.project_id || null,
+                            idempotency_key: next.idempotency_key,
+                            _localId: next.id,
+                        };
                         _cachedStartedAtMs = new Date(
-                            currentEntry.started_at,
+                            next.started_at,
                         ).getTime();
+                        _timerStateVersion++;
 
-                        // Close the stale local session at idle-start (already synced
-                        // server-side by the split) and open a fresh local session
-                        // anchored at the new entry's start, so getActiveLocalTimer()
-                        // returns the post-idle start everywhere downstream.
-                        const newLocalId = `local-${Date.now()}-${Math.random()
-                            .toString(36)
-                            .slice(2, 6)}`;
-                        const newIdempotencyKey =
-                            currentEntry.idempotency_key ||
-                            generateIdempotencyKey();
-                        if (prevLocalId) {
-                            const preIdleDuration = Math.max(
-                                0,
-                                Math.floor(
-                                    (effectiveIdleStartedAt -
-                                        new Date(prevStartIso).getTime()) /
-                                        1000,
-                                ),
-                            );
-                            saveLocalTimerStop(
-                                prevLocalId,
-                                new Date(effectiveIdleStartedAt).toISOString(),
-                                preIdleDuration,
-                            );
-                            markLocalTimerStopSynced(prevLocalId);
-                        }
-                        saveLocalTimerStart(
-                            newLocalId,
-                            newIdempotencyKey,
-                            currentEntry.project_id || null,
-                            currentEntry.started_at,
-                        );
-                        if (
-                            currentEntry.id &&
-                            !String(currentEntry.id).startsWith("local-")
-                        ) {
-                            markLocalTimerStartSynced(
-                                newLocalId,
-                                currentEntry.id,
-                            );
-                        }
-                        currentEntry._localId = newLocalId;
-                        currentEntry.idempotency_key = newIdempotencyKey;
-
-                        // No screenshots are captured during idle (Hubstaff behavior), so
-                        // there is nothing to attach to the post-split entry on reassign and
-                        // nothing to drop on discard.
-                    } catch (e) {
                         logToFile(
-                            "warn",
-                            `[IDLE_ACTION] discard API failed: ${e.message}`,
+                            "info",
+                            `[IDLE_ACTION] discard split local session at ${idleStartIso}, resumed at ${resumeIso}`,
                         );
-                        console.error(
-                            "[IdleAction] Failed to report idle time to server:",
-                            e.message,
-                        );
-                        offlineQueue?.add("idle_discard", payload);
-                        // DISPLAY-ONLY: for an offline REASSIGN, the idle is moving to
-                        // another project but the server split won't apply until
-                        // reconnect. The local timer stays anchored at the original
-                        // start (re-anchoring offline breaks the reconnect split), so
-                        // the live total would wrongly grow on the origin project by
-                        // this idle. Subtract it from the displayed total until the
-                        // reassign syncs. (discard does not resume, so only reassign.)
-                        if (payload.action === "reassign") {
-                            _pendingOfflineReassignIdleSec = Math.max(
-                                0,
-                                idleSeconds,
-                            );
-                        }
-                        if (idleAlertWindow && !idleAlertWindow.isDestroyed()) {
-                            idleAlertWindow.webContents.send(
-                                "idle-action-error",
-                                {
-                                    message:
-                                        "Network error — idle discard queued. Timer will resume locally and sync when online.",
-                                },
-                            );
-                        }
-                        // Resume without server split — reconcile + offline queue flush later
-                        _idleAlertShownAt = null;
-                        await resumeTimerAfterIdle();
-                        activityMonitor?.start();
-                        if (isTimerRunning && currentEntry) {
-                            screenshotService?.start(currentEntry.id, {
-                                immediateCapture:
-                                    config.screenshot_capture_immediate_after_idle ===
-                                    true,
-                            });
-                        }
-                        idleDetector?.start();
-                        startTrayTimer();
-                        notifyPopup("timer-resumed", {
-                            entry: currentEntry,
-                            todayTotal: todayTotalCurrentProject,
-                            _offlineDiscardPending: true,
-                        });
-                        scheduleReconcileAndFlush();
-                        break;
+
+                        // No screenshots are captured during idle (Hubstaff behavior),
+                        // so there is nothing to re-attach or drop here. Both rows go
+                        // up on the next sync interval.
                     }
                 }
                 // FIX D1: Reset _idleAlertShownAt after action handled
                 _idleAlertShownAt = null;
-                await resumeTimerAfterIdle();
+                resumeTimerAfterIdle();
                 activityMonitor?.start();
                 if (isTimerRunning && currentEntry) {
                     screenshotService?.start(currentEntry.id, {
@@ -6280,16 +5845,11 @@ async function handleIdleAction(
                 });
                 break;
         }
-        // After idle is resolved: flush any pending offline data (heartbeats,
-        // screenshots, timer events queued during sleep). This is especially
-        // important after a long sleep where reconcile was deferred.
-        if (networkMonitor?.isOnline && offlineQueue && apiClient) {
-            setImmediate(() => {
-                reconcileTimerState()
-                    .then(() => offlineQueue.flush(apiClient))
-                    .catch(() => {});
-            });
-        }
+        // The idle decision moved a boundary — the live session ended back at
+        // `idleStartedAt`, and (for "continue") a new one opened at the resume. Announce
+        // it: this is the exact case where a server left holding the abandoned session
+        // shows the user time they did not work, and keeps counting it.
+        pushSessionBoundary("idle-resolved");
         // FIX D7: Increment state version on successful idle action
         _timerStateVersion++;
     } finally {
@@ -6315,11 +5875,34 @@ function createLoginWindow() {
 
     loginWindow = new BrowserWindow({
         width: 400,
-        height: 500,
-        frame: false, // Custom titlebar for identical look on macOS/Windows/Linux
-        resizable: false,
+        // 520, up from 500: the branded header row grew from 32px to 40px, and the
+        // form needs to stay clear of the bottom edge once the inline error message
+        // appears (this dialog is deliberately not resizable, so it cannot grow).
+        height: 520,
+        // 400x520 is the CONTENT box. Linux gets a real native title bar, whose
+        // height would otherwise be taken OUT of the content area and clip the
+        // bottom of a fixed-size, non-resizable form.
+        useContentSize: true,
+        // Sign-in gets the same native window controls as the main window — the
+        // first screen users see should not be the one place the app looks like a
+        // frameless widget.
+        //
+        // It is RESIZABLE (floored at its design size) purely so the zoom button
+        // is live: macOS greys out the third traffic light on a non-resizable
+        // window, which reads as a broken green light rather than a deliberate
+        // constraint. The form is centred in `.main`, so extra room just adds
+        // margin around it.
+        resizable: true,
+        maximizable: true,
+        minWidth: 400,
+        minHeight: 520,
         center: true,
-        backgroundColor: "#0a0a0a",
+        title: "Sign in to TrackFlow",
+        backgroundColor: "#121110", // matches --bg-primary (was a stale #0a0a0a)
+        ...WindowGeometry.resolveWindowChrome(process.platform, {
+            background: "#121110",
+            symbol: "#a8a29e",
+        }),
         webPreferences: {
             preload: path.join(__dirname, "..", "preload", "index.js"),
             contextIsolation: true,

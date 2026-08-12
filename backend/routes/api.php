@@ -24,8 +24,10 @@ use App\Http\Controllers\Api\V1\Hr\EmployeeSalaryController;
 use App\Http\Controllers\Api\V1\Hr\ShiftAssignmentController;
 use App\Http\Controllers\Api\V1\Hr\ShiftController;
 use App\Http\Controllers\Api\V1\Hr\ShiftSwapController;
+use App\Http\Controllers\Api\V1\Hr\JobPostingController;
 use App\Http\Controllers\Api\V1\InvitationController;
 use App\Http\Controllers\Api\V1\JobMonitorController;
+use App\Http\Controllers\Api\V1\Public\PublicJobPostingController;
 use App\Http\Controllers\Api\V1\PermissionController;
 use App\Http\Controllers\Api\V1\ProfileController;
 use App\Http\Controllers\Api\V1\RoleController;
@@ -44,6 +46,13 @@ Route::prefix('v1')->group(function () {
     // Health checks (public)
     Route::get('health', \App\Http\Controllers\Api\V1\HealthController::class);
     Route::get('health/live', fn () => response()->json(['status' => 'ok']));
+
+    // Public careers feed — consumed by the marketing site. Unauthenticated by
+    // design, so the controller scopes by organization explicitly: the model's
+    // GlobalOrganizationScope only fires for authenticated requests.
+    Route::prefix('public')->middleware('throttle:api')->group(function () {
+        Route::get('organizations/{slug}/job-postings', [PublicJobPostingController::class, 'index']);
+    });
 
     // Public auth routes (with stricter rate limiting)
     Route::prefix('auth')->middleware('throttle:auth')->group(function () {
@@ -100,32 +109,31 @@ Route::prefix('v1')->group(function () {
 
         // Timer (desktop safety — auth:sanctum only)
         //
-        // Throttled at 30/min: far above any legitimate use (a human starts and
-        // stops a handful of times an hour, and an offline reconcile pushes one
-        // start + one stop), but it caps how fast a scripted client can mint
-        // back-dated entries. Deliberately generous — a throttle that blocked a
-        // real stop would leave the timer running, which is the worse failure.
-        // 'min.agent' refuses desktop builds older than TIMER_MIN_AGENT_VERSION
-        // (disabled until that env var is set). Gating START is what forces an
-        // upgrade: an old build simply cannot begin a session, so it never
-        // reaches the idle popup at all.
+        // OFFLINE-FIRST: the desktop agent holds every tracked session in local SQLite
+        // and is the SOLE writer of `type = 'tracked'` entries. It pushes that state
+        // here as an idempotent batch upsert keyed on a client-generated uuid. There is
+        // no start/stop RPC any more — those endpoints were removed because having two
+        // writers to the same entry is what produced the reconcile bug family.
         //
-        // Deliberately NOT on stop / idle. The desktop's idle catch treats ANY
-        // error from POST /timer/idle as a network error: it queues the payload
-        // and RESUMES the timer, which credits the idle time. Gating those routes
-        // would therefore turn a rejection into "idle time kept" on older builds —
-        // the exact opposite of the policy — and would break the honest Discard
-        // path too. Same reasoning for stop: refusing it strands the entry open
-        // and inflates it.
-        Route::post('timer/start', [\App\Http\Controllers\Api\V1\TimerController::class, 'start'])->middleware(['throttle:30,1', 'min.agent']);
-        Route::post('timer/stop', [\App\Http\Controllers\Api\V1\TimerController::class, 'stop'])->middleware('throttle:30,1');
-        Route::post('timer/switch', [\App\Http\Controllers\Api\V1\TimerController::class, 'switch'])->middleware(['throttle:30,1', 'min.agent']);
-        Route::post('timer/pause', [\App\Http\Controllers\Api\V1\TimerController::class, 'pause']);
-        Route::post('timer/resume', [\App\Http\Controllers\Api\V1\TimerController::class, 'resume']);
+        // Throttled at 20/min: the agent syncs on a ~60s cadence plus event triggers, so
+        // this is several times headroom while still capping how fast a scripted client
+        // can mint back-dated entries. Deliberately generous — a throttle that blocked a
+        // real sync would strand tracked time on the client, the worse failure.
+        //
+        // 'min.agent' refuses desktop builds older than TIMER_MIN_AGENT_VERSION. Gating
+        // the sync endpoint is what forces the upgrade: a pre-refactor build calls the
+        // deleted start/stop routes and 404s regardless, so this is belt-and-braces for
+        // any build that learns the new path but predates a later policy change.
+        Route::post('timer/sessions/sync', \App\Http\Controllers\Api\V1\TimerSessionSyncController::class)
+            ->middleware(['throttle:20,1', 'min.agent']);
+
+        // READ paths. `status` is what the WEB dashboard polls for its live-tracking
+        // indicator (the desktop never reads it); `today-total` is how the desktop
+        // picks up MANUAL entries it does not own. `heartbeat` writes ActivityLog rows,
+        // not time entries, and remains the activity-score source of truth.
         Route::get('timer/status', [\App\Http\Controllers\Api\V1\TimerController::class, 'status']);
         Route::get('timer/today-total', [\App\Http\Controllers\Api\V1\TimerController::class, 'todayTotal']);
         Route::post('timer/heartbeat', [\App\Http\Controllers\Api\V1\TimerController::class, 'heartbeat'])->middleware('throttle:60,1');
-        Route::post('timer/idle', [\App\Http\Controllers\Api\V1\TimerController::class, 'idle'])->middleware('throttle:30,1');
 
         // Time entries
         // STATIC route registered BEFORE the apiResource wildcard so 'pending' is
@@ -279,6 +287,14 @@ Route::prefix('v1')->group(function () {
                 ->middleware('permission:departments.view');
             Route::apiResource('positions', PositionController::class)
                 ->middleware('permission:positions.view');
+
+            // Job postings. Publishing is its own route behind its own
+            // permission, so job_postings.edit cannot push a posting live.
+            Route::patch('job-postings/{job_posting}/publish', [JobPostingController::class, 'setPublished'])
+                ->middleware('permission:job_postings.publish');
+            Route::apiResource('job-postings', JobPostingController::class)
+                ->parameters(['job-postings' => 'job_posting'])
+                ->middleware('permission:job_postings.view');
 
             // Leave Management
             Route::get('leave-calendar', [LeaveCalendarController::class, 'index'])

@@ -25,10 +25,20 @@ class ScreenshotController extends Controller
     /**
      * How far back an OFFLINE-captured screenshot may be backfilled onto a closed
      * entry. The desktop queues shots taken while offline and flushes them on
-     * reconnect — which can be hours (or a weekend) later. Bounded so the endpoint
-     * still cannot be used to attach arbitrary images to old history.
+     * reconnect — which can be hours, a weekend, or (since the offline-first refactor)
+     * weeks later. Bounded so the endpoint still cannot be used to attach arbitrary
+     * images to old history.
+     *
+     * MUST NOT be shorter than `timer.max_past_skew`. The agent flushes its session
+     * batch BEFORE the screenshot queue, so a window narrower than the session window
+     * produces the worst possible outcome: the time entry uploads successfully but its
+     * evidence is refused with a permanent 422 and dropped. That asymmetry is exactly
+     * bugs/offline-screenshots-rejected-after-entry-closed.md.
      */
-    private const OFFLINE_BACKFILL_DAYS = 7;
+    private function offlineBackfillDays(): int
+    {
+        return max(7, (int) ceil(((int) config('timer.max_past_skew', 2592000)) / 86400));
+    }
 
     /**
      * Tolerance around the entry's own [started_at, ended_at] window when accepting a
@@ -82,7 +92,7 @@ class ScreenshotController extends Controller
             $isOfflineBackfill = $capturedAt->betweenIncluded(
                 $timeEntry->started_at->copy()->subMinutes($tolerance),
                 $timeEntry->ended_at->copy()->addMinutes($tolerance)
-            ) && $timeEntry->ended_at->greaterThan(now()->subDays(self::OFFLINE_BACKFILL_DAYS));
+            ) && $timeEntry->ended_at->greaterThan(now()->subDays($this->offlineBackfillDays()));
         }
 
         if (!$isActive && !$isOfflineBackfill) {

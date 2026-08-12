@@ -70,6 +70,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import api from '@/lib/api';
+import type { UserRole } from '@/lib/roles';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
 
@@ -82,7 +83,7 @@ interface MemberUser {
   id: string;
   name: string;
   email: string;
-  role: 'owner' | 'admin' | 'manager' | 'employee';
+  role: UserRole;
   avatar_url?: string | null;
 }
 

@@ -672,4 +672,86 @@ describe("IdleDetector", () => {
             expect(detector.idleStartedAt).toBe(preservedStart);
         });
     });
+
+    // Regression: bugs/desktop-idle-alert-never-appears.md. A throwing callback
+    // (there, `pauseTimerForIdle(...).catch()` on a function that had stopped
+    // returning a promise) skipped the re-arm below it, stranding the detector in
+    // DETECTED with no interval — idle never fired again for the whole session and
+    // isIdleActive() stayed true forever, which also stood the idle hard-stop
+    // watchdog down permanently.
+    describe("a throwing onIdleDetected callback", () => {
+        test("still leaves the detector armed in ALERTING", () => {
+            detector = new IdleDetector({
+                idle_timeout: 5,
+                idle_check_interval_sec: 10,
+            });
+            jest.spyOn(console, "error").mockImplementation(() => {});
+            detector.onIdleDetected(() => {
+                throw new TypeError(
+                    "Cannot read properties of undefined (reading 'catch')",
+                );
+            });
+            detector.start();
+
+            powerMonitor.getSystemIdleTime.mockReturnValue(300);
+            expect(() => jest.advanceTimersByTime(10000)).not.toThrow();
+
+            expect(detector.state).toBe(IDLE_STATE.ALERTING);
+            expect(detector.checkInterval).not.toBeNull();
+            expect(detector.isIdleActive()).toBe(true);
+        });
+
+        test("idle still works on the NEXT cycle after the user resolves it", () => {
+            detector = new IdleDetector({
+                idle_timeout: 5,
+                idle_check_interval_sec: 10,
+            });
+            jest.spyOn(console, "error").mockImplementation(() => {});
+            const onIdle = jest.fn(() => {
+                throw new Error("boom");
+            });
+            detector.onIdleDetected(onIdle);
+            detector.start();
+
+            powerMonitor.getSystemIdleTime.mockReturnValue(300);
+            jest.advanceTimersByTime(10000);
+            expect(onIdle).toHaveBeenCalledTimes(1);
+
+            // User answers the (absent) alert, comes back to the keyboard, and the
+            // 60s post-resolve cooldown elapses.
+            expect(detector.resolveIdle(detector.getActionId())).not.toBeNull();
+            detector.start();
+            powerMonitor.getSystemIdleTime.mockReturnValue(0);
+            jest.advanceTimersByTime(70000);
+
+            // Goes idle again — the detector must fire a second time.
+            powerMonitor.getSystemIdleTime.mockReturnValue(300);
+            jest.advanceTimersByTime(10000);
+            expect(onIdle).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    // The `keep_idle_time` policies that never open a window resolve the cycle
+    // inside the callback and re-arm WATCHING themselves. The detector must not
+    // stomp that with ALERTING — doing so orphaned the interval start() had just
+    // armed and silently killed idle detection for those orgs.
+    test("a callback that resolves and re-starts is left in WATCHING", () => {
+        detector = new IdleDetector({
+            idle_timeout: 5,
+            idle_check_interval_sec: 10,
+        });
+        const onIdle = jest.fn((_sec, _startedAt, actionId) => {
+            detector.resolveIdle(actionId); // policy 'always': keep the time
+            detector.start();
+        });
+        detector.onIdleDetected(onIdle);
+        detector.start();
+
+        powerMonitor.getSystemIdleTime.mockReturnValue(300);
+        jest.advanceTimersByTime(10000);
+
+        expect(detector.state).toBe(IDLE_STATE.WATCHING);
+        expect(detector.isIdleActive()).toBe(false);
+        expect(detector.checkInterval).not.toBeNull();
+    });
 });

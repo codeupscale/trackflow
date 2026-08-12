@@ -18,8 +18,7 @@ export const employmentTypes = [
   'intern',
 ] as const;
 
-export const positionSchema = z
-  .object({
+export const positionSchema = z.object({
     title: z.string().min(1, 'Title is required').max(255),
     code: z.string().min(1, 'Code is required').max(50),
     department_id: z.string().uuid('Department is required'),
@@ -27,17 +26,8 @@ export const positionSchema = z
     employment_type: z.enum(employmentTypes, {
       error: 'Employment type is required',
     }),
-    min_salary: z.number().min(0).optional().nullable(),
-    max_salary: z.number().min(0).optional().nullable(),
     is_active: z.boolean(),
-  })
-  .refine(
-    (d) => !d.min_salary || !d.max_salary || d.max_salary >= d.min_salary,
-    {
-      message: 'Max salary must be >= min salary',
-      path: ['max_salary'],
-    }
-  );
+  });
 
 export type PositionInput = z.infer<typeof positionSchema>;
 
@@ -48,8 +38,6 @@ export interface Position {
   department_id: string;
   level: (typeof positionLevels)[number];
   employment_type: (typeof employmentTypes)[number];
-  min_salary: number | null;
-  max_salary: number | null;
   is_active: boolean;
   department?: {
     id: string;

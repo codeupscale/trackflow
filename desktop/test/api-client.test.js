@@ -82,31 +82,59 @@ describe('ApiClient', () => {
     expect(user).toEqual({ id: 1, name: 'Test' });
   });
 
-  test('startTimer should post with project_id', async () => {
+  // startTimer / stopTimer / switchProject / pause / resume / reportIdleTime are gone
+  // with their endpoints. Tracked time is written only by syncSessions().
+
+  test('syncSessions should post the batch to the sync endpoint', async () => {
+    const sessions = [
+      {
+        uuid: 'b3f1c2d4-0000-4000-8000-000000000001',
+        revision: 2,
+        started_at: '2026-07-30T08:00:00.000Z',
+        ended_at: '2026-07-30T09:00:00.000Z',
+        project_id: null,
+        task_id: null,
+      },
+    ];
     mockAxios.post.mockResolvedValueOnce({
-      data: { entry: { id: 1 }, today_total: 100 },
+      data: { results: [{ uuid: sessions[0].uuid, status: 'ok' }] },
     });
-    const result = await client.startTimer(42);
-    expect(mockAxios.post).toHaveBeenCalledWith('/timer/start', { project_id: 42 }, { timeout: 10000 });
-    expect(result.entry.id).toBe(1);
+
+    const result = await client.syncSessions(sessions);
+
+    expect(mockAxios.post).toHaveBeenCalledWith(
+      '/timer/sessions/sync',
+      { sessions },
+      { timeout: 30000 },
+    );
+    expect(result.results[0].status).toBe('ok');
   });
 
-  test('startTimer should work without project_id', async () => {
-    mockAxios.post.mockResolvedValueOnce({
-      data: { entry: { id: 2 }, today_total: 0 },
-    });
-    const result = await client.startTimer();
-    expect(mockAxios.post).toHaveBeenCalledWith('/timer/start', { project_id: null }, { timeout: 10000 });
-    expect(result.entry.id).toBe(2);
+  test('checkHealth returns true on 200', async () => {
+    mockAxios.get.mockResolvedValueOnce({ status: 200, data: { status: 'ok' } });
+
+    await expect(client.checkHealth()).resolves.toBe(true);
+    // The CHEAP liveness endpoint — /health probes S3 and counts failed jobs, far too
+    // expensive for every agent to poll every 60s.
+    expect(mockAxios.get).toHaveBeenCalledWith(
+      '/health/live',
+      expect.objectContaining({ timeout: 5000 }),
+    );
   });
 
-  test('stopTimer should post and return data', async () => {
-    mockAxios.post.mockResolvedValueOnce({
-      data: { entry: { id: 1 }, today_total: 500 },
-    });
-    const result = await client.stopTimer();
-    expect(mockAxios.post).toHaveBeenCalledWith('/timer/stop', {}, { timeout: 10000 });
-    expect(result.today_total).toBe(500);
+  test('checkHealth swallows errors and reports offline', async () => {
+    // Must never throw: the sync worker treats any failure as "offline", which is
+    // always the safe interpretation, and a health probe must never be able to
+    // trigger a token refresh or a logout.
+    mockAxios.get.mockRejectedValueOnce(new Error('ENOTFOUND'));
+
+    await expect(client.checkHealth()).resolves.toBe(false);
+  });
+
+  test('checkHealth reports offline on a non-200 status', async () => {
+    mockAxios.get.mockResolvedValueOnce({ status: 503, data: {} });
+
+    await expect(client.checkHealth()).resolves.toBe(false);
   });
 
   test('getTimerStatus should pass project_id as param', async () => {
@@ -157,11 +185,21 @@ describe('ApiClient', () => {
     expect(mockAxios.post).toHaveBeenCalledWith('/timer/heartbeat', data);
   });
 
-  test('reportIdleTime should post data', async () => {
-    const data = { time_entry_id: 1, action: 'discard', idle_seconds: 300 };
-    mockAxios.post.mockResolvedValueOnce({ data: { success: true } });
-    await client.reportIdleTime(data);
-    expect(mockAxios.post).toHaveBeenCalledWith('/timer/idle', data);
+  test('no timer-mutation methods survive on the client', () => {
+    // Force-upgrade contract: these endpoints were deleted server-side, so a client
+    // still calling them would 404 on every attempt. Assert they are gone rather than
+    // leaving a method that silently fails in the field.
+    for (const gone of [
+      'startTimer',
+      'stopTimer',
+      'switchProject',
+      'pauseTimer',
+      'resumeTimer',
+      'reportIdleTime',
+    ]) {
+      expect(typeof client[gone]).toBe('undefined');
+    }
+    expect(typeof client.syncSessions).toBe('function');
   });
 
   test('onTokenRefreshed callback should be called on refresh', async () => {

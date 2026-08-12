@@ -333,8 +333,28 @@ class ActivityMonitor {
       active_url: null,
     };
 
+    // NAME THE SESSION. Without this the server attributes the heartbeat to whatever
+    // entry its Redis pointer holds, which lags every local session change (idle
+    // discard, stop/start, project switch, midnight split) by up to one upload
+    // interval — so the activity lands on the PREVIOUS entry, corrupting its final
+    // score and making a session that already ended look alive to the dashboard.
+    // Measured on dev: 25 heartbeats over 20 minutes attributed to an entry the agent
+    // had closed at 12:37:16. The uuid is the same `idempotency_key` the sync endpoint
+    // upserts on, so it names the session unambiguously.
+    //
+    // If the server does not know the session yet it REJECTS the heartbeat, and the
+    // catch below queues it — the offline path resolves the real entry id once the
+    // session syncs, which is precisely how offline-captured heartbeats already land.
+    const entryMeta =
+      typeof this.getCurrentEntryMeta === 'function'
+        ? this.getCurrentEntryMeta()
+        : null;
+    const sessionUuid = entryMeta?.idempotency_key || null;
+
     try {
-      await this.apiClient.sendHeartbeat(data);
+      await this.apiClient.sendHeartbeat(
+        sessionUuid ? { ...data, session_uuid: sessionUuid } : data,
+      );
       this._onHeartbeatSuccess?.();
     } catch (apiErr) {
       try {
@@ -344,10 +364,11 @@ class ActivityMonitor {
           // idempotency_key) so the offline-queue resolver can map it to the
           // server entry on replay. Without this it's an unanchored orphan and
           // gets dropped — losing offline-captured activity.
-          const entryMeta =
-            typeof this.getCurrentEntryMeta === 'function'
-              ? this.getCurrentEntryMeta()
-              : null;
+          //
+          // `entryMeta` is captured ABOVE, before the request went out, so a
+          // rejected-because-not-synced-yet heartbeat is anchored to the session it
+          // was actually recorded in rather than to whatever is live by the time the
+          // failure comes back.
           await this.offlineQueue.add('heartbeat', {
             ...data,
             ...(entryMeta || {}),

@@ -23,8 +23,15 @@ contextBridge.exposeInMainWorld('trackflow', {
   setLastProject: (projectId) => ipcRenderer.invoke('set-last-project', projectId),
   logout: () => ipcRenderer.invoke('logout'),
   hideWindow: () => ipcRenderer.invoke('hide-window'),
+  quitApp: () => ipcRenderer.invoke('quit-app'),
   togglePin: (forceState) => ipcRenderer.invoke('toggle-pin', forceState),
   getPinState: () => ipcRenderer.invoke('get-pin-state'),
+  // Windows virtual desktops: report whether this window is actually being
+  // painted. A window sitting on another virtual desktop is occluded by
+  // Chromium, which is how main knows a PINNED window must be moved to the
+  // desktop the user switched to (setVisibleOnAllWorkspaces does nothing on
+  // Windows). Fire-and-forget: `send`, not `invoke`.
+  reportComposited: (composited) => ipcRenderer.send('report-composited', !!composited),
   onPinStateChanged: (callback) => safeOn('pin-state-changed', (_, data) => callback(data)),
   login: (email, password) => ipcRenderer.invoke('login', email, password),
   googleLogin: () => ipcRenderer.invoke('google-login'),

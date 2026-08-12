@@ -14,13 +14,15 @@ const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
 const isWin = navigator.platform.toUpperCase().indexOf('WIN') >= 0;
 const modKey = isMac ? 'Cmd' : 'Ctrl';
 
-// QA enhancement #10: the popup is user-resizable on Windows only. Tag the root
-// so the top-edge no-drag resize strip (see index.html) activates there and
-// stays fully inert on macOS/Linux (no reduction of the titlebar drag area).
-if (isWin) document.documentElement.classList.add('platform-win');
-
-// Apply shortcut hints
-document.getElementById('logoutBtn').title = `Sign out (${modKey}+Q)`;
+// Tag the root with the platform so the header can reserve room for whichever
+// native window controls the OS draws over it: macOS floats the traffic lights
+// on the LEFT of our header ('hiddenInset'), Windows paints minimise/maximise/
+// close into its RIGHT ('titleBarOverlay'), and Linux gets a real native title
+// bar ABOVE the header, so it needs no reserved space at all. See the chrome
+// block in main/index.js.
+document.documentElement.classList.add(
+  isMac ? 'platform-mac' : isWin ? 'platform-win' : 'platform-linux'
+);
 
 let elapsedSeconds = 0;
 let todayTotalBase = 0;
@@ -65,7 +67,6 @@ const startBtn = document.getElementById('startBtn');
 const startBtnText = document.getElementById('startBtnText');
 const stopBtn = document.getElementById('stopBtn');
 const projectSelect = document.getElementById('projectSelect');
-const logoutBtn = document.getElementById('logoutBtn');
 const logoutLink = document.getElementById('logoutLink');
 const dashboardLink = document.getElementById('dashboardLink');
 const permissionBanner = document.getElementById('permissionBanner');
@@ -211,6 +212,36 @@ function applyIdleLock(locked) {
     // Start / project select ownership goes back to the normal state machine.
     syncProjectSelectEnabled();
     updateStartBtnState();
+  }
+  // Spec: "answer the idle prompt before doing ANYTHING in the app." The timer buttons
+  // above are only half of it — the popup also carries Open Dashboard, Sign out and the
+  // Pin toggle. Lock those too while the prompt is pending (the click handlers also
+  // no-op on _idleLocked as defence in depth). Links can't use .disabled, so they are
+  // gated with pointer-events + aria-disabled; the pin is a real <button>.
+  setIdlePeripheralsLocked(_idleLocked);
+}
+
+// Lock/unlock the non-timer controls (Dashboard, Sign out links; Pin button) during an
+// idle prompt. Guarded so it is safe to call before every element exists.
+function setIdlePeripheralsLocked(locked) {
+  for (const el of [dashboardLink, logoutLink]) {
+    if (!el) continue;
+    el.style.pointerEvents = locked ? 'none' : '';
+    el.style.opacity = locked ? '0.5' : '';
+    el.setAttribute('aria-disabled', locked ? 'true' : 'false');
+    el.setAttribute('tabindex', locked ? '-1' : '0');
+  }
+  const pin = document.getElementById('pinBtn');
+  if (pin) {
+    pin.disabled = locked;
+    pin.style.opacity = locked ? '0.5' : '';
+    pin.style.cursor = locked ? 'not-allowed' : '';
+    // Restore the pinned/unpinned tooltip on unlock instead of leaving the lock text.
+    pin.title = locked
+      ? 'Answer the idle prompt first'
+      : (pin.getAttribute('aria-pressed') === 'true'
+          ? 'Always on top — click to unpin'
+          : 'Keep window on top of other apps');
   }
 }
 
@@ -538,7 +569,11 @@ startBtn.addEventListener('click', async () => {
     const result = await window.trackflow.startTimer(projectId);
     if (result.success) {
       setStartedAt(result.entry?.started_at || new Date().toISOString());
-      if (result.todayTotal > 0) todayTotalBase = result.todayTotal;
+      // Assign unconditionally. The old `> 0` guard kept whatever base happened to
+      // be left over when the start response said 0, so starting on a fresh project
+      // could inherit the PREVIOUS project's total. Main now always returns that
+      // project's real completed total for today, so 0 is a legitimate answer.
+      todayTotalBase = result.todayTotal ?? 0;
       elapsedSeconds = todayTotalBase;
       updateDisplay(true);
       startTicking();
@@ -546,7 +581,13 @@ startBtn.addEventListener('click', async () => {
       showNotification(result.error);
     }
   } catch (e) {
-    showNotification('Failed to start timer');
+    // Surface the underlying reason. A bare "Failed to start timer" is
+    // indistinguishable between a thrown IPC error, a missing handler and a
+    // storage fault, which is exactly the ambiguity that makes these reports
+    // unactionable from a screenshot.
+    const detail = (e && (e.message || String(e))) || '';
+    showNotification(detail ? `Failed to start timer — ${detail}` : 'Failed to start timer');
+    console.error('[Timer] start-timer threw:', e);
   }
   startBtnText.textContent = 'Start';
   updateStartBtnState();
@@ -582,41 +623,45 @@ stopBtn.addEventListener('click', () => {
   });
 });
 
+let _loggingOut = false;
 async function handleLogout() {
-  logoutBtn.disabled = true;
+  if (_loggingOut) return;
+  _loggingOut = true;
   stopTicking();
   await window.trackflow.logout();
 }
-logoutBtn.addEventListener('click', handleLogout);
-logoutLink.addEventListener('click', handleLogout);
-dashboardLink.addEventListener('click', () => window.trackflow.openDashboard());
-
-// Hide button — dismiss window to tray without logging out
-const hideBtn = document.getElementById('hideBtn');
-hideBtn.addEventListener('click', () => {
-  // ISSUE 9: when pinned, the close button is disabled — the modal is only
-  // closable after unpinning. Guard here too in case of a synthetic click.
-  if (hideBtn.disabled) return;
-  window.trackflow.hideWindow();
+logoutLink.addEventListener('click', () => {
+  if (_idleLocked) return; // idle prompt must be answered first
+  handleLogout();
+});
+logoutLink.title = `Sign out (${modKey}+Q)`;
+dashboardLink.addEventListener('click', () => {
+  if (_idleLocked) return; // idle prompt must be answered first
+  window.trackflow.openDashboard();
 });
 
 // ── Pin (Always on Top) Button Logic ──
+// The custom hide-to-tray and sign-out buttons that used to sit beside this one
+// are gone: the window now has NATIVE close/minimise/maximise, and closing hides
+// to tray without stopping the timer. Sign out lives in the footer only.
 const pinBtn = document.getElementById('pinBtn');
+
+// Assigned by the Windows compositing probe below (no-op elsewhere). Pinning is
+// what turns the virtual-desktop follow on, so a fresh pin must re-state whether
+// this window is currently on screen — otherwise a window pinned from the TRAY
+// while it sits on another desktop would stay stranded there: it is already
+// occluded, so no `visibilitychange` is coming to tell main about it.
+let resyncCompositedReport = () => {};
 
 function updatePinUI(pinned) {
   if (pinned) {
     pinBtn.classList.add('pinned');
-    pinBtn.title = 'Always on top (pinned)';
+    pinBtn.title = 'Always on top — click to unpin';
   } else {
     pinBtn.classList.remove('pinned');
-    pinBtn.title = 'Pin window on top';
+    pinBtn.title = 'Keep window on top of other apps';
   }
-  // ISSUE 9 FIX: the close (hide-to-tray) button is DISABLED while pinned. A pinned
-  // modal is meant to stay put; it can only be closed after the user unpins it.
-  hideBtn.disabled = pinned;
-  hideBtn.style.opacity = pinned ? '0.4' : '';
-  hideBtn.style.cursor = pinned ? 'not-allowed' : '';
-  hideBtn.title = pinned ? 'Unpin to close' : 'Hide to tray';
+  pinBtn.setAttribute('aria-pressed', pinned ? 'true' : 'false');
 }
 
 // Load initial pin state from main process
@@ -625,6 +670,7 @@ window.trackflow.getPinState().then((state) => {
 }).catch(() => {});
 
 pinBtn.addEventListener('click', async () => {
+  if (_idleLocked) return; // idle prompt must be answered first
   try {
     const result = await window.trackflow.togglePin();
     if (result) updatePinUI(result.pinned);
@@ -636,7 +682,77 @@ pinBtn.addEventListener('click', async () => {
 // Listen for pin state changes from main process (e.g. tray menu toggle)
 window.trackflow.onPinStateChanged((data) => {
   if (data) updatePinUI(data.pinned);
+  resyncCompositedReport();
 });
+
+// ── Windows virtual desktops: tell main whether this window is on screen ──────
+// Pinning shows the window on every Space (macOS) / workspace (Linux) for free,
+// but `setVisibleOnAllWorkspaces()` does nothing on Windows and Windows has no
+// supported API to pin a window across virtual desktops — so a pinned window sat
+// on Desktop 1 and never appeared on Desktop 2/3. Main solves that by MOVING the
+// pinned window to whichever desktop the user is on, and this probe is how it
+// finds out that the window is no longer there.
+//
+// Two independent signals, because Chromium reports occlusion differently across
+// Windows builds:
+//   1. `document.visibilityState` — a window on another virtual desktop is
+//      occluded, which normally flips this to 'hidden'. Event-driven, instant.
+//   2. Animation-frame starvation — an unpainted window gets no frames. One rAF
+//      is requested per poll; if it never lands, we are not being composited.
+//      This is the backstop for builds that keep reporting 'visible'.
+// Windows-only: macOS/Linux handle pinning natively and must not pay for a poll.
+if (isWin && window.trackflow.reportComposited) {
+  const POLL_MS = 700;
+  const FRAME_STALL_MS = 2500;   // no frame for this long => not being painted
+  const HEARTBEAT_MS = 2000;     // re-report while off-screen so a failed move retries
+  const MAX_HEARTBEATS = 5;      // ...but never report forever into the void
+
+  let framePending = false;
+  let lastFrameAt = Date.now();
+  let lastReported = null;
+  let lastSentAt = 0;
+  let heartbeats = 0;
+
+  const isComposited = () =>
+    document.visibilityState === 'visible' && Date.now() - lastFrameAt < FRAME_STALL_MS;
+
+  function report(force) {
+    const composited = isComposited();
+    const now = Date.now();
+    const changed = composited !== lastReported;
+    // While off-screen, repeat a few times: the move may not have stuck, and a
+    // repeat is the only way main gets to try again.
+    const heartbeatDue =
+      !composited && !changed && heartbeats < MAX_HEARTBEATS && now - lastSentAt >= HEARTBEAT_MS;
+    if (!changed && !heartbeatDue && !force) return;
+
+    heartbeats = composited || changed ? 0 : heartbeats + 1;
+    lastReported = composited;
+    lastSentAt = now;
+    window.trackflow.reportComposited(composited);
+  }
+
+  setInterval(() => {
+    if (!framePending) {
+      framePending = true;
+      requestAnimationFrame(() => {
+        framePending = false;
+        lastFrameAt = Date.now();
+      });
+    }
+    report(false);
+  }, POLL_MS);
+
+  // Instant path: leaving/entering a virtual desktop usually fires this.
+  document.addEventListener('visibilitychange', () => report(false));
+
+  // Pin toggled: re-state the current situation from scratch (see the
+  // declaration of this hook above the pin button for why).
+  resyncCompositedReport = () => {
+    heartbeats = 0;
+    report(true);
+  };
+}
 
 // Keyboard shortcuts — platform-aware
 document.addEventListener('keydown', (e) => {
@@ -644,11 +760,16 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (isRunning) stopBtn.click(); else startBtn.click();
   }
+  // Cmd/Ctrl+Q quits the app — the universal desktop meaning. It used to sign
+  // the user out, which was tolerable for a throwaway tray popup and is not for
+  // a normal window. Sign out is the footer link (and the tray menu).
   if ((e.ctrlKey || e.metaKey) && e.key === 'q') {
     e.preventDefault();
-    handleLogout();
+    window.trackflow.quitApp();
   }
-  if (e.key === 'Escape') window.blur();
+  // Escape hides the window to the tray. It used to call window.blur() and rely
+  // on the hide-on-blur handler, which no longer exists — so this was dead.
+  if (e.key === 'Escape') window.trackflow.hideWindow();
 });
 
 // Events from main process

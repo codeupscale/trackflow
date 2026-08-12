@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import {
     Camera,
+    Copy,
     CreditCard,
     Github,
     Linkedin,
@@ -150,9 +151,16 @@ export default function SettingsPage() {
                 ![5, 10, 20].includes(settings.idle_timeout)
                     ? String(settings.idle_timeout)
                     : "",
+            // `always` ("always keep idle time") is retired — idle time is never
+            // credited as work (owner policy, 2026-07-16), so the agent and
+            // GET /agent/config both treat it as `never`. Show it as what it now
+            // DOES, so an org still holding the old value sees the truth and saving
+            // migrates the stored setting instead of silently re-writing a lie.
             keepIdleTime:
-                (settings?.keep_idle_time as "prompt" | "always" | "never") ??
-                "prompt",
+                settings?.keep_idle_time === "always"
+                    ? "never"
+                    : ((settings?.keep_idle_time as "prompt" | "never") ??
+                      "prompt"),
             idleAlertAutoStopEnabled:
                 (settings?.idle_alert_auto_stop_min ?? 10) > 0,
             idleAlertAutoStopMin:
@@ -196,9 +204,12 @@ export default function SettingsPage() {
     const [screenshotBlur, setScreenshotBlur] = useState(false);
     const [idleTimeout, setIdleTimeout] = useState("5");
     const [idleTimeoutCustom, setIdleTimeoutCustom] = useState("");
-    const [keepIdleTime, setKeepIdleTime] = useState<
-        "prompt" | "always" | "never"
-    >("prompt");
+    // No "always": keeping idle time as work was retired (owner policy, 2026-07-16).
+    // The API still ACCEPTS the old value so no org is locked out mid-migration; it is
+    // normalised to "never" on read here and in GET /agent/config.
+    const [keepIdleTime, setKeepIdleTime] = useState<"prompt" | "never">(
+        "prompt",
+    );
     const [idleAlertAutoStopEnabled, setIdleAlertAutoStopEnabled] =
         useState(true);
     const [idleAlertAutoStopMin, setIdleAlertAutoStopMin] = useState("10");
@@ -450,6 +461,26 @@ export default function SettingsPage() {
 
     const handleSaveUserTimezone = () => {
         updateProfileMutation.mutate({ timezone: userTimezone });
+    };
+
+    /**
+     * The slug is generated as `Str::slug(name)-Str::random(6)`, so the suffix
+     * is mixed-case base62 and the server matches it case-sensitively. Copying
+     * it is the only safe way to move it into a config file — retyping it is
+     * how you end up with a silent 404.
+     */
+    const handleCopySlug = async () => {
+        const slug = data?.organization.slug;
+        if (!slug) return;
+
+        try {
+            await navigator.clipboard.writeText(slug);
+            toast.success("Organization slug copied");
+        } catch {
+            // Clipboard access fails on insecure origins and when the browser
+            // withholds permission. Say so rather than appearing to succeed.
+            toast.error("Could not copy — select the text and copy manually");
+        }
     };
 
     const validatePasswordForm = (): boolean => {
@@ -1070,6 +1101,48 @@ export default function SettingsPage() {
                                     className="bg-background/50"
                                 />
                             </div>
+
+                            {/*
+                                Read-only: the slug is assigned once at signup
+                                and PUT /settings accepts only name + settings.
+                                Shown because it is the organization's public
+                                identifier — the careers feed is keyed on it —
+                                and nothing else in the app surfaces it.
+                            */}
+                            <div className="grid gap-2 max-w-md">
+                                <Label htmlFor="org-slug">
+                                    Organization Slug
+                                </Label>
+                                <div className="flex items-center gap-2">
+                                    <Input
+                                        id="org-slug"
+                                        value={data?.organization.slug ?? ""}
+                                        readOnly
+                                        // Case matters here, so render it in a
+                                        // face where I/l and O/0 are tellable
+                                        // apart.
+                                        className="bg-background/50 font-mono"
+                                        onFocus={(e) => e.target.select()}
+                                    />
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="icon"
+                                        onClick={handleCopySlug}
+                                        disabled={!data?.organization.slug}
+                                        aria-label="Copy organization slug"
+                                        title="Copy organization slug"
+                                    >
+                                        <Copy className="h-4 w-4" />
+                                    </Button>
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                    Public identifier for this organization,
+                                    used in your careers page feed. Case
+                                    sensitive — copy it rather than retyping.
+                                </p>
+                            </div>
+
                             <div className="grid gap-2 max-w-md">
                                 <Label
                                     htmlFor="org-tz"
@@ -1415,10 +1488,7 @@ export default function SettingsPage() {
                                         onValueChange={(v) => {
                                             if (v)
                                                 setKeepIdleTime(
-                                                    v as
-                                                        | "prompt"
-                                                        | "always"
-                                                        | "never",
+                                                    v as "prompt" | "never",
                                                 );
                                         }}
                                         disabled={!isAdmin}
@@ -1428,11 +1498,8 @@ export default function SettingsPage() {
                                         </SelectTrigger>
                                         <SelectContent>
                                             <SelectItem value="prompt">
-                                                Prompt (ask Keep / Discard /
-                                                Reassign / Stop)
-                                            </SelectItem>
-                                            <SelectItem value="always">
-                                                Always keep idle time
+                                                Prompt (Continue tracking /
+                                                Stop timer)
                                             </SelectItem>
                                             <SelectItem value="never">
                                                 Always discard idle time
@@ -1440,8 +1507,10 @@ export default function SettingsPage() {
                                         </SelectContent>
                                     </Select>
                                     <p className="text-xs text-muted-foreground">
-                                        Whether to show the idle alert or
-                                        auto-keep / auto-discard
+                                        Whether to ask before discarding the
+                                        idle period, or discard it silently and
+                                        keep tracking. Idle time is never
+                                        counted as work either way.
                                     </p>
                                 </div>
                                 <div className="grid gap-2 max-w-xs">

@@ -11,13 +11,12 @@ return [
     | before automated cleanup is allowed to force-close it.
     |
     | Desktop agents queue heartbeats while offline and flush them on reconnect,
-    | so a 30-minute threshold would truncate legitimate offline work. This grace
-    | window must cover the longest expected offline-tracking stretch (~3-4 hours)
-    | so that flushed heartbeats land before the entry is auto-closed.
+    | so a heartbeat-only threshold would truncate legitimate offline work.
     |
-    | Used by:
-    |   - App\Console\Commands\CleanupStaleEntries (primary cleanup threshold)
-    |   - App\Jobs\CloseStaleTimerEntriesJob       (longer backstop, >= this value)
+    | NOTE: entry auto-closing no longer uses this value — it moved to
+    | `abandoned_after_minutes` below, whose liveness rule also counts
+    | `client_synced_at` and so does not need a multi-hour cushion for queued
+    | heartbeats. This setting remains for token/session grace in AuthTokenService.
     |
     */
 
@@ -45,5 +44,118 @@ return [
     */
 
     'min_agent_version' => env('TIMER_MIN_AGENT_VERSION', ''),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Maximum Entry Duration (seconds)
+    |--------------------------------------------------------------------------
+    |
+    | Hard ceiling on any single time entry, so a runaway timer cannot corrupt
+    | reports. Raised from 12h to 24h alongside the offline-first refactor.
+    |
+    | The desktop agent SPLITS the live session at midnight in the organization's
+    | timezone, so a legitimate entry can never span two calendar days and this
+    | ceiling is not reachable in normal operation — it is a backstop for a
+    | corrupt clock or a hand-crafted payload, not a routine clamp.
+    |
+    | Used by: App\Services\TimeEntrySyncService, App\Console\Commands\CleanupStaleEntries
+    |
+    */
+
+    'max_entry_duration' => (int) env('TIMER_MAX_ENTRY_DURATION', 86400), // 24 hours
+
+    /*
+    |--------------------------------------------------------------------------
+    | Abandoned Entry Window (minutes)
+    |--------------------------------------------------------------------------
+    |
+    | Silence after which an OPEN entry is treated as abandoned by an agent that is
+    | never coming back (reimaged, stolen, permanently offline) and is closed at its
+    | last known activity — never at now().
+    |
+    | Liveness is the MOST RECENT of the last heartbeat and `client_synced_at`, and
+    | `client_synced_at` is stamped on EVERY push of the live session including one
+    | that carries no change, so a healthy agent refreshes it at least once per upload
+    | interval. That is what makes a window this tight safe: only an agent that is
+    | genuinely unreachable goes quiet for an hour.
+    |
+    | Used by: App\Services\TimeEntrySyncService::closeAbandonedOpenEntries()
+    |
+    */
+
+    'abandoned_after_minutes' => (int) env('TIMER_ABANDONED_AFTER_MINUTES', 60),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Maximum Backfill Age (seconds)
+    |--------------------------------------------------------------------------
+    |
+    | How far in the past a client-supplied timestamp may be and still be accepted.
+    |
+    | This was 24h, which silently made the product's core promise unkeepable: a
+    | laptop that tracked offline over a long weekend had every session REJECTED
+    | on reconnect, because the whole batch predated the window. Since local SQLite
+    | is now the source of truth and the agent retries until the server confirms,
+    | this must cover the longest realistic offline stretch. 30 days.
+    |
+    | Keep in step with ScreenshotController::OFFLINE_BACKFILL_DAYS — a session that
+    | uploads but whose screenshots are refused is its own data-loss bug.
+    |
+    | Used by: App\Services\TimeEntrySyncService::parseClientTimestamp()
+    |
+    */
+
+    'max_past_skew' => (int) env('TIMER_MAX_PAST_SKEW', 2592000), // 30 days
+
+    /*
+    |--------------------------------------------------------------------------
+    | Maximum Future Skew (seconds)
+    |--------------------------------------------------------------------------
+    |
+    | Tolerance for a client clock running ahead of the server. Values inside the
+    | window are clamped back to now(); anything beyond it is rejected, so stored
+    | data never claims a future start.
+    |
+    */
+
+    'max_future_skew' => (int) env('TIMER_MAX_FUTURE_SKEW', 300), // 5 minutes
+
+    /*
+    |--------------------------------------------------------------------------
+    | Live Elapsed Grace (minutes)
+    |--------------------------------------------------------------------------
+    |
+    | How long an OPEN entry may go without proof that its agent is alive before
+    | `elapsed_seconds` stops being measured to now() and freezes at that last
+    | proof (`live_as_of`, with `elapsed_is_stale` set so the UI can say so).
+    |
+    | The desktop owns tracked time locally and uploads on a 10-minute batch, so
+    | between pushes the server's open entry can be a stale replica of state the
+    | agent has already changed — an idle gap it discarded, a session it stopped,
+    | a machine that died. Counting such an entry to now() does not lag, it
+    | INVENTS time and grows it every second.
+    |
+    | 3 minutes: comfortably above the agent's 30s heartbeat cadence (so a healthy
+    | online agent never freezes), well under the 10-minute upload interval, and
+    | far under `abandoned_after_minutes`.
+    |
+    | Used by: App\Services\TimerService::computeOpenEntryElapsed()
+    |
+    */
+
+    'live_elapsed_grace_minutes' => (int) env('TIMER_LIVE_ELAPSED_GRACE_MINUTES', 3),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Session Sync Batch Cap
+    |--------------------------------------------------------------------------
+    |
+    | Maximum number of sessions accepted in one POST /timer/sessions/sync call.
+    | The agent pages through larger backlogs; this bounds per-request work so a
+    | month-long offline backlog cannot produce a single enormous transaction.
+    |
+    */
+
+    'sync_batch_max' => (int) env('TIMER_SYNC_BATCH_MAX', 100),
 
 ];

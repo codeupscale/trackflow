@@ -20,23 +20,13 @@ class Position extends Model
         'code',
         'level',
         'employment_type',
-        'min_salary',
-        'max_salary',
         'is_active',
     ];
-
-    /**
-     * Salary fields are hidden from default serialization.
-     * Access only via explicit admin-gated endpoints.
-     */
-    protected $hidden = ['min_salary', 'max_salary'];
 
     protected function casts(): array
     {
         return [
             'is_active' => 'boolean',
-            'min_salary' => 'encrypted',
-            'max_salary' => 'encrypted',
         ];
     }
 

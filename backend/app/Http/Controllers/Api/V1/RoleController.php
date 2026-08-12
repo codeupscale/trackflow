@@ -74,7 +74,7 @@ class RoleController extends Controller
             $baseName = $name;
             $counter = 1;
             while (Role::where('organization_id', $user->organization_id)->where('name', $name)->exists()) {
-                $name = $baseName . '_' . $counter++;
+                $name = $baseName.'_'.$counter++;
             }
 
             // Custom roles always get priority 10 (below manager=30)
@@ -242,9 +242,9 @@ class RoleController extends Controller
 
             // Insert new
             DB::table('user_roles')->insert([
-                'id'          => \Illuminate\Support\Str::uuid()->toString(),
-                'user_id'     => $targetUser->id,
-                'role_id'     => $role->id,
+                'id' => Str::uuid()->toString(),
+                'user_id' => $targetUser->id,
+                'role_id' => $role->id,
                 'assigned_by' => null,
                 'assigned_at' => now(),
             ]);
@@ -286,10 +286,27 @@ class RoleController extends Controller
         // Fallback: use the raw role column
         $rawRole = $user->getRawOriginal('role') ?? 'employee';
 
+        // Read the real priority off the org's roles table rather than guessing. The
+        // system role set is data — including custom roles — and the hardcoded map
+        // below had drifted: it still scored the retired 'admin'/'manager' names and
+        // knew nothing of org_manager / hr_manager / finance_manager, so any of those
+        // users without a user_roles row scored 1 and could assign no role at all.
+        $rolePriority = DB::table('roles')
+            ->where('organization_id', $user->organization_id)
+            ->where('name', $rawRole)
+            ->value('priority');
+
+        if ($rolePriority !== null) {
+            return (int) $rolePriority;
+        }
+
+        // Last resort, matching the priorities PermissionSeeder assigns.
         return match ($rawRole) {
             'owner' => 100,
-            'admin' => 50,
-            'manager' => 30,
+            'org_manager' => 75,
+            'hr_manager' => 65,
+            'finance_manager' => 60,
+            'employee' => 10,
             default => 1,
         };
     }
@@ -298,7 +315,7 @@ class RoleController extends Controller
      * Validate that no scoped permission (has_scope=true) is being assigned scope='none'.
      * scope='none' is only valid as a placeholder for has_scope=false (boolean) permissions.
      *
-     * @param array<string, string> $requestedPermissions  permission_key => scope
+     * @param  array<string, string>  $requestedPermissions  permission_key => scope
      */
     private function validateScopeIntegrity(array $requestedPermissions): void
     {
@@ -314,7 +331,7 @@ class RoleController extends Controller
             ->pluck('key');
 
         if ($violations->isNotEmpty()) {
-            abort(422, 'Invalid scope: the following permissions require a specific scope (own/project/organization) and cannot use \'none\': ' . $violations->implode(', '));
+            abort(422, 'Invalid scope: the following permissions require a specific scope (own/project/organization) and cannot use \'none\': '.$violations->implode(', '));
         }
     }
 
@@ -322,8 +339,8 @@ class RoleController extends Controller
      * Validate that the requesting user has all permissions they are trying to grant.
      * Throws a 403 if escalation is detected.
      *
-     * @param array<string, string> $requestedPermissions  permission_key => scope
-     * @param array<string, string> $userPermMap            user's current permission map
+     * @param  array<string, string>  $requestedPermissions  permission_key => scope
+     * @param  array<string, string>  $userPermMap  user's current permission map
      */
     private function validatePermissionEscalation(array $requestedPermissions, array $userPermMap): void
     {
@@ -346,7 +363,7 @@ class RoleController extends Controller
     /**
      * Sync permission entries for a role.
      *
-     * @param array<string, string> $permissions  permission_key => scope
+     * @param  array<string, string>  $permissions  permission_key => scope
      */
     private function syncPermissions(Role $role, array $permissions): void
     {
@@ -358,7 +375,7 @@ class RoleController extends Controller
             $perm = $permModels->get($key);
             if ($perm) {
                 $rows[] = [
-                    'id' => (string) \Illuminate\Support\Str::uuid(),
+                    'id' => (string) Str::uuid(),
                     'role_id' => $role->id,
                     'permission_id' => $perm->id,
                     'scope' => $scope,

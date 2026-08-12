@@ -56,6 +56,14 @@ class PermissionSeeder extends Seeder
             ['positions.delete',      'positions', 'delete',      'Archive or delete positions',                   false],
             ['positions.view_salary', 'positions', 'view_salary', 'View min/max salary encrypted fields',         false],
 
+            // --- job_postings (6) ---
+            ['job_postings.view',        'job_postings', 'view',        'View job posting list',                          false],
+            ['job_postings.create',      'job_postings', 'create',      'Create new job postings',                        false],
+            ['job_postings.edit',        'job_postings', 'edit',        'Edit job posting details',                       false],
+            ['job_postings.delete',      'job_postings', 'delete',      'Delete job postings',                            false],
+            ['job_postings.publish',     'job_postings', 'publish',     'Publish or unpublish postings to the careers page', false],
+            ['job_postings.view_salary', 'job_postings', 'view_salary', 'View min/max salary encrypted fields',           false],
+
             // --- employees (6) ---
             ['employees.view_directory',   'employees', 'view_directory',   'View employee directory',             true],
             ['employees.view_profile',     'employees', 'view_profile',     'View full employee profile',          true],
@@ -177,6 +185,14 @@ class PermissionSeeder extends Seeder
             'positions.delete'      => 'none',
             'positions.view_salary' => 'none',
 
+            // job_postings — full control including publishing to the careers page
+            'job_postings.view'        => 'none',
+            'job_postings.create'      => 'none',
+            'job_postings.edit'        => 'none',
+            'job_postings.delete'      => 'none',
+            'job_postings.publish'     => 'none',
+            'job_postings.view_salary' => 'none',
+
             // employees
             'employees.view_directory'   => 'organization',
             'employees.view_profile'     => 'organization',
@@ -274,6 +290,14 @@ class PermissionSeeder extends Seeder
             'positions.delete'      => 'none',
             'positions.view_salary' => 'none',
 
+            // job_postings — HR owns hiring, so full control including publishing
+            'job_postings.view'        => 'none',
+            'job_postings.create'      => 'none',
+            'job_postings.edit'        => 'none',
+            'job_postings.delete'      => 'none',
+            'job_postings.publish'     => 'none',
+            'job_postings.view_salary' => 'none',
+
             // employees — full access including financial data and notes
             'employees.view_directory'   => 'organization',
             'employees.view_profile'     => 'organization',
@@ -346,6 +370,10 @@ class PermissionSeeder extends Seeder
 
             // positions — salary band visibility
             'positions.view_salary' => 'none',
+
+            // job_postings — compensation visibility only; hiring is HR's to run
+            'job_postings.view'        => 'none',
+            'job_postings.view_salary' => 'none',
 
             // employees — view directory + profile + financial data + documents
             'employees.view_directory'   => 'organization',
@@ -427,9 +455,10 @@ class PermissionSeeder extends Seeder
             'dashboard.view_own_stats'  => 'none',
             'dashboard.view_team_stats' => 'none',
 
-            // departments & positions — view only
-            'departments.view' => 'none',
-            'positions.view'   => 'none',
+            // departments, positions & job postings — view only
+            'departments.view'  => 'none',
+            'positions.view'    => 'none',
+            'job_postings.view' => 'none',
 
             // employees
             'employees.view_directory'   => 'project',

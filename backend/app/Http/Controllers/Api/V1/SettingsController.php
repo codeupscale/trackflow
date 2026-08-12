@@ -33,12 +33,19 @@ class SettingsController extends Controller
             'name' => 'sometimes|string|max:255',
             'settings' => 'sometimes|array',
             'settings.screenshot_interval' => 'sometimes|integer|in:5,10,15',
+            // Screenshots per interval window (Hubstaff-style multi-capture); agent clamps to [1,10].
+            'settings.screenshots_per_interval' => 'sometimes|integer|min:1|max:10',
             'settings.blur_screenshots' => 'sometimes|boolean',
             // Idle detection is always on; minimum 1 minute (no disable).
             'settings.idle_timeout' => 'sometimes|integer|min:1|max:30',
             'settings.idle_alert_email_enabled' => 'sometimes|boolean',
             // Clamp via validation; job also defensively clamps.
             'settings.idle_alert_email_cooldown_min' => 'sometimes|integer|min:5|max:1440',
+            // `always` ("always keep idle time") is RETIRED — idle time is never credited
+            // as work (owner policy, 2026-07-16). It is still ACCEPTED so an org holding
+            // the old value, or an older client that echoes settings back, is not 422'd
+            // mid-migration; AgentController::idlePolicy() folds it into `never` on read,
+            // and the settings page no longer offers it.
             'settings.keep_idle_time' => 'sometimes|string|in:prompt,always,never',
             // 0 = disabled (idle popup never auto-stops); max 240 min (4 hours) when enabled
             'settings.idle_alert_auto_stop_min' => 'sometimes|integer|min:0|max:240',
@@ -66,6 +73,7 @@ class SettingsController extends Controller
             $currentSettings = $org->settings ?? $org->getDefaultSettings();
             $allowedKeys = array_flip([
                 'screenshot_interval',
+                'screenshots_per_interval',
                 'blur_screenshots',
                 'idle_timeout',
                 'idle_alert_email_enabled',

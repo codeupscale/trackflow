@@ -67,8 +67,6 @@ export function PositionFormSheet({
       department_id: '' as PositionInput['department_id'],
       level: 'mid',
       employment_type: 'full_time',
-      min_salary: null,
-      max_salary: null,
       is_active: true,
     },
   });
@@ -81,8 +79,6 @@ export function PositionFormSheet({
         department_id: position.department_id,
         level: position.level,
         employment_type: position.employment_type,
-        min_salary: position.min_salary,
-        max_salary: position.max_salary,
         is_active: position.is_active,
       });
     } else {
@@ -92,8 +88,6 @@ export function PositionFormSheet({
         department_id: '' as PositionInput['department_id'],
         level: 'mid',
         employment_type: 'full_time',
-        min_salary: null,
-        max_salary: null,
         is_active: true,
       });
     }
@@ -239,58 +233,6 @@ export function PositionFormSheet({
                         </SelectGroup>
                       </SelectContent>
                     </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="min_salary"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Min Salary</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="number"
-                        min="0"
-                        step="1000"
-                        placeholder="0"
-                        value={field.value ?? ''}
-                        onChange={(e) =>
-                          field.onChange(
-                            e.target.value ? Number(e.target.value) : null
-                          )
-                        }
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="max_salary"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Max Salary</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="number"
-                        min="0"
-                        step="1000"
-                        placeholder="0"
-                        value={field.value ?? ''}
-                        onChange={(e) =>
-                          field.onChange(
-                            e.target.value ? Number(e.target.value) : null
-                          )
-                        }
-                      />
-                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}

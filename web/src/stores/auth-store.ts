@@ -4,12 +4,13 @@ import axios from 'axios';
 import api from '@/lib/api';
 import { identifyUser, resetUser } from '@/lib/posthog';
 import { usePermissionStore } from '@/stores/permission-store';
+import type { UserRole } from '@/lib/roles';
 
 interface User {
   id: string;
   name: string;
   email: string;
-  role: 'owner' | 'admin' | 'manager' | 'employee';
+  role: UserRole;
   organization_id: string;
   timezone: string;
   avatar_url: string | null;

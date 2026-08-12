@@ -74,8 +74,6 @@ class PositionTest extends TestCase
             'department_id' => $dept->id,
             'level' => 'senior',
             'employment_type' => 'full_time',
-            'min_salary' => 80000,
-            'max_salary' => 120000,
         ]);
 
         $response->assertStatus(201)
@@ -88,30 +86,6 @@ class PositionTest extends TestCase
             'code' => 'SE-001',
         ]);
     }
-
-    public function test_store_validates_max_salary_gte_min_salary(): void
-    {
-        $user = $this->actingAsUser('org_manager');
-
-        $dept = Department::factory()->create([
-            'organization_id' => $user->organization_id,
-        ]);
-
-        $response = $this->postJson('/api/v1/hr/positions', [
-            'title' => 'Tester',
-            'code' => 'TST-001',
-            'department_id' => $dept->id,
-            'level' => 'junior',
-            'employment_type' => 'full_time',
-            'min_salary' => 100000,
-            'max_salary' => 50000,
-        ]);
-
-        $response->assertStatus(422)
-            ->assertJsonValidationErrors(['max_salary']);
-    }
-
-    // ── Update ───────────────────────────────────────────
 
     public function test_update_position(): void
     {

@@ -16,91 +16,182 @@
       flex-direction: column;
     }
 
-    /* QA #10 — Windows top-edge resize strip. Hidden by default; only the
-       Windows build (html.platform-win, set in index-renderer.js) shows it.
-       The left/right/bottom window edges are already no-drag (the .content
-       area is not a drag region), so only the titlebar's top edge needs to be
-       carved out for the native resize handle. pointer-events stays enabled so
-       Chromium's hit-test sees the no-drag region; the strip is transparent and
-       only ~6px tall, above the titlebar buttons, so dragging/moving via the
-       rest of the titlebar is unaffected. */
-    .resize-edge-top { display: none; }
-    html.platform-win .resize-edge-top {
-      display: block;
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 6px;
-      z-index: 9999;
-      -webkit-app-region: no-drag;
-    }
-
+    /* The window is a real resizable app window now, so the layout is authored
+       to BREATHE at the default size and degrade gracefully as it shrinks
+       towards the 380x520 floor — rather than the old fixed 320x480 popup where
+       eight stacked blocks fought over the same 480px and every one of them
+       collapsed onto its neighbour. */
     .content {
-      /* Roomier than the original 12/16/16 — the popup felt cramped once banners,
-         the shift row and the activity bar were all on screen together. */
-      padding: 14px 18px 18px;
+      padding: 18px 22px 16px;
       flex: 1;
       display: flex;
       flex-direction: column;
-      /* ISSUE 7 FIX: allow this flex container to shrink below its content's
-         intrinsic height so the footer is never pushed off the bottom edge. */
+      gap: 14px;
+      /* Let this flex container shrink below its content's intrinsic height so
+         the footer is never pushed off the bottom edge. */
       min-height: 0;
     }
 
-    /* ── Timer Display ──────────────────────────────────────── */
-    .timer-display {
-      text-align: center;
-      padding: 26px 0 22px;
-      flex: 1;
+    /* The header row carries no wordmark — the OS already identifies the app
+       (Dock/taskbar icon, and the native title bar on Linux), so a logo lockup
+       up here was decoration competing with the timer. Only the pin toggle and
+       the update badge live in it now. With the title gone the row has a single
+       child, and `space-between` would push it to the LEFT — straight into the
+       macOS traffic lights — so pin it to the end explicitly. */
+    .titlebar { justify-content: flex-end; }
+
+    /* ── Alerts (permission / wallpaper / offline / idle) ────── */
+    /* Only rendered when something is actually wrong, and quiet when it is:
+       a tinted strip with a colour-coded left rule, not a full-bleed warning
+       slab competing with the timer for attention. */
+    .alerts {
       display: flex;
       flex-direction: column;
-      justify-content: center;
-      /* ISSUE 7 FIX: the timer block absorbs the flexible space; letting it shrink
-         (min-height:0) means the fixed rows below (select, activity bar, actions,
-         footer) always stay on-screen instead of overflowing when the activity
-         section appears on Start. */
-      min-height: 0;
-    }
-
-    /* ISSUE 7 FIX: keep the interactive rows at their natural height and always
-       visible — they must never be the ones clipped by an overflowing column. */
-    .select-wrap,
-    .activity-section.visible,
-    .actions,
-    .footer {
+      gap: 6px;
       flex-shrink: 0;
     }
+    .alerts:empty { display: none; }
+
+    .alert {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 11px;
+      border-radius: 7px;
+      border-left: 2px solid var(--alert-accent, var(--accent-amber));
+      background: var(--alert-bg, rgba(245, 158, 11, 0.09));
+      font-size: 12px;
+      line-height: 1.35;
+      color: var(--text-secondary);
+    }
+    .alert-icon {
+      flex-shrink: 0;
+      width: 14px;
+      height: 14px;
+      color: var(--alert-accent, var(--accent-amber));
+    }
+    .alert-text { flex: 1; min-width: 0; }
+    .alert-action {
+      flex-shrink: 0;
+      padding: 3px 9px;
+      border-radius: 5px;
+      border: 1px solid var(--border-input);
+      background: transparent;
+      color: var(--alert-accent, var(--accent-amber));
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .alert-action:hover {
+      background: var(--alert-bg, rgba(245, 158, 11, 0.09));
+      border-color: var(--alert-accent, var(--accent-amber));
+    }
+    .alert.alert-danger {
+      --alert-accent: var(--accent-red);
+      --alert-bg: rgba(239, 68, 68, 0.09);
+    }
+
+    /* ── Status strip — connection + shift on ONE line ───────── */
+    /* Previously two separate full-width rows (a centred connection line and a
+       boxed shift banner) that together ate ~60px of a 480px window. */
+    /* CENTRED, not space-between. Pushing connection to one edge and the shift to
+       the other only balanced when BOTH were present — and the shift is hidden
+       whenever the user has no shift assigned, which stranded a lone "● Online"
+       against a wide void. Centring reads as deliberate in both cases: one item
+       sits centred, two read as a single inline sentence joined by the separator
+       below. */
+    .status-strip {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 4px 8px;
+      flex-shrink: 0;
+      font-size: 11.5px;
+      color: var(--text-muted);
+      min-height: 18px;
+    }
+    .conn-status {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+    }
+    .conn-status .dot { width: 6px; height: 6px; }
+    .conn-status .dot.online { background: var(--accent-green); }
+    .conn-status .dot.offline { background: var(--accent-red); animation: pulse 2s infinite; }
+    .conn-sep { color: var(--text-xs-muted); }
+
+    .shift-info {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+      color: var(--text-muted);
+    }
+    /* Separator, rendered only when the shift block is actually shown (the JS
+       toggles it between display:none and display:flex), so the centred row
+       reads as one sentence: "● Online · 🕐 Morning Shift 11:30 - 20:30". */
+    .shift-info::before {
+      content: "·";
+      color: var(--text-xs-muted);
+      margin-right: 3px;
+    }
+    .shift-info svg { color: var(--accent-indigo); flex-shrink: 0; }
+    .shift-info #shiftName {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .shift-time {
+      font-variant-numeric: tabular-nums;
+      color: var(--text-xs-muted);
+      flex-shrink: 0;
+    }
+
+    /* ── Timer hero ──────────────────────────────────────────── */
+    .timer-card {
+      /* Sized to its CONTENT, not to the leftover space. `flex: 1` made the card
+         swallow every spare pixel, so on a tall window the timer floated in a
+         large dead zone with the card border miles away from it. `margin-block:
+         auto` instead splits the free space evenly ABOVE and BELOW the card, so
+         the hero sits optically centred while the controls and footer stay put
+         at the bottom. `flex: 0 1 auto` still lets it shrink (margins collapse
+         to 0 first) so nothing overflows near the size floor. */
+      flex: 0 1 auto;
+      margin-block: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 26px 16px;
+      border-radius: 12px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      min-height: 0;
+    }
     .time {
-      font-size: 44px;
-      line-height: 1.15;
+      font-size: 46px;
+      line-height: 1.05;
       font-weight: 700;
       font-variant-numeric: tabular-nums;
-      letter-spacing: 2px;
+      letter-spacing: 1px;
       transition: color 0.2s;
     }
     .time.running { color: var(--accent-primary, var(--accent-blue)); }
-    .time.paused { color: var(--accent-amber); }
+    .time.paused  { color: var(--accent-amber); }
     .time.stopped { color: var(--text-muted); }
 
     .status {
-      font-size: 13px;
-      color: var(--text-muted);
-      margin-top: 10px;
       display: flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
-    }
-
-    /* Secondary, non-ticking total: sum of all projects today (server-synced). */
-    .total-sum {
-      font-size: 12px;
-      color: var(--text-muted);
-      opacity: 0.75;
-      margin-top: 8px;
-      font-variant-numeric: tabular-nums;
-      letter-spacing: 0.3px;
+      font-size: 12.5px;
+      font-weight: 500;
+      color: var(--text-secondary);
     }
     .dot {
       display: inline-block;
@@ -111,171 +202,121 @@
     }
     .dot.green { background: var(--accent-primary, var(--accent-blue)); animation: pulse 2s infinite; }
     .dot.amber { background: var(--accent-amber); }
-    .dot.gray { background: var(--text-muted); }
+    .dot.gray  { background: var(--text-muted); }
 
-    /* ── Project Select ─────────────────────────────────────── */
-    .select-wrap {
-      margin: 12px 0 4px;
+    /* Secondary, non-ticking total: sum of all projects today (server-synced). */
+    .total-sum {
+      font-size: 11.5px;
+      color: var(--text-xs-muted);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.2px;
     }
 
-    /* ── Action Buttons ─────────────────────────────────────── */
-    .actions {
+    /* ── Controls ────────────────────────────────────────────── */
+    .controls {
       display: flex;
-      gap: 8px;
-      justify-content: center;
-      padding: 12px 0 6px;
+      flex-direction: column;
+      gap: 12px;
+      flex-shrink: 0;
     }
-    .actions .btn {
-      flex: 1;
-      padding: 12px;
-      font-size: 14px;
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+      color: var(--text-muted);
     }
 
-    /* ── Activity Bar ───────────────────────────────────────── */
-    .activity-section {
-      display: none;
-      margin: 12px 0 4px;
-    }
-    .activity-section.visible {
-      display: block;
-    }
+    /* ── Activity ────────────────────────────────────────────── */
+    .activity-section { display: none; }
+    .activity-section.visible { display: block; }
     .activity-header {
       display: flex;
       justify-content: space-between;
-      align-items: center;
-      margin-bottom: 7px;
-      font-size: 12px;
+      align-items: baseline;
+      margin-bottom: 6px;
+      font-size: 11px;
     }
     .activity-label {
       color: var(--text-muted);
-      font-weight: 500;
+      font-weight: 600;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
     }
     .activity-value {
+      font-size: 12px;
       font-weight: 700;
       font-variant-numeric: tabular-nums;
       color: var(--accent-green);
     }
-    .activity-value.low { color: var(--accent-red); }
+    .activity-value.low    { color: var(--accent-red); }
     .activity-value.medium { color: var(--accent-amber); }
-    .activity-value.high { color: var(--accent-green); }
+    .activity-value.high   { color: var(--accent-green); }
     .activity-bar {
       width: 100%;
-      height: 8px;
+      height: 6px;
       background: var(--bg-tertiary);
-      border-radius: 4px;
+      border-radius: 3px;
       overflow: hidden;
     }
     .activity-bar-fill {
       height: 100%;
-      border-radius: 4px;
+      border-radius: 3px;
       transition: width 0.6s ease, background-color 0.3s ease;
       background: var(--accent-green);
     }
-    .activity-bar-fill.low { background: var(--accent-red); }
+    .activity-bar-fill.low    { background: var(--accent-red); }
     .activity-bar-fill.medium { background: var(--accent-amber); }
-    .activity-bar-fill.high { background: var(--accent-green); }
+    .activity-bar-fill.high   { background: var(--accent-green); }
 
-    /* ── Shift Info Banner ──────────────────────────────────── */
-    .shift-info {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 9px 11px;
-      margin: 8px 0 2px;
-      border-radius: 8px;
-      background: rgba(99, 102, 241, 0.1);
-      border: 1px solid rgba(99, 102, 241, 0.2);
-      font-size: 12px;
-      color: var(--text-secondary);
-    }
-    .shift-info svg { color: var(--accent-primary, #6366f1); flex-shrink: 0; }
-    .shift-time {
-      margin-left: auto;
-      font-variant-numeric: tabular-nums;
-      color: var(--text-muted);
-      font-size: 11px;
+    /* ── Action Buttons ──────────────────────────────────────── */
+    .actions { display: flex; gap: 8px; }
+    .actions .btn {
+      flex: 1;
+      padding: 12px;
+      font-size: 14px;
+      font-weight: 600;
     }
 
-    /* ── Connection Status (always visible, above timer) ──── */
-    .conn-status {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 5px;
-      padding: 6px 0 2px;
-      font-size: 11px;
-      color: var(--text-muted);
+    /* Stop is a frequent, completely reversible action — it should read as the
+       primary control while tracking, not as a destructive alarm. The shared
+       .btn-danger fill (--accent-red, a saturated coral) turned the bottom third
+       of the window into a red slab, and stacked directly under a red
+       low-activity bar it made the whole window look like an error state. This
+       keeps it unmistakably "stop" via a tinted fill + red label. */
+    .actions #stopBtn {
+      background: rgba(255, 100, 103, 0.14);
+      border: 1px solid rgba(255, 100, 103, 0.38);
+      color: #ff8b8d;
     }
-    .conn-status .dot {
-      width: 6px;
-      height: 6px;
+    .actions #stopBtn:hover:not(:disabled) {
+      background: rgba(255, 100, 103, 0.22);
+      border-color: rgba(255, 100, 103, 0.6);
     }
-    .conn-status .dot.online { background: var(--accent-green); }
-    .conn-status .dot.offline { background: var(--accent-red); animation: pulse 2s infinite; }
-    .conn-status .conn-sep { color: var(--text-xs-muted); }
+    [data-theme="light"] .actions #stopBtn {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #dc2626;
+    }
+    [data-theme="light"] .actions #stopBtn:hover:not(:disabled) {
+      background: rgba(239, 68, 68, 0.16);
+      border-color: rgba(239, 68, 68, 0.5);
+    }
 
-    /* ── Footer ─────────────────────────────────────────────── */
+    /* ── Footer ──────────────────────────────────────────────── */
     .footer {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-top: 12px;
-      padding-top: 14px;
+      flex-shrink: 0;
+      padding-top: 12px;
       border-top: 1px solid var(--border-color);
       font-size: 12px;
     }
-    /* Larger hit targets — 11px text on a 10px padding-top was a hard link to click. */
-    .footer a {
-      padding: 4px 0;
-    }
+    .footer a { padding: 4px 0; }
 
-    /* ── Permission Warning Banner ─────────────────────────── */
-    .permission-banner {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 10px 12px;
-      margin-bottom: 10px;
-      border-radius: 8px;
-      background: rgba(234, 179, 8, 0.12);
-      border: 1px solid rgba(234, 179, 8, 0.3);
-      font-size: 12px;
-      color: var(--text-primary);
-    }
-    .permission-banner-text {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .permission-banner-icon {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 18px;
-      height: 18px;
-      border-radius: 50%;
-      background: rgba(234, 179, 8, 0.3);
-      color: #eab308;
-      font-weight: 700;
-      font-size: 11px;
-      flex-shrink: 0;
-    }
-    .permission-banner-btn {
-      padding: 3px 10px;
-      border-radius: 4px;
-      border: 1px solid rgba(234, 179, 8, 0.4);
-      background: rgba(234, 179, 8, 0.15);
-      color: #eab308;
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-      flex-shrink: 0;
-    }
-    .permission-banner-btn:hover {
-      background: rgba(234, 179, 8, 0.25);
-    }
-
-    /* ── Update Dialog Overlay ────────────────────────────── */
+    /* ── Update Dialog Overlay ───────────────────────────────── */
     .update-overlay {
       display: none;
       position: fixed;
@@ -288,9 +329,7 @@
       justify-content: center;
       animation: updateFadeIn 0.25s ease-out;
     }
-    .update-overlay.visible {
-      display: flex;
-    }
+    .update-overlay.visible { display: flex; }
     @keyframes updateFadeIn {
       from { opacity: 0; }
       to   { opacity: 1; }
@@ -319,9 +358,7 @@
       justify-content: center;
       margin: 0 auto 16px;
     }
-    .update-icon svg {
-      color: var(--accent-primary, #c47d2e);
-    }
+    .update-icon svg { color: var(--accent-primary, #c47d2e); }
     .update-title {
       font-size: 17px;
       font-weight: 700;
@@ -334,11 +371,7 @@
       line-height: 1.5;
       margin-bottom: 20px;
     }
-    .update-actions {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
+    .update-actions { display: flex; flex-direction: column; gap: 8px; }
     .update-btn-primary {
       width: 100%;
       padding: 10px 16px;
@@ -351,9 +384,7 @@
       color: #fff;
       transition: background 0.15s;
     }
-    .update-btn-primary:hover {
-      background: var(--accent-primary-hover, #a86a25);
-    }
+    .update-btn-primary:hover { background: var(--accent-primary-hover, #a86a25); }
     .update-btn-secondary {
       width: 100%;
       padding: 10px 16px;
@@ -373,120 +404,90 @@
     /* Update badge — shows after dismissing the dialog */
     .update-badge {
       display: none;
-      position: absolute;
-      top: 7px;
-      right: 40px;
       width: 8px;
       height: 8px;
       border-radius: 50%;
       background: var(--accent-primary, #c47d2e);
       cursor: pointer;
       animation: pulse 2s infinite;
+      -webkit-app-region: no-drag;
     }
-    .update-badge.visible {
-      display: block;
+    .update-badge.visible { display: block; }
+
+    /* ── Compact height fallback ─────────────────────────────── */
+    /* Near the 480px floor the hero gives up its padding first so the controls
+       and footer are never the things that clip. Set below the 560px default so
+       it only kicks in once the user has actually shrunk the window (and on
+       Linux, where the native title bar takes its height out of the content). */
+    @media (max-height: 500px) {
+      .content { padding: 14px 18px 12px; gap: 10px; }
+      .timer-card { padding: 14px; gap: 6px; }
+      .time { font-size: 38px; }
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <!-- Windows-only top-edge resize strip. The titlebar below is a drag region,
-         which blocks the native top-edge resize handle on frameless Windows
-         windows; this thin no-drag strip re-exposes it. display:none everywhere
-         except .platform-win so macOS/Linux keep the full-height drag titlebar. -->
-    <div class="resize-edge-top" aria-hidden="true"></div>
-    <!-- Custom titlebar — identical on all platforms -->
+    <!-- Chrome row. No wordmark: the OS already identifies the app, and the
+         native controls are drawn INTO this row — macOS floats the traffic
+         lights on its left, Windows paints minimise/maximise/close on its
+         right, and Linux puts a real title bar above it (see the .titlebar
+         platform rules in shared.css). Holds only the pin toggle + update
+         badge. -->
     <div class="titlebar" id="titlebar">
-      <span class="titlebar-title">
-        <svg class="titlebar-logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
-          <defs>
-            <linearGradient id="tg1" x1="60" y1="452" x2="452" y2="60" gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stop-color="#4338CA"/>
-              <stop offset="45%" stop-color="#6366F1"/>
-              <stop offset="100%" stop-color="#06B6D4"/>
-            </linearGradient>
-            <linearGradient id="tg2" x1="256" y1="268" x2="345" y2="148" gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stop-color="#6366F1"/>
-              <stop offset="100%" stop-color="#22D3EE"/>
-            </linearGradient>
-          </defs>
-          <path d="M 108 362 A 180 180 0 1 1 348 108" stroke="url(#tg1)" stroke-width="48" stroke-linecap="round" fill="none"/>
-          <path d="M 324 140 L 396 62 L 368 152 Z" fill="#06B6D4"/>
-          <path d="M 324 140 L 396 62 L 368 152 Z" fill="url(#tg1)" opacity="0.25"/>
-          <line x1="256" y1="256" x2="330" y2="160" stroke="url(#tg2)" stroke-width="28" stroke-linecap="round"/>
-          <circle cx="256" cy="256" r="24" fill="#6366F1"/>
-          <circle cx="256" cy="256" r="11" fill="#ffffff"/>
-        </svg>
-        TrackFlow
-      </span>
       <div class="titlebar-controls">
         <span class="update-badge" id="updateBadge" title="Update available — click to show"></span>
-        <button class="titlebar-btn" id="logoutBtn" title="Sign out">
-          <!-- Logout icon (SVG) -->
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-        </button>
-        <button class="titlebar-btn pin-btn pinned" id="pinBtn" title="Always on top (pinned)">
-          <!-- Pin/thumbtack icon (SVG) -->
+        <button class="titlebar-btn pin-btn" id="pinBtn" aria-pressed="false" title="Keep window on top of other apps">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
-        </button>
-        <button class="titlebar-btn close" id="hideBtn" title="Hide to tray">
-          <!-- Close/hide icon (SVG) -->
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
     </div>
 
     <div class="content">
-      <!-- Permission warning banner — shown when Screen Recording is not granted -->
-      <div class="permission-banner" id="permissionBanner" style="display:none" role="alert">
-        <div class="permission-banner-text">
-          <span class="permission-banner-icon" aria-hidden="true">!</span>
-          <span>Screenshots disabled — permission needed</span>
+      <div class="alerts">
+        <!-- Screen Recording permission missing -->
+        <div class="alert" id="permissionBanner" style="display:none" role="alert">
+          <svg class="alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span class="alert-text">Screenshots disabled — permission needed</span>
+          <button class="alert-action" id="fixPermissionBtn">Fix</button>
         </div>
-        <button class="permission-banner-btn" id="fixPermissionBtn">Fix</button>
-      </div>
 
-      <!-- Wallpaper-only warning — shown when captures appear to be wallpaper-only -->
-      <div class="permission-banner" id="wallpaperBanner" style="display:none" role="alert">
-        <div class="permission-banner-text">
-          <span class="permission-banner-icon" aria-hidden="true">!</span>
-          <span>Screenshots may be wallpaper-only</span>
+        <!-- Captures appear to be wallpaper-only -->
+        <div class="alert" id="wallpaperBanner" style="display:none" role="alert">
+          <svg class="alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span class="alert-text">Screenshots may be wallpaper-only</span>
+          <button class="alert-action" id="fixWallpaperBtn">Fix</button>
         </div>
-        <button class="permission-banner-btn" id="fixWallpaperBtn">Fix</button>
-      </div>
 
-      <!-- Offline status banner — shown when network is unavailable -->
-      <div class="permission-banner" id="offlineBanner" style="display:none" role="status">
-        <div class="permission-banner-text">
-          <span class="permission-banner-icon" aria-hidden="true" style="background:rgba(239,68,68,0.3);color:#ef4444">!</span>
-          <span>Offline — data will sync when connected</span>
+        <!-- Network unavailable -->
+        <div class="alert alert-danger" id="offlineBanner" style="display:none" role="status">
+          <svg class="alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.58 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+          <span class="alert-text">Offline — data will sync when connected</span>
         </div>
-      </div>
 
-      <!-- Idle lock banner — the idle window owns the timer until the user answers it -->
-      <div class="permission-banner" id="idleLockBanner" style="display:none" role="status">
-        <div class="permission-banner-text">
-          <span class="permission-banner-icon" aria-hidden="true" style="background:rgba(245,158,11,0.3);color:#f59e0b">!</span>
-          <span>You went idle — answer the idle prompt to continue</span>
+        <!-- The idle window owns the timer until the user answers it -->
+        <div class="alert" id="idleLockBanner" style="display:none" role="status">
+          <svg class="alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span class="alert-text">Please click Continue or Stop timer before doing anything.</span>
         </div>
       </div>
 
-      <!-- Connection status — always visible -->
-      <div class="conn-status" id="connStatus">
-        <span class="dot online" id="connDot"></span>
-        <span id="connText">Online</span>
-        <span class="conn-sep" id="lastSsSep" style="display:none">&middot;</span>
-        <span id="lastSsText"></span>
+      <!-- Connection + shift, one line -->
+      <div class="status-strip">
+        <span class="conn-status" id="connStatus">
+          <span class="dot online" id="connDot"></span>
+          <span id="connText">Online</span>
+          <span class="conn-sep" id="lastSsSep" style="display:none">&middot;</span>
+          <span id="lastSsText"></span>
+        </span>
+        <span class="shift-info" id="shiftInfo" style="display:none">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span id="shiftName"></span>
+          <span class="shift-time" id="shiftTime"></span>
+        </span>
       </div>
 
-      <!-- Shift info banner — visible when user has an assigned shift -->
-      <div class="shift-info" id="shiftInfo" style="display:none">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        <span id="shiftName"></span>
-        <span class="shift-time" id="shiftTime"></span>
-      </div>
-
-      <div class="timer-display">
+      <div class="timer-card">
         <div class="time stopped" id="timerDisplay" role="timer" aria-live="polite">00:00:00</div>
         <div class="status">
           <span class="dot gray" id="statusDot" aria-hidden="true"></span>
@@ -495,29 +496,33 @@
         <div class="total-sum" id="totalSumDisplay" aria-live="polite">Today, all projects: 00:00:00</div>
       </div>
 
-      <!-- Custom-styled select — identical on all platforms -->
-      <div class="select-wrap">
-        <select id="projectSelect" aria-label="Select project">
-          <option value="">No Project</option>
-        </select>
-      </div>
-
-      <!-- Activity bar — visible only when timer is running -->
-      <div class="activity-section" id="activitySection">
-        <div class="activity-header">
-          <span class="activity-label">Activity</span>
-          <span class="activity-value high" id="activityValue">0%</span>
+      <div class="controls">
+        <div class="field">
+          <label class="field-label" for="projectSelect">Project</label>
+          <div class="select-wrap">
+            <select id="projectSelect" aria-label="Select project">
+              <option value="">No Project</option>
+            </select>
+          </div>
         </div>
-        <div class="activity-bar">
-          <div class="activity-bar-fill high" id="activityBarFill" style="width: 0%"></div>
-        </div>
-      </div>
 
-      <div class="actions">
-        <button class="btn btn-primary" id="startBtn">
-          <span id="startBtnText">Start</span>
-        </button>
-        <button class="btn btn-danger" id="stopBtn" style="display:none">Stop</button>
+        <!-- Activity bar — visible only when the timer is running -->
+        <div class="activity-section" id="activitySection">
+          <div class="activity-header">
+            <span class="activity-label">Activity</span>
+            <span class="activity-value high" id="activityValue">0%</span>
+          </div>
+          <div class="activity-bar">
+            <div class="activity-bar-fill high" id="activityBarFill" style="width: 0%"></div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary" id="startBtn">
+            <span id="startBtnText">Start</span>
+          </button>
+          <button class="btn btn-danger" id="stopBtn" style="display:none">Stop</button>
+        </div>
       </div>
 
       <div class="footer">

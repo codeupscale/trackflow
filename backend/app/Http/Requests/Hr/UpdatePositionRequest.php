@@ -34,8 +34,6 @@ class UpdatePositionRequest extends FormRequest
             ],
             'level' => ['sometimes', Rule::in(['junior', 'mid', 'senior', 'lead', 'manager', 'director', 'vp', 'c_level'])],
             'employment_type' => ['sometimes', Rule::in(['full_time', 'part_time', 'contract', 'intern'])],
-            'min_salary' => ['nullable', 'numeric', 'min:0'],
-            'max_salary' => ['nullable', 'numeric', 'gte:min_salary'],
             'is_active' => ['sometimes', 'boolean'],
         ];
     }

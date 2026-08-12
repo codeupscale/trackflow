@@ -74,6 +74,37 @@ describe('wayland-capture-session', () => {
     expect(buffer.toString()).toBe('jpeg');
   });
 
+  /**
+   * Every timeout raced against real work must be CLEARED when the work wins.
+   *
+   * Abandoning it kept a 15s (open) / 10s (frame grab) timer alive per call, holding a
+   * closure and the event loop. In Jest that leak force-exits the worker, and a
+   * force-exited worker reports whatever suite it happened to be running as FAILED —
+   * which is how `projects-cache.test.js` (no timers, no async, no clock) failed
+   * intermittently under load while passing every time on its own.
+   */
+  test('open() and captureJpeg() leave no dangling timeout behind', async () => {
+    jest.useFakeTimers();
+    try {
+      desktopCapturer.getSources.mockResolvedValue([
+        { id: 'screen:0:0', name: 'Screen 1' },
+      ]);
+
+      const session = new WaylandCaptureSession();
+      await session.open();
+
+      __mockWebContents.executeJavaScript.mockResolvedValueOnce({
+        ok: true,
+        data: Buffer.from('jpeg').toString('base64'),
+      });
+      await session.captureJpeg();
+
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   test('close() stops stream and destroys hidden window', async () => {
     desktopCapturer.getSources.mockResolvedValue([
       { id: 'screen:0:0', name: 'Screen 1' },

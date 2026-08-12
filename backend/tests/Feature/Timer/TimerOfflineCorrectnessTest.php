@@ -3,7 +3,6 @@
 namespace Tests\Feature\Timer;
 
 use App\Console\Commands\CleanupStaleEntries;
-use App\Jobs\CloseStaleTimerEntriesJob;
 use App\Models\ActivityLog;
 use App\Models\Organization;
 use App\Models\TimeEntry;
@@ -46,14 +45,44 @@ class TimerOfflineCorrectnessTest extends TestCase
         parent::tearDown();
     }
 
-    // ─── B1: cleanup threshold respects the offline grace window ─────────────
-
-    public function test_cleanup_does_not_close_entry_within_offline_grace_window(): void
+    /**
+     * Open a live session directly. These tests use it as a FIXTURE for the heartbeat
+     * assertions; TimerService::start() is gone (the desktop agent owns session creation
+     * and pushes via TimeEntrySyncService), so this builds the same end state: an open
+     * entry plus the Redis timer key processHeartbeat() resolves against.
+     */
+    private function openSession(array $attributes = []): TimeEntry
     {
-        config(['timer.offline_grace_minutes' => 240]);
+        $entry = TimeEntry::create(array_merge([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'started_at' => now(),
+            'type' => 'tracked',
+        ], $attributes));
 
-        // Last server-received heartbeat was 90 minutes ago — well inside the 4h grace
-        // window. An offline desktop is still legitimately tracking; do NOT close it.
+        Redis::setex("timer:{$this->user->id}", 2592000, json_encode([
+            'entry_id' => $entry->id,
+            'started_at' => $entry->started_at->toISOString(),
+            'project_id' => $entry->project_id,
+            'task_id' => $entry->task_id,
+            'state' => 'running',
+        ]));
+
+        return $entry;
+    }
+
+    // ─── B1: the abandoned-entry window (timer.abandoned_after_minutes, 60) ──
+    //
+    // Owner decision (2026-08-03): an agent that has gone silent for an hour is
+    // treated as never coming back and its entry is closed AT ITS LAST HEARTBEAT.
+    // What makes a window this tight safe for a merely OFFLINE user is the liveness
+    // rule — the most recent of the last heartbeat and `client_synced_at`, the latter
+    // stamped on every push of the live session, including one carrying no change.
+
+    public function test_entry_with_a_recent_heartbeat_is_left_alone(): void
+    {
+        config(['timer.abandoned_after_minutes' => 60]);
+
         $entry = TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
             'user_id' => $this->user->id,
@@ -66,22 +95,54 @@ class TimerOfflineCorrectnessTest extends TestCase
             'organization_id' => $this->org->id,
             'user_id' => $this->user->id,
             'time_entry_id' => $entry->id,
-            'logged_at' => now()->subMinutes(90),
+            'logged_at' => now()->subMinutes(30),
             'keyboard_events' => 5,
             'mouse_events' => 5,
         ]);
 
         $this->artisan('timer:cleanup-stale')->assertExitCode(0);
 
-        $this->assertNull($entry->fresh()->ended_at, 'Entry inside grace window must stay open.');
+        $this->assertNull($entry->fresh()->ended_at, 'A heartbeat inside the window means the agent is alive.');
     }
 
-    public function test_cleanup_closes_entry_beyond_grace_window_at_last_heartbeat(): void
+    public function test_an_offline_agent_that_still_syncs_is_never_treated_as_abandoned(): void
     {
-        config(['timer.offline_grace_minutes' => 240]);
+        config(['timer.abandoned_after_minutes' => 60]);
+
+        // Heartbeats are queued while offline and arrive in a burst much later, so the
+        // last SERVER-received heartbeat is 3h old — but the agent pushed its session
+        // 5 minutes ago, which proves it is alive. Closing here would truncate work the
+        // user is doing right now.
+        $entry = TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'started_at' => now()->subHours(4),
+            'ended_at' => null,
+            'duration_seconds' => null,
+            'type' => 'tracked',
+        ]);
+        ActivityLog::create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'time_entry_id' => $entry->id,
+            'logged_at' => now()->subHours(3),
+            'keyboard_events' => 1,
+            'mouse_events' => 1,
+        ]);
+        TimeEntry::withoutGlobalScopes()->where('id', $entry->id)
+            ->update(['client_synced_at' => now()->subMinutes(5)]);
+
+        $this->artisan('timer:cleanup-stale')->assertExitCode(0);
+
+        $this->assertNull($entry->fresh()->ended_at);
+    }
+
+    public function test_abandoned_entry_is_closed_at_its_last_heartbeat_never_at_now(): void
+    {
+        config(['timer.abandoned_after_minutes' => 60]);
 
         $started = now()->subHours(10);
-        $lastHeartbeat = now()->subHours(5); // > 4h stale → close, but only up to here
+        $lastHeartbeat = now()->subHours(5);
 
         $entry = TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
@@ -104,7 +165,7 @@ class TimerOfflineCorrectnessTest extends TestCase
 
         $fresh = $entry->fresh();
         $this->assertNotNull($fresh->ended_at);
-        // Closed AT the last heartbeat — dead time after it is not counted.
+        // The five dead hours after the last heartbeat are discarded, not billed.
         $this->assertEqualsWithDelta($lastHeartbeat->timestamp, $fresh->ended_at->timestamp, 2);
         $this->assertEqualsWithDelta(
             $started->diffInSeconds($lastHeartbeat),
@@ -113,103 +174,70 @@ class TimerOfflineCorrectnessTest extends TestCase
         );
     }
 
-    // ─── B1: backstop job threshold is >= grace window ───────────────────────
-
-    public function test_backstop_job_does_not_close_entry_within_grace_plus_margin(): void
+    public function test_an_entry_with_no_heartbeat_at_all_closes_at_its_own_start(): void
     {
-        config(['timer.offline_grace_minutes' => 240]);
+        config(['timer.abandoned_after_minutes' => 60]);
 
-        // updated_at 3h ago: within grace(4h)+margin(1h) = 5h, so the backstop must skip it.
-        $entry = TimeEntry::factory()->create([
-            'organization_id' => $this->org->id,
-            'user_id' => $this->user->id,
-            'started_at' => now()->subHours(4),
-            'ended_at' => null,
-            'duration_seconds' => null,
-            'type' => 'tracked',
-        ]);
-        TimeEntry::withoutGlobalScopes()->where('id', $entry->id)
-            ->update(['updated_at' => now()->subHours(3)]);
-
-        (new CloseStaleTimerEntriesJob())->handle();
-
-        $this->assertNull($entry->fresh()->ended_at);
-    }
-
-    public function test_backstop_job_closes_very_old_entry(): void
-    {
-        config(['timer.offline_grace_minutes' => 240]);
-
-        $entry = TimeEntry::factory()->create([
-            'organization_id' => $this->org->id,
-            'user_id' => $this->user->id,
-            'started_at' => now()->subHours(10),
-            'ended_at' => null,
-            'duration_seconds' => null,
-            'type' => 'tracked',
-        ]);
-        TimeEntry::withoutGlobalScopes()->where('id', $entry->id)
-            ->update(['updated_at' => now()->subHours(8)]); // > 5h → close
-
-        (new CloseStaleTimerEntriesJob())->handle();
-
-        $this->assertNotNull($entry->fresh()->ended_at);
-    }
-
-    // ─── B1: offline stop EXTENDS an entry cleanup closed early ──────────────
-
-    public function test_offline_stop_extends_entry_that_cleanup_closed_early(): void
-    {
-        $started = now()->subHours(4);
-        $earlyClose = now()->subHours(3);   // where cleanup truncated it
-        $realStop = now()->subMinutes(30);  // the real offline stop, later than earlyClose
-
-        // Cleanup already force-closed this entry at the last server heartbeat.
+        // The agent opened a session, pushed it once, and was never seen again. There is
+        // no evidence of WORK, so a zero-length close is the only honest outcome.
+        $started = now()->subHours(9);
         $entry = TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
             'user_id' => $this->user->id,
             'started_at' => $started,
-            'ended_at' => $earlyClose,
-            'duration_seconds' => (int) $started->diffInSeconds($earlyClose),
+            'ended_at' => null,
+            'duration_seconds' => null,
             'type' => 'tracked',
         ]);
 
-        // Desktop reconnects and flushes the REAL stop with a later ended_at.
-        $meta = $this->service->stopWithMeta([
-            'time_entry_id' => $entry->id,
-            'ended_at' => $realStop->toISOString(),
-        ]);
+        $this->artisan('timer:cleanup-stale')->assertExitCode(0);
 
         $fresh = $entry->fresh();
-        $this->assertEqualsWithDelta($realStop->timestamp, $fresh->ended_at->timestamp, 2,
-            'Offline stop must EXTEND the early-closed entry, not be discarded.');
-        $this->assertEqualsWithDelta($started->diffInSeconds($realStop), $fresh->duration_seconds, 2);
-        $this->assertTrue($meta['already_stopped']);
+        $this->assertNotNull($fresh->ended_at);
+        $this->assertEqualsWithDelta($started->timestamp, $fresh->ended_at->timestamp, 2);
+        $this->assertSame(0, (int) $fresh->duration_seconds);
     }
 
-    public function test_offline_stop_does_not_shrink_a_closed_entry(): void
+    public function test_the_close_is_provisional_a_returning_agent_still_wins(): void
     {
-        $started = now()->subHours(4);
-        $storedStop = now()->subHour();
-        $earlierStop = now()->subHours(2); // earlier than stored → must be ignored
+        config(['timer.abandoned_after_minutes' => 60]);
 
+        // `client_revision` must be left untouched, or the agent's next push would be
+        // dismissed as a replay and the server's guess would become permanent.
         $entry = TimeEntry::factory()->create([
             'organization_id' => $this->org->id,
             'user_id' => $this->user->id,
-            'started_at' => $started,
-            'ended_at' => $storedStop,
-            'duration_seconds' => (int) $started->diffInSeconds($storedStop),
+            'started_at' => now()->subHours(8),
+            'ended_at' => null,
+            'duration_seconds' => null,
             'type' => 'tracked',
         ]);
+        TimeEntry::withoutGlobalScopes()->where('id', $entry->id)
+            ->update(['client_revision' => 3, 'idempotency_key' => (string) \Illuminate\Support\Str::uuid()]);
 
-        $meta = $this->service->stopWithMeta([
-            'time_entry_id' => $entry->id,
-            'ended_at' => $earlierStop->toISOString(),
-        ]);
+        $this->artisan('timer:cleanup-stale')->assertExitCode(0);
 
-        $this->assertTrue($meta['already_stopped']);
-        // Stored ended_at is preserved — never shrunk.
-        $this->assertEqualsWithDelta($storedStop->timestamp, $entry->fresh()->ended_at->timestamp, 2);
+        $fresh = $entry->fresh();
+        $this->assertNotNull($fresh->ended_at);
+        $this->assertSame(3, (int) $fresh->client_revision, 'client_revision must not be bumped by a server-side close.');
+
+        // The machine comes back and pushes the real boundaries at a higher revision.
+        $trueEnd = now()->subHours(2);
+        $result = app(\App\Services\TimeEntrySyncService::class)->sync([[
+            'uuid' => $fresh->idempotency_key,
+            'revision' => 4,
+            'started_at' => $fresh->started_at->toISOString(),
+            'ended_at' => $trueEnd->toISOString(),
+            'project_id' => null,
+        ]], $this->user->fresh());
+
+        $this->assertSame('ok', $result[0]['status']);
+        $this->assertEqualsWithDelta(
+            $trueEnd->timestamp,
+            $entry->fresh()->ended_at->timestamp,
+            2,
+            'The agent is the only writer: its values must override the provisional close.'
+        );
     }
 
     // ─── B2: heartbeat on a CLOSED entry is rejected ─────────────────────────
@@ -250,7 +278,7 @@ class TimerOfflineCorrectnessTest extends TestCase
 
     public function test_heartbeat_honors_client_capture_timestamp(): void
     {
-        $entry = $this->service->start([]);
+        $this->openSession();
         $captureTime = now()->subMinutes(10);
 
         $log = $this->service->processHeartbeat([
@@ -265,136 +293,11 @@ class TimerOfflineCorrectnessTest extends TestCase
 
     public function test_heartbeat_defaults_logged_at_to_now_when_absent(): void
     {
-        $this->service->start([]);
+        $this->openSession();
 
         $log = $this->service->processHeartbeat(['keyboard_events' => 1, 'mouse_events' => 1]);
 
         $this->assertEqualsWithDelta(now()->timestamp, $log->logged_at->timestamp, 5);
     }
 
-    // ─── B3: idle skew bounds + dead-tail prevention ─────────────────────────
-
-    public function test_idle_rejects_out_of_skew_timestamp(): void
-    {
-        $entry = $this->service->start(['started_at' => now()->subHours(2)->toISOString()]);
-
-        $this->expectException(\InvalidArgumentException::class);
-
-        $this->service->reportIdle([
-            'time_entry_id' => $entry->id,
-            'idle_started_at' => now()->subDays(3)->toISOString(), // > 24h past → rejected
-            'idle_ended_at' => now()->subDays(3)->addHour()->toISOString(),
-            'action' => 'discard',
-        ]);
-    }
-
-    public function test_idle_replay_clamps_new_entry_start_to_now(): void
-    {
-        // Live session started 3h ago.
-        $entry = $this->service->start(['started_at' => now()->subHours(3)->toISOString()]);
-
-        // Offline-replayed idle whose idle_ended_at is well in the past. The new running
-        // entry must NOT anchor at that past moment (which would count the past→now gap).
-        $result = $this->service->reportIdle([
-            'time_entry_id' => $entry->id,
-            'idle_started_at' => now()->subHours(2)->toISOString(),
-            'idle_ended_at' => now()->subHours(1)->toISOString(),
-            'action' => 'discard',
-        ]);
-
-        $newEntry = $result['new_entry'];
-        $this->assertNotNull($newEntry);
-        $this->assertEqualsWithDelta(now()->timestamp, $newEntry->started_at->timestamp, 5,
-            'New post-idle entry must be clamped to now() on offline replay.');
-    }
-
-    // ─── B4: idle on an already-closed session is a no-op ────────────────────
-
-    public function test_idle_on_closed_entry_is_idempotent_no_op(): void
-    {
-        $closed = TimeEntry::factory()->create([
-            'organization_id' => $this->org->id,
-            'user_id' => $this->user->id,
-            'started_at' => now()->subHours(2),
-            'ended_at' => now()->subHour(),
-            'duration_seconds' => 3600,
-            'type' => 'tracked',
-        ]);
-        Redis::setex("timer:{$this->user->id}", 2592000, json_encode([
-            'entry_id' => $closed->id,
-            'started_at' => $closed->started_at->toISOString(),
-            'project_id' => null,
-            'task_id' => null,
-            'state' => 'running',
-        ]));
-
-        $entryCountBefore = TimeEntry::withoutGlobalScopes()->where('user_id', $this->user->id)->count();
-
-        $result = $this->service->reportIdle([
-            'time_entry_id' => $closed->id,
-            'idle_started_at' => now()->subMinutes(90)->toISOString(),
-            'idle_ended_at' => now()->subMinutes(80)->toISOString(),
-            'action' => 'discard',
-        ]);
-
-        // No-op: no new entry, no resurrection, closed entry untouched.
-        $this->assertNull($result['idle_entry']);
-        $this->assertNull($result['new_entry']);
-        $this->assertNotNull($closed->fresh()->ended_at);
-        $this->assertEquals(3600, $closed->fresh()->duration_seconds);
-        $this->assertEquals(
-            $entryCountBefore,
-            TimeEntry::withoutGlobalScopes()->where('user_id', $this->user->id)->count(),
-            'No new entry must be created for a closed session.'
-        );
-    }
-
-    // ─── Backfill: a start carrying ended_at creates a CLOSED entry and NEVER
-    //     auto-stops the user's live timer (defence-in-depth for stop→start loss).
-    public function test_backfill_start_with_ended_at_does_not_stop_the_live_timer(): void
-    {
-        // A live timer B is running (open entry + Redis running key).
-        $b = TimeEntry::factory()->create([
-            'organization_id' => $this->org->id,
-            'user_id' => $this->user->id,
-            'started_at' => now()->subMinutes(3),
-            'ended_at' => null,
-            'duration_seconds' => null,
-            'type' => 'tracked',
-        ]);
-        Redis::setex("timer:{$this->user->id}", 2592000, json_encode([
-            'entry_id' => $b->id,
-            'started_at' => $b->started_at->toISOString(),
-            'state' => 'running',
-        ]));
-
-        // Replay a completed offline session A as a single start+ended_at call.
-        $aStart = now()->subHours(2);
-        $aEnd = now()->subHour();
-        $response = $this->postJson('/api/v1/timer/start', [
-            'started_at' => $aStart->toIso8601String(),
-            'ended_at' => $aEnd->toIso8601String(),
-            'idempotency_key' => 'backfill-a-1',
-        ]);
-        $response->assertStatus(201);
-
-        // A was created CLOSED with the real historical span.
-        $aId = $response->json('entry.id');
-        $a = TimeEntry::withoutGlobalScopes()->findOrFail($aId);
-        $this->assertNotNull($a->ended_at, 'Backfill entry must be created closed.');
-        $this->assertEqualsWithDelta(3600, (int) $a->duration_seconds, 2);
-
-        // The live timer B must NOT have been auto-stopped.
-        $this->assertNull($b->fresh()->ended_at, 'Backfill start must not stop the live timer.');
-
-        // Idempotent replay returns the same closed entry (200), no duplicate, B still open.
-        $replay = $this->postJson('/api/v1/timer/start', [
-            'started_at' => $aStart->toIso8601String(),
-            'ended_at' => $aEnd->toIso8601String(),
-            'idempotency_key' => 'backfill-a-1',
-        ]);
-        $replay->assertStatus(200);
-        $this->assertEquals($aId, $replay->json('entry.id'));
-        $this->assertNull($b->fresh()->ended_at);
-    }
 }

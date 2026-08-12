@@ -160,19 +160,35 @@ body {
   background: var(--scrollbar-thumb-hover);
 }
 
-/* ── Custom Titlebar (replaces native frame for consistent look) ───────── */
+/* ── Branded header row ────────────────────────────────────────────────── */
+/* The main window has NATIVE window controls; this row carries the branding and
+   the pin toggle underneath/behind them. Height is kept in sync with
+   TITLEBAR_HEIGHT in main/index.js so the Windows overlay buttons line up with
+   it. The login window still uses this as a true custom titlebar (it stays
+   frameless), which is why the drag region and .titlebar-btn.close survive. */
 .titlebar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 32px;
-  padding: 0 8px;
+  height: 40px;
+  padding: 0 12px;
   background: var(--bg-primary);
   border-bottom: 1px solid var(--border-color);
   -webkit-app-region: drag;
   /* Fallback for Linux where app-region:drag may not work */
   cursor: default;
+  flex-shrink: 0;
 }
+
+/* Reserve room for whichever native controls the OS paints over this row.
+   The platform class is set on <html> by index-renderer.js; the login window
+   never sets one, so it keeps the plain full-width custom titlebar. */
+/* macOS — traffic lights float over the LEFT ('hiddenInset'). */
+html.platform-mac .titlebar { padding-left: 80px; }
+/* Windows — the OS paints minimise/maximise/close into the RIGHT
+   ('titleBarOverlay'); 138px clears all three at the default caption width. */
+html.platform-win .titlebar { padding-right: 138px; }
+/* Linux — a real native title bar sits ABOVE this row, so nothing overlaps it. */
 .titlebar-title {
   font-size: 12px;
   font-weight: 600;
@@ -194,7 +210,13 @@ body {
   margin-bottom: 8px;
 }
 .logo svg {
-  width: 160px;
+  /* 97px, not 160px. The lockup's viewBox used to be `0 0 880 200` while its ink
+     only ran x=14..544 (measured with getBBox), so ~336 units of trailing
+     whitespace were baked into the asset: `text-align: center` dutifully centred
+     the BOX, leaving the visible artwork ~29px left of centre. The viewBox is now
+     cropped to the ink, and the width is scaled to match so the lockup renders at
+     exactly the same size it always did — just actually centred. */
+  width: 97px;
   height: auto;
 }
 .logo-light { display: none; }

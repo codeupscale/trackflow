@@ -94,6 +94,9 @@ class Organization extends Model
     {
         return [
             'screenshot_interval' => 5,
+            // Screenshots taken at random moments within each interval window
+            // (Hubstaff-style). Agent clamps to [1,10]; default 3.
+            'screenshots_per_interval' => 3,
             'blur_screenshots' => false,
             // Minutes of no keyboard/mouse before the idle alert fires. Also the
             // sleep-gap threshold the desktop uses on resume — a sleep longer

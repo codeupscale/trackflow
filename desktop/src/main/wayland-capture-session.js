@@ -22,6 +22,33 @@ function shouldUseWaylandPersistentCapture(env = process.env) {
   return process.platform === 'linux' && isWaylandSession(env);
 }
 
+/**
+ * Race `promise` against a timeout, ALWAYS clearing the timer.
+ *
+ * A bare `Promise.race([work, new Promise(r => setTimeout(...))])` abandons the timer
+ * whenever the work wins — the timeout keeps the event loop alive for its full duration
+ * holding a closure, on EVERY call. On Wayland that is one dangling 10s timer per frame
+ * grab (three per interval window), plus a 15s one per session open.
+ *
+ * Under Jest the same leak is what force-exits a worker ("A worker process has failed to
+ * exit gracefully"), and a force-exited worker reports whatever suite it was running as
+ * FAILED — which is how `projects-cache.test.js`, a file with no timers, no async and no
+ * clock, failed intermittently under load while passing every time in isolation.
+ */
+function withTimeout(promise, timeoutMs, message) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  });
+}
+
 class WaylandCaptureSession {
   constructor() {
     this._win = null;
@@ -45,19 +72,15 @@ class WaylandCaptureSession {
   async _doOpen() {
     console.log('[SS][Wayland] Opening persistent capture session (single portal prompt)');
 
-    const sources = await Promise.race([
+    const sources = await withTimeout(
       desktopCapturer.getSources({
         types: ['screen'],
         thumbnailSize: { width: 0, height: 0 },
         fetchWindowIcons: false,
       }),
-      new Promise((_, reject) =>
-        setTimeout(
-          () => reject(new Error('desktopCapturer.getSources() timed out')),
-          GET_SOURCES_TIMEOUT_MS,
-        ),
-      ),
-    ]);
+      GET_SOURCES_TIMEOUT_MS,
+      'desktopCapturer.getSources() timed out',
+    );
 
     const screenSource = sources.find((s) => s.id.startsWith('screen:'));
     if (!screenSource) {
@@ -150,12 +173,11 @@ class WaylandCaptureSession {
       throw new Error('Capture window is not available');
     }
 
-    return Promise.race([
+    return withTimeout(
       this._win.webContents.executeJavaScript(expression, true),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Capture page script timed out')), timeoutMs),
-      ),
-    ]);
+      timeoutMs,
+      'Capture page script timed out',
+    );
   }
 }
 
