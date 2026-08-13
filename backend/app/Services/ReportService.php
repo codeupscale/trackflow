@@ -83,6 +83,7 @@ class ReportService
         return Cache::remember($cacheKey, 900, function () use ($orgId, $userId, $dateFrom, $dateTo) {
             // Daily breakdown with duration-weighted activity (single query)
             $query = TimeEntry::withoutGlobalScopes()
+                ->whereNull('time_entries.deleted_at')
                 ->where('organization_id', $orgId)
                 ->where('started_at', '>=', $dateFrom)
                 ->where('started_at', '<', $dateTo)
@@ -131,6 +132,7 @@ class ReportService
             $totalEarnings = 0;
             if ($totalTrackedSeconds > 0) {
                 $billableQuery = DB::table('time_entries')
+                    ->whereNull('time_entries.deleted_at')
                     ->where('time_entries.organization_id', $orgId)
                     ->where('time_entries.started_at', '>=', $dateFrom)
                     ->where('time_entries.started_at', '<', $dateTo)
@@ -164,6 +166,7 @@ class ReportService
             $prevTo = $dateFrom;
 
             $prevQuery = TimeEntry::withoutGlobalScopes()
+                ->whereNull('time_entries.deleted_at')
                 ->where('organization_id', $orgId)
                 ->where('started_at', '>=', $prevFrom)
                 ->where('started_at', '<', $prevTo)
@@ -182,6 +185,7 @@ class ReportService
             $previousBudgetUsed = 0;
             if ($prevTotalSeconds > 0) {
                 $prevBudgetQuery = DB::table('time_entries')
+                    ->whereNull('time_entries.deleted_at')
                     ->where('time_entries.organization_id', $orgId)
                     ->where('time_entries.started_at', '>=', $prevFrom)
                     ->where('time_entries.started_at', '<', $prevTo)
@@ -230,6 +234,7 @@ class ReportService
 
             // Single query: aggregate all metrics per user (fixes N+1: was 3 queries per user)
             $userStats = DB::table('time_entries')
+                ->whereNull('time_entries.deleted_at')
                 ->where('organization_id', $orgId)
                 ->where('started_at', '>=', $dateFrom)
                 ->where('started_at', '<', $dateTo)
@@ -294,6 +299,7 @@ class ReportService
             $dur = self::durationExpr('time_entries');
 
             return TimeEntry::withoutGlobalScopes()
+                ->whereNull('time_entries.deleted_at')
                 ->where('time_entries.organization_id', $orgId)
                 ->where('time_entries.started_at', '>=', $dateFrom)
                 ->where('time_entries.started_at', '<', $dateTo)
@@ -386,6 +392,7 @@ class ReportService
 
         return Cache::remember($cacheKey, 900, function () use ($orgId, $userId, $date) {
             $entries = TimeEntry::withoutGlobalScopes()
+                ->whereNull('time_entries.deleted_at')
                 ->where('organization_id', $orgId)
                 ->where('user_id', $userId)
                 ->whereDate('started_at', $date)
@@ -417,6 +424,7 @@ class ReportService
 
             // Single query: aggregate total, billable, and earnings per user
             $payrollStats = DB::table('time_entries')
+                ->whereNull('time_entries.deleted_at')
                 ->where('time_entries.organization_id', $orgId)
                 ->where('time_entries.started_at', '>=', $dateFrom)
                 ->where('time_entries.started_at', '<', $dateTo)
@@ -481,6 +489,7 @@ class ReportService
             $prevTo = $dateFrom;
 
             $currentHoursRow = DB::table('time_entries as te')
+                ->whereNull('te.deleted_at')
                 ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
                 ->where('te.type', 'tracked')
                 ->selectRaw("COALESCE(SUM({$dur}), 0) as total_seconds")
@@ -489,6 +498,7 @@ class ReportService
             $currentTotalHours = round($currentTotalSeconds / 3600, 1);
 
             $prevHoursRow = DB::table('time_entries as te')
+                ->whereNull('te.deleted_at')
                 ->where('te.organization_id', $orgId)
                 ->where('te.started_at', '>=', $prevFrom)
                 ->where('te.started_at', '<', $prevTo)
@@ -506,6 +516,7 @@ class ReportService
 
             // --- KPI 2: avg_activity_percent (duration-weighted, tracked entries only) ---
             $activityRow = DB::table('time_entries as te')
+                ->whereNull('te.deleted_at')
                 ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
                 ->where('te.type', 'tracked')
                 ->selectRaw("
@@ -523,6 +534,7 @@ class ReportService
 
             // --- KPI 3: total_budget_used + change_percent ---
             $budgetRow = DB::table('time_entries as te')
+                ->whereNull('te.deleted_at')
                 ->join('projects as p', 'te.project_id', '=', 'p.id')
                 ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
                 ->where('p.billable', true)
@@ -531,6 +543,7 @@ class ReportService
             $currentBudget = round((float) ($budgetRow->total_budget ?? 0), 2);
 
             $prevBudgetRow = DB::table('time_entries as te')
+                ->whereNull('te.deleted_at')
                 ->join('projects as p', 'te.project_id', '=', 'p.id')
                 ->where('te.organization_id', $orgId)
                 ->where('te.started_at', '>=', $prevFrom)
@@ -549,6 +562,7 @@ class ReportService
 
             // --- KPI 4: billable_ratio ---
             $billableRow = DB::table('time_entries as te')
+                ->whereNull('te.deleted_at')
                 ->leftJoin('projects as p', 'te.project_id', '=', 'p.id')
                 ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
                 ->where('te.type', 'tracked')
@@ -564,6 +578,7 @@ class ReportService
 
             // --- Chart 1: time_per_project (top 8) ---
             $timePerProject = DB::table('time_entries as te')
+                ->whereNull('te.deleted_at')
                 ->join('projects as p', 'te.project_id', '=', 'p.id')
                 ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
                 ->whereNotNull('te.project_id')
@@ -583,6 +598,7 @@ class ReportService
             $dayNames = [0 => 'Sun', 1 => 'Mon', 2 => 'Tue', 3 => 'Wed', 4 => 'Thu', 5 => 'Fri', 6 => 'Sat'];
 
             $activityByDay = DB::table('time_entries as te')
+                ->whereNull('te.deleted_at')
                 ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
                 ->where('te.type', 'tracked')
                 ->whereNotNull('te.activity_score')
@@ -639,6 +655,7 @@ class ReportService
             $dur = self::durationExpr('te');
 
             $baseQuery = DB::table('time_entries as te')
+                ->whereNull('te.deleted_at')
                 ->join('users as u', 'te.user_id', '=', 'u.id')
                 ->leftJoin('projects as p', 'te.project_id', '=', 'p.id')
                 ->leftJoin('tasks as t', 'te.task_id', '=', 't.id')
@@ -711,6 +728,7 @@ class ReportService
             $dur = self::durationExpr();
 
             $query = TimeEntry::withoutGlobalScopes()
+                ->whereNull('time_entries.deleted_at')
                 ->where('organization_id', $orgId)
                 ->where('started_at', '>=', $dateFrom)
                 ->where('started_at', '<', $dateTo)
@@ -760,6 +778,7 @@ class ReportService
         $dur = self::durationExpr('time_entries');
 
         $query = DB::table('time_entries')
+            ->whereNull('time_entries.deleted_at')
             ->join('users', 'time_entries.user_id', '=', 'users.id')
             ->leftJoin('projects', 'time_entries.project_id', '=', 'projects.id')
             ->leftJoin('tasks', 'time_entries.task_id', '=', 'tasks.id')
@@ -805,6 +824,7 @@ class ReportService
                 ->pluck('name', 'id');
 
             $rows = TimeEntry::withoutGlobalScopes()
+                ->whereNull('time_entries.deleted_at')
                 ->where('organization_id', $orgId)
                 ->where('started_at', '>=', $dateFrom)
                 ->where('started_at', '<', $dateTo)
