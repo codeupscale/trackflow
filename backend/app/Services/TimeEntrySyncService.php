@@ -457,8 +457,24 @@ class TimeEntrySyncService
 
     /**
      * Close any OPEN entry for this user other than the one being opened, at its last
-     * known activity: the newest heartbeat, else the last successful agent sync, else
-     * its own start (a zero-length close, which counts no dead time).
+     * evidence of WORK: the newest heartbeat, else its own start (a zero-length close,
+     * which counts no dead time).
+     *
+     * `client_synced_at` is deliberately NOT a candidate close instant — the same rule
+     * `closeIfAbandoned()` states: it proves the AGENT was alive, not that the user was
+     * at the keyboard. It used to sit between the two as a fallback, and that is how a
+     * session started days earlier got closed at the instant its backlog was pushed:
+     * the agent flushes sessions BEFORE the offline queue, so a returning agent's
+     * superseded entries are evaluated here while their heartbeats are still queued
+     * client-side. With no heartbeat visible yet, the close fell through to
+     * `client_synced_at` — i.e. NOW — and billed every dead hour since the real work
+     * stopped. Measured on prod 2026-08-13: ten sessions whose input stopped around
+     * 20:30 each evening were closed the following morning and clamped to the 24h cap,
+     * ~150 fabricated hours on one account. Falling back to `started_at` instead makes
+     * the failure mode "lose an unproven session" rather than "invent a day of work",
+     * and the late heartbeats still arrive to be re-scored.
+     *
+     * See bugs/desktop-orphan-backlog-closed-at-sync-time.md
      */
     private function closeOtherOpenEntries(User $user, string $exceptIdempotencyKey): void
     {
@@ -477,7 +493,7 @@ class TimeEntrySyncService
         foreach ($stale as $entry) {
             $lastHeartbeat = ActivityLog::where('time_entry_id', $entry->id)->max('logged_at');
 
-            $endedAt = $lastHeartbeat ? Carbon::parse($lastHeartbeat) : ($entry->client_synced_at ?? $entry->started_at);
+            $endedAt = $lastHeartbeat ? Carbon::parse($lastHeartbeat) : $entry->started_at->copy();
             if ($endedAt->lt($entry->started_at)) {
                 $endedAt = $entry->started_at->copy();
             }

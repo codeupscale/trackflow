@@ -537,6 +537,79 @@ class TimerSessionSyncTest extends TestCase
         $this->postJson(self::URL, ['sessions' => [$this->payload()]])->assertStatus(401);
     }
 
+    // ─── Superseded open entries ─────────────────────────────────────────────
+
+    /**
+     * A returning agent flushes SESSIONS before its offline heartbeat queue, so a
+     * superseded entry is evaluated here while its heartbeats are still client-side.
+     * Closing it at `client_synced_at` (i.e. now) invents every dead hour since the
+     * user actually stopped — on prod that turned ten ~9h days into ten 24h-capped
+     * entries. With no heartbeat visible, the only honest close instant is its start.
+     */
+    public function test_superseded_entry_with_no_visible_heartbeat_closes_at_its_start_not_now(): void
+    {
+        $orphanStart = now()->subDays(3);
+        $orphan = TimeEntry::create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'started_at' => $orphanStart,
+            'ended_at' => null,
+            'type' => 'tracked',
+            'idempotency_key' => (string) Str::uuid(),
+            // The agent pushed this row while it was live, days ago; the routine
+            // re-push keeps stamping it. It is liveness evidence, never work evidence.
+            'client_synced_at' => now(),
+        ]);
+
+        $this->postJson(self::URL, ['sessions' => [$this->payload()]])->assertOk();
+
+        $orphan->refresh();
+
+        $this->assertNotNull($orphan->ended_at, 'the superseded entry should be closed');
+        $this->assertTrue(
+            $orphan->ended_at->equalTo($orphanStart),
+            "expected close at started_at ({$orphanStart->toISOString()}), got {$orphan->ended_at->toISOString()}",
+        );
+        $this->assertSame(0, $orphan->duration_seconds, 'no work was ever proven, so no time may be billed');
+    }
+
+    /** With real heartbeats present, the close still lands on the last one. */
+    public function test_superseded_entry_closes_at_its_last_heartbeat_when_one_exists(): void
+    {
+        $orphanStart = now()->subDays(3);
+        $lastInput = $orphanStart->copy()->addHours(9);
+
+        $orphan = TimeEntry::create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'started_at' => $orphanStart,
+            'ended_at' => null,
+            'type' => 'tracked',
+            'idempotency_key' => (string) Str::uuid(),
+            'client_synced_at' => now(),
+        ]);
+
+        ActivityLog::create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->user->id,
+            'time_entry_id' => $orphan->id,
+            'logged_at' => $lastInput,
+            'keyboard_events' => 120,
+            'mouse_events' => 80,
+            'active_seconds' => 60,
+        ]);
+
+        $this->postJson(self::URL, ['sessions' => [$this->payload()]])->assertOk();
+
+        $orphan->refresh();
+
+        $this->assertTrue(
+            $orphan->ended_at->equalTo($lastInput),
+            "expected close at last heartbeat ({$lastInput->toISOString()}), got {$orphan->ended_at->toISOString()}",
+        );
+        $this->assertSame(9 * 3600, $orphan->duration_seconds);
+    }
+
     public function test_legacy_mutation_endpoints_are_gone(): void
     {
         // Force-upgrade: pre-refactor builds must fail loudly rather than silently
