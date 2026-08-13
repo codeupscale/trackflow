@@ -69,6 +69,7 @@ class AttendanceService
                 // hours and can flip the Present/Half-Day/Absent status. `tracked` and
                 // `manual` entries are real worked time and count.
                 $timeEntries = TimeEntry::withoutGlobalScopes()
+                    ->whereNull('time_entries.deleted_at')
                     ->where('organization_id', $orgId)
                     ->where('user_id', $user->id)
                     ->where('started_at', '>=', $dayStart)
