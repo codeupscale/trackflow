@@ -182,4 +182,79 @@ class ReportTest extends TestCase
 
         $response->assertStatus(403);
     }
+
+    /**
+     * A deleted time entry must disappear from every report.
+     *
+     * ReportService reaches for the table with DB::table('time_entries'), which bypasses
+     * Eloquent's SoftDeletes global scope — the whole file carried zero `deleted_at`
+     * filters. So an entry deleted in the UI stayed in every total, payslip and dashboard
+     * figure indefinitely. Measured on prod 2026-08-13: one employee's 10 August read
+     * 24.47h against a true 6.78h, because three soft-deleted duplicate rows were still
+     * being summed.
+     */
+    public function test_soft_deleted_entries_are_excluded_from_reports(): void
+    {
+        $refDate = now()->subDays(2)->startOfDay()->addHours(10);
+
+        $live = TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->employee->id,
+            'started_at' => $refDate,
+            'ended_at' => $refDate->copy()->addHour(),
+            'duration_seconds' => 3600,
+        ]);
+
+        $deleted = TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->employee->id,
+            'started_at' => $refDate,
+            'ended_at' => $refDate->copy()->addHours(9),
+            'duration_seconds' => 9 * 3600,
+        ]);
+        $deleted->delete();
+
+        $this->assertNotNull($deleted->fresh()->deleted_at, 'guard: the row must be soft-deleted');
+
+        $this->actingAs($this->owner, 'sanctum');
+
+        $response = $this->getJson('/api/v1/reports/summary?' . http_build_query([
+            'date_from' => now()->subDays(7)->toDateString(),
+            'date_to' => now()->addDay()->toDateString(),
+        ]));
+
+        $response->assertOk();
+
+        // Only the live entry may be counted — never the deleted 9h one.
+        $this->assertSame(3600, (int) $response->json('total_seconds'),
+            'a soft-deleted entry is still being billed in the summary report');
+    }
+
+    public function test_soft_deleted_entries_are_excluded_from_team_report(): void
+    {
+        $refDate = now()->subDays(2)->startOfDay()->addHours(10);
+
+        $deleted = TimeEntry::factory()->create([
+            'organization_id' => $this->org->id,
+            'user_id' => $this->employee->id,
+            'started_at' => $refDate,
+            'ended_at' => $refDate->copy()->addHours(9),
+            'duration_seconds' => 9 * 3600,
+        ]);
+        $deleted->delete();
+
+        $this->actingAs($this->owner, 'sanctum');
+
+        $response = $this->getJson('/api/v1/reports/team?' . http_build_query([
+            'date_from' => now()->subDays(7)->toDateString(),
+            'date_to' => now()->addDay()->toDateString(),
+        ]));
+
+        $response->assertOk();
+
+        $rows = collect($response->json('data') ?? $response->json());
+        $seconds = (int) $rows->sum(fn ($r) => (int) ($r['total_seconds'] ?? 0));
+
+        $this->assertSame(0, $seconds, 'a soft-deleted entry is still being billed in the team report');
+    }
 }

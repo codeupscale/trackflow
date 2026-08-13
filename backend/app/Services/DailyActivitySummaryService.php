@@ -46,6 +46,7 @@ class DailyActivitySummaryService
 
         // Aggregate totals for the user on this date, scoped by organization_id
         $totals = TimeEntry::withoutGlobalScopes()
+            ->whereNull('time_entries.deleted_at')
             ->where('organization_id', $organizationId)
             ->where('user_id', $userId)
             ->where('started_at', '>=', $dateStart)
@@ -87,6 +88,7 @@ class DailyActivitySummaryService
         $teDur = self::durationExpr('time_entries');
 
         $projects = DB::table('time_entries')
+            ->whereNull('time_entries.deleted_at')
             ->where('time_entries.organization_id', $organizationId)
             ->where('time_entries.user_id', $userId)
             ->where('time_entries.started_at', '>=', $dateStart)
