@@ -440,6 +440,61 @@ jobs:
             echo "marketing=${{ needs.changes.outputs.marketing }}" >> $GITHUB_OUTPUT
           fi
 
+      # A build job that is SKIPPED is not a passing build. When `test-backend`
+      # fails, `build-api` is skipped — but `changes.outputs.backend` is still
+      # 'true', so DEPLOY_API=true and the rolling restart re-pulls
+      # ghcr.io/.../api:latest, which is the PREVIOUS build. The deploy then
+      # reports success while production silently keeps running yesterday's API.
+      #
+      # That is exactly how the local-first desktop client (1.0.46) ended up
+      # talking to a backend with no POST /timer/sessions/sync route: the
+      # endpoint was merged to main, its tests failed on an unrelated flake,
+      # build-api was skipped, and the deploy shipped the stale image anyway.
+      # Every agent upload 404'd for hours with a green pipeline.
+      #
+      # So: a service may only be deployed if its image build actually
+      # SUCCEEDED. 'skipped' is acceptable only when that service is not part
+      # of this deploy at all.
+      - name: Refuse to deploy a service whose image build did not succeed
+        env:
+          DEPLOY_API: ${{ steps.services.outputs.api }}
+          DEPLOY_WEB: ${{ steps.services.outputs.web }}
+          DEPLOY_MARKETING: ${{ steps.services.outputs.marketing }}
+          BUILD_API: ${{ needs.build-api.result }}
+          BUILD_WEB: ${{ needs.build-web.result }}
+          BUILD_MARKETING: ${{ needs.build-marketing.result }}
+        run: |
+          set -uo pipefail
+          failed=0
+
+          check() {
+            name="$1"; deploy="$2"; result="$3"
+            if [ "$deploy" != "true" ]; then
+              echo "·  ${name}: not part of this deploy"
+              return
+            fi
+            if [ "$result" = "success" ]; then
+              echo "✓  ${name}: image built successfully"
+              return
+            fi
+            echo "::error::${name} is slated for deployment but its image build did not succeed (result='${result}'). Deploying would roll out a STALE image. Refusing."
+            failed=1
+          }
+
+          check "API"       "$DEPLOY_API"       "$BUILD_API"
+          check "Web"       "$DEPLOY_WEB"       "$BUILD_WEB"
+          check "Marketing" "$DEPLOY_MARKETING" "$BUILD_MARKETING"
+
+          if [ "$failed" -ne 0 ]; then
+            echo ""
+            echo "Deployment aborted: refusing to ship an image that was never built."
+            echo "Fix the failing build/test job and re-run — do not bypass this gate."
+            exit 1
+          fi
+
+          echo ""
+          echo "All services in this deploy have freshly built images."
+
       - name: Deploy via SSH (zero-downtime rolling restart)
         uses: appleboy/ssh-action@v1
         env:
