@@ -3,31 +3,39 @@
 import * as React from 'react'
 import { Moon, Sun } from 'lucide-react'
 import { useTheme } from 'next-themes'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 
 export function ThemeToggle() {
-  const { setTheme } = useTheme()
+  const { theme, setTheme, resolvedTheme } = useTheme()
+  const [mounted, setMounted] = React.useState(false)
+
+  React.useEffect(() => setMounted(true), [])
+
+  const isDark = mounted && (theme === 'dark' || (theme === 'system' && resolvedTheme === 'dark'))
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        className="inline-flex items-center justify-center rounded-md border border-input bg-background size-9 text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
-        aria-label="Toggle theme"
+    <div className="flex items-center gap-0.5 rounded-full border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+      <button
+        onClick={() => setTheme('light')}
+        className={`flex h-7 w-7 items-center justify-center rounded-full transition-colors ${
+          mounted && !isDark
+            ? 'bg-orange-100 text-orange-600'
+            : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+        }`}
+        aria-label="Light mode"
       >
-        <Sun className="size-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-        <Moon className="absolute size-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-        <span className="sr-only">Toggle theme</span>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={() => setTheme('light')}>Light</DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme('dark')}>Dark</DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme('system')}>System</DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        <Sun className="h-3.5 w-3.5" />
+      </button>
+      <button
+        onClick={() => setTheme('dark')}
+        className={`flex h-7 w-7 items-center justify-center rounded-full transition-colors ${
+          mounted && isDark
+            ? 'bg-slate-700 text-slate-200'
+            : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+        }`}
+        aria-label="Dark mode"
+      >
+        <Moon className="h-3.5 w-3.5" />
+      </button>
+    </div>
   )
 }

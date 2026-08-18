@@ -8,29 +8,29 @@ import {
     UserPlus,
     Mail,
     Loader2,
-    Shield,
     MoreHorizontal,
     Copy,
     RefreshCw,
     Trash2,
+    Search,
+    SlidersHorizontal,
+    X,
+    CheckCircle2,
+    XCircle,
+    ChevronDown,
+    ChevronUp,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import {
-    Card,
-    CardContent,
-    CardDescription,
-    CardHeader,
-    CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { SearchInput } from "@/components/ui/search-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Switch } from "@/components/ui/switch";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
     Select,
     SelectContent,
@@ -125,13 +125,16 @@ const parsePositiveInt = (value: string | null, fallback: number) => {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-const roleBadgeVariant: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
-    owner: "default",
-    org_manager: "secondary",
-    hr_manager: "outline",
-    finance_manager: "outline",
-    employee: "outline",
-};
+const avatarColors = [
+    "bg-blue-600", "bg-emerald-600", "bg-violet-600", "bg-amber-600",
+    "bg-rose-600", "bg-cyan-600", "bg-indigo-600", "bg-teal-600",
+];
+
+function getAvatarColor(name: string) {
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    return avatarColors[Math.abs(hash) % avatarColors.length];
+}
 
 type ApiValidationErrorResponse = {
     message?: string;
@@ -169,19 +172,18 @@ export default function TeamPage() {
         generate?: string;
     }>({});
 
-    // Search, role, and status filters for the members table
     const [searchInput, setSearchInput] = useState("");
     const [memberSearch, setMemberSearch] = useState("");
     const [roleFilter, setRoleFilter] = useState<string>("all");
     const [statusFilter, setStatusFilter] = useState<string>("all");
+    const [showFilters, setShowFilters] = useState(false);
+    const [invitesExpanded, setInvitesExpanded] = useState(false);
 
-    // Debounced search (300ms)
     useEffect(() => {
         const t = setTimeout(() => setMemberSearch(searchInput), 300);
         return () => clearTimeout(t);
     }, [searchInput]);
 
-    // Team is for owner/admin/manager only; redirect employees so they don't hit 403
     useEffect(() => {
         if (user && !hasPermission('team.view_members')) {
             toast.error("You don't have access to the Team page.");
@@ -211,7 +213,6 @@ export default function TeamPage() {
         router.replace(`/team?${next.toString()}`);
     };
 
-    // Reset to page 1 when filters change
     useEffect(() => {
         const next = new URLSearchParams(searchParams.toString());
         if (next.get("members_page") && next.get("members_page") !== "1") {
@@ -240,8 +241,6 @@ export default function TeamPage() {
             if (statusFilter !== "all") params.status = statusFilter;
             const res = await api.get("/users", { params });
             const raw = res.data;
-            // Backend returns { data, meta: { current_page, last_page, total, per_page }, users }
-            // Normalize to flat LaravelPaginator shape the UI expects
             if (raw.meta) {
                 return {
                     data: raw.data || raw.users || [],
@@ -309,13 +308,11 @@ export default function TeamPage() {
                     status?: number;
                 };
             };
-
             const status = axiosErr.response?.status;
             if (status === 403) {
-                toast.error("You don’t have permission to send invitations.");
+                toast.error("You don't have permission to send invitations.");
                 return;
             }
-
             const errors = axiosErr.response?.data?.errors;
             if (errors) {
                 setInviteErrors({
@@ -323,7 +320,6 @@ export default function TeamPage() {
                     role: errors.role?.[0],
                 });
             }
-
             toast.error(
                 axiosErr.response?.data?.message ||
                     axiosErr.message ||
@@ -332,7 +328,6 @@ export default function TeamPage() {
         },
     });
 
-    // Legacy updateRoleMutation kept for backward compatibility with non-RBAC paths
     const updateRoleMutation = useMutation({
         mutationFn: async ({
             userId,
@@ -459,12 +454,10 @@ export default function TeamPage() {
                 message?: string;
                 response?: { data?: ApiValidationErrorResponse };
             };
-
             const message =
                 axiosErr.response?.data?.message ||
                 axiosErr.message ||
                 "Failed to reset password";
-
             const errors = axiosErr.response?.data?.errors;
             if (errors) {
                 setResetPasswordErrors({
@@ -473,7 +466,6 @@ export default function TeamPage() {
                     generate: errors.generate?.[0],
                 });
             }
-
             toast.error(message);
         },
     });
@@ -501,10 +493,8 @@ export default function TeamPage() {
     const submitResetPassword = (e: React.FormEvent) => {
         e.preventDefault();
         if (!resetPasswordMember) return;
-
         setResetPasswordErrors({});
         setGeneratedPassword(null);
-
         if (!generateRandomPassword) {
             if (!newPassword || newPassword.length < 8) {
                 setResetPasswordErrors((prev) => ({
@@ -521,7 +511,6 @@ export default function TeamPage() {
                 return;
             }
         }
-
         resetPasswordMutation.mutate({
             userId: resetPasswordMember.id,
             body: generateRandomPassword
@@ -543,9 +532,18 @@ export default function TeamPage() {
 
     const members = membersResponse?.data ?? [];
     const invitations = invitationsResponse?.data ?? [];
-
     const activeMembers = members.filter((m) => m.is_active).length;
+    const inactiveMembers = members.filter((m) => !m.is_active).length;
     const totalMembers = membersResponse?.total ?? members.length;
+
+    const activeFilterCount =
+        (roleFilter !== "all" ? 1 : 0) + (statusFilter !== "all" ? 1 : 0);
+
+    const clearFilters = () => {
+        setSearchInput("");
+        setRoleFilter("all");
+        setStatusFilter("all");
+    };
 
     const handleInvite = (e: React.FormEvent) => {
         e.preventDefault();
@@ -560,369 +558,152 @@ export default function TeamPage() {
         typeof usage.limit === "number" &&
         usage.used >= usage.limit;
 
+    const seatDisplay = !usage
+        ? "--"
+        : usage.limit === "unlimited"
+            ? `${usage.used}`
+            : `${usage.used}/${usage.limit}`;
+
     return (
-        <div className="space-y-6">
+        <div className="flex flex-col gap-3">
             {/* Header */}
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-2xl font-bold text-foreground">Team</h1>
-                    <p className="text-muted-foreground text-sm mt-1">
+                    <h1 className="text-lg font-semibold tracking-tight">Team</h1>
+                    <p className="text-xs text-muted-foreground">
                         Manage your team members and roles
                     </p>
                 </div>
                 {canManageInvites && (
                     <Button
+                        size="sm"
+                        className="h-8 text-xs"
                         onClick={() => {
                             setInviteErrors({});
                             setInviteOpen(true);
                         }}
                         disabled={seatLimitReached}
-                        className="disabled:opacity-60"
                     >
-                        <UserPlus className="mr-2 h-4 w-4" />
-                        {seatLimitReached
-                            ? "Seat limit reached"
-                            : "Invite Member"}
+                        <UserPlus className="h-3.5 w-3.5 mr-1" />
+                        {seatLimitReached ? "Seat limit reached" : "Invite Member"}
                     </Button>
                 )}
-                <Dialog
-                    open={inviteOpen}
-                    onOpenChange={(open) => {
-                        setInviteOpen(open);
-                        if (!open) setInviteErrors({});
-                    }}
-                >
-                    <DialogContent className="bg-card border-border">
-                        <form onSubmit={handleInvite}>
-                            <DialogHeader>
-                                <DialogTitle className="text-foreground">
-                                    Invite Team Member
-                                </DialogTitle>
-                                <DialogDescription className="text-muted-foreground">
-                                    Send an invitation email to a new team
-                                    member.
-                                </DialogDescription>
-                            </DialogHeader>
-                            <div className="grid gap-4 py-4">
-                                <div className="grid gap-2">
-                                    <Label
-                                        htmlFor="invite-email"
-                                        className="text-foreground"
-                                    >
-                                        Email address
-                                    </Label>
-                                    <div className="relative">
-                                        <Mail className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                                        <Input
-                                            id="invite-email"
-                                            type="email"
-                                            placeholder="colleague@company.com"
-                                            value={inviteEmail}
-                                            onChange={(e) => {
-                                                setInviteEmail(e.target.value);
-                                                if (inviteErrors.email) {
-                                                    setInviteErrors((prev) => ({
-                                                        ...prev,
-                                                        email: undefined,
-                                                    }));
-                                                }
-                                            }}
-                                            aria-invalid={!!inviteErrors.email}
-                                            className={`pl-10 bg-muted border-border text-foreground placeholder:text-muted-foreground ${
-                                                inviteErrors.email
-                                                    ? "border-destructive focus-visible:ring-destructive"
-                                                    : ""
-                                            }`}
-                                            required
-                                        />
-                                    </div>
-                                    {inviteErrors.email && (
-                                        <p
-                                            className="text-xs text-destructive"
-                                            role="alert"
-                                        >
-                                            {inviteErrors.email}
-                                        </p>
-                                    )}
-                                </div>
-                                <div className="grid gap-2">
-                                    <Label className="text-foreground">
-                                        Role
-                                    </Label>
-                                    <Select
-                                        value={inviteRole}
-                                        onValueChange={(val) => {
-                                            setInviteRole(val ?? "employee");
-                                            if (inviteErrors.role) {
-                                                setInviteErrors((prev) => ({
-                                                    ...prev,
-                                                    role: undefined,
-                                                }));
-                                            }
-                                        }}
-                                    >
-                                        <SelectTrigger
-                                            className={`w-full bg-muted border-border ${inviteErrors.role ? "border-destructive" : ""}`}
-                                            aria-invalid={!!inviteErrors.role}
-                                        >
-                                            <SelectValue placeholder="Select role" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {orgRoles
-                                                ? orgRoles
-                                                    .filter((r) =>
-                                                        r.priority < 100 ||
-                                                        (r.priority >= 100 && user?.role === 'owner')
-                                                    )
-                                                    .sort((a, b) => b.priority - a.priority)
-                                                    .map((r) => (
-                                                        <SelectItem key={r.id} value={r.name}>
-                                                            {r.display_name}
-                                                        </SelectItem>
-                                                    ))
-                                                : (
-                                                    <SelectItem value="" disabled>
-                                                        Loading roles…
-                                                    </SelectItem>
-                                                )
-                                            }
-                                        </SelectContent>
-                                    </Select>
-                                    {inviteErrors.role && (
-                                        <p
-                                            className="text-xs text-destructive"
-                                            role="alert"
-                                        >
-                                            {inviteErrors.role}
-                                        </p>
-                                    )}
-                                </div>
-                            </div>
-                            <DialogFooter>
-                                <Button
-                                    type="submit"
-                                    disabled={inviteMutation.isPending}
-                                >
-                                    {inviteMutation.isPending ? (
-                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    ) : (
-                                        <Mail className="mr-2 h-4 w-4" />
-                                    )}
-                                    Send Invitation
-                                </Button>
-                            </DialogFooter>
-                        </form>
-                    </DialogContent>
-                </Dialog>
             </div>
 
-            {/* Stats */}
-            <div className="grid gap-4 sm:grid-cols-3">
-                <Card className="border-border bg-card">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground">
-                            Total Members
-                        </CardTitle>
-                        <Users className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold text-foreground">
-                            {isLoading ? (
-                                <div className="h-8 w-12 bg-muted animate-pulse rounded" />
-                            ) : (
-                                totalMembers
-                            )}
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card className="border-border bg-card">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground">
-                            Active
-                        </CardTitle>
-                        <div className="h-2.5 w-2.5 rounded-full bg-primary" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold text-foreground">
-                            {isLoading ? (
-                                <div className="h-8 w-12 bg-muted animate-pulse rounded" />
-                            ) : (
-                                activeMembers
-                            )}
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card className="border-border bg-card">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium text-muted-foreground">
-                            Seat Usage
-                        </CardTitle>
-                        <Shield className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold text-foreground">
-                            {!usage ? (
-                                <div className="h-8 w-20 bg-muted animate-pulse rounded" />
-                            ) : usage.limit === "unlimited" ? (
-                                <span>
-                                    {usage.used}
-                                    <span className="text-sm font-normal text-muted-foreground ml-1">
-                                        members (Unlimited)
-                                    </span>
-                                </span>
-                            ) : (
-                                <span>
-                                    {usage.used}
-                                    <span className="text-sm font-normal text-muted-foreground">
-                                        /{usage.limit} seats used
-                                    </span>
-                                </span>
-                            )}
-                        </div>
-                        {usage &&
-                            usage.limit !== "unlimited" &&
-                            typeof usage.limit === "number" &&
-                            usage.limit > 0 && (
-                                <div className="mt-2 h-1.5 bg-muted rounded-full">
-                                    <div
-                                        className="h-full bg-primary rounded-full transition-all"
-                                        style={{
-                                            width: `${Math.min((usage.used / usage.limit) * 100, 100)}%`,
-                                        }}
-                                    />
+            {/* Stats Strip */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                    { label: "Total", value: totalMembers, icon: Users, color: "text-blue-500", bg: "bg-blue-500/10" },
+                    { label: "Active", value: activeMembers, icon: CheckCircle2, color: "text-emerald-500", bg: "bg-emerald-500/10" },
+                    { label: "Pending Invites", value: invitations.length, icon: Mail, color: "text-amber-500", bg: "bg-amber-500/10" },
+                    { label: "Deactivated", value: inactiveMembers, icon: XCircle, color: "text-red-500", bg: "bg-red-500/10" },
+                ].map((s) => (
+                    <Card key={s.label} className="border-border">
+                        <CardContent className="p-3">
+                            <div className="flex items-center gap-2.5">
+                                <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${s.bg} shrink-0`}>
+                                    <s.icon className={`h-4 w-4 ${s.color}`} />
                                 </div>
-                            )}
-                    </CardContent>
-                </Card>
+                                <div className="min-w-0">
+                                    <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">{s.label}</p>
+                                    <p className="text-base font-bold text-foreground tabular-nums leading-tight">{isLoading ? "--" : s.value}</p>
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
+                ))}
             </div>
 
-            {/* Team Table */}
-            {/* Pending invitations */}
-            {canManageInvites ? (
-                <Card className="border-border bg-card">
-                    <CardHeader>
-                        <CardTitle className="text-foreground">
-                            Pending invitations
-                        </CardTitle>
-                        <CardDescription className="text-muted-foreground">
-                            Invites that haven&apos;t been accepted yet (expire
-                            after 7 days)
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        {invitesLoading ? (
-                            <div className="space-y-3">
-                                {Array.from({ length: 3 }).map((_, i) => (
-                                    <div
-                                        key={i}
-                                        className="h-12 bg-muted rounded animate-pulse"
-                                    />
-                                ))}
-                            </div>
-                        ) : invitesIsError ? (
-                            <div className="text-sm text-destructive">
-                                {(invitesError as { message?: string })
-                                    ?.message || "Failed to load invitations."}
-                            </div>
-                        ) : invitations.length === 0 ? (
-                            <div className="text-sm text-muted-foreground">
-                                No pending invitations.
-                            </div>
-                        ) : (
-                            <>
-                                <div className="rounded-lg border border-border overflow-hidden">
-                                <div className="overflow-x-auto">
+            {/* Pending Invitations */}
+            {canManageInvites && (
+                <Card className="border-border">
+                    <button
+                        className="flex items-center justify-between w-full px-4 py-3 text-left hover:bg-muted/30 transition-colors rounded-t-lg"
+                        onClick={() => setInvitesExpanded(!invitesExpanded)}
+                    >
+                        <div className="flex items-center gap-2">
+                            <Mail className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-sm font-medium">Pending Invitations</span>
+                            {invitations.length > 0 && (
+                                <Badge variant="secondary" className="h-5 px-1.5 text-[0.6rem]">
+                                    {invitations.length}
+                                </Badge>
+                            )}
+                        </div>
+                        {invitesExpanded
+                            ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                            : <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        }
+                    </button>
+                    {invitesExpanded && (
+                        <div className="border-t border-border/50 px-4 py-3">
+                            {invitesLoading ? (
+                                <div className="space-y-2">
+                                    {Array.from({ length: 2 }).map((_, i) => (
+                                        <Skeleton key={i} className="h-10 w-full" />
+                                    ))}
+                                </div>
+                            ) : invitesIsError ? (
+                                <p className="text-xs text-destructive">
+                                    {(invitesError as { message?: string })?.message || "Failed to load invitations."}
+                                </p>
+                            ) : invitations.length === 0 ? (
+                                <p className="text-xs text-muted-foreground">No pending invitations.</p>
+                            ) : (
                                 <Table>
                                     <TableHeader>
-                                        <TableRow className="border-border hover:bg-transparent">
-                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                                Email
-                                            </TableHead>
-                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                                Role
-                                            </TableHead>
-                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                                Invited by
-                                            </TableHead>
-                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                                Expires
-                                            </TableHead>
-                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">
-                                                Actions
-                                            </TableHead>
+                                        <TableRow className="hover:bg-transparent">
+                                            <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[240px]">Email</TableHead>
+                                            <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[90px]">Role</TableHead>
+                                            <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[110px]">Invited By</TableHead>
+                                            <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[90px]">Expires</TableHead>
+                                            <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[160px] text-right">Actions</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
                                         {invitations.map((inv) => (
-                                            <TableRow
-                                                key={inv.id}
-                                                className="border-border hover:bg-muted/50 transition-colors"
-                                            >
-                                                <TableCell className="text-sm text-foreground">
-                                                    {inv.email}
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Badge
-                                                        variant={
-                                                            roleBadgeVariant[
-                                                                inv.role
-                                                            ] || "outline"
-                                                        }
-                                                        className="capitalize"
-                                                    >
+                                            <TableRow key={inv.id} className="border-border/50 hover:bg-muted/30">
+                                                <TableCell className="text-[0.7rem] py-2">{inv.email}</TableCell>
+                                                <TableCell className="py-2">
+                                                    <Badge variant="outline" className="text-[0.6rem] px-1.5 py-0">
                                                         {inv.role}
                                                     </Badge>
                                                 </TableCell>
-                                                <TableCell className="text-sm text-muted-foreground">
+                                                <TableCell className="text-[0.7rem] text-muted-foreground py-2">
                                                     {inv.creator?.name || "--"}
                                                 </TableCell>
-                                                <TableCell className="text-sm text-muted-foreground">
+                                                <TableCell className="text-[0.7rem] text-muted-foreground py-2">
                                                     {formatDate(inv.expires_at)}
                                                 </TableCell>
-                                                <TableCell className="text-right">
-                                                    <div className="inline-flex items-center gap-2">
+                                                <TableCell className="text-right py-2">
+                                                    <div className="inline-flex items-center gap-1">
                                                         <Button
-                                                            variant="outline"
+                                                            variant="ghost"
                                                             size="sm"
-                                                            className="border-border text-foreground"
-                                                            onClick={() =>
-                                                                copyInviteLink(
-                                                                    inv.token,
-                                                                )
-                                                            }
+                                                            className="h-6 px-2 text-[0.6rem]"
+                                                            onClick={() => copyInviteLink(inv.token)}
                                                         >
-                                                            <Copy className="h-4 w-4 mr-1" />
-                                                            Copy link
+                                                            <Copy className="h-3 w-3 mr-1" />
+                                                            Copy
                                                         </Button>
                                                         <Button
-                                                            variant="outline"
+                                                            variant="ghost"
                                                             size="sm"
-                                                            className="border-border text-foreground"
-                                                            disabled={
-                                                                resendInviteMutation.isPending
-                                                            }
-                                                            onClick={() =>
-                                                                resendInviteMutation.mutate(
-                                                                    inv.id,
-                                                                )
-                                                            }
+                                                            className="h-6 px-2 text-[0.6rem]"
+                                                            disabled={resendInviteMutation.isPending}
+                                                            onClick={() => resendInviteMutation.mutate(inv.id)}
                                                         >
-                                                            <RefreshCw className="h-4 w-4 mr-1" />
+                                                            <RefreshCw className="h-3 w-3 mr-1" />
                                                             Resend
                                                         </Button>
                                                         <Button
-                                                            variant="destructive"
+                                                            variant="ghost"
                                                             size="sm"
-                                                            disabled={
-                                                                revokeInviteMutation.isPending
-                                                            }
-                                                            onClick={() =>
-                                                                revokeInviteMutation.mutate(
-                                                                    inv.id,
-                                                                )
-                                                            }
+                                                            className="h-6 px-2 text-[0.6rem] text-destructive hover:text-destructive"
+                                                            disabled={revokeInviteMutation.isPending}
+                                                            onClick={() => revokeInviteMutation.mutate(inv.id)}
                                                         >
-                                                            <Trash2 className="h-4 w-4 mr-1" />
+                                                            <Trash2 className="h-3 w-3 mr-1" />
                                                             Revoke
                                                         </Button>
                                                     </div>
@@ -931,174 +712,152 @@ export default function TeamPage() {
                                         ))}
                                     </TableBody>
                                 </Table>
-                                </div>
-                                </div>
-                                {invitationsResponse &&
-                                    invitationsResponse.last_page > 1 && (
-                                        <div className="flex items-center justify-between mt-4">
-                                            <Button
-                                                variant="outline"
-                                                size="sm"
-                                                className="border-border text-foreground"
-                                                disabled={
-                                                    invitationsResponse.current_page <=
-                                                    1
-                                                }
-                                                onClick={() =>
-                                                    setSearchParam(
-                                                        "invites_page",
-                                                        String(
-                                                            Math.max(
-                                                                1,
-                                                                invitesPage - 1,
-                                                            ),
-                                                        ),
-                                                    )
-                                                }
-                                            >
-                                                Previous
-                                            </Button>
-                                            <div className="text-sm text-muted-foreground">
-                                                Page{" "}
-                                                {
-                                                    invitationsResponse.current_page
-                                                }{" "}
-                                                of{" "}
-                                                {invitationsResponse.last_page}
-                                            </div>
-                                            <Button
-                                                variant="outline"
-                                                size="sm"
-                                                className="border-border text-foreground"
-                                                disabled={
-                                                    invitationsResponse.current_page >=
-                                                    invitationsResponse.last_page
-                                                }
-                                                onClick={() =>
-                                                    setSearchParam(
-                                                        "invites_page",
-                                                        String(invitesPage + 1),
-                                                    )
-                                                }
-                                            >
-                                                Next
-                                            </Button>
-                                        </div>
-                                    )}
-                            </>
-                        )}
-                    </CardContent>
-                </Card>
-            ) : (
-                <Card className="border-border bg-card">
-                    <CardHeader>
-                        <CardTitle className="text-foreground">
-                            Pending invitations
-                        </CardTitle>
-                        <CardDescription className="text-muted-foreground">
-                            Only owners and admins can manage invitations.
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-sm text-muted-foreground">
-                            You can still manage existing team members below.
+                            )}
                         </div>
-                    </CardContent>
+                    )}
                 </Card>
             )}
 
-            <Card className="border-border bg-card">
-                <CardHeader>
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                        <div>
-                            <CardTitle className="text-foreground">Members</CardTitle>
-                            <CardDescription className="text-muted-foreground">
-                                {membersResponse && membersResponse.total != null
-                                    ? `Showing ${((membersResponse.current_page - 1) * membersPerPage) + 1}\u2013${Math.min(membersResponse.current_page * membersPerPage, membersResponse.total)} of ${membersResponse.total} members`
-                                    : "All members of your organization"}
-                            </CardDescription>
-                        </div>
-                    </div>
-                    <div className="flex flex-col sm:flex-row gap-3 mt-4">
-                        <SearchInput
-                            value={searchInput}
-                            onChange={setSearchInput}
-                            placeholder="Search by name or email..."
-                            className="flex-1 max-w-sm"
-                        />
-                        <Select value={roleFilter} onValueChange={(val) => setRoleFilter(val ?? "all")}>
-                            <SelectTrigger className="w-[160px] bg-muted border-border">
-                                <SelectValue placeholder="All Roles" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All Roles</SelectItem>
-                                {orgRoles
-                                    ?.slice()
-                                    .sort((a, b) => b.priority - a.priority)
-                                    .map((r) => (
-                                        <SelectItem key={r.id} value={r.name}>
-                                            {r.display_name}
-                                        </SelectItem>
-                                    ))}
-                            </SelectContent>
-                        </Select>
-                        <Select value={statusFilter} onValueChange={(val) => setStatusFilter(val ?? "all")}>
-                            <SelectTrigger className="w-[160px] bg-muted border-border">
-                                <SelectValue placeholder="All Status" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">All Status</SelectItem>
-                                <SelectItem value="active">Active</SelectItem>
-                                <SelectItem value="inactive">Inactive</SelectItem>
-                            </SelectContent>
-                        </Select>
-                    </div>
-                </CardHeader>
-                <CardContent>
-                    {isLoading ? (
-                        <div className="space-y-3">
+            {/* Filter Bar */}
+            <div className="flex items-center gap-2">
+                <div className="relative flex-1 max-w-xs">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                    <Input
+                        placeholder="Search by name or email..."
+                        value={searchInput}
+                        onChange={(e) => setSearchInput(e.target.value)}
+                        className="h-8 pl-8 text-xs"
+                    />
+                </div>
+
+                <Button
+                    variant={showFilters ? "secondary" : "outline"}
+                    size="sm"
+                    className="h-8 text-xs gap-1.5"
+                    onClick={() => setShowFilters(!showFilters)}
+                >
+                    <SlidersHorizontal className="h-3.5 w-3.5" />
+                    Filters
+                    {activeFilterCount > 0 && (
+                        <Badge variant="secondary" className="h-4 px-1 text-[0.6rem] rounded-full ml-0.5">
+                            {activeFilterCount}
+                        </Badge>
+                    )}
+                </Button>
+
+                {activeFilterCount > 0 && (
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 text-xs gap-1 text-muted-foreground"
+                        onClick={clearFilters}
+                    >
+                        <X className="h-3 w-3" />
+                        Clear
+                    </Button>
+                )}
+            </div>
+
+            {/* Collapsible Filters */}
+            {showFilters && (
+                <div className="flex items-center gap-3">
+                    <Select value={roleFilter} onValueChange={(val) => setRoleFilter(val ?? "all")}>
+                        <SelectTrigger className="h-8 w-[160px] text-xs">
+                            <SelectValue placeholder="All Roles" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All Roles</SelectItem>
+                            {orgRoles
+                                ?.slice()
+                                .sort((a, b) => b.priority - a.priority)
+                                .map((r) => (
+                                    <SelectItem key={r.id} value={r.name}>
+                                        {r.display_name}
+                                    </SelectItem>
+                                ))}
+                        </SelectContent>
+                    </Select>
+                    <Select value={statusFilter} onValueChange={(val) => setStatusFilter(val ?? "all")}>
+                        <SelectTrigger className="h-8 w-[140px] text-xs">
+                            <SelectValue placeholder="All Status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All Status</SelectItem>
+                            <SelectItem value="active">Active</SelectItem>
+                            <SelectItem value="inactive">Inactive</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+            )}
+
+            {/* Members Table */}
+            {isLoading ? (
+                <Card>
+                    <CardContent className="p-0">
+                        <div className="flex flex-col">
+                            <div className="flex items-center gap-4 px-4 py-2 border-b border-border/50">
+                                {Array.from({ length: 5 }).map((_, i) => (
+                                    <Skeleton key={i} className="h-3 w-20" />
+                                ))}
+                            </div>
                             {Array.from({ length: 5 }).map((_, i) => (
-                                <div
-                                    key={i}
-                                    className="h-14 bg-muted rounded animate-pulse"
-                                />
+                                <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-border/50 last:border-0">
+                                    <Skeleton className="h-7 w-7 rounded-full" />
+                                    <Skeleton className="h-3.5 w-32" />
+                                    <Skeleton className="h-5 w-16" />
+                                    <Skeleton className="h-5 w-14" />
+                                    <Skeleton className="h-3.5 w-20" />
+                                </div>
                             ))}
                         </div>
-                    ) : membersIsError ? (
-                        <div className="text-sm text-destructive">
-                            Failed to load members.
+                    </CardContent>
+                </Card>
+            ) : membersIsError ? (
+                <Card className="border-destructive/50">
+                    <CardContent className="py-10">
+                        <div className="flex flex-col items-center text-center gap-3">
+                            <Users className="size-10 text-destructive/60" />
+                            <p className="text-muted-foreground font-medium">Failed to load members</p>
+                            <p className="text-sm text-muted-foreground">Please try again later.</p>
                         </div>
-                    ) : !members || members.length === 0 ? (
-                        <div className="text-center py-12">
-                            <Users className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-                            <p className="text-muted-foreground font-medium">
-                                No team members
-                            </p>
-                            <p className="text-sm text-muted-foreground mt-1">
-                                Invite your first team member to get started
-                            </p>
+                    </CardContent>
+                </Card>
+            ) : members.length === 0 ? (
+                <Card>
+                    <CardContent className="py-8">
+                        <div className="flex flex-col items-center text-center gap-2">
+                            {searchInput || roleFilter !== "all" || statusFilter !== "all" ? (
+                                <>
+                                    <Search className="h-8 w-8 text-muted-foreground/40" />
+                                    <p className="text-sm text-muted-foreground font-medium">No results found</p>
+                                    <p className="text-xs text-muted-foreground">Try adjusting your search or filters</p>
+                                    <Button variant="ghost" size="sm" className="mt-1 text-xs" onClick={clearFilters}>
+                                        Clear filters
+                                    </Button>
+                                </>
+                            ) : (
+                                <>
+                                    <Users className="h-8 w-8 text-muted-foreground/40" />
+                                    <p className="text-sm text-muted-foreground font-medium">No team members</p>
+                                    <p className="text-xs text-muted-foreground">Invite your first team member to get started</p>
+                                </>
+                            )}
                         </div>
-                    ) : (
-                        <>
-                            <div className="rounded-lg border border-border overflow-hidden">
-                            <div className="overflow-x-auto">
+                    </CardContent>
+                </Card>
+            ) : (
+                <>
+                    <Card>
+                        <CardContent className="p-0">
                             <Table>
                                 <TableHeader>
-                                    <TableRow className="border-border hover:bg-transparent">
-                                        <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                            Member
-                                        </TableHead>
-                                        <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                            Role
-                                        </TableHead>
-                                        <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                            Status
-                                        </TableHead>
-                                        <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                                            Last Active
-                                        </TableHead>
-                                        <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">
-                                            Actions
+                                    <TableRow className="hover:bg-transparent">
+                                        <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[280px]">Member</TableHead>
+                                        <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[110px]">Role</TableHead>
+                                        <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[80px]">Status</TableHead>
+                                        <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[100px]">Last Active</TableHead>
+                                        <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-10">
+                                            <span className="sr-only">Actions</span>
                                         </TableHead>
                                     </TableRow>
                                 </TableHeader>
@@ -1112,91 +871,62 @@ export default function TeamPage() {
                                             .slice(0, 2);
 
                                         return (
-                                            <TableRow
-                                                key={member.id}
-                                                className="border-border hover:bg-muted/50 transition-colors"
-                                            >
-                                                <TableCell>
-                                                    <div className="flex items-center gap-3">
-                                                        <Avatar className="h-8 w-8 border border-border">
+                                            <TableRow key={member.id} className="border-border/50 hover:bg-muted/30">
+                                                <TableCell className="py-2">
+                                                    <div className="flex items-center gap-2.5">
+                                                        <Avatar className="h-7 w-7">
                                                             <AvatarImage
-                                                                src={
-                                                                    member.avatar_url ||
-                                                                    undefined
-                                                                }
-                                                                alt={
-                                                                    member.name
-                                                                }
+                                                                src={member.avatar_url || undefined}
+                                                                alt={member.name}
                                                             />
-                                                            <AvatarFallback className="bg-muted text-foreground text-xs">
+                                                            <AvatarFallback className={`${getAvatarColor(member.name)} text-white text-[0.55rem] font-medium`}>
                                                                 {initials}
                                                             </AvatarFallback>
                                                         </Avatar>
-                                                        <div>
-                                                            <p className="text-sm font-medium text-foreground">
-                                                                {member.name}
-                                                            </p>
-                                                            <p className="text-xs text-muted-foreground">
-                                                                {member.email}
-                                                            </p>
+                                                        <div className="min-w-0">
+                                                            <p className="text-[0.7rem] font-medium truncate">{member.name}</p>
+                                                            <p className="text-[0.6rem] text-muted-foreground truncate">{member.email}</p>
                                                         </div>
                                                     </div>
                                                 </TableCell>
-                                                <TableCell>
-                                                    <Badge
-                                                        variant={roleBadgeVariant[member.role] || "outline"}
-                                                        className="text-xs"
-                                                    >
+                                                <TableCell className="py-2">
+                                                    <Badge variant="outline" className="text-[0.6rem] px-1.5 py-0">
                                                         {orgRoles?.find((r) => r.name === member.role)?.display_name ?? member.role}
                                                     </Badge>
                                                 </TableCell>
-                                                <TableCell>
-                                                    <Badge
-                                                        variant={
-                                                            member.is_active
-                                                                ? "default"
-                                                                : "secondary"
-                                                        }
-                                                    >
-                                                        <span
-                                                            className={`h-1.5 w-1.5 rounded-full mr-1.5 inline-block ${
-                                                                member.is_active
-                                                                    ? "bg-primary-foreground"
-                                                                    : "bg-muted-foreground"
-                                                            }`}
-                                                        />
-                                                        {member.is_active
-                                                            ? "Active"
-                                                            : "Inactive"}
-                                                    </Badge>
+                                                <TableCell className="py-2">
+                                                    {member.is_active ? (
+                                                        <span className="inline-flex items-center gap-1 text-[0.6rem] text-emerald-600 dark:text-emerald-400">
+                                                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                                            Active
+                                                        </span>
+                                                    ) : (
+                                                        <span className="inline-flex items-center gap-1 text-[0.6rem] text-red-600 dark:text-red-400">
+                                                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" />
+                                                            Deactivated
+                                                        </span>
+                                                    )}
                                                 </TableCell>
-                                                <TableCell>
-                                                    <span className="text-sm text-muted-foreground">
-                                                        {member.last_active_at
-                                                            ? formatDate(
-                                                                  member.last_active_at,
-                                                              )
-                                                            : "Never"}
-                                                    </span>
+                                                <TableCell className="text-[0.7rem] text-muted-foreground py-2">
+                                                    {member.last_active_at ? formatDate(member.last_active_at) : "Never"}
                                                 </TableCell>
-                                                <TableCell className="text-right">
-                                                    {member.role !==
-                                                        "owner" && (
+                                                <TableCell className="py-2">
+                                                    {member.role !== "owner" && (
                                                         <DropdownMenu>
-                                                            <DropdownMenuTrigger className="inline-flex items-center justify-center rounded-md h-8 w-8 hover:bg-muted text-muted-foreground">
-                                                                <MoreHorizontal className="h-4 w-4" />
+                                                            <DropdownMenuTrigger className="inline-flex items-center justify-center rounded-md size-7 hover:bg-muted text-muted-foreground">
+                                                                <MoreHorizontal className="h-3.5 w-3.5" />
                                                             </DropdownMenuTrigger>
                                                             <DropdownMenuContent align="end">
                                                                 {canChangeRole && orgRoles && orgRoles.length > 0 && (
                                                                     <>
-                                                                        <DropdownMenuLabel>
+                                                                        <DropdownMenuLabel className="text-xs">
                                                                             Change Role
                                                                         </DropdownMenuLabel>
                                                                         <DropdownMenuSeparator />
                                                                         {orgRoles
                                                                             .filter((r) =>
                                                                                 r.priority < 100 ||
-                                                                                (r.priority >= 100 && user?.role === 'owner')
+                                                                                (r.priority >= 100 && user?.role === "owner")
                                                                             )
                                                                             .sort((a, b) => b.priority - a.priority)
                                                                             .map((r) => (
@@ -1213,13 +943,11 @@ export default function TeamPage() {
                                                                                         })
                                                                                     }
                                                                                 >
-                                                                                    <span>
-                                                                                        {r.display_name}
-                                                                                    </span>
+                                                                                    <span>{r.display_name}</span>
                                                                                     {member.role === r.name && (
                                                                                         <Badge
                                                                                             variant="secondary"
-                                                                                            className="ml-auto text-xs"
+                                                                                            className="ml-auto text-[0.55rem]"
                                                                                         >
                                                                                             Current
                                                                                         </Badge>
@@ -1229,36 +957,20 @@ export default function TeamPage() {
                                                                         <DropdownMenuSeparator />
                                                                     </>
                                                                 )}
-                                                                <DropdownMenuItem
-                                                                    onClick={() =>
-                                                                        openResetPassword(
-                                                                            member,
-                                                                        )
-                                                                    }
-                                                                >
-                                                                    Reset
-                                                                    password
+                                                                <DropdownMenuItem onClick={() => openResetPassword(member)}>
+                                                                    Reset password
                                                                 </DropdownMenuItem>
                                                                 <DropdownMenuSeparator />
                                                                 <DropdownMenuItem
-                                                                    variant={
-                                                                        member.is_active
-                                                                            ? "destructive"
-                                                                            : "default"
-                                                                    }
+                                                                    variant={member.is_active ? "destructive" : "default"}
                                                                     onClick={() =>
-                                                                        toggleActiveMutation.mutate(
-                                                                            {
-                                                                                userId: member.id,
-                                                                                isActive:
-                                                                                    !member.is_active,
-                                                                            },
-                                                                        )
+                                                                        toggleActiveMutation.mutate({
+                                                                            userId: member.id,
+                                                                            isActive: !member.is_active,
+                                                                        })
                                                                     }
                                                                 >
-                                                                    {member.is_active
-                                                                        ? "Deactivate"
-                                                                        : "Activate"}
+                                                                    {member.is_active ? "Deactivate" : "Activate"}
                                                                 </DropdownMenuItem>
                                                             </DropdownMenuContent>
                                                         </DropdownMenu>
@@ -1269,73 +981,171 @@ export default function TeamPage() {
                                     })}
                                 </TableBody>
                             </Table>
-                            </div>
-                            </div>
-                            {membersResponse &&
-                                membersResponse.last_page > 1 && (
-                                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-4 pt-4 border-t border-border">
-                                        <p className="text-sm text-muted-foreground">
-                                            Showing {((membersResponse.current_page - 1) * membersPerPage) + 1}&ndash;{Math.min(membersResponse.current_page * membersPerPage, membersResponse.total)} of {membersResponse.total} members
-                                        </p>
-                                        <Pagination>
-                                            <PaginationContent>
-                                                <PaginationItem>
-                                                    <PaginationPrevious
-                                                        onClick={() =>
-                                                            setSearchParam(
-                                                                "members_page",
-                                                                String(Math.max(1, membersPage - 1)),
-                                                            )
-                                                        }
-                                                        aria-disabled={membersPage <= 1}
-                                                        className={membersPage <= 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
-                                                    />
-                                                </PaginationItem>
-                                                {Array.from({ length: membersResponse.last_page }, (_, i) => i + 1)
-                                                    .filter((p) => p === 1 || p === membersResponse.last_page || Math.abs(p - membersResponse.current_page) <= 1)
-                                                    .reduce((acc, p, idx, arr) => {
-                                                        if (idx > 0 && p - arr[idx - 1] > 1) acc.push(-1);
-                                                        acc.push(p);
-                                                        return acc;
-                                                    }, [] as number[])
-                                                    .map((p, idx) =>
-                                                        p === -1 ? (
-                                                            <PaginationItem key={`ellipsis-${idx}`}>
-                                                                <PaginationEllipsis />
-                                                            </PaginationItem>
-                                                        ) : (
-                                                            <PaginationItem key={p}>
-                                                                <PaginationLink
-                                                                    isActive={p === membersResponse.current_page}
-                                                                    onClick={() => setSearchParam("members_page", String(p))}
-                                                                    className="cursor-pointer"
-                                                                >
-                                                                    {p}
-                                                                </PaginationLink>
-                                                            </PaginationItem>
-                                                        ),
-                                                    )}
-                                                <PaginationItem>
-                                                    <PaginationNext
-                                                        onClick={() =>
-                                                            setSearchParam(
-                                                                "members_page",
-                                                                String(membersPage + 1),
-                                                            )
-                                                        }
-                                                        aria-disabled={membersPage >= membersResponse.last_page}
-                                                        className={membersPage >= membersResponse.last_page ? "pointer-events-none opacity-50" : "cursor-pointer"}
-                                                    />
-                                                </PaginationItem>
-                                            </PaginationContent>
-                                        </Pagination>
-                                    </div>
-                                )}
-                        </>
-                    )}
-                </CardContent>
-            </Card>
+                        </CardContent>
+                    </Card>
 
+                    {membersResponse && membersResponse.last_page > 1 && (
+                        <div className="flex items-center justify-between">
+                            <p className="text-[0.65rem] text-muted-foreground">
+                                Showing {membersResponse.from ?? 0}&ndash;{membersResponse.to ?? 0} of{" "}
+                                {membersResponse.total}
+                            </p>
+                            <Pagination>
+                                <PaginationContent>
+                                    <PaginationItem>
+                                        <PaginationPrevious
+                                            onClick={() =>
+                                                setSearchParam("members_page", String(Math.max(1, membersPage - 1)))
+                                            }
+                                            aria-disabled={membersPage <= 1}
+                                            className={membersPage <= 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                                        />
+                                    </PaginationItem>
+                                    {Array.from({ length: membersResponse.last_page }, (_, i) => i + 1)
+                                        .filter((p) => p === 1 || p === membersResponse.last_page || Math.abs(p - membersResponse.current_page) <= 1)
+                                        .reduce((acc, p, idx, arr) => {
+                                            if (idx > 0 && p - arr[idx - 1] > 1) acc.push(-1);
+                                            acc.push(p);
+                                            return acc;
+                                        }, [] as number[])
+                                        .map((p, idx) =>
+                                            p === -1 ? (
+                                                <PaginationItem key={`e-${idx}`}>
+                                                    <PaginationEllipsis />
+                                                </PaginationItem>
+                                            ) : (
+                                                <PaginationItem key={p}>
+                                                    <PaginationLink
+                                                        isActive={p === membersResponse.current_page}
+                                                        onClick={() => setSearchParam("members_page", String(p))}
+                                                        className="cursor-pointer"
+                                                    >
+                                                        {p}
+                                                    </PaginationLink>
+                                                </PaginationItem>
+                                            ),
+                                        )}
+                                    <PaginationItem>
+                                        <PaginationNext
+                                            onClick={() =>
+                                                setSearchParam("members_page", String(membersPage + 1))
+                                            }
+                                            aria-disabled={membersPage >= membersResponse.last_page}
+                                            className={membersPage >= membersResponse.last_page ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                                        />
+                                    </PaginationItem>
+                                </PaginationContent>
+                            </Pagination>
+                        </div>
+                    )}
+                </>
+            )}
+
+            {/* Invite Dialog */}
+            <Dialog
+                open={inviteOpen}
+                onOpenChange={(open) => {
+                    setInviteOpen(open);
+                    if (!open) setInviteErrors({});
+                }}
+            >
+                <DialogContent className="sm:max-w-md">
+                    <form onSubmit={handleInvite}>
+                        <DialogHeader>
+                            <DialogTitle className="text-base">Invite Team Member</DialogTitle>
+                            <DialogDescription className="text-xs">
+                                Send an invitation email to a new team member.
+                            </DialogDescription>
+                        </DialogHeader>
+                        <div className="flex flex-col gap-3 py-4">
+                            <div className="grid gap-1.5">
+                                <Label htmlFor="invite-email" className="text-xs">Email address</Label>
+                                <div className="relative">
+                                    <Mail className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                                    <Input
+                                        id="invite-email"
+                                        type="email"
+                                        placeholder="colleague@company.com"
+                                        value={inviteEmail}
+                                        onChange={(e) => {
+                                            setInviteEmail(e.target.value);
+                                            if (inviteErrors.email) {
+                                                setInviteErrors((prev) => ({ ...prev, email: undefined }));
+                                            }
+                                        }}
+                                        aria-invalid={!!inviteErrors.email}
+                                        className={`h-8 pl-8 text-sm ${inviteErrors.email ? "border-destructive" : ""}`}
+                                        required
+                                    />
+                                </div>
+                                {inviteErrors.email && (
+                                    <p className="text-[0.65rem] text-destructive" role="alert">{inviteErrors.email}</p>
+                                )}
+                            </div>
+                            <div className="grid gap-1.5">
+                                <Label className="text-xs">Role</Label>
+                                <Select
+                                    value={inviteRole}
+                                    onValueChange={(val) => {
+                                        setInviteRole(val ?? "employee");
+                                        if (inviteErrors.role) {
+                                            setInviteErrors((prev) => ({ ...prev, role: undefined }));
+                                        }
+                                    }}
+                                >
+                                    <SelectTrigger
+                                        className={`h-8 w-full text-sm ${inviteErrors.role ? "border-destructive" : ""}`}
+                                        aria-invalid={!!inviteErrors.role}
+                                    >
+                                        <SelectValue placeholder="Select role" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {orgRoles
+                                            ? orgRoles
+                                                .filter((r) =>
+                                                    r.priority < 100 ||
+                                                    (r.priority >= 100 && user?.role === "owner")
+                                                )
+                                                .sort((a, b) => b.priority - a.priority)
+                                                .map((r) => (
+                                                    <SelectItem key={r.id} value={r.name}>
+                                                        {r.display_name}
+                                                    </SelectItem>
+                                                ))
+                                            : (
+                                                <SelectItem value="" disabled>
+                                                    Loading roles...
+                                                </SelectItem>
+                                            )}
+                                    </SelectContent>
+                                </Select>
+                                {inviteErrors.role && (
+                                    <p className="text-[0.65rem] text-destructive" role="alert">{inviteErrors.role}</p>
+                                )}
+                            </div>
+                        </div>
+                        <DialogFooter className="gap-2">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setInviteOpen(false)}
+                                disabled={inviteMutation.isPending}
+                            >
+                                Cancel
+                            </Button>
+                            <Button type="submit" size="sm" disabled={inviteMutation.isPending}>
+                                {inviteMutation.isPending && (
+                                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                                )}
+                                Send Invitation
+                            </Button>
+                        </DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
+
+            {/* Reset Password Dialog */}
             <Dialog
                 open={resetPasswordOpen}
                 onOpenChange={(open) => {
@@ -1350,38 +1160,27 @@ export default function TeamPage() {
                     }
                 }}
             >
-                <DialogContent className="bg-card border-border">
-                    <form onSubmit={submitResetPassword} className="space-y-4">
+                <DialogContent className="sm:max-w-md">
+                    <form onSubmit={submitResetPassword} className="flex flex-col gap-4">
                         <DialogHeader>
-                            <DialogTitle className="text-foreground">
-                                Reset password
-                            </DialogTitle>
-                            <DialogDescription className="text-muted-foreground">
+                            <DialogTitle className="text-base">Reset Password</DialogTitle>
+                            <DialogDescription className="text-xs">
                                 Set a new password for{" "}
-                                <span className="text-foreground font-medium">
+                                <span className="font-medium text-foreground">
                                     {resetPasswordMember?.name || "this member"}
                                 </span>
-                                {resetPasswordMember?.email
-                                    ? ` (${resetPasswordMember.email})`
-                                    : ""}
-                                .
+                                {resetPasswordMember?.email ? ` (${resetPasswordMember.email})` : ""}.
                             </DialogDescription>
                         </DialogHeader>
 
-                        <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted p-3">
+                        <div className="flex items-center justify-between rounded-lg border border-border p-3">
                             <div>
-                                <p className="text-sm font-medium text-foreground">
-                                    Generate random password
-                                </p>
-                                <p className="text-xs text-muted-foreground">
-                                    We’ll generate a secure password and show it
-                                    once.
+                                <p className="text-xs font-medium">Generate random password</p>
+                                <p className="text-[0.65rem] text-muted-foreground">
+                                    Secure password shown once
                                 </p>
                                 {resetPasswordErrors.generate && (
-                                    <p
-                                        className="text-xs text-destructive mt-1"
-                                        role="alert"
-                                    >
+                                    <p className="text-[0.65rem] text-destructive mt-1" role="alert">
                                         {resetPasswordErrors.generate}
                                     </p>
                                 )}
@@ -1393,49 +1192,35 @@ export default function TeamPage() {
                                     setResetPasswordErrors({});
                                     setGeneratedPassword(null);
                                 }}
-                                aria-label="Generate random password"
                             />
                         </div>
 
                         {generateRandomPassword ? (
-                            <div className="space-y-2">
-                                <Label className="text-foreground">
-                                    Generated password
-                                </Label>
+                            <div className="grid gap-1.5">
+                                <Label className="text-xs">Generated password</Label>
                                 {generatedPassword ? (
                                     <div className="flex gap-2">
-                                        <Input
-                                            value={generatedPassword}
-                                            readOnly
-                                            className="bg-muted border-border text-foreground"
-                                            aria-label="Generated password"
-                                        />
+                                        <Input value={generatedPassword} readOnly className="h-8 text-sm" />
                                         <Button
                                             type="button"
                                             variant="outline"
-                                            className="bg-muted border-border"
+                                            size="sm"
+                                            className="h-8"
                                             onClick={copyGeneratedPassword}
-                                            aria-label="Copy generated password"
                                         >
-                                            <Copy className="h-4 w-4" />
+                                            <Copy className="h-3.5 w-3.5" />
                                         </Button>
                                     </div>
                                 ) : (
-                                    <p className="text-xs text-muted-foreground">
-                                        Click “Reset password” to generate a new
-                                        password.
+                                    <p className="text-[0.65rem] text-muted-foreground">
+                                        Click &quot;Reset password&quot; to generate.
                                     </p>
                                 )}
                             </div>
                         ) : (
                             <>
-                                <div className="grid gap-2">
-                                    <Label
-                                        htmlFor="member-new-password"
-                                        className="text-foreground"
-                                    >
-                                        New password
-                                    </Label>
+                                <div className="grid gap-1.5">
+                                    <Label htmlFor="member-new-password" className="text-xs">New password</Label>
                                     <PasswordInput
                                         id="member-new-password"
                                         autoComplete="new-password"
@@ -1443,96 +1228,59 @@ export default function TeamPage() {
                                         onChange={(e) => {
                                             setNewPassword(e.target.value);
                                             if (resetPasswordErrors.password) {
-                                                setResetPasswordErrors(
-                                                    (prev) => ({
-                                                        ...prev,
-                                                        password: undefined,
-                                                    }),
-                                                );
+                                                setResetPasswordErrors((prev) => ({ ...prev, password: undefined }));
                                             }
                                         }}
-                                        aria-invalid={
-                                            !!resetPasswordErrors.password
-                                        }
-                                        className={`bg-muted border-border text-foreground ${resetPasswordErrors.password ? "border-destructive focus-visible:ring-destructive" : ""}`}
+                                        aria-invalid={!!resetPasswordErrors.password}
+                                        className={`h-8 text-sm ${resetPasswordErrors.password ? "border-destructive" : ""}`}
                                     />
                                     {resetPasswordErrors.password && (
-                                        <p
-                                            className="text-xs text-destructive"
-                                            role="alert"
-                                        >
+                                        <p className="text-[0.65rem] text-destructive" role="alert">
                                             {resetPasswordErrors.password}
                                         </p>
                                     )}
-                                    <p className="text-xs text-muted-foreground">
-                                        Minimum 8 characters
-                                    </p>
+                                    <p className="text-[0.6rem] text-muted-foreground">Minimum 8 characters</p>
                                 </div>
-
-                                <div className="grid gap-2">
-                                    <Label
-                                        htmlFor="member-new-password-confirm"
-                                        className="text-foreground"
-                                    >
-                                        Confirm new password
-                                    </Label>
+                                <div className="grid gap-1.5">
+                                    <Label htmlFor="member-new-password-confirm" className="text-xs">Confirm password</Label>
                                     <PasswordInput
                                         id="member-new-password-confirm"
                                         autoComplete="new-password"
                                         value={newPasswordConfirm}
                                         onChange={(e) => {
-                                            setNewPasswordConfirm(
-                                                e.target.value,
-                                            );
-                                            if (
-                                                resetPasswordErrors.password_confirmation
-                                            ) {
-                                                setResetPasswordErrors(
-                                                    (prev) => ({
-                                                        ...prev,
-                                                        password_confirmation:
-                                                            undefined,
-                                                    }),
-                                                );
+                                            setNewPasswordConfirm(e.target.value);
+                                            if (resetPasswordErrors.password_confirmation) {
+                                                setResetPasswordErrors((prev) => ({
+                                                    ...prev,
+                                                    password_confirmation: undefined,
+                                                }));
                                             }
                                         }}
-                                        aria-invalid={
-                                            !!resetPasswordErrors.password_confirmation
-                                        }
-                                        className={`bg-muted border-border text-foreground ${resetPasswordErrors.password_confirmation ? "border-destructive focus-visible:ring-destructive" : ""}`}
+                                        aria-invalid={!!resetPasswordErrors.password_confirmation}
+                                        className={`h-8 text-sm ${resetPasswordErrors.password_confirmation ? "border-destructive" : ""}`}
                                     />
                                     {resetPasswordErrors.password_confirmation && (
-                                        <p
-                                            className="text-xs text-destructive"
-                                            role="alert"
-                                        >
-                                            {
-                                                resetPasswordErrors.password_confirmation
-                                            }
+                                        <p className="text-[0.65rem] text-destructive" role="alert">
+                                            {resetPasswordErrors.password_confirmation}
                                         </p>
                                     )}
                                 </div>
                             </>
                         )}
 
-                        <DialogFooter className="gap-2 sm:gap-0">
+                        <DialogFooter className="gap-2">
                             <Button
                                 type="button"
                                 variant="outline"
-                                className="bg-muted border-border"
+                                size="sm"
                                 onClick={() => setResetPasswordOpen(false)}
                                 disabled={resetPasswordMutation.isPending}
                             >
                                 Cancel
                             </Button>
-                            <Button
-                                type="submit"
-                                disabled={resetPasswordMutation.isPending}
-                            >
-                                {resetPasswordMutation.isPending ? (
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                ) : (
-                                    <RefreshCw className="mr-2 h-4 w-4" />
+                            <Button type="submit" size="sm" disabled={resetPasswordMutation.isPending}>
+                                {resetPasswordMutation.isPending && (
+                                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                                 )}
                                 Reset password
                             </Button>

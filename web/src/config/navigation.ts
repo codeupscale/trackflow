@@ -1,30 +1,24 @@
 import type { LucideIcon } from "lucide-react";
 import {
-    ArrowLeftRight,
     BarChart3,
     Briefcase,
     Building2,
     CalendarCheck,
     CalendarClock,
     CalendarDays,
-    CalendarRange,
     Camera,
     ClipboardCheck,
     Clock,
     Clock4,
     DollarSign,
-    FileBarChart2,
-    FileEdit,
     FolderOpen,
     Layers,
     LayoutDashboard,
-    ListChecks,
     Megaphone,
     Puzzle,
     Receipt,
     Settings,
     Shield,
-    UserCog,
     Users,
     UsersRound,
 } from "lucide-react";
@@ -60,7 +54,6 @@ export const navigationConfig: NavGroup[] = [
                 icon: Clock,
                 requiredPermission: "time_entries.view",
             },
-            // Manual time approvals — managers/admins only (time_entries.approve)
             {
                 name: "Time Approvals",
                 href: "/time-entries/approvals",
@@ -93,31 +86,8 @@ export const navigationConfig: NavGroup[] = [
         ],
     },
     {
-        label: "HR",
+        label: "People",
         items: [
-            // Employees with departments.view can see the org tree (read-only at API level)
-            {
-                name: "Departments",
-                href: "/hr/departments",
-                icon: Building2,
-                requiredPermission: "departments.view",
-            },
-            // Positions — Owner, Org Manager, HR Manager only (Finance Manager and Employee do not have positions.view)
-            {
-                name: "Positions",
-                href: "/hr/positions",
-                icon: Briefcase,
-                requiredPermission: "positions.view",
-            },
-            // Job Postings — Owner, Org Manager, HR Manager manage; Finance Manager
-            // and Manager have read-only. Employees do not have job_postings.view.
-            {
-                name: "Job Postings",
-                href: "/hr/job-postings",
-                icon: Megaphone,
-                requiredPermission: "job_postings.view",
-            },
-            // Employees see own profile only (scoped at API level); managers+ see directory
             {
                 name: "Employees",
                 href: "/hr/employees",
@@ -126,62 +96,69 @@ export const navigationConfig: NavGroup[] = [
                 requiredScope: "project",
             },
             {
+                name: "Departments",
+                href: "/hr/departments",
+                icon: Building2,
+                requiredPermission: "departments.view",
+            },
+            {
+                name: "Positions",
+                href: "/hr/positions",
+                icon: Briefcase,
+                requiredPermission: "positions.view",
+            },
+            {
+                name: "Job Postings",
+                href: "/hr/job-postings",
+                icon: Megaphone,
+                requiredPermission: "job_postings.view",
+            },
+            {
+                name: "Team",
+                href: "/team",
+                icon: UsersRound,
+                requiredPermission: "team.view_members",
+            },
+        ],
+    },
+    {
+        label: "Leave",
+        items: [
+            {
                 name: "My Leave",
                 href: "/hr/leave",
                 icon: CalendarDays,
                 requiredPermission: "leave.apply",
             },
-            // Leave Approvals — managers/admins only
             {
-                name: "Leave Approvals",
-                href: "/hr/leave/approvals",
+                name: "Leave Management",
+                href: "/hr/leave/management",
                 icon: ClipboardCheck,
                 requiredPermission: "leave.approve",
             },
+        ],
+    },
+    {
+        label: "Attendance",
+        items: [
             {
-                name: "Leave Calendar",
-                href: "/hr/leave/calendar",
-                icon: CalendarRange,
-                requiredPermission: "leave.view_calendar",
-            },
-            // Leave Types — admin/HR only
-            {
-                name: "Leave Types",
-                href: "/hr/leave/types",
-                icon: ListChecks,
-                requiredPermission: "leave.manage_types",
-            },
-            {
-                name: "Attendance",
+                name: "My Attendance",
                 href: "/hr/attendance",
                 icon: CalendarCheck,
                 requiredPermission: "attendance.view",
             },
-            // Team Attendance — managers/admins only
             {
-                name: "Team Attendance",
-                href: "/hr/attendance/team",
+                name: "Attendance Management",
+                href: "/hr/attendance/management",
                 icon: UsersRound,
                 requiredPermission: "attendance.view",
                 requiredScope: "project",
             },
-            // Regularizations approvals — managers/admins only
-            {
-                name: "Regularizations",
-                href: "/hr/attendance/regularizations",
-                icon: FileEdit,
-                requiredPermission: "attendance.approve_regularizations",
-            },
-            // Check-in Report (all-employees rollup) — HR/admin only
-            {
-                name: "Check-in Report",
-                href: "/hr/attendance/report",
-                icon: FileBarChart2,
-                requiredPermission: "attendance.view_all",
-            },
-            // (Attendance Policy settings removed — check-in windows now come from each
-            //  user's shift; configure them under Shifts.)
-            // Shifts management — managers/admins only (employees have shifts.view but NOT shifts.create)
+        ],
+    },
+    {
+        label: "Scheduling",
+        items: [
             {
                 name: "Shifts",
                 href: "/hr/shifts",
@@ -189,25 +166,16 @@ export const navigationConfig: NavGroup[] = [
                 requiredPermission: "shifts.create",
             },
             {
-                name: "Shift Roster",
-                href: "/hr/shifts/roster",
+                name: "Shift Management",
+                href: "/hr/shifts/management",
                 icon: CalendarClock,
-                requiredPermission: "shifts.manage_assignments",
-            },
-            {
-                name: "Shift Assignments",
-                href: "/hr/shifts/assignments",
-                icon: UserCog,
-                requiredPermission: "shifts.manage_assignments",
-            },
-            // Shift Swaps — employees can request swaps (shifts.view)
-            {
-                name: "Shift Swaps",
-                href: "/hr/shifts/swaps",
-                icon: ArrowLeftRight,
                 requiredPermission: "shifts.view",
             },
-            // Payroll admin — managers/admins only
+        ],
+    },
+    {
+        label: "Payroll",
+        items: [
             {
                 name: "Payroll",
                 href: "/hr/payroll",
@@ -215,27 +183,25 @@ export const navigationConfig: NavGroup[] = [
                 requiredPermission: "payroll.view_all",
             },
             {
-                name: "Payroll Periods",
+                name: "Pay Periods",
                 href: "/hr/payroll/periods",
                 icon: CalendarDays,
                 requiredPermission: "payroll.run",
             },
-            // My Payslips — all employees
             {
                 name: "My Payslips",
                 href: "/hr/payroll/my-payslips",
                 icon: Receipt,
                 requiredPermission: "payroll.view_own",
             },
-            // Salary/Pay management — admin only
             {
-                name: "Salary Structures",
+                name: "Structures",
                 href: "/hr/payroll/structures",
                 icon: Layers,
                 requiredPermission: "payroll.manage_structures",
             },
             {
-                name: "Pay Components",
+                name: "Components",
                 href: "/hr/payroll/components",
                 icon: Puzzle,
                 requiredPermission: "payroll.manage_components",
@@ -243,23 +209,14 @@ export const navigationConfig: NavGroup[] = [
         ],
     },
     {
-        label: "Team",
+        label: "Settings",
         items: [
-            // Team page — managers/admins only (team.view_members has_scope=false; employees have no such permission at all)
-            {
-                name: "Team",
-                href: "/team",
-                icon: Users,
-                requiredPermission: "team.view_members",
-            },
-            // Roles — admin only
             {
                 name: "Roles",
                 href: "/settings/roles",
                 icon: Shield,
                 requiredPermission: "roles.view",
             },
-            // Settings — admin only
             {
                 name: "Settings",
                 href: "/settings",

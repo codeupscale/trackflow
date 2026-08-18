@@ -6,8 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { PageHeader } from '@/components/common/PageHeader';
-import { EmptyState } from '@/components/common/EmptyState';
 import { ShiftRosterCalendar } from '@/components/hr/ShiftRosterCalendar';
 import { useShiftRoster } from '@/hooks/hr/use-shift-roster';
 
@@ -54,35 +52,46 @@ export default function ShiftRosterPage() {
     roster && Object.values(roster).some((entries) => entries.length > 0);
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Shift Roster"
-        description="Weekly overview of shift assignments"
-      />
+    <div className="flex flex-col gap-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Shift Roster</h1>
+          <p className="text-xs text-muted-foreground">
+            Weekly overview of shift assignments
+          </p>
+        </div>
+      </div>
 
       {/* Week Navigation */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-1.5">
           <Button
             variant="outline"
             size="icon"
+            className="h-8 w-8"
             onClick={goToPreviousWeek}
             aria-label="Previous week"
           >
-            <ChevronLeft />
+            <ChevronLeft className="h-3.5 w-3.5" />
           </Button>
-          <span className="text-sm font-medium text-foreground min-w-[200px] text-center">
+          <span className="text-xs font-medium text-foreground min-w-[180px] text-center tabular-nums">
             {weekLabel}
           </span>
           <Button
             variant="outline"
             size="icon"
+            className="h-8 w-8"
             onClick={goToNextWeek}
             aria-label="Next week"
           >
-            <ChevronRight />
+            <ChevronRight className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="sm" onClick={goToCurrentWeek}>
+          <Button
+            variant="ghost"
+            className="h-8 text-xs"
+            onClick={goToCurrentWeek}
+          >
             Today
           </Button>
         </div>
@@ -96,7 +105,7 @@ export default function ShiftRosterPage() {
                 setWeekStart(getMonday(new Date(e.target.value + 'T00:00:00')));
               }
             }}
-            className="w-fit"
+            className="h-8 text-xs w-fit"
             aria-label="Jump to week"
           />
         </div>
@@ -105,13 +114,13 @@ export default function ShiftRosterPage() {
       {/* Roster */}
       {isError ? (
         <Card className="border-destructive/50">
-          <CardContent className="py-16">
-            <div className="flex flex-col items-center text-center gap-3">
-              <CalendarRange className="size-10 text-destructive/60" />
-              <p className="text-muted-foreground font-medium">
+          <CardContent className="py-12">
+            <div className="flex flex-col items-center text-center gap-2">
+              <CalendarRange className="h-8 w-8 text-destructive/60" />
+              <p className="text-sm text-muted-foreground font-medium">
                 Failed to load roster
               </p>
-              <p className="text-sm text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Please try again later.
               </p>
             </div>
@@ -119,20 +128,36 @@ export default function ShiftRosterPage() {
         </Card>
       ) : isLoading ? (
         <Card>
-          <CardContent className="p-4">
-            <div className="grid grid-cols-7 gap-2">
+          <CardContent className="p-0">
+            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/50">
               {Array.from({ length: 7 }).map((_, i) => (
-                <Skeleton key={i} className="h-32" />
+                <Skeleton key={i} className="h-3 w-12 flex-1" />
+              ))}
+            </div>
+            <div className="grid grid-cols-7 gap-2 p-4">
+              {Array.from({ length: 7 }).map((_, i) => (
+                <div key={i} className="flex flex-col gap-1.5">
+                  <Skeleton className="h-16 rounded-md" />
+                  <Skeleton className="h-12 rounded-md" />
+                </div>
               ))}
             </div>
           </CardContent>
         </Card>
       ) : !hasData ? (
-        <EmptyState
-          icon={CalendarRange}
-          title="No shifts scheduled"
-          description="No shift assignments found for this week. Assign users to shifts to see them here."
-        />
+        <Card>
+          <CardContent className="py-12">
+            <div className="flex flex-col items-center text-center gap-2">
+              <CalendarRange className="h-8 w-8 text-muted-foreground/40" />
+              <p className="text-sm text-muted-foreground font-medium">
+                No shifts scheduled
+              </p>
+              <p className="text-xs text-muted-foreground">
+                No shift assignments found for this week. Assign users to shifts to see them here.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
       ) : (
         <Card>
           <CardContent className="p-4">

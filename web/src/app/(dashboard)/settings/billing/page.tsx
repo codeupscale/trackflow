@@ -9,6 +9,9 @@ import {
   Users,
   Zap,
   AlertTriangle,
+  Receipt,
+  Crown,
+  Download,
 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
@@ -17,20 +20,7 @@ import { Button } from '@/components/ui/button';
 import {
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import {
   Dialog,
   DialogContent,
@@ -89,8 +79,8 @@ export default function BillingPage() {
   if (!hasPermission('settings.manage_billing')) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-2">
-        <CreditCard className="size-10 text-muted-foreground" />
-        <p className="text-muted-foreground">You do not have access to billing settings.</p>
+        <CreditCard className="h-8 w-8 text-muted-foreground" />
+        <p className="text-xs text-muted-foreground">You do not have access to billing settings.</p>
       </div>
     );
   }
@@ -126,62 +116,137 @@ export default function BillingPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-4">
+    <div className="flex flex-col gap-4">
+      {/* Header */}
+      <div className="flex items-center gap-3">
         <Link href="/settings">
-          <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
-            <ArrowLeft className="mr-2 h-4 w-4" />
+          <Button variant="ghost" className="h-8 text-xs text-muted-foreground hover:text-foreground">
+            <ArrowLeft className="h-3.5 w-3.5 mr-1" />
             Settings
           </Button>
         </Link>
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Billing</h1>
-          <p className="text-muted-foreground text-sm mt-1">Manage your subscription and invoices</p>
+          <h1 className="text-lg font-semibold tracking-tight text-foreground">Billing</h1>
+          <p className="text-xs text-muted-foreground">Manage your subscription and invoices</p>
         </div>
       </div>
 
-      {/* Current Plan */}
-      <Card className="border-border bg-card">
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2 text-foreground">
-                <Zap className="h-5 w-5 text-amber-400" />
-                Current Plan
-              </CardTitle>
-              <CardDescription className="text-muted-foreground">Your active subscription</CardDescription>
+      {/* Stats Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Card>
+          <CardContent className="p-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10">
+                <Crown className="h-4 w-4 text-blue-500" />
+              </div>
+              <div>
+                <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Current Plan</p>
+                <p className="text-base font-bold tabular-nums leading-tight capitalize">{currentPlan}</p>
+              </div>
             </div>
-            <Badge
-              className={
-                isTrial
-                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                  : 'bg-green-500/10 text-green-400 border-green-500/20'
-              }
-            >
-              {isTrial ? 'Trial' : 'Active'}
-            </Badge>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/10">
+                <Users className="h-4 w-4 text-emerald-500" />
+              </div>
+              <div>
+                <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Seats Used</p>
+                <p className="text-base font-bold tabular-nums leading-tight">
+                  {usage?.seats_used ?? '-'}<span className="text-xs font-normal text-muted-foreground">/{usage?.seats_limit ?? '-'}</span>
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10">
+                <Zap className="h-4 w-4 text-amber-500" />
+              </div>
+              <div>
+                <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Status</p>
+                <p className="text-base font-bold leading-tight">
+                  {isTrial ? (
+                    <span className="inline-flex items-center gap-1.5 text-[0.75rem] font-medium text-amber-600 dark:text-amber-400">
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
+                      Trial
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 text-[0.75rem] font-medium text-emerald-600 dark:text-emerald-400">
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                      Active
+                    </span>
+                  )}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/10">
+                <Receipt className="h-4 w-4 text-violet-500" />
+              </div>
+              <div>
+                <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Invoices</p>
+                <p className="text-base font-bold tabular-nums leading-tight">{invoices?.length ?? 0}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Current Plan Card */}
+      <Card>
+        <div className="px-4 pt-3 pb-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-500/10">
+                <Zap className="h-3.5 w-3.5 text-amber-500" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold">Current Plan</h3>
+                <p className="text-[0.65rem] text-muted-foreground">Your active subscription details</p>
+              </div>
+            </div>
+            {isTrial ? (
+              <span className="inline-flex items-center gap-1.5 text-[0.7rem] font-medium text-amber-600 dark:text-amber-400">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
+                Trial
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 text-[0.7rem] font-medium text-emerald-600 dark:text-emerald-400">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                Active
+              </span>
+            )}
           </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        </div>
+        <CardContent className="pt-0">
           {usageLoading ? (
-            <div className="space-y-3">
-              <div className="h-6 w-48 bg-muted animate-pulse rounded" />
-              <div className="h-3 w-full bg-muted animate-pulse rounded" />
+            <div className="space-y-2">
+              <div className="h-5 w-36 bg-muted animate-pulse rounded" />
+              <div className="h-2 w-full bg-muted animate-pulse rounded" />
             </div>
           ) : (
-            <>
-              <div className="text-xl font-bold text-foreground capitalize">{currentPlan}</div>
+            <div className="space-y-3">
+              <p className="text-sm font-bold text-foreground capitalize">{currentPlan}</p>
 
               {/* Seat usage meter */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="flex items-center gap-2 text-muted-foreground">
-                    <Users className="h-4 w-4" />
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[0.7rem]">
+                  <span className="flex items-center gap-1.5 text-muted-foreground">
+                    <Users className="h-3 w-3" />
                     Seats: <span className="text-foreground font-medium">{usage?.seats_used}</span> / {usage?.seats_limit}
                   </span>
-                  <span className="text-muted-foreground">{seatPercentage}% used</span>
+                  <span className="text-muted-foreground tabular-nums">{seatPercentage}% used</span>
                 </div>
-                <div className="h-2 bg-muted rounded-full">
+                <div className="h-1.5 bg-muted rounded-full">
                   <div
                     className={`h-full rounded-full transition-all ${
                       seatPercentage >= 90
@@ -196,66 +261,69 @@ export default function BillingPage() {
               </div>
 
               {usage?.trial_ends_at && (
-                <p className="text-sm text-amber-400">
+                <p className="text-[0.7rem] text-amber-600 dark:text-amber-400">
                   Trial ends: {new Date(usage.trial_ends_at).toLocaleDateString()}
                 </p>
               )}
               {usage?.subscription_renews_at && !isTrial && (
-                <p className="text-sm text-muted-foreground">
+                <p className="text-[0.7rem] text-muted-foreground">
                   Renews: {new Date(usage.subscription_renews_at).toLocaleDateString()}
                 </p>
               )}
-            </>
+            </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Plans */}
+      {/* Available Plans */}
       <div>
-        <h2 className="text-lg font-semibold text-foreground mb-4">Available Plans</h2>
-        <div className="grid gap-4 md:grid-cols-3">
+        <h2 className="text-sm font-semibold text-foreground mb-3">Available Plans</h2>
+        <div className="grid gap-3 md:grid-cols-3">
           {plans.map((plan) => {
             const isCurrent = plan.name.toLowerCase() === currentPlan;
             return (
               <Card
                 key={plan.name}
-                className={`border-border bg-card transition-all ${
+                className={`transition-all ${
                   isCurrent ? 'border-blue-500/50 ring-1 ring-blue-500/20' : ''
                 }`}
               >
-                <CardHeader>
-                  <CardTitle className="text-lg text-foreground">{plan.name}</CardTitle>
-                  <CardDescription className="text-2xl font-bold text-foreground">
-                    {plan.price}
-                  </CardDescription>
-                  <p className="text-xs text-muted-foreground">{plan.seats}</p>
-                </CardHeader>
-                <CardContent>
-                  <ul className="space-y-2">
+                <CardContent className="p-4">
+                  <div className="mb-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <h3 className="text-xs font-semibold text-foreground">{plan.name}</h3>
+                      {isCurrent && (
+                        <span className="inline-flex items-center gap-1 text-[0.6rem] font-medium text-blue-600 dark:text-blue-400">
+                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500" />
+                          Current
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-lg font-bold text-foreground">{plan.price}</p>
+                    <p className="text-[0.65rem] text-muted-foreground">{plan.seats}</p>
+                  </div>
+                  <ul className="space-y-1.5 mb-4">
                     {plan.features.map((feature) => (
-                      <li key={feature} className="flex items-center gap-2 text-sm text-foreground">
-                        <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
+                      <li key={feature} className="flex items-center gap-1.5 text-[0.7rem] text-foreground">
+                        <CheckCircle className="h-3 w-3 text-emerald-500 shrink-0" />
                         {feature}
                       </li>
                     ))}
                   </ul>
-                  <Separator className="my-4 bg-muted" />
-                  {isCurrent ? (
-                    <Button variant="outline" className="w-full border-border text-muted-foreground" disabled>
-                      Current Plan
-                    </Button>
-                  ) : (
-                    <Button
-                      className={`w-full ${
-                        plan.name === 'Pro'
-                          ? 'bg-blue-600 hover:bg-blue-700 text-foreground'
-                          : 'border-border text-foreground'
-                      }`}
-                      variant={plan.name === 'Pro' ? 'default' : 'outline'}
-                    >
-                      {plan.name === 'Trial' ? 'Downgrade' : 'Upgrade'}
-                    </Button>
-                  )}
+                  <div className="border-t border-border/40 pt-3">
+                    {isCurrent ? (
+                      <Button variant="outline" className="w-full h-8 text-xs" disabled>
+                        Current Plan
+                      </Button>
+                    ) : (
+                      <Button
+                        className="w-full h-8 text-xs"
+                        variant={plan.name === 'Pro' ? 'default' : 'outline'}
+                      >
+                        {plan.name === 'Trial' ? 'Downgrade' : 'Upgrade'}
+                      </Button>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
             );
@@ -263,94 +331,114 @@ export default function BillingPage() {
         </div>
       </div>
 
-      {/* Invoices */}
-      <Card className="border-border bg-card">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-foreground">
-            <CreditCard className="h-5 w-5" />
-            Invoice History
-          </CardTitle>
-          <CardDescription className="text-muted-foreground">Your billing history</CardDescription>
-        </CardHeader>
-        <CardContent>
+      {/* Invoice History */}
+      <Card>
+        <div className="px-4 pt-3 pb-2">
+          <div className="flex items-center gap-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-500/10">
+              <Receipt className="h-3.5 w-3.5 text-blue-500" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold">Invoice History</h3>
+              <p className="text-[0.65rem] text-muted-foreground">Your billing history and receipts</p>
+            </div>
+          </div>
+        </div>
+        <CardContent className="p-0">
           {!invoices || invoices.length === 0 ? (
-            <div className="text-center py-8">
-              <CreditCard className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-              <p className="text-muted-foreground">No invoices yet</p>
+            <div className="flex flex-col items-center justify-center py-10 gap-2">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
+                <CreditCard className="h-5 w-5 text-muted-foreground" />
+              </div>
+              <p className="text-xs text-muted-foreground">No invoices yet</p>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="border-border hover:bg-transparent">
-                  <TableHead className="text-muted-foreground">Date</TableHead>
-                  <TableHead className="text-muted-foreground">Amount</TableHead>
-                  <TableHead className="text-muted-foreground">Status</TableHead>
-                  <TableHead className="text-muted-foreground text-right">Download</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {invoices.map((inv) => (
-                  <TableRow key={inv.id} className="border-border">
-                    <TableCell className="text-sm text-foreground">
-                      {new Date(inv.date).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell className="text-sm font-medium text-foreground">
-                      ${(inv.amount / 100).toFixed(2)}
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        className={
-                          inv.status === 'paid'
-                            ? 'bg-green-500/10 text-green-400 border-green-500/20'
-                            : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                        }
-                      >
-                        {inv.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {inv.pdf_url && (
-                        <a
-                          href={inv.pdf_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sm text-blue-400 hover:underline"
-                        >
-                          Download
-                        </a>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-border/50">
+                    <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 text-left">Date</th>
+                    <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 text-left">Amount</th>
+                    <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 text-left">Status</th>
+                    <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 text-right">Download</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invoices.map((inv) => (
+                    <tr key={inv.id} className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-2.5 text-[0.75rem] text-foreground">
+                        {new Date(inv.date).toLocaleDateString()}
+                      </td>
+                      <td className="px-4 py-2.5 text-[0.75rem] font-medium text-foreground tabular-nums">
+                        ${(inv.amount / 100).toFixed(2)}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        {inv.status === 'paid' ? (
+                          <span className="inline-flex items-center gap-1.5 text-[0.7rem] font-medium text-emerald-600 dark:text-emerald-400">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                            Paid
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 text-[0.7rem] font-medium text-amber-600 dark:text-amber-400">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
+                            {inv.status}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        {inv.pdf_url && (
+                          <a
+                            href={inv.pdf_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[0.7rem] text-blue-600 dark:text-blue-400 hover:underline"
+                          >
+                            <Download className="h-3 w-3" />
+                            PDF
+                          </a>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Cancel Subscription */}
+      {/* Cancel Subscription (Danger Zone) */}
       {!isTrial && (
-        <Card className="border-red-500/20 bg-card">
-          <CardHeader>
-            <CardTitle className="text-red-400 flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5" />
-              Danger Zone
-            </CardTitle>
-            <CardDescription className="text-muted-foreground">
-              Cancel your subscription. This will take effect at the end of your current billing period.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+        <Card className="border-red-500/20">
+          <div className="px-4 pt-3 pb-2">
+            <div className="flex items-center gap-2">
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-destructive/10">
+                <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-destructive">Danger Zone</h3>
+                <p className="text-[0.65rem] text-muted-foreground">
+                  Cancel your subscription. Takes effect at the end of your billing period.
+                </p>
+              </div>
+            </div>
+          </div>
+          <CardContent className="pt-0">
             <Dialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
               <DialogTrigger>
-                <Button variant="destructive">
+                <Button variant="destructive" className="h-8 text-xs">
                   Cancel Subscription
                 </Button>
               </DialogTrigger>
-              <DialogContent className="bg-card border-border">
+              <DialogContent className="sm:max-w-md">
                 <DialogHeader>
-                  <DialogTitle className="text-foreground">Cancel Subscription</DialogTitle>
-                  <DialogDescription className="text-muted-foreground">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-destructive/10">
+                      <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
+                    </div>
+                    <DialogTitle className="text-base">Cancel Subscription</DialogTitle>
+                  </div>
+                  <DialogDescription className="text-xs">
                     Are you sure you want to cancel your subscription? Your team will lose access
                     to premium features at the end of the current billing period.
                   </DialogDescription>
@@ -358,13 +446,14 @@ export default function BillingPage() {
                 <DialogFooter>
                   <Button
                     variant="outline"
+                    className="h-8 text-xs"
                     onClick={() => setCancelDialogOpen(false)}
-                    className="border-border text-foreground"
                   >
                     Keep Subscription
                   </Button>
                   <Button
                     variant="destructive"
+                    className="h-8 text-xs"
                     onClick={handleCancelSubscription}
                   >
                     Yes, Cancel

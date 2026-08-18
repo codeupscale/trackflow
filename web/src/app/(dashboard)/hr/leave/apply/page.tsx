@@ -12,10 +12,10 @@ import {
   Upload,
   Calendar,
 } from 'lucide-react';
-import { differenceInBusinessDays, parseISO, format } from 'date-fns';
+import { differenceInBusinessDays, parseISO } from 'date-fns';
 
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -23,7 +23,6 @@ import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { DatePicker } from '@/components/ui/date-picker';
-import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import { formatDate } from '@/lib/utils';
 
@@ -31,7 +30,7 @@ import { LeaveBalanceCard } from '@/components/hr/LeaveBalanceCard';
 import { useLeaveTypes } from '@/hooks/hr/use-leave-types';
 import { useLeaveBalance } from '@/hooks/hr/use-leave-balance';
 import { useApplyLeave } from '@/hooks/hr/use-apply-leave';
-import { leaveRequestSchema, type LeaveRequestFormData, type LeaveType } from '@/lib/validations/leave';
+import { leaveRequestSchema, type LeaveRequestFormData } from '@/lib/validations/leave';
 
 const STEPS = [
   { number: 1, label: 'Leave Type' },
@@ -117,20 +116,21 @@ export default function ApplyLeavePage() {
   });
 
   return (
-    <div className="flex flex-col gap-6 max-w-2xl mx-auto">
+    <div className="flex flex-col gap-4 max-w-2xl mx-auto">
       {/* Header */}
       <div className="flex items-center gap-3">
         <Button
           variant="ghost"
-          size="icon"
+          size="sm"
+          className="h-8 w-8 p-0"
           onClick={() => router.push('/hr/leave')}
           aria-label="Back to My Leave"
         >
-          <ArrowLeft />
+          <ArrowLeft className="h-4 w-4" />
         </Button>
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Apply for Leave</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
+          <h1 className="text-lg font-semibold tracking-tight">Apply for Leave</h1>
+          <p className="text-xs text-muted-foreground">
             Complete the steps below to submit a leave request
           </p>
         </div>
@@ -146,7 +146,7 @@ export default function ApplyLeavePage() {
                 if (step.number < currentStep) setCurrentStep(step.number);
               }}
               className={cn(
-                'flex items-center gap-2 text-xs font-medium transition-colors',
+                'flex items-center gap-1.5 text-xs font-medium transition-colors',
                 currentStep === step.number
                   ? 'text-primary'
                   : currentStep > step.number
@@ -158,27 +158,27 @@ export default function ApplyLeavePage() {
             >
               <span
                 className={cn(
-                  'flex size-7 items-center justify-center rounded-full text-xs font-bold transition-colors',
+                  'flex size-6 items-center justify-center rounded-full text-[0.6rem] font-bold transition-colors',
                   currentStep === step.number
                     ? 'bg-primary text-primary-foreground'
                     : currentStep > step.number
-                      ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
                       : 'bg-muted text-muted-foreground'
                 )}
               >
                 {currentStep > step.number ? (
-                  <Check className="size-3.5" />
+                  <Check className="size-3" />
                 ) : (
                   step.number
                 )}
               </span>
-              <span className="hidden sm:inline">{step.label}</span>
+              <span className="hidden sm:inline text-[0.65rem]">{step.label}</span>
             </button>
             {idx < STEPS.length - 1 && (
               <div
                 className={cn(
                   'h-px flex-1',
-                  currentStep > step.number ? 'bg-green-500' : 'bg-border'
+                  currentStep > step.number ? 'bg-emerald-500' : 'bg-border'
                 )}
               />
             )}
@@ -191,33 +191,32 @@ export default function ApplyLeavePage() {
         {/* Step 1: Select Leave Type */}
         {currentStep === 1 && (
           <Card>
-            <CardHeader>
-              <CardTitle>Select Leave Type</CardTitle>
-              <CardDescription>
-                Choose the type of leave you would like to apply for
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {typesError ? (
-                <p className="text-center text-muted-foreground py-4">
-                  Failed to load leave types
+            <CardContent className="p-4">
+              <div className="mb-3">
+                <p className="text-sm font-medium">Select Leave Type</p>
+                <p className="text-xs text-muted-foreground">
+                  Choose the type of leave you would like to apply for
                 </p>
+              </div>
+              {typesError ? (
+                <div className="flex flex-col items-center gap-2 py-6">
+                  <Calendar className="h-8 w-8 text-destructive/60" />
+                  <p className="text-sm text-muted-foreground">Failed to load leave types</p>
+                </div>
               ) : typesLoading || balancesLoading ? (
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-3 sm:grid-cols-2">
                   {Array.from({ length: 4 }).map((_, i) => (
                     <Skeleton key={i} className="h-24" />
                   ))}
                 </div>
               ) : !leaveTypes || leaveTypes.length === 0 ? (
-                <div className="text-center py-6">
-                  <Calendar className="mx-auto mb-2 text-muted-foreground" />
-                  <p className="text-muted-foreground">No leave types available</p>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Please contact your administrator
-                  </p>
+                <div className="flex flex-col items-center gap-2 py-6">
+                  <Calendar className="h-8 w-8 text-muted-foreground/40" />
+                  <p className="text-sm text-muted-foreground font-medium">No leave types available</p>
+                  <p className="text-xs text-muted-foreground">Please contact your administrator</p>
                 </div>
               ) : (
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-3 sm:grid-cols-2">
                   {leaveTypes.map((type) => {
                     const balance = balances?.find((b) => b.leave_type_id === type.id);
                     if (!balance) {
@@ -239,9 +238,9 @@ export default function ApplyLeavePage() {
                           }}
                           aria-pressed={watchedValues.leave_type_id === type.id}
                         >
-                          <CardContent className="p-4">
-                            <p className="text-sm font-medium">{type.name}</p>
-                            <p className="text-xs text-muted-foreground mt-1">
+                          <CardContent className="p-3">
+                            <p className="text-xs font-medium">{type.name}</p>
+                            <p className="text-[0.65rem] text-muted-foreground mt-0.5">
                               {type.days_per_year} days/year
                             </p>
                           </CardContent>
@@ -260,7 +259,7 @@ export default function ApplyLeavePage() {
                 </div>
               )}
               {errors.leave_type_id && (
-                <p className="mt-2 text-xs text-destructive">{errors.leave_type_id.message}</p>
+                <p className="mt-2 text-[0.65rem] text-destructive">{errors.leave_type_id.message}</p>
               )}
             </CardContent>
           </Card>
@@ -269,17 +268,17 @@ export default function ApplyLeavePage() {
         {/* Step 2: Date Selection */}
         {currentStep === 2 && (
           <Card>
-            <CardHeader>
-              <CardTitle>Select Dates</CardTitle>
-              <CardDescription>
-                Choose the start and end dates for your {selectedType?.name ?? 'leave'}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-col gap-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="start_date">Start Date</Label>
+            <CardContent className="p-4">
+              <div className="mb-3">
+                <p className="text-sm font-medium">Select Dates</p>
+                <p className="text-xs text-muted-foreground">
+                  Choose the start and end dates for your {selectedType?.name ?? 'leave'}
+                </p>
+              </div>
+              <div className="flex flex-col gap-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="start_date" className="text-xs">Start Date</Label>
                     <Controller
                       control={form.control}
                       name="start_date"
@@ -293,11 +292,11 @@ export default function ApplyLeavePage() {
                       )}
                     />
                     {errors.start_date && (
-                      <p className="text-xs text-destructive">{errors.start_date.message}</p>
+                      <p className="text-[0.65rem] text-destructive">{errors.start_date.message}</p>
                     )}
                   </div>
-                  <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="end_date">End Date</Label>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="end_date" className="text-xs">End Date</Label>
                     <Controller
                       control={form.control}
                       name="end_date"
@@ -311,15 +310,15 @@ export default function ApplyLeavePage() {
                       )}
                     />
                     {errors.end_date && (
-                      <p className="text-xs text-destructive">{errors.end_date.message}</p>
+                      <p className="text-[0.65rem] text-destructive">{errors.end_date.message}</p>
                     )}
                   </div>
                 </div>
 
                 <div className="flex items-center justify-between rounded-lg border border-border p-3">
                   <div>
-                    <Label htmlFor="half_day" className="text-sm">Half Day</Label>
-                    <p className="text-xs text-muted-foreground">Apply for half a day only</p>
+                    <Label htmlFor="half_day" className="text-xs">Half Day</Label>
+                    <p className="text-[0.65rem] text-muted-foreground">Apply for half a day only</p>
                   </div>
                   <Controller
                     control={form.control}
@@ -335,17 +334,17 @@ export default function ApplyLeavePage() {
                 </div>
 
                 {calculatedDays > 0 && (
-                  <div className="rounded-lg bg-muted p-3">
+                  <div className="rounded-lg bg-muted/50 border border-border/50 p-3">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm text-muted-foreground">Working days:</span>
-                      <span className="text-lg font-bold text-foreground tabular-nums">
+                      <span className="text-xs text-muted-foreground">Working days:</span>
+                      <span className="text-sm font-bold text-foreground tabular-nums">
                         {calculatedDays} {calculatedDays === 1 ? 'day' : 'days'}
                       </span>
                     </div>
                     {selectedBalance && (
                       <div className="flex items-center justify-between mt-1">
-                        <span className="text-xs text-muted-foreground">Remaining after this request:</span>
-                        <span className="text-sm font-medium tabular-nums">
+                        <span className="text-[0.65rem] text-muted-foreground">Remaining after this request:</span>
+                        <span className="text-xs font-medium tabular-nums">
                           {selectedBalance.total_days - selectedBalance.used_days - selectedBalance.pending_days - calculatedDays} days
                         </span>
                       </div>
@@ -360,32 +359,36 @@ export default function ApplyLeavePage() {
         {/* Step 3: Reason & Document */}
         {currentStep === 3 && (
           <Card>
-            <CardHeader>
-              <CardTitle>Provide Details</CardTitle>
-              <CardDescription>
-                Enter a reason for your leave request and upload any supporting documents
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-col gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="reason">Reason</Label>
+            <CardContent className="p-4">
+              <div className="mb-3">
+                <p className="text-sm font-medium">Provide Details</p>
+                <p className="text-xs text-muted-foreground">
+                  Enter a reason and upload any supporting documents
+                </p>
+              </div>
+              <div className="flex flex-col gap-3">
+                <div className="grid gap-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="reason" className="text-xs">Reason</Label>
+                    <span className="text-[0.6rem] text-muted-foreground tabular-nums">
+                      {watchedValues.reason?.length ?? 0}/1000
+                    </span>
+                  </div>
                   <Textarea
                     id="reason"
+                    rows={3}
                     placeholder="Describe the reason for your leave..."
+                    className="text-sm resize-none"
                     {...form.register('reason')}
                     aria-invalid={!!errors.reason}
                   />
                   {errors.reason && (
-                    <p className="text-xs text-destructive">{errors.reason.message}</p>
+                    <p className="text-[0.65rem] text-destructive">{errors.reason.message}</p>
                   )}
-                  <p className="text-xs text-muted-foreground">
-                    {watchedValues.reason?.length ?? 0}/1000 characters
-                  </p>
                 </div>
 
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="document">Supporting Document (optional)</Label>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="document" className="text-xs">Supporting Document (optional)</Label>
                   <Controller
                     control={form.control}
                     name="document"
@@ -399,18 +402,18 @@ export default function ApplyLeavePage() {
                             const file = e.target.files?.[0] ?? null;
                             field.onChange(file);
                           }}
-                          className="flex-1"
+                          className="flex-1 h-8 text-sm"
                         />
                         {field.value && (
-                          <Badge variant="secondary" className="shrink-0">
-                            <Upload data-icon="inline-start" className="size-3" />
+                          <Badge variant="secondary" className="shrink-0 text-[0.6rem]">
+                            <Upload className="size-3 mr-1" />
                             {(field.value as File).name}
                           </Badge>
                         )}
                       </div>
                     )}
                   />
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-[0.6rem] text-muted-foreground">
                     PDF, JPG, PNG, DOC, or DOCX. Max 5MB.
                   </p>
                 </div>
@@ -422,88 +425,89 @@ export default function ApplyLeavePage() {
         {/* Step 4: Review */}
         {currentStep === 4 && (
           <Card>
-            <CardHeader>
-              <CardTitle>Review Your Request</CardTitle>
-              <CardDescription>
-                Please verify all details before submitting
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
+            <CardContent className="p-4">
+              <div className="mb-3">
+                <p className="text-sm font-medium">Review Your Request</p>
+                <p className="text-xs text-muted-foreground">
+                  Please verify all details before submitting
+                </p>
+              </div>
               <div className="flex flex-col gap-3">
-                <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3">
                   <div>
-                    <p className="text-xs text-muted-foreground">Leave Type</p>
-                    <p className="font-medium text-foreground">{selectedType?.name ?? '—'}</p>
+                    <p className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground">Leave Type</p>
+                    <p className="text-xs font-medium text-foreground mt-0.5">{selectedType?.name ?? '—'}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Type</p>
-                    <Badge variant={selectedType?.type === 'paid' ? 'default' : 'secondary'}>
+                    <p className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground">Type</p>
+                    <Badge variant={selectedType?.type === 'paid' ? 'default' : 'secondary'} className="mt-0.5 text-[0.6rem]">
                       {selectedType?.type ?? '—'}
                     </Badge>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Start Date</p>
-                    <p className="font-medium text-foreground">{formatDate(watchedValues.start_date)}</p>
+                    <p className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground">Start Date</p>
+                    <p className="text-xs font-medium text-foreground mt-0.5">{formatDate(watchedValues.start_date)}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">End Date</p>
-                    <p className="font-medium text-foreground">{formatDate(watchedValues.end_date)}</p>
+                    <p className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground">End Date</p>
+                    <p className="text-xs font-medium text-foreground mt-0.5">{formatDate(watchedValues.end_date)}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground">Working Days</p>
-                    <p className="font-medium text-foreground tabular-nums">
+                    <p className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground">Working Days</p>
+                    <p className="text-xs font-medium text-foreground tabular-nums mt-0.5">
                       {calculatedDays} {calculatedDays === 1 ? 'day' : 'days'}
                       {watchedValues.half_day && ' (half day)'}
                     </p>
                   </div>
                   {watchedValues.document && (
                     <div>
-                      <p className="text-xs text-muted-foreground">Document</p>
-                      <p className="font-medium text-foreground truncate">
+                      <p className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground">Document</p>
+                      <p className="text-xs font-medium text-foreground truncate mt-0.5">
                         {(watchedValues.document as File).name}
                       </p>
                     </div>
                   )}
                 </div>
-                <Separator />
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Reason</p>
-                  <p className="text-sm text-foreground">{watchedValues.reason}</p>
+                <div className="border-t border-border/50 pt-3">
+                  <p className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground mb-1">Reason</p>
+                  <p className="text-xs text-foreground">{watchedValues.reason}</p>
                 </div>
               </div>
             </CardContent>
           </Card>
         )}
 
-        {/* Navigation Buttons */}
-        <div className="flex items-center justify-between mt-6">
+        {/* Navigation */}
+        <div className="flex items-center justify-between mt-4">
           <Button
             type="button"
             variant="outline"
+            size="sm"
+            className="h-8 text-xs"
             onClick={handleBack}
             disabled={currentStep === 1}
           >
-            <ArrowLeft data-icon="inline-start" />
+            <ArrowLeft className="h-3.5 w-3.5 mr-1" />
             Back
           </Button>
-          <div className="flex items-center gap-2">
-            {currentStep < 4 ? (
-              <Button type="button" onClick={handleNext}>
-                Next
-                <ArrowRight data-icon="inline-end" />
-              </Button>
-            ) : (
-              <Button
-                type="submit"
-                disabled={applyMutation.isPending}
-              >
-                {applyMutation.isPending && (
-                  <Loader2 className="animate-spin" data-icon="inline-start" />
-                )}
-                Submit Request
-              </Button>
-            )}
-          </div>
+          {currentStep < 4 ? (
+            <Button type="button" size="sm" className="h-8 text-xs" onClick={handleNext}>
+              Next
+              <ArrowRight className="h-3.5 w-3.5 ml-1" />
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              size="sm"
+              className="h-8 text-xs"
+              disabled={applyMutation.isPending}
+            >
+              {applyMutation.isPending && (
+                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+              )}
+              Submit Request
+            </Button>
+          )}
         </div>
       </form>
     </div>

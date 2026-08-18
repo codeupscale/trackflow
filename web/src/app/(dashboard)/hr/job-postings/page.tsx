@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   Megaphone,
   Plus,
@@ -9,6 +9,15 @@ import {
   Trash2,
   Eye,
   EyeOff,
+  Search,
+  SlidersHorizontal,
+  X,
+  CheckCircle2,
+  FileText,
+  Briefcase,
+  MapPin,
+  Clock,
+  Building2,
 } from 'lucide-react';
 import { usePermissionStore } from '@/stores/permission-store';
 import {
@@ -26,7 +35,6 @@ import {
   formatPostingDate,
   type JobPosting,
 } from '@/lib/validations/job-posting';
-import { PageHeader } from '@/components/common/PageHeader';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { JobPostingFormDialog } from '@/components/hr/JobPostingFormDialog';
@@ -35,6 +43,7 @@ import { DepartmentSelect } from '@/components/hr/DepartmentSelect';
 
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent } from '@/components/ui/card';
 import {
@@ -69,11 +78,6 @@ import {
   PaginationPrevious,
 } from '@/components/ui/pagination';
 
-/**
- * Base UI's <SelectValue> renders the raw value unless given a formatter
- * function, so a sentinel like "all" would show up literally as "all".
- * These maps turn each stored value into its label.
- */
 const typeFilterLabels: Record<string, string> = {
   all: 'All Types',
   ...employmentTypeLabels,
@@ -85,17 +89,14 @@ const statusFilterLabels: Record<string, string> = {
   draft: 'Draft',
 };
 
-/** "09:00:00" -> "9:00 AM" */
 function to12Hour(value: string): string {
   const [rawHours, minutes] = value.split(':');
   const hours = Number(rawHours);
   const suffix = hours >= 12 ? 'PM' : 'AM';
-  // 0 -> 12 AM, 12 -> 12 PM, 13 -> 1 PM
   const hour12 = hours % 12 === 0 ? 12 : hours % 12;
   return `${hour12}:${minutes} ${suffix}`;
 }
 
-/** "09:00:00" + "18:00:00" -> "9:00 AM - 6:00 PM" */
 function formatWorkingHours(
   start: string | null,
   end: string | null
@@ -104,17 +105,11 @@ function formatWorkingHours(
   return `${to12Hour(start)} - ${to12Hour(end)}`;
 }
 
-/**
- * The server sends salary_display when the viewer holds
- * job_postings.view_salary; fall back to the local formatter otherwise so the
- * column never renders a bare number without its "From"/"Up to" qualifier.
- */
 function salaryCell(posting: JobPosting): string {
   if (!posting.send_salary_via_api) return 'Not published';
   const display =
     posting.salary_display ??
     formatSalaryDisplay(posting.min_salary, posting.max_salary);
-  // Same PKR treatment the careers page uses, so HR sees what candidates do.
   return withCurrency(display) ?? '--';
 }
 
@@ -127,15 +122,16 @@ export default function JobPostingsPage() {
   const showActions = canEdit || canDelete || canPublish;
 
   const [page, setPage] = useState(1);
-  const [departmentFilter, setDepartmentFilter] = useState<string | null>(
-    null
-  );
-  const [typeFilter, setTypeFilter] = useState<string>('all');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<JobPosting | null>(null);
   const [viewing, setViewing] = useState<JobPosting | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<JobPosting | null>(null);
+
+  const [search, setSearch] = useState('');
+  const [departmentFilter, setDepartmentFilter] = useState<string | null>(null);
+  const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [showFilters, setShowFilters] = useState(false);
 
   const { data, isLoading, isError } = useJobPostings({
     page,
@@ -148,20 +144,41 @@ export default function JobPostingsPage() {
   const deleteMutation = useDeleteJobPosting();
   const publishMutation = useSetJobPostingPublished();
 
-  const postings = data?.data ?? [];
+  const allPostings = data?.data ?? [];
   const meta = data?.meta;
   const totalPages = meta?.last_page ?? 1;
-  const hasFilters =
-    !!departmentFilter || typeFilter !== 'all' || statusFilter !== 'all';
 
-  /**
-   * `viewing` is the snapshot captured on row click. Publishing from inside the
-   * detail dialog refetches the list, so re-read the posting from that fresh
-   * data — otherwise the dialog would keep rendering the stale copy and its
-   * badge would still say "Draft" after a successful publish. Falls back to the
-   * snapshot so the dialog does not blank out if the posting leaves the current
-   * page (e.g. publishing while the Draft filter is active).
-   */
+  const postings = useMemo(() => {
+    if (!search) return allPostings;
+    const q = search.toLowerCase();
+    return allPostings.filter(
+      (p) =>
+        p.title.toLowerCase().includes(q) ||
+        (p.location && p.location.toLowerCase().includes(q))
+    );
+  }, [allPostings, search]);
+
+  const stats = useMemo(() => {
+    const total = meta?.total ?? allPostings.length;
+    const published = allPostings.filter((p) => p.is_published).length;
+    const draft = allPostings.filter((p) => !p.is_published).length;
+    const positions = new Set(allPostings.map((p) => p.position_id).filter(Boolean)).size;
+    return { total, published, draft, positions };
+  }, [allPostings, meta]);
+
+  const activeFilterCount =
+    (departmentFilter ? 1 : 0) +
+    (typeFilter !== 'all' ? 1 : 0) +
+    (statusFilter !== 'all' ? 1 : 0);
+
+  const clearFilters = () => {
+    setSearch('');
+    setDepartmentFilter(null);
+    setTypeFilter('all');
+    setStatusFilter('all');
+    setPage(1);
+  };
+
   const viewedPosting = viewing
     ? (postings.find((p) => p.id === viewing.id) ?? viewing)
     : null;
@@ -184,15 +201,12 @@ export default function JobPostingsPage() {
   };
 
   const togglePublished = (posting: JobPosting) => {
-    // The menu item is already disabled in this case; belt and braces for the
-    // keyboard path, where a stale row could still fire the handler.
     if (
       !posting.is_published &&
       isFuturePostingDate(posting.posting_date)
     ) {
       return;
     }
-
     publishMutation.mutate({
       id: posting.id,
       is_published: !posting.is_published,
@@ -200,33 +214,100 @@ export default function JobPostingsPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Job Postings"
-        description="Create job openings and publish them to the careers page"
-        action={
-          canManage ? (
-            <Button onClick={openCreate}>
-              <Plus data-icon="inline-start" />
-              Add Job Posting
-            </Button>
-          ) : undefined
-        }
-      />
+    <div className="flex flex-col gap-3">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Job Postings</h1>
+          <p className="text-xs text-muted-foreground">
+            Create job openings and publish them to the careers page
+          </p>
+        </div>
+        {canManage && (
+          <Button size="sm" className="h-8 text-xs" onClick={openCreate}>
+            <Plus className="h-3.5 w-3.5 mr-1" />
+            Add Job Posting
+          </Button>
+        )}
+      </div>
 
-      {/* Filter bar */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-        <div className="w-full sm:w-64">
-          <DepartmentSelect
-            value={departmentFilter}
-            onChange={(val) => {
-              setDepartmentFilter(val);
-              setPage(1);
-            }}
-            placeholder="All departments"
+      {/* Stats Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { label: 'Total', value: stats.total, icon: Megaphone, color: 'text-blue-500', bg: 'bg-blue-500/10' },
+          { label: 'Published', value: stats.published, icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
+          { label: 'Draft', value: stats.draft, icon: FileText, color: 'text-amber-500', bg: 'bg-amber-500/10' },
+          { label: 'Positions', value: stats.positions, icon: Briefcase, color: 'text-violet-500', bg: 'bg-violet-500/10' },
+        ].map((s) => (
+          <Card key={s.label} className="border-border">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-2.5">
+                <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${s.bg} shrink-0`}>
+                  <s.icon className={`h-4 w-4 ${s.color}`} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">{s.label}</p>
+                  <p className="text-base font-bold text-foreground tabular-nums leading-tight">{isLoading ? '--' : s.value}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Filter Bar */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1 max-w-xs">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            placeholder="Search job postings..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-8 pl-8 text-xs"
           />
         </div>
-        <div className="w-full sm:w-48">
+
+        <Button
+          variant={showFilters ? 'secondary' : 'outline'}
+          size="sm"
+          className="h-8 text-xs gap-1.5"
+          onClick={() => setShowFilters(!showFilters)}
+        >
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          Filters
+          {activeFilterCount > 0 && (
+            <Badge variant="secondary" className="h-4 px-1 text-[0.6rem] rounded-full ml-0.5">
+              {activeFilterCount}
+            </Badge>
+          )}
+        </Button>
+
+        {activeFilterCount > 0 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 text-xs gap-1 text-muted-foreground"
+            onClick={clearFilters}
+          >
+            <X className="h-3 w-3" />
+            Clear
+          </Button>
+        )}
+      </div>
+
+      {/* Collapsible Filters */}
+      {showFilters && (
+        <div className="flex items-center gap-3">
+          <div className="w-[180px]">
+            <DepartmentSelect
+              value={departmentFilter}
+              onChange={(val) => {
+                setDepartmentFilter(val);
+                setPage(1);
+              }}
+              placeholder="All departments"
+            />
+          </div>
           <Select
             value={typeFilter}
             onValueChange={(val) => {
@@ -234,7 +315,7 @@ export default function JobPostingsPage() {
               setPage(1);
             }}
           >
-            <SelectTrigger className="w-full" aria-label="Filter by employment type">
+            <SelectTrigger className="h-8 w-[140px] text-xs" aria-label="Filter by employment type">
               <SelectValue placeholder="All Types">
                 {(value: string | null) =>
                   typeFilterLabels[value ?? 'all'] ?? 'All Types'
@@ -252,8 +333,6 @@ export default function JobPostingsPage() {
               </SelectGroup>
             </SelectContent>
           </Select>
-        </div>
-        <div className="w-full sm:w-48">
           <Select
             value={statusFilter}
             onValueChange={(val) => {
@@ -261,7 +340,7 @@ export default function JobPostingsPage() {
               setPage(1);
             }}
           >
-            <SelectTrigger className="w-full" aria-label="Filter by publish status">
+            <SelectTrigger className="h-8 w-[140px] text-xs" aria-label="Filter by status">
               <SelectValue placeholder="All Statuses">
                 {(value: string | null) =>
                   statusFilterLabels[value ?? 'all'] ?? 'All Statuses'
@@ -277,11 +356,12 @@ export default function JobPostingsPage() {
             </SelectContent>
           </Select>
         </div>
-      </div>
+      )}
 
+      {/* Content */}
       {isError ? (
         <Card className="border-destructive/50">
-          <CardContent className="py-16">
+          <CardContent className="py-10">
             <div className="flex flex-col items-center text-center gap-3">
               <Megaphone className="size-10 text-destructive/60" />
               <p className="text-muted-foreground font-medium">
@@ -296,64 +376,75 @@ export default function JobPostingsPage() {
       ) : isLoading ? (
         <Card>
           <CardContent className="p-0">
-            <div className="flex flex-col gap-0">
-              <div className="flex items-center gap-4 px-4 py-3 border-b border-border">
+            <div className="flex flex-col">
+              <div className="flex items-center gap-4 px-4 py-2 border-b border-border/50">
                 {Array.from({ length: 7 }).map((_, i) => (
-                  <Skeleton key={i} className="h-4 w-20" />
+                  <Skeleton key={i} className="h-3 w-20" />
                 ))}
               </div>
               {Array.from({ length: 5 }).map((_, i) => (
                 <div
                   key={i}
-                  className="flex items-center gap-4 px-4 py-3 border-b border-border last:border-0"
+                  className="flex items-center gap-4 px-4 py-3 border-b border-border/50 last:border-0"
                 >
-                  <Skeleton className="h-4 w-40" />
-                  <Skeleton className="h-4 w-24" />
-                  <Skeleton className="h-5 w-20" />
-                  <Skeleton className="h-4 w-24" />
-                  <Skeleton className="h-4 w-24" />
-                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-3.5 w-36" />
+                  <Skeleton className="h-3.5 w-24" />
+                  <Skeleton className="h-5 w-16" />
+                  <Skeleton className="h-3.5 w-20" />
+                  <Skeleton className="h-3.5 w-24" />
+                  <Skeleton className="h-3.5 w-28" />
                   <Skeleton className="h-5 w-16" />
                 </div>
               ))}
             </div>
           </CardContent>
         </Card>
-      ) : postings.length === 0 ? (
+      ) : postings.length === 0 && !search && !departmentFilter && typeFilter === 'all' && statusFilter === 'all' ? (
         <EmptyState
           icon={Megaphone}
-          title="No job postings found"
-          description={
-            hasFilters
-              ? 'No job postings match the current filters. Try adjusting your selection.'
-              : 'Create your first job posting to advertise an opening on the careers page.'
-          }
+          title="No job postings yet"
+          description="Create your first job posting to advertise an opening on the careers page."
           action={
-            canManage && !hasFilters ? (
-              <Button onClick={openCreate}>
-                <Plus data-icon="inline-start" />
+            canManage ? (
+              <Button size="sm" onClick={openCreate}>
+                <Plus className="h-3.5 w-3.5 mr-1" />
                 Add Job Posting
               </Button>
             ) : undefined
           }
         />
+      ) : postings.length === 0 ? (
+        <Card>
+          <CardContent className="py-8">
+            <div className="flex flex-col items-center text-center gap-2">
+              <Search className="h-8 w-8 text-muted-foreground/40" />
+              <p className="text-sm text-muted-foreground font-medium">No results found</p>
+              <p className="text-xs text-muted-foreground">
+                Try adjusting your search or filters
+              </p>
+              <Button variant="ghost" size="sm" className="mt-1 text-xs" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       ) : (
         <>
           <Card>
             <CardContent className="p-0">
               <Table>
                 <TableHeader>
-                  <TableRow>
-                    <TableHead>Job Title</TableHead>
-                    <TableHead>Department</TableHead>
-                    <TableHead>Employment Type</TableHead>
-                    <TableHead>Work Mode</TableHead>
-                    <TableHead>Location</TableHead>
-                    <TableHead>Working Hours</TableHead>
-                    <TableHead>Salary</TableHead>
-                    <TableHead>Status</TableHead>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[200px]">Job Title</TableHead>
+                    <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[120px]">Department</TableHead>
+                    <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[90px]">Type</TableHead>
+                    <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[80px]">Mode</TableHead>
+                    <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[100px]">Location</TableHead>
+                    <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[110px]">Hours</TableHead>
+                    <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[120px]">Salary</TableHead>
+                    <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[80px]">Status</TableHead>
                     {showActions && (
-                      <TableHead className="w-12">
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-10">
                         <span className="sr-only">Actions</span>
                       </TableHead>
                     )}
@@ -363,12 +454,10 @@ export default function JobPostingsPage() {
                   {postings.map((posting) => (
                     <TableRow
                       key={posting.id}
-                      // The whole row opens a read-only view. Keyboard users get
-                      // the same affordance rather than being locked out of it.
                       role="button"
                       tabIndex={0}
                       aria-label={`View ${posting.title}`}
-                      className="cursor-pointer"
+                      className="border-border/50 hover:bg-muted/30 cursor-pointer"
                       onClick={() => setViewing(posting)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
@@ -377,72 +466,91 @@ export default function JobPostingsPage() {
                         }
                       }}
                     >
-                      <TableCell className="font-medium">
-                        {posting.title}
+                      <TableCell className="text-[0.7rem] font-medium py-2">
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center justify-center h-6 w-6 rounded bg-primary/10 text-primary shrink-0">
+                            <Megaphone className="h-3 w-3" />
+                          </div>
+                          <span className="truncate">{posting.title}</span>
+                        </div>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {posting.department?.name ?? '--'}
+                      <TableCell className="text-[0.7rem] text-muted-foreground py-2">
+                        {posting.department?.name ? (
+                          <div className="flex items-center gap-1.5">
+                            <Building2 className="h-3 w-3 text-muted-foreground/60" />
+                            {posting.department.name}
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground/40">--</span>
+                        )}
                       </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">
+                      <TableCell className="py-2">
+                        <Badge variant="outline" className="text-[0.6rem] px-1.5 py-0">
                           {employmentTypeLabels[posting.employment_type]}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
+                      <TableCell className="text-[0.7rem] text-muted-foreground py-2">
                         {workModeLabels[posting.work_mode]}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {posting.location ?? '--'}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {formatWorkingHours(
-                          posting.start_time,
-                          posting.end_time
+                      <TableCell className="text-[0.7rem] text-muted-foreground py-2">
+                        {posting.location ? (
+                          <div className="flex items-center gap-1">
+                            <MapPin className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+                            <span className="truncate">{posting.location}</span>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground/40">--</span>
                         )}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
+                      <TableCell className="text-[0.7rem] text-muted-foreground py-2">
+                        {posting.start_time && posting.end_time ? (
+                          <div className="flex items-center gap-1">
+                            <Clock className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+                            <span className="truncate">{formatWorkingHours(posting.start_time, posting.end_time)}</span>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground/40">--</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-[0.7rem] text-muted-foreground py-2">
                         {salaryCell(posting)}
                       </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            posting.is_published ? 'default' : 'secondary'
-                          }
-                        >
-                          {posting.is_published ? 'Published' : 'Draft'}
-                        </Badge>
+                      <TableCell className="py-2">
+                        {posting.is_published ? (
+                          <span className="inline-flex items-center gap-1 text-[0.6rem] text-emerald-600 dark:text-emerald-400">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                            Published
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[0.6rem] text-muted-foreground">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
+                            Draft
+                          </span>
+                        )}
                       </TableCell>
                       {showActions && (
-                        // Stop the row's view handler firing when someone is
-                        // reaching for Edit / Publish / Delete.
                         <TableCell
+                          className="py-2"
                           onClick={(e) => e.stopPropagation()}
                           onKeyDown={(e) => e.stopPropagation()}
                         >
                           <DropdownMenu>
                             <DropdownMenuTrigger
-                              className="inline-flex items-center justify-center rounded-md size-8 hover:bg-muted text-muted-foreground"
+                              className="inline-flex items-center justify-center rounded-md size-7 hover:bg-muted text-muted-foreground"
                               aria-label={`Actions for ${posting.title}`}
                             >
-                              <MoreHorizontal />
+                              <MoreHorizontal className="h-3.5 w-3.5" />
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               {canEdit && (
-                                <DropdownMenuItem
-                                  onClick={() => openEdit(posting)}
-                                >
-                                  <Pencil data-icon="inline-start" />
+                                <DropdownMenuItem onClick={() => openEdit(posting)}>
+                                  <Pencil className="h-3.5 w-3.5 mr-2" />
                                   Edit
                                 </DropdownMenuItem>
                               )}
                               {canPublish && (
                                 <>
                                   <DropdownMenuItem
-                                    // A future-dated posting is invisible on
-                                    // the careers page, so publishing it would
-                                    // only produce a badge that lies. The
-                                    // server enforces this too — this just
-                                    // stops the pointless round trip.
                                     disabled={
                                       !posting.is_published &&
                                       isFuturePostingDate(posting.posting_date)
@@ -451,27 +559,21 @@ export default function JobPostingsPage() {
                                   >
                                     {posting.is_published ? (
                                       <>
-                                        <EyeOff data-icon="inline-start" />
+                                        <EyeOff className="h-3.5 w-3.5 mr-2" />
                                         Unpublish
                                       </>
                                     ) : (
                                       <>
-                                        <Eye data-icon="inline-start" />
+                                        <Eye className="h-3.5 w-3.5 mr-2" />
                                         Publish
                                       </>
                                     )}
                                   </DropdownMenuItem>
                                   {!posting.is_published &&
-                                    isFuturePostingDate(
-                                      posting.posting_date
-                                    ) && (
-                                      // Without this the item is greyed out
-                                      // with no clue why.
+                                    isFuturePostingDate(posting.posting_date) && (
                                       <p className="px-2 pb-1 text-[11px] leading-snug text-muted-foreground max-w-48">
                                         Dated{' '}
-                                        {formatPostingDate(
-                                          posting.posting_date!
-                                        )}
+                                        {formatPostingDate(posting.posting_date!)}
                                         . Change the posting date to publish.
                                       </p>
                                     )}
@@ -482,7 +584,7 @@ export default function JobPostingsPage() {
                                   variant="destructive"
                                   onClick={() => setDeleteTarget(posting)}
                                 >
-                                  <Trash2 data-icon="inline-start" />
+                                  <Trash2 className="h-3.5 w-3.5 mr-2" />
                                   Delete
                                 </DropdownMenuItem>
                               )}
@@ -497,12 +599,11 @@ export default function JobPostingsPage() {
             </CardContent>
           </Card>
 
-          {/* Pagination */}
           {totalPages > 1 && (
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-              <p className="text-sm text-muted-foreground">
+            <div className="flex items-center justify-between">
+              <p className="text-[0.65rem] text-muted-foreground">
                 Showing {meta?.from ?? 0}&ndash;{meta?.to ?? 0} of{' '}
-                {meta?.total ?? 0} job postings
+                {meta?.total ?? 0}
               </p>
               <Pagination>
                 <PaginationContent>
@@ -566,12 +667,8 @@ export default function JobPostingsPage() {
         </>
       )}
 
-      {/* Detail view, opened by clicking a row */}
+      {/* Detail view */}
       <JobPostingViewDialog
-        // Hidden rather than discarded while the edit form is stacked on top,
-        // so closing that form — by saving or cancelling — lands back on this
-        // dialog. `viewing` is only cleared by an explicit Close. Editing from
-        // the row menu leaves `viewing` null, so nothing reopens there.
         open={!!viewing && !dialogOpen}
         onOpenChange={(open) => {
           if (!open) setViewing(null);
@@ -581,7 +678,7 @@ export default function JobPostingsPage() {
         onTogglePublished={canPublish ? togglePublished : undefined}
       />
 
-      {/* Create/Edit Modal */}
+      {/* Create/Edit Dialog */}
       <JobPostingFormDialog
         open={dialogOpen}
         onOpenChange={(open) => {

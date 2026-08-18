@@ -2,37 +2,11 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "backend",
-      "runtimeExecutable": "docker",
-      "runtimeArgs": ["compose", "up", "-d"],
-      "port": 80
-    },
-    {
       "name": "web",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "web", "run", "dev"],
+      "runtimeArgs": ["run", "dev"],
       "port": 3000,
-      "autoPort": true
-    },
-    {
-      "name": "demo",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["serve", "marketing/demo", "-l", "8090", "--no-clipboard"],
-      "port": 8090
-    },
-    {
-      "name": "marketing",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "marketing", "run", "dev"],
-      "port": 3001,
-      "autoPort": true
-    },
-    {
-      "name": "video",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["--prefix", "video", "remotion", "studio"],
-      "port": 3100,
-      "autoPort": true
+      "cwd": "web"
     }
   ]
 }

@@ -93,12 +93,13 @@ export function EmployeeProfileSheet({
     });
 
     useEffect(() => {
+        if (!open) return;
         if (employee) {
             form.reset(getDefaults(employee));
         } else {
             form.reset(getDefaults(null));
         }
-    }, [employee, form]);
+    }, [open, employee, form]);
 
     const onSubmit = (data: EmployeeProfileInput) => {
         if (!employee) return;

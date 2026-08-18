@@ -5,13 +5,13 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader2 } from 'lucide-react';
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet';
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -61,6 +61,7 @@ export function DepartmentFormSheet({
   });
 
   useEffect(() => {
+    if (!open) return;
     if (department) {
       form.reset({
         name: department.name,
@@ -80,7 +81,7 @@ export function DepartmentFormSheet({
         is_active: true,
       });
     }
-  }, [department, form]);
+  }, [open, department, form]);
 
   const createMutation = useCreateDepartment();
   const updateMutation = useUpdateDepartment();
@@ -100,62 +101,65 @@ export function DepartmentFormSheet({
   };
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="sm:max-w-lg">
-        <SheetHeader>
-          <SheetTitle>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
             {isEditing ? 'Edit Department' : 'New Department'}
-          </SheetTitle>
-          <SheetDescription>
+          </DialogTitle>
+          <DialogDescription>
             {isEditing
               ? 'Update the department details below.'
               : 'Create a new department for your organization.'}
-          </SheetDescription>
-        </SheetHeader>
+          </DialogDescription>
+        </DialogHeader>
 
         <Form {...form}>
           <form
             onSubmit={form.handleSubmit(onSubmit)}
-            className="flex flex-col flex-1 gap-6 p-6 overflow-y-auto"
+            className="flex flex-col gap-4"
           >
-            <FormField
-              control={form.control}
-              name="name"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Name</FormLabel>
-                  <FormControl>
-                    <Input placeholder="e.g. Engineering" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            <div className="grid grid-cols-2 gap-3">
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-xs">Name</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. Engineering" className="h-8 text-sm" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-            <FormField
-              control={form.control}
-              name="code"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Code</FormLabel>
-                  <FormControl>
-                    <Input placeholder="e.g. ENG" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+              <FormField
+                control={form.control}
+                name="code"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-xs">Code</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. ENG" className="h-8 text-sm" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
 
             <FormField
               control={form.control}
               name="description"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Description</FormLabel>
+                  <FormLabel className="text-xs">Description</FormLabel>
                   <FormControl>
                     <Textarea
                       placeholder="Optional description..."
-                      rows={3}
+                      rows={2}
+                      className="text-sm resize-none"
                       {...field}
                     />
                   </FormControl>
@@ -169,7 +173,7 @@ export function DepartmentFormSheet({
               name="parent_department_id"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Parent Department</FormLabel>
+                  <FormLabel className="text-xs">Parent Department</FormLabel>
                   <FormControl>
                     <DepartmentSelect
                       value={field.value}
@@ -187,10 +191,10 @@ export function DepartmentFormSheet({
               control={form.control}
               name="is_active"
               render={({ field }) => (
-                <FormItem className="flex items-center justify-between rounded-lg border border-border p-4">
+                <FormItem className="flex items-center justify-between rounded-lg border border-border p-3">
                   <div>
-                    <FormLabel>Active</FormLabel>
-                    <p className="text-xs text-muted-foreground">
+                    <FormLabel className="text-xs">Active</FormLabel>
+                    <p className="text-[0.65rem] text-muted-foreground">
                       Inactive departments are hidden from selection
                     </p>
                   </div>
@@ -204,28 +208,26 @@ export function DepartmentFormSheet({
               )}
             />
 
-            <SheetFooter className="mt-auto gap-2">
+            <DialogFooter className="gap-2 pt-2">
               <Button
                 type="button"
                 variant="outline"
+                size="sm"
                 onClick={() => onOpenChange(false)}
                 disabled={isPending}
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={isPending}>
+              <Button type="submit" size="sm" disabled={isPending}>
                 {isPending && (
-                  <Loader2
-                    data-icon="inline-start"
-                    className="animate-spin"
-                  />
+                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                 )}
                 {isEditing ? 'Save Changes' : 'Create Department'}
               </Button>
-            </SheetFooter>
+            </DialogFooter>
           </form>
         </Form>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }

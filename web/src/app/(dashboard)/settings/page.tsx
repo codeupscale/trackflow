@@ -3,16 +3,22 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
 import {
+    Bell,
     Camera,
+    CalendarDays,
+    Clock,
     Copy,
     CreditCard,
     Github,
+    Globe,
     Linkedin,
     Loader2,
     Lock,
     Mail,
     Save,
     Settings,
+    Shield,
+    UserIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -38,7 +44,6 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -51,7 +56,6 @@ import {
 import api from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { usePermissionStore } from "@/stores/permission-store";
-import { User as UserIcon } from "lucide-react";
 
 interface OrgSettings {
     organization: {
@@ -110,6 +114,45 @@ const timezones = [
     "Pacific/Auckland",
 ];
 
+function SectionRow({
+    icon: Icon,
+    iconColor,
+    iconBg,
+    title,
+    description,
+    children,
+    last = false,
+}: {
+    icon: React.ElementType;
+    iconColor: string;
+    iconBg: string;
+    title: string;
+    description?: string;
+    children: React.ReactNode;
+    last?: boolean;
+}) {
+    return (
+        <div className={`grid grid-cols-1 lg:grid-cols-[240px_1fr] gap-x-10 gap-y-3 py-5 ${last ? "" : "border-b border-border/40"}`}>
+            <div>
+                <h3 className="text-[0.8rem] font-medium flex items-center gap-2">
+                    <div className={`flex h-6 w-6 items-center justify-center rounded-md ${iconBg}`}>
+                        <Icon className={`h-3 w-3 ${iconColor}`} />
+                    </div>
+                    {title}
+                </h3>
+                {description && (
+                    <p className="text-[0.65rem] text-muted-foreground mt-1 leading-relaxed">
+                        {description}
+                    </p>
+                )}
+            </div>
+            <div className="space-y-3">
+                {children}
+            </div>
+        </div>
+    );
+}
+
 export default function SettingsPage() {
     const { user } = useAuthStore();
     const queryClient = useQueryClient();
@@ -151,11 +194,6 @@ export default function SettingsPage() {
                 ![5, 10, 20].includes(settings.idle_timeout)
                     ? String(settings.idle_timeout)
                     : "",
-            // `always` ("always keep idle time") is retired — idle time is never
-            // credited as work (owner policy, 2026-07-16), so the agent and
-            // GET /agent/config both treat it as `never`. Show it as what it now
-            // DOES, so an org still holding the old value sees the truth and saving
-            // migrates the stored setting instead of silently re-writing a lie.
             keepIdleTime:
                 settings?.keep_idle_time === "always"
                     ? "never"
@@ -204,9 +242,6 @@ export default function SettingsPage() {
     const [screenshotBlur, setScreenshotBlur] = useState(false);
     const [idleTimeout, setIdleTimeout] = useState("5");
     const [idleTimeoutCustom, setIdleTimeoutCustom] = useState("");
-    // No "always": keeping idle time as work was retired (owner policy, 2026-07-16).
-    // The API still ACCEPTS the old value so no org is locked out mid-migration; it is
-    // normalised to "never" on read here and in GET /agent/config.
     const [keepIdleTime, setKeepIdleTime] = useState<"prompt" | "never">(
         "prompt",
     );
@@ -231,10 +266,8 @@ export default function SettingsPage() {
     const [userTimezone, setUserTimezone] = useState(user?.timezone ?? "UTC");
     const { fetchUser } = useAuthStore();
 
-    // Sync form state from fetched data
     useEffect(() => {
         if (!data || initialized) return;
-        // eslint-disable-next-line
         setOrgName(defaults.orgName);
         setTimezone(defaults.timezone);
         setUserTimezone(user?.timezone ?? defaults.timezone);
@@ -267,7 +300,7 @@ export default function SettingsPage() {
         },
         onSuccess: async () => {
             queryClient.invalidateQueries({ queryKey: ["org-settings"] });
-            await fetchUser(); // Refresh auth store so sidebar/header shows updated org name
+            await fetchUser();
             toast.success("Settings saved successfully");
         },
         onError: () => toast.error("Failed to save settings"),
@@ -279,9 +312,6 @@ export default function SettingsPage() {
             return res.data;
         },
         onSuccess: (data, variables) => {
-            // A timezone change cannot affect permissions or org, so merge locally instead of a
-            // full /auth/me re-fetch — avoids the fetchUser() round-trip (and its failure modes)
-            // entirely. Prefer the server's returned user; fall back to a local merge.
             const current = useAuthStore.getState().user;
             if (data?.user) {
                 useAuthStore.getState().setUser(data.user);
@@ -295,7 +325,6 @@ export default function SettingsPage() {
         onError: () => toast.error("Failed to update timezone"),
     });
 
-    // ── Profile tab state ──
     const fileRef = useRef<HTMLInputElement>(null);
     const [profileName, setProfileName] = useState(user?.name ?? "");
     const [profileJobTitle, setProfileJobTitle] = useState(
@@ -375,11 +404,9 @@ export default function SettingsPage() {
             toast.error("File must be under 2MB");
             return;
         }
-        // Show local preview immediately
         const previewUrl = URL.createObjectURL(file);
         setAvatarPreview(previewUrl);
         uploadAvatarMutation.mutate(file);
-        // Reset input so the same file can be re-selected
         e.target.value = "";
     };
 
@@ -463,22 +490,13 @@ export default function SettingsPage() {
         updateProfileMutation.mutate({ timezone: userTimezone });
     };
 
-    /**
-     * The slug is generated as `Str::slug(name)-Str::random(6)`, so the suffix
-     * is mixed-case base62 and the server matches it case-sensitively. Copying
-     * it is the only safe way to move it into a config file — retyping it is
-     * how you end up with a silent 404.
-     */
     const handleCopySlug = async () => {
         const slug = data?.organization.slug;
         if (!slug) return;
-
         try {
             await navigator.clipboard.writeText(slug);
             toast.success("Organization slug copied");
         } catch {
-            // Clipboard access fails on insecure origins and when the browser
-            // withholds permission. Say so rather than appearing to succeed.
             toast.error("Could not copy — select the text and copy manually");
         }
     };
@@ -551,21 +569,15 @@ export default function SettingsPage() {
 
     if (isLoading) {
         return (
-            <div className="space-y-6">
+            <div className="flex flex-col gap-4">
                 <div>
-                    <h1 className="text-2xl font-bold text-foreground">
-                        Settings
-                    </h1>
-                    <p className="text-muted-foreground text-sm mt-1">
-                        Manage your organization settings
-                    </p>
+                    <Skeleton className="h-5 w-28" />
+                    <Skeleton className="h-3 w-52 mt-1.5" />
                 </div>
-                <div className="space-y-4">
+                <Skeleton className="h-8 w-72 rounded-lg" />
+                <div className="space-y-3">
                     {Array.from({ length: 3 }).map((_, i) => (
-                        <div
-                            key={i}
-                            className="h-40 bg-muted/50 animate-pulse rounded-lg"
-                        />
+                        <Skeleton key={i} className="h-36 w-full rounded-lg" />
                     ))}
                 </div>
             </div>
@@ -573,25 +585,26 @@ export default function SettingsPage() {
     }
 
     return (
-        <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="flex flex-col gap-4">
+            {/* Header */}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                    <h1 className="text-2xl font-bold text-foreground">
-                        Settings
-                    </h1>
-                    <p className="text-muted-foreground text-sm mt-1">
-                        Manage your organization settings
+                    <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
+                    <p className="text-xs text-muted-foreground">
+                        Manage your profile and organization settings
                     </p>
                 </div>
                 {isAdmin && (
                     <Button
+                        size="sm"
+                        className="h-8 text-xs"
                         onClick={handleSave}
                         disabled={updateMutation.isPending}
                     >
                         {updateMutation.isPending ? (
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                         ) : (
-                            <Save className="mr-2 h-4 w-4" />
+                            <Save className="h-3.5 w-3.5 mr-1.5" />
                         )}
                         Save Changes
                     </Button>
@@ -599,50 +612,53 @@ export default function SettingsPage() {
             </div>
 
             <Tabs defaultValue="profile">
-                <TabsList className="bg-muted/50">
-                    <TabsTrigger value="profile">Profile</TabsTrigger>
-                    <TabsTrigger value="general">General</TabsTrigger>
+                <TabsList>
+                    <TabsTrigger value="profile">
+                        <UserIcon className="h-3 w-3" />
+                        Profile
+                    </TabsTrigger>
+                    <TabsTrigger value="general">
+                        <Settings className="h-3 w-3" />
+                        General
+                    </TabsTrigger>
                     {isAdmin && (
-                        <TabsTrigger value="tracking">Tracking</TabsTrigger>
+                        <TabsTrigger value="tracking">
+                            <Camera className="h-3 w-3" />
+                            Tracking
+                        </TabsTrigger>
                     )}
                     <TabsTrigger value="notifications">
+                        <Bell className="h-3 w-3" />
                         Notifications
                     </TabsTrigger>
                 </TabsList>
 
-                {/* Profile Tab */}
-                <TabsContent value="profile" className="space-y-6 mt-6">
-                    {/* Avatar + Name Header */}
-                    <Card className="border-border bg-card/50">
-                        <CardContent className="pt-6">
-                            <div className="flex items-center gap-6">
-                                {/* Avatar */}
+                {/* ═══════════════ Profile Tab ═══════════════ */}
+                <TabsContent value="profile" className="mt-4">
+                    <Card className="border-border">
+                        <CardContent className="p-5 sm:p-6">
+                            {/* Avatar header row */}
+                            <div className="flex items-center gap-4 pb-5 border-b border-border/40">
                                 <div
-                                    className="relative group w-24 h-24 cursor-pointer shrink-0"
+                                    className="relative group w-16 h-16 cursor-pointer shrink-0"
                                     onClick={() => fileRef.current?.click()}
                                 >
-                                    <Avatar className="w-24 h-24 border-2 border-border">
+                                    <Avatar className="w-16 h-16 border-2 border-border">
                                         <AvatarImage
-                                            src={
-                                                avatarPreview ||
-                                                user?.avatar_url ||
-                                                undefined
-                                            }
+                                            src={avatarPreview || user?.avatar_url || undefined}
                                             alt={user?.name || "User"}
                                         />
-                                        <AvatarFallback className="bg-blue-600 text-white text-2xl font-medium">
+                                        <AvatarFallback className="bg-blue-600 text-white text-lg font-medium">
                                             {profileInitials}
                                         </AvatarFallback>
                                     </Avatar>
-                                    <div className="absolute inset-0 bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1">
-                                        <Camera className="w-5 h-5 text-white" />
-                                        <span className="text-white text-[10px] font-medium">
-                                            Change
-                                        </span>
+                                    <div className="absolute inset-0 bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center">
+                                        <Camera className="w-4 h-4 text-white" />
+                                        <span className="text-white text-[8px] font-medium mt-0.5">Change</span>
                                     </div>
                                     {uploadAvatarMutation.isPending && (
                                         <div className="absolute inset-0 bg-black/60 rounded-full flex items-center justify-center">
-                                            <Loader2 className="w-6 h-6 text-white animate-spin" />
+                                            <Loader2 className="w-5 h-5 text-white animate-spin" />
                                         </div>
                                     )}
                                 </div>
@@ -653,1061 +669,756 @@ export default function SettingsPage() {
                                     className="hidden"
                                     onChange={handleAvatarUpload}
                                 />
-                                <div className="flex flex-col gap-1">
-                                    <h2 className="text-xl font-semibold text-foreground">
+                                <div className="flex flex-col gap-0.5 min-w-0">
+                                    <h2 className="text-sm font-semibold text-foreground truncate">
                                         {user?.name}
                                     </h2>
                                     {user?.job_title && (
-                                        <p className="text-sm text-muted-foreground">
-                                            {user.job_title}
-                                        </p>
+                                        <p className="text-[0.7rem] text-muted-foreground truncate">{user.job_title}</p>
                                     )}
-                                    <p className="text-sm text-muted-foreground">
-                                        {user?.email}
-                                    </p>
+                                    <p className="text-[0.7rem] text-muted-foreground truncate">{user?.email}</p>
                                 </div>
                             </div>
-                        </CardContent>
-                    </Card>
 
-                    {/* Personal Information */}
-                    <Card className="border-border bg-card/50">
-                        <CardHeader>
-                            <CardTitle className="text-foreground">
-                                Personal Information
-                            </CardTitle>
-                            <CardDescription className="text-muted-foreground">
-                                Update your personal details
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="grid gap-2">
-                                    <Label htmlFor="profile-name">
-                                        Full Name
-                                    </Label>
-                                    <Input
-                                        id="profile-name"
-                                        value={profileName}
-                                        onChange={(e) =>
-                                            setProfileName(e.target.value)
-                                        }
-                                        className="bg-background/50"
-                                    />
-                                </div>
-                                <div className="grid gap-2">
-                                    <Label htmlFor="profile-job-title">
-                                        Job Title
-                                    </Label>
-                                    <Input
-                                        id="profile-job-title"
-                                        placeholder="e.g. Senior Developer"
-                                        value={profileJobTitle}
-                                        onChange={(e) =>
-                                            setProfileJobTitle(e.target.value)
-                                        }
-                                        className="bg-background/50"
-                                    />
-                                </div>
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="grid gap-2">
-                                    <Label htmlFor="profile-email">Email</Label>
-                                    <div
-                                        className="relative"
-                                        title="Email cannot be changed"
-                                    >
+                            {/* Personal Information */}
+                            <SectionRow
+                                icon={UserIcon}
+                                iconColor="text-blue-500"
+                                iconBg="bg-blue-500/10"
+                                title="Personal Information"
+                                description="Update your name, contact details, and timezone."
+                            >
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div className="grid gap-1.5">
+                                        <Label htmlFor="profile-name" className="text-xs">Full Name</Label>
                                         <Input
-                                            id="profile-email"
-                                            value={user?.email ?? ""}
-                                            disabled
-                                            className="bg-muted/50 pr-9"
+                                            id="profile-name"
+                                            className="h-9 text-sm"
+                                            value={profileName}
+                                            onChange={(e) => setProfileName(e.target.value)}
                                         />
-                                        <Lock className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                                     </div>
-                                    <p className="text-xs text-muted-foreground">
-                                        Email cannot be changed
+                                    <div className="grid gap-1.5">
+                                        <Label htmlFor="profile-job-title" className="text-xs">Job Title</Label>
+                                        <Input
+                                            id="profile-job-title"
+                                            className="h-9 text-sm"
+                                            placeholder="e.g. Senior Developer"
+                                            value={profileJobTitle}
+                                            onChange={(e) => setProfileJobTitle(e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div className="grid gap-1.5">
+                                        <Label htmlFor="profile-email" className="text-xs">Email</Label>
+                                        <div className="relative" title="Email cannot be changed">
+                                            <Input
+                                                id="profile-email"
+                                                value={user?.email ?? ""}
+                                                disabled
+                                                className="h-9 text-sm bg-muted/50 pr-9"
+                                            />
+                                            <Lock className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                                        </div>
+                                        <p className="text-[0.6rem] text-muted-foreground">Email cannot be changed</p>
+                                    </div>
+                                    <div className="grid gap-1.5">
+                                        <Label htmlFor="profile-phone" className="text-xs">Phone Number</Label>
+                                        <Input
+                                            id="profile-phone"
+                                            className="h-9 text-sm"
+                                            placeholder="+1 (555) 000-0000"
+                                            value={profilePhone}
+                                            onChange={(e) => setProfilePhone(e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div className="grid gap-1.5">
+                                        <Label htmlFor="profile-tz" className="text-xs">Timezone</Label>
+                                        <Select
+                                            value={profileTimezone}
+                                            onValueChange={(v) => v && setProfileTimezone(v)}
+                                        >
+                                            <SelectTrigger id="profile-tz" className="h-9 text-sm">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {timezones.map((tz) => (
+                                                    <SelectItem key={tz} value={tz}>
+                                                        {tz.replace(/_/g, " ")}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
+                                <div className="grid gap-1.5">
+                                    <Label htmlFor="profile-bio" className="text-xs">Bio</Label>
+                                    <Textarea
+                                        id="profile-bio"
+                                        placeholder="Tell us a little about yourself..."
+                                        value={profileBio}
+                                        onChange={(e) => {
+                                            if (e.target.value.length <= 500) {
+                                                setProfileBio(e.target.value);
+                                            }
+                                        }}
+                                        className="text-sm min-h-[72px] resize-none"
+                                        maxLength={500}
+                                    />
+                                    <p className="text-[0.6rem] text-muted-foreground text-right tabular-nums">
+                                        {profileBio.length} / 500
                                     </p>
                                 </div>
-                                <div className="grid gap-2">
-                                    <Label htmlFor="profile-phone">
-                                        Phone Number
-                                    </Label>
-                                    <Input
-                                        id="profile-phone"
-                                        placeholder="+1 (555) 000-0000"
-                                        value={profilePhone}
-                                        onChange={(e) =>
-                                            setProfilePhone(e.target.value)
-                                        }
-                                        className="bg-background/50"
-                                    />
+                            </SectionRow>
+
+                            {/* Important Dates */}
+                            <SectionRow
+                                icon={CalendarDays}
+                                iconColor="text-amber-500"
+                                iconBg="bg-amber-500/10"
+                                title="Important Dates"
+                                description="Your date of birth and when you joined."
+                            >
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div className="grid gap-1.5">
+                                        <Label className="text-xs">Date of Birth</Label>
+                                        <DatePicker
+                                            value={profileDob}
+                                            onChange={setProfileDob}
+                                            placeholder="Select date of birth"
+                                        />
+                                    </div>
+                                    <div className="grid gap-1.5">
+                                        <Label className="text-xs">Date of Joining</Label>
+                                        <DatePicker
+                                            value={profileDoj}
+                                            onChange={setProfileDoj}
+                                            placeholder="Select date of joining"
+                                        />
+                                    </div>
                                 </div>
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="grid gap-2">
-                                    <Label htmlFor="profile-tz">Timezone</Label>
-                                    <Select
-                                        value={profileTimezone}
-                                        onValueChange={(v) =>
-                                            v && setProfileTimezone(v)
-                                        }
-                                    >
-                                        <SelectTrigger
-                                            id="profile-tz"
-                                            className="bg-background/50"
-                                        >
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {timezones.map((tz) => (
-                                                <SelectItem key={tz} value={tz}>
-                                                    {tz.replace(/_/g, " ")}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
+                            </SectionRow>
+
+                            {/* Social Links */}
+                            <SectionRow
+                                icon={Globe}
+                                iconColor="text-violet-500"
+                                iconBg="bg-violet-500/10"
+                                title="Social Links"
+                                description="Add links to your professional profiles."
+                                last
+                            >
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div className="grid gap-1.5">
+                                        <Label htmlFor="profile-linkedin" className="text-xs">LinkedIn</Label>
+                                        <div className="relative">
+                                            <Linkedin className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                                            <Input
+                                                id="profile-linkedin"
+                                                className="h-9 text-sm pl-9"
+                                                placeholder="https://linkedin.com/in/..."
+                                                value={profileLinkedin}
+                                                onChange={(e) => setProfileLinkedin(e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="grid gap-1.5">
+                                        <Label htmlFor="profile-github" className="text-xs">GitHub</Label>
+                                        <div className="relative">
+                                            <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                                            <Input
+                                                id="profile-github"
+                                                className="h-9 text-sm pl-9"
+                                                placeholder="https://github.com/..."
+                                                value={profileGithub}
+                                                onChange={(e) => setProfileGithub(e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
                                 </div>
-                            </div>
-                            <div className="grid gap-2">
-                                <Label htmlFor="profile-bio">Bio</Label>
-                                <Textarea
-                                    id="profile-bio"
-                                    placeholder="Tell us a little about yourself..."
-                                    value={profileBio}
-                                    onChange={(e) => {
-                                        if (e.target.value.length <= 500) {
-                                            setProfileBio(e.target.value);
-                                        }
-                                    }}
-                                    className="bg-background/50 min-h-[80px]"
-                                    maxLength={500}
-                                />
-                                <p className="text-xs text-muted-foreground text-right">
-                                    {profileBio.length} / 500
-                                </p>
+                            </SectionRow>
+
+                            {/* Save Profile */}
+                            <div className="flex justify-end pt-4">
+                                <Button
+                                    size="sm"
+                                    className="h-8 text-xs"
+                                    onClick={handleSaveProfile}
+                                    disabled={saveProfileMutation.isPending}
+                                >
+                                    {saveProfileMutation.isPending ? (
+                                        <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                                    ) : (
+                                        <Save className="h-3.5 w-3.5 mr-1.5" />
+                                    )}
+                                    Save Profile
+                                </Button>
                             </div>
                         </CardContent>
                     </Card>
-
-                    {/* Important Dates */}
-                    <Card className="border-border bg-card/50">
-                        <CardHeader>
-                            <CardTitle className="text-foreground">
-                                Important Dates
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="grid gap-2">
-                                    <Label>Date of Birth</Label>
-                                    <DatePicker
-                                        value={profileDob}
-                                        onChange={setProfileDob}
-                                        placeholder="Select date of birth"
-                                    />
-                                </div>
-                                <div className="grid gap-2">
-                                    <Label>Date of Joining</Label>
-                                    <DatePicker
-                                        value={profileDoj}
-                                        onChange={setProfileDoj}
-                                        placeholder="Select date of joining"
-                                    />
-                                </div>
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    {/* Social Links */}
-                    <Card className="border-border bg-card/50">
-                        <CardHeader>
-                            <CardTitle className="text-foreground">
-                                Social Links
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="grid gap-2">
-                                <Label htmlFor="profile-linkedin">
-                                    LinkedIn
-                                </Label>
-                                <div className="relative">
-                                    <Linkedin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                                    <Input
-                                        id="profile-linkedin"
-                                        placeholder="https://linkedin.com/in/your-profile"
-                                        value={profileLinkedin}
-                                        onChange={(e) =>
-                                            setProfileLinkedin(e.target.value)
-                                        }
-                                        className="bg-background/50 pl-9"
-                                    />
-                                </div>
-                            </div>
-                            <div className="grid gap-2">
-                                <Label htmlFor="profile-github">GitHub</Label>
-                                <div className="relative">
-                                    <Github className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                                    <Input
-                                        id="profile-github"
-                                        placeholder="https://github.com/your-username"
-                                        value={profileGithub}
-                                        onChange={(e) =>
-                                            setProfileGithub(e.target.value)
-                                        }
-                                        className="bg-background/50 pl-9"
-                                    />
-                                </div>
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    {/* Save Profile Button */}
-                    <div className="flex justify-end">
-                        <Button
-                            onClick={handleSaveProfile}
-                            disabled={saveProfileMutation.isPending}
-                        >
-                            {saveProfileMutation.isPending ? (
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            ) : (
-                                <Save className="mr-2 h-4 w-4" />
-                            )}
-                            Save Profile
-                        </Button>
-                    </div>
                 </TabsContent>
 
-                {/* General Tab */}
-                <TabsContent value="general" className="space-y-6 mt-6">
-                    {/* Your timezone — used for "today", dashboard dates, timer */}
-                    <Card className="border-border bg-card/50">
-                        <CardHeader>
-                            <CardTitle className="flex items-center gap-2 text-foreground">
-                                <UserIcon className="h-5 w-5" />
-                                Your timezone
-                            </CardTitle>
-                            <CardDescription className="text-muted-foreground">
-                                Used for today’s total, dashboard date filters,
-                                and reports
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="grid gap-2 max-w-md">
-                                <Label htmlFor="user-tz">Timezone</Label>
-                                <div className="flex gap-2 items-center">
-                                    <Select
-                                        value={userTimezone}
-                                        onValueChange={(v) =>
-                                            v && setUserTimezone(v)
-                                        }
-                                    >
-                                        <SelectTrigger
-                                            id="user-tz"
-                                            className="bg-background/50"
+                {/* ═══════════════ General Tab ═══════════════ */}
+                <TabsContent value="general" className="mt-4">
+                    <Card className="border-border">
+                        <CardContent className="p-5 sm:p-6">
+                            {/* Your Timezone */}
+                            <SectionRow
+                                icon={Globe}
+                                iconColor="text-blue-500"
+                                iconBg="bg-blue-500/10"
+                                title="Your Timezone"
+                                description="Used for today's total, dashboard date filters, and reports."
+                            >
+                                <div className="flex gap-2 items-end">
+                                    <div className="grid gap-1.5 flex-1 max-w-xs">
+                                        <Label htmlFor="user-tz" className="text-xs">Timezone</Label>
+                                        <Select
+                                            value={userTimezone}
+                                            onValueChange={(v) => v && setUserTimezone(v)}
                                         >
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            {timezones.map((tz) => (
-                                                <SelectItem key={tz} value={tz}>
-                                                    {tz.replace(/_/g, " ")}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
+                                            <SelectTrigger id="user-tz" className="h-9 text-sm">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {timezones.map((tz) => (
+                                                    <SelectItem key={tz} value={tz}>
+                                                        {tz.replace(/_/g, " ")}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
                                     <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-9 text-xs shrink-0"
                                         onClick={handleSaveUserTimezone}
                                         disabled={
                                             updateProfileMutation.isPending ||
-                                            userTimezone ===
-                                                (user?.timezone ?? "UTC")
+                                            userTimezone === (user?.timezone ?? "UTC")
                                         }
-                                        variant="outline"
-                                        className="bg-background/50"
                                     >
                                         {updateProfileMutation.isPending ? (
-                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                         ) : (
-                                            <Save className="h-4 w-4 mr-1" />
+                                            <Save className="h-3.5 w-3.5 mr-1" />
                                         )}
                                         Save
                                     </Button>
                                 </div>
-                            </div>
-                        </CardContent>
-                    </Card>
+                            </SectionRow>
 
-                    {/* Password */}
-                    <Card className="border-border bg-card/50">
-                        <CardHeader>
-                            <CardTitle className="text-foreground">
-                                Security
-                            </CardTitle>
-                            <CardDescription className="text-muted-foreground">
-                                Change your account password
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="grid gap-2 max-w-md">
-                                <Label htmlFor="current-password">
-                                    Current password
-                                </Label>
-                                <PasswordInput
-                                    id="current-password"
-                                    autoComplete="current-password"
-                                    aria-describedby={
-                                        passwordErrors.current_password
-                                            ? "current-password-error"
-                                            : undefined
-                                    }
-                                    aria-invalid={
-                                        !!passwordErrors.current_password
-                                    }
-                                    value={currentPassword}
-                                    onChange={(e) => {
-                                        setCurrentPassword(e.target.value);
-                                        if (passwordErrors.current_password) {
-                                            setPasswordErrors((prev) => ({
-                                                ...prev,
-                                                current_password: undefined,
-                                            }));
-                                        }
-                                    }}
-                                    className={`bg-background/50 ${passwordErrors.current_password ? "border-destructive focus-visible:ring-destructive" : ""}`}
-                                />
-                                {passwordErrors.current_password && (
-                                    <p
-                                        id="current-password-error"
-                                        className="text-sm text-destructive"
-                                        role="alert"
-                                    >
-                                        {passwordErrors.current_password}
-                                    </p>
-                                )}
-                            </div>
-                            <div className="grid gap-2 max-w-md">
-                                <Label htmlFor="new-password">
-                                    New password
-                                </Label>
-                                <PasswordInput
-                                    id="new-password"
-                                    autoComplete="new-password"
-                                    aria-describedby={`new-password-hint${passwordErrors.password ? " new-password-error" : ""}`}
-                                    aria-invalid={!!passwordErrors.password}
-                                    value={newPassword}
-                                    onChange={(e) => {
-                                        setNewPassword(e.target.value);
-                                        if (passwordErrors.password) {
-                                            setPasswordErrors((prev) => ({
-                                                ...prev,
-                                                password: undefined,
-                                            }));
-                                        }
-                                    }}
-                                    className={`bg-background/50 ${passwordErrors.password ? "border-destructive focus-visible:ring-destructive" : ""}`}
-                                />
-                                <p
-                                    id="new-password-hint"
-                                    className="text-xs text-muted-foreground"
-                                >
-                                    Minimum 8 characters
-                                </p>
-                                {passwordErrors.password && (
-                                    <p
-                                        id="new-password-error"
-                                        className="text-sm text-destructive"
-                                        role="alert"
-                                    >
-                                        {passwordErrors.password}
-                                    </p>
-                                )}
-                            </div>
-                            <div className="grid gap-2 max-w-md">
-                                <Label htmlFor="new-password-confirm">
-                                    Confirm new password
-                                </Label>
-                                <PasswordInput
-                                    id="new-password-confirm"
-                                    autoComplete="new-password"
-                                    aria-describedby={
-                                        passwordErrors.password_confirmation
-                                            ? "confirm-password-error"
-                                            : undefined
-                                    }
-                                    aria-invalid={
-                                        !!passwordErrors.password_confirmation
-                                    }
-                                    value={newPasswordConfirm}
-                                    onChange={(e) => {
-                                        setNewPasswordConfirm(e.target.value);
-                                        if (
-                                            passwordErrors.password_confirmation
-                                        ) {
-                                            setPasswordErrors((prev) => ({
-                                                ...prev,
-                                                password_confirmation:
-                                                    undefined,
-                                            }));
-                                        }
-                                    }}
-                                    className={`bg-background/50 ${passwordErrors.password_confirmation ? "border-destructive focus-visible:ring-destructive" : ""}`}
-                                />
-                                {passwordErrors.password_confirmation && (
-                                    <p
-                                        id="confirm-password-error"
-                                        className="text-sm text-destructive"
-                                        role="alert"
-                                    >
-                                        {passwordErrors.password_confirmation}
-                                    </p>
-                                )}
-                            </div>
-
-                            <Button
-                                onClick={handleChangePassword}
-                                disabled={changePasswordMutation.isPending}
+                            {/* Security */}
+                            <SectionRow
+                                icon={Lock}
+                                iconColor="text-red-500"
+                                iconBg="bg-red-500/10"
+                                title="Security"
+                                description="Change your account password. You'll stay logged in after updating."
                             >
-                                {changePasswordMutation.isPending ? (
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                ) : (
-                                    <Save className="mr-2 h-4 w-4" />
-                                )}
-                                Update password
-                            </Button>
-                        </CardContent>
-                    </Card>
-
-                    <Card className="border-border bg-card/50">
-                        <CardHeader>
-                            <CardTitle className="flex items-center gap-2 text-foreground">
-                                <Settings className="h-5 w-5" />
-                                Organization
-                            </CardTitle>
-                            <CardDescription className="text-muted-foreground">
-                                General organization settings
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="grid gap-2 max-w-md">
-                                <Label htmlFor="org-name">
-                                    Organization Name
-                                </Label>
-                                <Input
-                                    id="org-name"
-                                    value={orgName}
-                                    onChange={(e) => setOrgName(e.target.value)}
-                                    disabled={!isAdmin}
-                                    className="bg-background/50"
-                                />
-                            </div>
-
-                            {/*
-                                Read-only: the slug is assigned once at signup
-                                and PUT /settings accepts only name + settings.
-                                Shown because it is the organization's public
-                                identifier — the careers feed is keyed on it —
-                                and nothing else in the app surfaces it.
-                            */}
-                            <div className="grid gap-2 max-w-md">
-                                <Label htmlFor="org-slug">
-                                    Organization Slug
-                                </Label>
-                                <div className="flex items-center gap-2">
-                                    <Input
-                                        id="org-slug"
-                                        value={data?.organization.slug ?? ""}
-                                        readOnly
-                                        // Case matters here, so render it in a
-                                        // face where I/l and O/0 are tellable
-                                        // apart.
-                                        className="bg-background/50 font-mono"
-                                        onFocus={(e) => e.target.select()}
-                                    />
-                                    <Button
-                                        type="button"
-                                        variant="outline"
-                                        size="icon"
-                                        onClick={handleCopySlug}
-                                        disabled={!data?.organization.slug}
-                                        aria-label="Copy organization slug"
-                                        title="Copy organization slug"
-                                    >
-                                        <Copy className="h-4 w-4" />
-                                    </Button>
-                                </div>
-                                <p className="text-xs text-muted-foreground">
-                                    Public identifier for this organization,
-                                    used in your careers page feed. Case
-                                    sensitive — copy it rather than retyping.
-                                </p>
-                            </div>
-
-                            <div className="grid gap-2 max-w-md">
-                                <Label
-                                    htmlFor="org-tz"
-                                    className="text-foreground"
-                                >
-                                    Timezone
-                                </Label>
-                                <Select
-                                    value={timezone}
-                                    onValueChange={(v) => v && setTimezone(v)}
-                                    disabled={!isAdmin}
-                                >
-                                    <SelectTrigger
-                                        id="org-tz"
-                                        className="bg-muted border-border"
-                                    >
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {timezones.map((tz) => (
-                                            <SelectItem key={tz} value={tz}>
-                                                {tz.replace(/_/g, " ")}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-
-                            {isAdmin && (
-                                <>
-                                    <Separator className="bg-muted" />
-                                    <div className="flex items-center justify-between">
-                                        <div>
-                                            <Label className="text-foreground">
-                                                Idle alert emails
-                                            </Label>
-                                            <p className="text-xs text-muted-foreground">
-                                                Sends an email when an employee
-                                                remains idle. The scheduler runs
-                                                every 5 minutes; cooldown
-                                                prevents spam.
-                                            </p>
-                                        </div>
-                                        <Switch
-                                            checked={idleAlertEmailEnabled}
-                                            onCheckedChange={
-                                                setIdleAlertEmailEnabled
-                                            }
-                                            aria-label="Idle alert emails"
-                                        />
-                                    </div>
-                                    <div className="grid gap-2 max-w-xs">
-                                        <Label
-                                            htmlFor="idle-alert-email-cooldown"
-                                            className="text-foreground"
-                                        >
-                                            Cooldown (minutes)
-                                        </Label>
-                                        <Input
-                                            id="idle-alert-email-cooldown"
-                                            type="number"
-                                            min={5}
-                                            max={1440}
-                                            value={idleAlertEmailCooldownMin}
-                                            onChange={(e) =>
-                                                setIdleAlertEmailCooldownMin(
-                                                    e.target.value,
-                                                )
-                                            }
-                                            disabled={!idleAlertEmailEnabled}
-                                            className="bg-muted border-border text-foreground w-28"
-                                        />
-                                        <p className="text-xs text-muted-foreground">
-                                            Minimum time between emails per
-                                            employee. Recommended: 60+ minutes.
-                                        </p>
-                                    </div>
-                                </>
-                            )}
-
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                                <span>
-                                    Plan:{" "}
-                                    <strong className="text-foreground capitalize">
-                                        {data?.organization.plan}
-                                    </strong>
-                                </span>
-                                {data?.organization.trial_ends_at && (
-                                    <span>
-                                        | Trial ends:{" "}
-                                        {new Date(
-                                            data.organization.trial_ends_at,
-                                        ).toLocaleDateString()}
-                                    </span>
-                                )}
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    {/* Billing Link */}
-                    {isAdmin && (
-                        <Card className="border-border bg-card">
-                            <CardHeader>
-                                <CardTitle className="flex items-center gap-2 text-foreground">
-                                    <CreditCard className="h-5 w-5" />
-                                    Billing
-                                </CardTitle>
-                                <CardDescription className="text-muted-foreground">
-                                    Manage your subscription and billing
-                                </CardDescription>
-                            </CardHeader>
-                            <CardContent>
-                                <Link href="/settings/billing">
-                                    <Button
-                                        variant="outline"
-                                        className="border-border text-foreground"
-                                    >
-                                        <CreditCard className="mr-2 h-4 w-4" />
-                                        Manage Billing
-                                    </Button>
-                                </Link>
-                            </CardContent>
-                        </Card>
-                    )}
-                </TabsContent>
-
-                {/* Tracking Tab */}
-                {isAdmin && (
-                    <TabsContent value="tracking" className="space-y-6 mt-6">
-                        {/* Screenshot Settings */}
-                        <Card className="border-border bg-card">
-                            <CardHeader>
-                                <CardTitle className="text-foreground">
-                                    Screenshots
-                                </CardTitle>
-                                <CardDescription className="text-muted-foreground">
-                                    Configure screenshot capture settings
-                                </CardDescription>
-                            </CardHeader>
-                            <CardContent className="space-y-6">
-                                <div className="grid gap-2 max-w-xs">
-                                    <Label
-                                        htmlFor="ss-interval"
-                                        className="text-foreground"
-                                    >
-                                        Capture Interval
-                                    </Label>
-                                    <Select
-                                        value={screenshotInterval}
-                                        onValueChange={(v) =>
-                                            v && setScreenshotInterval(v)
-                                        }
-                                        disabled={!isAdmin}
-                                    >
-                                        <SelectTrigger
-                                            id="ss-interval"
-                                            className="bg-muted border-border"
-                                        >
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="5">
-                                                Every 5 minutes
-                                            </SelectItem>
-                                            <SelectItem value="10">
-                                                Every 10 minutes
-                                            </SelectItem>
-                                            <SelectItem value="15">
-                                                Every 15 minutes
-                                            </SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                                <div className="grid gap-2 max-w-xs">
-                                    <Label
-                                        htmlFor="ss-first-delay"
-                                        className="text-foreground"
-                                    >
-                                        First capture delay
-                                    </Label>
-                                    <Input
-                                        id="ss-first-delay"
-                                        type="number"
-                                        min={0}
-                                        max={60}
-                                        value={screenshotFirstCaptureDelayMin}
-                                        onChange={(e) =>
-                                            setScreenshotFirstCaptureDelayMin(
-                                                e.target.value,
-                                            )
-                                        }
-                                        disabled={!isAdmin}
-                                        className="bg-muted border-border text-foreground w-28"
-                                    />
-                                    <p className="text-xs text-muted-foreground">
-                                        Minutes before first screenshot when
-                                        timer starts (0 = immediate)
-                                    </p>
-                                </div>
-                                <Separator className="bg-muted" />
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <Label className="text-foreground">
-                                            Blur Screenshots
-                                        </Label>
-                                        <p className="text-xs text-muted-foreground">
-                                            Apply blur to screenshots for
-                                            privacy
-                                        </p>
-                                    </div>
-                                    <Switch
-                                        checked={screenshotBlur}
-                                        onCheckedChange={setScreenshotBlur}
-                                        disabled={!isAdmin}
-                                    />
-                                </div>
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <Label className="text-foreground">
-                                            Capture only when app visible
-                                        </Label>
-                                        <p className="text-xs text-muted-foreground">
-                                            Skip screenshots when desktop app is
-                                            minimized (reduces permission
-                                            prompts)
-                                        </p>
-                                    </div>
-                                    <Switch
-                                        checked={captureOnlyWhenVisible}
-                                        onCheckedChange={
-                                            setCaptureOnlyWhenVisible
-                                        }
-                                        disabled={!isAdmin}
-                                    />
-                                </div>
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <Label className="text-foreground">
-                                            Multi-monitor capture
-                                        </Label>
-                                        <p className="text-xs text-muted-foreground">
-                                            Capture all monitors and composite
-                                            into one image
-                                        </p>
-                                    </div>
-                                    <Switch
-                                        checked={captureMultiMonitor}
-                                        onCheckedChange={setCaptureMultiMonitor}
-                                        disabled={!isAdmin}
-                                    />
-                                </div>
-                            </CardContent>
-                        </Card>
-
-                        {/* Tracking Settings */}
-                        <Card className="border-border bg-card">
-                            <CardHeader>
-                                <CardTitle className="text-foreground">
-                                    Time Tracking
-                                </CardTitle>
-                                <CardDescription className="text-muted-foreground">
-                                    Configure time tracking behavior
-                                </CardDescription>
-                            </CardHeader>
-                            <CardContent className="space-y-6">
-                                <div className="grid gap-2 max-w-xs">
-                                    <Label className="text-foreground">
-                                        Idle detection
-                                    </Label>
-                                    <Select
-                                        value={
-                                            [5, 10, 20].includes(
-                                                parseInt(idleTimeout, 10),
-                                            )
-                                                ? idleTimeout
-                                                : "custom"
-                                        }
-                                        onValueChange={(v) => {
-                                            if (v === "custom")
-                                                setIdleTimeout(
-                                                    idleTimeoutCustom || "15",
-                                                );
-                                            else if (v) setIdleTimeout(v);
-                                        }}
-                                        disabled={!isAdmin}
-                                    >
-                                        <SelectTrigger className="bg-muted border-border">
-                                            <SelectValue placeholder="Idle timeout" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="5">
-                                                5 minutes
-                                            </SelectItem>
-                                            <SelectItem value="10">
-                                                10 minutes
-                                            </SelectItem>
-                                            <SelectItem value="20">
-                                                20 minutes
-                                            </SelectItem>
-                                            <SelectItem value="custom">
-                                                Custom
-                                            </SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                    {(idleTimeout === "custom" ||
-                                        ![5, 10, 20].includes(
-                                            parseInt(idleTimeout, 10),
-                                        )) && (
-                                        <div className="flex items-center gap-2">
-                                            <Input
-                                                type="number"
-                                                min="1"
-                                                max="30"
-                                                value={
-                                                    idleTimeout === "custom"
-                                                        ? idleTimeoutCustom
-                                                        : idleTimeout
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                    <div className="grid gap-1.5">
+                                        <Label htmlFor="current-password" className="text-xs">Current password</Label>
+                                        <PasswordInput
+                                            id="current-password"
+                                            autoComplete="current-password"
+                                            aria-describedby={passwordErrors.current_password ? "current-password-error" : undefined}
+                                            aria-invalid={!!passwordErrors.current_password}
+                                            value={currentPassword}
+                                            onChange={(e) => {
+                                                setCurrentPassword(e.target.value);
+                                                if (passwordErrors.current_password) {
+                                                    setPasswordErrors((prev) => ({ ...prev, current_password: undefined }));
                                                 }
-                                                onChange={(e) => {
-                                                    const v = e.target.value;
-                                                    setIdleTimeout("custom");
-                                                    setIdleTimeoutCustom(v);
-                                                }}
-                                                disabled={!isAdmin}
-                                                className="w-24 bg-muted border-border text-foreground"
-                                            />
-                                            <span className="text-xs text-muted-foreground">
-                                                minutes
-                                            </span>
-                                        </div>
-                                    )}
-                                    <p className="text-xs text-muted-foreground">
-                                        Show idle alert after this many minutes
-                                        of no keyboard/mouse activity.
-                                    </p>
-                                </div>
-                                <div className="grid gap-2 max-w-xs">
-                                    <Label className="text-foreground">
-                                        When idle is detected
-                                    </Label>
-                                    <Select
-                                        value={keepIdleTime}
-                                        onValueChange={(v) => {
-                                            if (v)
-                                                setKeepIdleTime(
-                                                    v as "prompt" | "never",
-                                                );
-                                        }}
-                                        disabled={!isAdmin}
-                                    >
-                                        <SelectTrigger className="bg-muted border-border">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="prompt">
-                                                Prompt (Continue tracking /
-                                                Stop timer)
-                                            </SelectItem>
-                                            <SelectItem value="never">
-                                                Always discard idle time
-                                            </SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                    <p className="text-xs text-muted-foreground">
-                                        Whether to ask before discarding the
-                                        idle period, or discard it silently and
-                                        keep tracking. Idle time is never
-                                        counted as work either way.
-                                    </p>
-                                </div>
-                                <div className="grid gap-2 max-w-xs">
-                                    <div className="flex items-center justify-between gap-4">
-                                        <div>
-                                            <Label className="text-foreground">
-                                                Idle alert auto-stop
-                                            </Label>
-                                            <p className="text-xs text-muted-foreground">
-                                                In <strong>Prompt</strong> mode,
-                                                auto-stop the timer if the idle
-                                                popup gets no response.
+                                            }}
+                                            className={`h-9 text-sm ${passwordErrors.current_password ? "border-destructive focus-visible:ring-destructive" : ""}`}
+                                        />
+                                        {passwordErrors.current_password && (
+                                            <p id="current-password-error" className="text-xs text-destructive" role="alert">
+                                                {passwordErrors.current_password}
                                             </p>
-                                        </div>
-                                        <Switch
-                                            checked={idleAlertAutoStopEnabled}
-                                            onCheckedChange={
-                                                setIdleAlertAutoStopEnabled
-                                            }
+                                        )}
+                                    </div>
+                                    <div className="grid gap-1.5">
+                                        <Label htmlFor="new-password" className="text-xs">New password</Label>
+                                        <PasswordInput
+                                            id="new-password"
+                                            autoComplete="new-password"
+                                            aria-describedby={`new-password-hint${passwordErrors.password ? " new-password-error" : ""}`}
+                                            aria-invalid={!!passwordErrors.password}
+                                            value={newPassword}
+                                            onChange={(e) => {
+                                                setNewPassword(e.target.value);
+                                                if (passwordErrors.password) {
+                                                    setPasswordErrors((prev) => ({ ...prev, password: undefined }));
+                                                }
+                                            }}
+                                            className={`h-9 text-sm ${passwordErrors.password ? "border-destructive focus-visible:ring-destructive" : ""}`}
+                                        />
+                                        <p id="new-password-hint" className="text-[0.6rem] text-muted-foreground">
+                                            Minimum 8 characters
+                                        </p>
+                                        {passwordErrors.password && (
+                                            <p id="new-password-error" className="text-xs text-destructive" role="alert">
+                                                {passwordErrors.password}
+                                            </p>
+                                        )}
+                                    </div>
+                                    <div className="grid gap-1.5">
+                                        <Label htmlFor="new-password-confirm" className="text-xs">Confirm password</Label>
+                                        <PasswordInput
+                                            id="new-password-confirm"
+                                            autoComplete="new-password"
+                                            aria-describedby={passwordErrors.password_confirmation ? "confirm-password-error" : undefined}
+                                            aria-invalid={!!passwordErrors.password_confirmation}
+                                            value={newPasswordConfirm}
+                                            onChange={(e) => {
+                                                setNewPasswordConfirm(e.target.value);
+                                                if (passwordErrors.password_confirmation) {
+                                                    setPasswordErrors((prev) => ({ ...prev, password_confirmation: undefined }));
+                                                }
+                                            }}
+                                            className={`h-9 text-sm ${passwordErrors.password_confirmation ? "border-destructive focus-visible:ring-destructive" : ""}`}
+                                        />
+                                        {passwordErrors.password_confirmation && (
+                                            <p id="confirm-password-error" className="text-xs text-destructive" role="alert">
+                                                {passwordErrors.password_confirmation}
+                                            </p>
+                                        )}
+                                    </div>
+                                </div>
+                                <div>
+                                    <Button
+                                        size="sm"
+                                        className="h-8 text-xs"
+                                        onClick={handleChangePassword}
+                                        disabled={changePasswordMutation.isPending}
+                                    >
+                                        {changePasswordMutation.isPending ? (
+                                            <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                                        ) : (
+                                            <Lock className="h-3.5 w-3.5 mr-1.5" />
+                                        )}
+                                        Update Password
+                                    </Button>
+                                </div>
+                            </SectionRow>
+
+                            {/* Organization */}
+                            <SectionRow
+                                icon={Settings}
+                                iconColor="text-emerald-500"
+                                iconBg="bg-emerald-500/10"
+                                title="Organization"
+                                description="General organization settings visible to all members."
+                            >
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div className="grid gap-1.5">
+                                        <Label htmlFor="org-name" className="text-xs">Organization Name</Label>
+                                        <Input
+                                            id="org-name"
+                                            className="h-9 text-sm"
+                                            value={orgName}
+                                            onChange={(e) => setOrgName(e.target.value)}
                                             disabled={!isAdmin}
                                         />
                                     </div>
-                                    {idleAlertAutoStopEnabled && (
-                                        <>
-                                            <Input
-                                                type="number"
-                                                min="1"
-                                                max="240"
-                                                value={idleAlertAutoStopMin}
-                                                onChange={(e) =>
-                                                    setIdleAlertAutoStopMin(
-                                                        e.target.value,
-                                                    )
-                                                }
-                                                disabled={!isAdmin}
-                                                className="w-28 bg-muted border-border text-foreground"
+                                    <div className="grid gap-1.5">
+                                        <Label htmlFor="org-tz" className="text-xs">Timezone</Label>
+                                        <Select
+                                            value={timezone}
+                                            onValueChange={(v) => v && setTimezone(v)}
+                                            disabled={!isAdmin}
+                                        >
+                                            <SelectTrigger id="org-tz" className="h-9 text-sm">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {timezones.map((tz) => (
+                                                    <SelectItem key={tz} value={tz}>
+                                                        {tz.replace(/_/g, " ")}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
+                                <div className="grid gap-1.5">
+                                    <Label htmlFor="org-slug" className="text-xs">Organization Slug</Label>
+                                    <div className="flex items-center gap-2 max-w-md">
+                                        <Input
+                                            id="org-slug"
+                                            value={data?.organization.slug ?? ""}
+                                            readOnly
+                                            className="h-9 text-sm bg-muted/50 font-mono"
+                                            onFocus={(e) => e.target.select()}
+                                        />
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-9 w-9 p-0 shrink-0"
+                                            onClick={handleCopySlug}
+                                            disabled={!data?.organization.slug}
+                                            aria-label="Copy organization slug"
+                                        >
+                                            <Copy className="h-3.5 w-3.5" />
+                                        </Button>
+                                    </div>
+                                    <p className="text-[0.6rem] text-muted-foreground">
+                                        Public identifier — case sensitive. Copy rather than retyping.
+                                    </p>
+                                </div>
+
+                                {isAdmin && (
+                                    <>
+                                        <div className="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-3">
+                                            <div className="min-w-0">
+                                                <Label className="text-xs">Idle alert emails</Label>
+                                                <p className="text-[0.6rem] text-muted-foreground">
+                                                    Send an email when an employee remains idle
+                                                </p>
+                                            </div>
+                                            <Switch
+                                                checked={idleAlertEmailEnabled}
+                                                onCheckedChange={setIdleAlertEmailEnabled}
+                                                aria-label="Idle alert emails"
                                             />
-                                            <span className="text-xs text-muted-foreground">
-                                                minutes (max 4 hours). Desktop
-                                                shows a countdown in the idle
-                                                popup.
+                                        </div>
+                                        {idleAlertEmailEnabled && (
+                                            <div className="grid gap-1.5 max-w-[160px]">
+                                                <Label htmlFor="idle-alert-email-cooldown" className="text-xs">
+                                                    Cooldown (minutes)
+                                                </Label>
+                                                <Input
+                                                    id="idle-alert-email-cooldown"
+                                                    type="number"
+                                                    min={5}
+                                                    max={1440}
+                                                    value={idleAlertEmailCooldownMin}
+                                                    onChange={(e) => setIdleAlertEmailCooldownMin(e.target.value)}
+                                                    className="h-9 text-sm"
+                                                />
+                                                <p className="text-[0.6rem] text-muted-foreground">
+                                                    Min time between emails per employee
+                                                </p>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+
+                                <div className="flex items-center gap-3 text-xs text-muted-foreground rounded-lg bg-muted/40 px-3 py-2">
+                                    <span>
+                                        Plan:{" "}
+                                        <strong className="text-foreground capitalize">
+                                            {data?.organization.plan}
+                                        </strong>
+                                    </span>
+                                    {data?.organization.trial_ends_at && (
+                                        <>
+                                            <span className="text-border">|</span>
+                                            <span>
+                                                Trial ends:{" "}
+                                                {new Date(data.organization.trial_ends_at).toLocaleDateString()}
                                             </span>
                                         </>
                                     )}
-                                    {!idleAlertAutoStopEnabled && (
-                                        <p className="text-xs text-muted-foreground">
-                                            Disabled — the idle popup stays open
-                                            until the user chooses Keep,
-                                            Discard, Reassign, or Stop.
-                                        </p>
-                                    )}
                                 </div>
-                                <div className="grid gap-2 max-w-xs">
-                                    <Label className="text-foreground">
-                                        Idle check interval
-                                    </Label>
-                                    <Input
-                                        type="number"
-                                        min={1}
-                                        max={60}
-                                        value={idleCheckIntervalSec}
-                                        onChange={(e) =>
-                                            setIdleCheckIntervalSec(
-                                                e.target.value,
-                                            )
-                                        }
-                                        disabled={!isAdmin}
-                                        className="w-28 bg-muted border-border text-foreground"
-                                    />
-                                    <p className="text-xs text-muted-foreground">
-                                        How often (seconds) the desktop app
-                                        checks for idle activity
-                                    </p>
-                                </div>
-                                <Separator className="bg-muted" />
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <Label className="text-foreground">
-                                            Screenshot on idle resume
-                                        </Label>
-                                        <p className="text-xs text-muted-foreground">
-                                            Capture one screenshot immediately
-                                            after idle alert is
-                                            resolved/discarded.
-                                        </p>
-                                    </div>
-                                    <Switch
-                                        checked={screenshotImmediateAfterIdle}
-                                        onCheckedChange={
-                                            setScreenshotImmediateAfterIdle
-                                        }
-                                        disabled={!isAdmin}
-                                    />
-                                </div>
-                            </CardContent>
-                        </Card>
+                            </SectionRow>
 
-                        {/* Policies */}
-                        <Card className="border-border bg-card">
-                            <CardHeader>
-                                <CardTitle className="text-foreground">
-                                    Policies
-                                </CardTitle>
-                                <CardDescription className="text-muted-foreground">
-                                    Rules that apply to all employees in the
-                                    organization
-                                </CardDescription>
-                            </CardHeader>
-                            <CardContent className="space-y-6">
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <Label className="text-foreground">
-                                            Track browser URLs
-                                        </Label>
-                                        <p className="text-xs text-muted-foreground">
-                                            Record the active browser URL
-                                            alongside each screenshot
+                            {/* Billing */}
+                            {isAdmin && (
+                                <SectionRow
+                                    icon={CreditCard}
+                                    iconColor="text-violet-500"
+                                    iconBg="bg-violet-500/10"
+                                    title="Billing"
+                                    description="Manage your subscription and payment methods."
+                                    last
+                                >
+                                    <Link href="/settings/billing">
+                                        <Button variant="outline" size="sm" className="h-8 text-xs">
+                                            <CreditCard className="h-3.5 w-3.5 mr-1.5" />
+                                            Manage Billing
+                                        </Button>
+                                    </Link>
+                                </SectionRow>
+                            )}
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+
+                {/* ═══════════════ Tracking Tab ═══════════════ */}
+                {isAdmin && (
+                    <TabsContent value="tracking" className="mt-4">
+                        <Card className="border-border">
+                            <CardContent className="p-5 sm:p-6">
+                                {/* Screenshots */}
+                                <SectionRow
+                                    icon={Camera}
+                                    iconColor="text-blue-500"
+                                    iconBg="bg-blue-500/10"
+                                    title="Screenshots"
+                                    description="Configure when and how screenshots are captured."
+                                >
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <div className="grid gap-1.5">
+                                            <Label htmlFor="ss-interval" className="text-xs">Capture Interval</Label>
+                                            <Select
+                                                value={screenshotInterval}
+                                                onValueChange={(v) => v && setScreenshotInterval(v)}
+                                                disabled={!isAdmin}
+                                            >
+                                                <SelectTrigger id="ss-interval" className="h-9 text-sm">
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="5">Every 5 minutes</SelectItem>
+                                                    <SelectItem value="10">Every 10 minutes</SelectItem>
+                                                    <SelectItem value="15">Every 15 minutes</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                        <div className="grid gap-1.5">
+                                            <Label htmlFor="ss-first-delay" className="text-xs">First capture delay</Label>
+                                            <Input
+                                                id="ss-first-delay"
+                                                type="number"
+                                                min={0}
+                                                max={60}
+                                                value={screenshotFirstCaptureDelayMin}
+                                                onChange={(e) => setScreenshotFirstCaptureDelayMin(e.target.value)}
+                                                disabled={!isAdmin}
+                                                className="h-9 text-sm"
+                                            />
+                                            <p className="text-[0.6rem] text-muted-foreground">
+                                                Minutes before first screenshot (0 = immediate)
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-3">
+                                            <div className="min-w-0">
+                                                <Label className="text-xs">Blur Screenshots</Label>
+                                                <p className="text-[0.6rem] text-muted-foreground">Apply blur for privacy</p>
+                                            </div>
+                                            <Switch checked={screenshotBlur} onCheckedChange={setScreenshotBlur} disabled={!isAdmin} />
+                                        </div>
+                                        <div className="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-3">
+                                            <div className="min-w-0">
+                                                <Label className="text-xs">Capture only when app visible</Label>
+                                                <p className="text-[0.6rem] text-muted-foreground">Skip when desktop app is minimized</p>
+                                            </div>
+                                            <Switch checked={captureOnlyWhenVisible} onCheckedChange={setCaptureOnlyWhenVisible} disabled={!isAdmin} />
+                                        </div>
+                                        <div className="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-3">
+                                            <div className="min-w-0">
+                                                <Label className="text-xs">Multi-monitor capture</Label>
+                                                <p className="text-[0.6rem] text-muted-foreground">Capture all monitors into one image</p>
+                                            </div>
+                                            <Switch checked={captureMultiMonitor} onCheckedChange={setCaptureMultiMonitor} disabled={!isAdmin} />
+                                        </div>
+                                    </div>
+                                </SectionRow>
+
+                                {/* Time Tracking */}
+                                <SectionRow
+                                    icon={Clock}
+                                    iconColor="text-emerald-500"
+                                    iconBg="bg-emerald-500/10"
+                                    title="Time Tracking"
+                                    description="Configure idle detection and tracking behavior."
+                                >
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <div className="grid gap-1.5">
+                                            <Label className="text-xs">Idle detection</Label>
+                                            <Select
+                                                value={
+                                                    [5, 10, 20].includes(parseInt(idleTimeout, 10))
+                                                        ? idleTimeout
+                                                        : "custom"
+                                                }
+                                                onValueChange={(v) => {
+                                                    if (v === "custom") setIdleTimeout(idleTimeoutCustom || "15");
+                                                    else if (v) setIdleTimeout(v);
+                                                }}
+                                                disabled={!isAdmin}
+                                            >
+                                                <SelectTrigger className="h-9 text-sm">
+                                                    <SelectValue placeholder="Idle timeout" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="5">5 minutes</SelectItem>
+                                                    <SelectItem value="10">10 minutes</SelectItem>
+                                                    <SelectItem value="20">20 minutes</SelectItem>
+                                                    <SelectItem value="custom">Custom</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                            {(idleTimeout === "custom" ||
+                                                ![5, 10, 20].includes(parseInt(idleTimeout, 10))) && (
+                                                <div className="flex items-center gap-2">
+                                                    <Input
+                                                        type="number"
+                                                        min="1"
+                                                        max="30"
+                                                        value={idleTimeout === "custom" ? idleTimeoutCustom : idleTimeout}
+                                                        onChange={(e) => {
+                                                            const v = e.target.value;
+                                                            setIdleTimeout("custom");
+                                                            setIdleTimeoutCustom(v);
+                                                        }}
+                                                        disabled={!isAdmin}
+                                                        className="w-24 h-9 text-sm"
+                                                    />
+                                                    <span className="text-xs text-muted-foreground">minutes</span>
+                                                </div>
+                                            )}
+                                            <p className="text-[0.6rem] text-muted-foreground">
+                                                Show idle alert after inactivity
+                                            </p>
+                                        </div>
+                                        <div className="grid gap-1.5">
+                                            <Label className="text-xs">When idle is detected</Label>
+                                            <Select
+                                                value={keepIdleTime}
+                                                onValueChange={(v) => {
+                                                    if (v) setKeepIdleTime(v as "prompt" | "never");
+                                                }}
+                                                disabled={!isAdmin}
+                                            >
+                                                <SelectTrigger className="h-9 text-sm">
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="prompt">Prompt user</SelectItem>
+                                                    <SelectItem value="never">Always discard</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                            <p className="text-[0.6rem] text-muted-foreground">
+                                                Ask before discarding idle time, or discard silently
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-3">
+                                            <div className="min-w-0">
+                                                <Label className="text-xs">Idle alert auto-stop</Label>
+                                                <p className="text-[0.6rem] text-muted-foreground">
+                                                    Auto-stop timer if the idle popup gets no response
+                                                </p>
+                                            </div>
+                                            <Switch checked={idleAlertAutoStopEnabled} onCheckedChange={setIdleAlertAutoStopEnabled} disabled={!isAdmin} />
+                                        </div>
+                                        {idleAlertAutoStopEnabled && (
+                                            <div className="flex items-center gap-2 pl-3">
+                                                <Input
+                                                    type="number"
+                                                    min="1"
+                                                    max="240"
+                                                    value={idleAlertAutoStopMin}
+                                                    onChange={(e) => setIdleAlertAutoStopMin(e.target.value)}
+                                                    disabled={!isAdmin}
+                                                    className="w-24 h-9 text-sm"
+                                                />
+                                                <span className="text-[0.6rem] text-muted-foreground">
+                                                    minutes (max 4 hours)
+                                                </span>
+                                            </div>
+                                        )}
+                                        <div className="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-3">
+                                            <div className="min-w-0">
+                                                <Label className="text-xs">Screenshot on idle resume</Label>
+                                                <p className="text-[0.6rem] text-muted-foreground">
+                                                    Capture after idle alert is resolved
+                                                </p>
+                                            </div>
+                                            <Switch checked={screenshotImmediateAfterIdle} onCheckedChange={setScreenshotImmediateAfterIdle} disabled={!isAdmin} />
+                                        </div>
+                                    </div>
+
+                                    <div className="grid gap-1.5 max-w-[160px]">
+                                        <Label className="text-xs">Idle check interval</Label>
+                                        <Input
+                                            type="number"
+                                            min={1}
+                                            max={60}
+                                            value={idleCheckIntervalSec}
+                                            onChange={(e) => setIdleCheckIntervalSec(e.target.value)}
+                                            disabled={!isAdmin}
+                                            className="h-9 text-sm"
+                                        />
+                                        <p className="text-[0.6rem] text-muted-foreground">Seconds between checks</p>
+                                    </div>
+                                </SectionRow>
+
+                                {/* Policies */}
+                                <SectionRow
+                                    icon={Shield}
+                                    iconColor="text-amber-500"
+                                    iconBg="bg-amber-500/10"
+                                    title="Policies"
+                                    description="Rules that apply to all employees in the organization."
+                                    last
+                                >
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-3">
+                                            <div className="min-w-0">
+                                                <Label className="text-xs">Track browser URLs</Label>
+                                                <p className="text-[0.6rem] text-muted-foreground">Record active URL with each screenshot</p>
+                                            </div>
+                                            <Switch checked={trackUrls} onCheckedChange={setTrackUrls} disabled={!isAdmin} aria-label="Track browser URLs" />
+                                        </div>
+                                        <div className="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-3">
+                                            <div className="min-w-0">
+                                                <Label className="text-xs">Allow manual time entries</Label>
+                                                <p className="text-[0.6rem] text-muted-foreground">Employees can add time entries manually</p>
+                                            </div>
+                                            <Switch checked={allowManualTime} onCheckedChange={setAllowManualTime} disabled={!isAdmin} aria-label="Allow manual time entries" />
+                                        </div>
+                                        <div className="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-3">
+                                            <div className="min-w-0">
+                                                <Label className="text-xs">Require project selection</Label>
+                                                <p className="text-[0.6rem] text-muted-foreground">Must select a project before starting timer</p>
+                                            </div>
+                                            <Switch checked={requireProject} onCheckedChange={setRequireProject} disabled={!isAdmin} aria-label="Require project selection" />
+                                        </div>
+                                    </div>
+                                    <div className="grid gap-1.5 max-w-[160px]">
+                                        <Label htmlFor="weekly-limit" className="text-xs">Weekly hour limit</Label>
+                                        <Input
+                                            id="weekly-limit"
+                                            type="number"
+                                            min={0}
+                                            max={168}
+                                            value={weeklyLimitHours}
+                                            onChange={(e) => setWeeklyLimitHours(e.target.value)}
+                                            disabled={!isAdmin}
+                                            placeholder="0 = unlimited"
+                                            className="h-9 text-sm"
+                                            aria-label="Weekly hour limit"
+                                        />
+                                        <p className="text-[0.6rem] text-muted-foreground">
+                                            Max hours per week. 0 = unlimited.
                                         </p>
                                     </div>
-                                    <Switch
-                                        checked={trackUrls}
-                                        onCheckedChange={setTrackUrls}
-                                        disabled={!isAdmin}
-                                        aria-label="Track browser URLs"
-                                    />
-                                </div>
-                                <Separator className="bg-muted" />
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <Label className="text-foreground">
-                                            Allow manual time entries
-                                        </Label>
-                                        <p className="text-xs text-muted-foreground">
-                                            Allow employees to add time entries
-                                            manually
-                                        </p>
-                                    </div>
-                                    <Switch
-                                        checked={allowManualTime}
-                                        onCheckedChange={setAllowManualTime}
-                                        disabled={!isAdmin}
-                                        aria-label="Allow manual time entries"
-                                    />
-                                </div>
-                                <Separator className="bg-muted" />
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <Label className="text-foreground">
-                                            Require project selection
-                                        </Label>
-                                        <p className="text-xs text-muted-foreground">
-                                            Employees must select a project
-                                            before starting the timer
-                                        </p>
-                                    </div>
-                                    <Switch
-                                        checked={requireProject}
-                                        onCheckedChange={setRequireProject}
-                                        disabled={!isAdmin}
-                                        aria-label="Require project selection"
-                                    />
-                                </div>
-                                <Separator className="bg-muted" />
-                                <div className="grid gap-2 max-w-xs">
-                                    <Label
-                                        htmlFor="weekly-limit"
-                                        className="text-foreground"
-                                    >
-                                        Weekly hour limit
-                                    </Label>
-                                    <Input
-                                        id="weekly-limit"
-                                        type="number"
-                                        min={0}
-                                        max={168}
-                                        value={weeklyLimitHours}
-                                        onChange={(e) =>
-                                            setWeeklyLimitHours(e.target.value)
-                                        }
-                                        disabled={!isAdmin}
-                                        placeholder="0 = unlimited"
-                                        className="bg-muted border-border text-foreground w-28"
-                                        aria-label="Weekly hour limit"
-                                    />
-                                    <p className="text-xs text-muted-foreground">
-                                        Maximum hours per week per employee. 0 =
-                                        unlimited.
-                                    </p>
-                                </div>
+                                </SectionRow>
                             </CardContent>
                         </Card>
                     </TabsContent>
                 )}
 
-                {/* Notifications Tab */}
-                <TabsContent value="notifications" className="space-y-6 mt-6">
-                    <EmailReportsCard />
+                {/* ═══════════════ Notifications Tab ═══════════════ */}
+                <TabsContent value="notifications" className="mt-4">
+                    <Card className="border-border">
+                        <CardContent className="p-5 sm:p-6">
+                            <EmailReportsCard />
+                        </CardContent>
+                    </Card>
                 </TabsContent>
             </Tabs>
         </div>
@@ -1756,7 +1467,6 @@ function EmailReportsCard() {
     const { data, isLoading, isError } = useReportSubscriptions();
     const upsertMutation = useUpsertReportSubscription();
 
-    // Find existing weekly_summary subscription if any
     const existing = data?.data?.find(
         (s: ReportSubscription) => s.report_type === "weekly_summary",
     );
@@ -1797,154 +1507,113 @@ function EmailReportsCard() {
 
     if (isLoading) {
         return (
-            <Card>
-                <CardHeader>
-                    <Skeleton className="h-6 w-40" />
-                    <Skeleton className="h-4 w-60" />
-                </CardHeader>
-                <CardContent>
-                    <Skeleton className="h-32 w-full" />
-                </CardContent>
-            </Card>
+            <div className="space-y-3">
+                <Skeleton className="h-4 w-36" />
+                <Skeleton className="h-3 w-52" />
+                <Skeleton className="h-24 w-full rounded-lg" />
+            </div>
         );
     }
 
     if (isError) {
         return (
-            <Card className="border-destructive/50">
-                <CardContent className="pt-6">
-                    <p className="text-destructive">
-                        Failed to load email report settings.
-                    </p>
-                </CardContent>
-            </Card>
+            <div className="rounded-lg border border-destructive/50 p-4">
+                <p className="text-xs text-destructive">Failed to load email report settings.</p>
+            </div>
         );
     }
 
     return (
-        <Card>
-            <CardHeader>
-                <div className="flex items-center gap-2">
-                    <Mail className="size-5 text-muted-foreground" />
-                    <CardTitle>Email Reports</CardTitle>
+        <SectionRow
+            icon={Mail}
+            iconColor="text-blue-500"
+            iconBg="bg-blue-500/10"
+            title="Email Reports"
+            description="Receive automated summaries of your tracked hours by email."
+            last
+        >
+            <div className="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-3">
+                <div className="min-w-0">
+                    <span className="text-xs font-medium">Weekly Summary</span>
+                    <p className="text-[0.6rem] text-muted-foreground">
+                        Get a weekly overview of your tracked hours and activity
+                    </p>
                 </div>
-                <CardDescription>
-                    Receive automated summaries by email
-                </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-6">
-                {/* Toggle */}
-                <div className="flex items-center justify-between">
-                    <div className="flex flex-col gap-0.5">
-                        <span className="text-sm font-medium">
-                            Weekly Summary
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                            Get a weekly overview of your tracked hours and
-                            activity
-                        </span>
+                <Switch checked={isActive} onCheckedChange={setIsActive} />
+            </div>
+
+            {isActive && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="grid gap-1.5">
+                        <Label htmlFor="email-day" className="text-xs">Day</Label>
+                        <Select
+                            value={dayOfWeek}
+                            onValueChange={(v) => { if (v) setDayOfWeek(v); }}
+                        >
+                            <SelectTrigger className="h-9 text-sm" id="email-day">
+                                <SelectValue placeholder="Select day" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {DAY_OPTIONS.map((d) => (
+                                    <SelectItem key={d.value} value={d.value}>
+                                        {d.label}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
                     </div>
-                    <Switch checked={isActive} onCheckedChange={setIsActive} />
-                </div>
-
-                {isActive && (
-                    <div className="flex flex-wrap items-end gap-4">
-                        {/* Day of week */}
-                        <div className="flex flex-col gap-1.5">
-                            <Label htmlFor="email-day">Day</Label>
-                            <Select
-                                value={dayOfWeek}
-                                onValueChange={(v) => {
-                                    if (v) setDayOfWeek(v);
-                                }}
-                            >
-                                <SelectTrigger
-                                    className="w-[160px]"
-                                    id="email-day"
-                                >
-                                    <SelectValue placeholder="Select day" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {DAY_OPTIONS.map((d) => (
-                                        <SelectItem
-                                            key={d.value}
-                                            value={d.value}
-                                        >
-                                            {d.label}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        {/* Time */}
-                        <div className="flex flex-col gap-1.5">
-                            <Label htmlFor="email-time">Time</Label>
-                            <Select
-                                value={sendTime}
-                                onValueChange={(v) => {
-                                    if (v) setSendTime(v);
-                                }}
-                            >
-                                <SelectTrigger
-                                    className="w-[120px]"
-                                    id="email-time"
-                                >
-                                    <SelectValue placeholder="Select time" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {HOUR_OPTIONS.map((h) => (
-                                        <SelectItem
-                                            key={h.value}
-                                            value={h.value}
-                                        >
-                                            {h.label}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                        {/* Timezone */}
-                        <div className="flex flex-col gap-1.5">
-                            <Label htmlFor="email-tz">Timezone</Label>
-                            <Select
-                                value={timezone}
-                                onValueChange={(v) => {
-                                    if (v) setTimezone(v);
-                                }}
-                            >
-                                <SelectTrigger
-                                    className="w-[220px]"
-                                    id="email-tz"
-                                >
-                                    <SelectValue placeholder="Select timezone" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {COMMON_TIMEZONES.map((tz) => (
-                                        <SelectItem key={tz} value={tz}>
-                                            {tz}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
+                    <div className="grid gap-1.5">
+                        <Label htmlFor="email-time" className="text-xs">Time</Label>
+                        <Select
+                            value={sendTime}
+                            onValueChange={(v) => { if (v) setSendTime(v); }}
+                        >
+                            <SelectTrigger className="h-9 text-sm" id="email-time">
+                                <SelectValue placeholder="Select time" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {HOUR_OPTIONS.map((h) => (
+                                    <SelectItem key={h.value} value={h.value}>
+                                        {h.label}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
                     </div>
-                )}
-
-                {/* Save */}
-                <div className="flex justify-end">
-                    <Button
-                        onClick={handleSave}
-                        disabled={upsertMutation.isPending}
-                    >
-                        {upsertMutation.isPending && (
-                            <Loader2 className="animate-spin mr-2" />
-                        )}
-                        Save Changes
-                    </Button>
+                    <div className="grid gap-1.5">
+                        <Label htmlFor="email-tz" className="text-xs">Timezone</Label>
+                        <Select
+                            value={timezone}
+                            onValueChange={(v) => { if (v) setTimezone(v); }}
+                        >
+                            <SelectTrigger className="h-9 text-sm" id="email-tz">
+                                <SelectValue placeholder="Select timezone" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {COMMON_TIMEZONES.map((tz) => (
+                                    <SelectItem key={tz} value={tz}>
+                                        {tz}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
                 </div>
-            </CardContent>
-        </Card>
+            )}
+
+            <div className="flex justify-end">
+                <Button
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={handleSave}
+                    disabled={upsertMutation.isPending}
+                >
+                    {upsertMutation.isPending && (
+                        <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                    )}
+                    Save Changes
+                </Button>
+            </div>
+        </SectionRow>
     );
 }

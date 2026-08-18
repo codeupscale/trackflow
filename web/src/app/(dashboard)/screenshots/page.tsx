@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { format, subDays, parseISO } from 'date-fns';
+import { format, subDays, parseISO, isToday, startOfWeek, isWithinInterval } from 'date-fns';
 import {
   Camera,
   Monitor,
@@ -19,6 +19,9 @@ import {
   FileDown,
   Clock,
   AlertTriangle,
+  ImageIcon,
+  Activity,
+  Eye,
 } from 'lucide-react';
 
 import Image from 'next/image';
@@ -362,14 +365,39 @@ export default function ScreenshotsPage() {
     };
   };
 
+  // --- Derived stats ---
+  const stats = useMemo(() => {
+    const totalCount = meta?.total ?? screenshots.length;
+    const now = new Date();
+    const todayStr = format(now, 'yyyy-MM-dd');
+    const weekStart = startOfWeek(now, { weekStartsOn: 1 });
+
+    const todayCount = screenshots.filter((s) => {
+      try { return isToday(parseISO(s.captured_at)); } catch { return false; }
+    }).length;
+
+    const weekCount = screenshots.filter((s) => {
+      try {
+        const d = parseISO(s.captured_at);
+        return isWithinInterval(d, { start: weekStart, end: now });
+      } catch { return false; }
+    }).length;
+
+    const avgActivity = screenshots.length > 0
+      ? Math.round(screenshots.reduce((sum, s) => sum + s.activity_score, 0) / screenshots.length)
+      : 0;
+
+    return { totalCount, todayCount, weekCount, avgActivity };
+  }, [screenshots, meta]);
+
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-4">
       {/* Page Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Screenshots</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            Real-time engagement across your organization&apos;s active projects.
+          <h1 className="text-lg font-semibold tracking-tight">Screenshots</h1>
+          <p className="text-xs text-muted-foreground">
+            Real-time engagement across your organization&apos;s active projects
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -386,7 +414,7 @@ export default function ScreenshotsPage() {
           <Button
             variant="outline"
             size="sm"
-            className="gap-2"
+            className="h-8 text-xs gap-1.5"
             onClick={() => {
               if (datePreset !== 'custom') {
                 setDatePreset('custom');
@@ -395,14 +423,38 @@ export default function ScreenshotsPage() {
               }
             }}
           >
-            <CalendarIcon className="h-4 w-4" />
+            <CalendarIcon className="size-3.5" />
             {datePreset === 'custom' ? 'Quick Filters' : 'Pick Date'}
           </Button>
-          <Button variant="outline" size="sm" className="gap-2">
-            <FileDown className="h-4 w-4" />
+          <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5">
+            <FileDown className="size-3.5" />
             Export Report
           </Button>
         </div>
+      </div>
+
+      {/* Stats Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { label: 'Total Screenshots', value: stats.totalCount, icon: Camera, color: 'text-blue-500', bg: 'bg-blue-500/10' },
+          { label: 'Today', value: stats.todayCount, icon: ImageIcon, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
+          { label: 'This Week', value: stats.weekCount, icon: Eye, color: 'text-violet-500', bg: 'bg-violet-500/10' },
+          { label: 'Avg Activity', value: `${stats.avgActivity}%`, icon: Activity, color: 'text-amber-500', bg: 'bg-amber-500/10' },
+        ].map((s) => (
+          <Card key={s.label} className="border-border">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-2.5">
+                <div className={cn('flex h-8 w-8 items-center justify-center rounded-lg shrink-0', s.bg)}>
+                  <s.icon className={cn('size-4', s.color)} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">{s.label}</p>
+                  <p className="text-base font-bold text-foreground tabular-nums leading-tight">{isLoading ? '-' : s.value}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
       {/* Filter Bar */}
@@ -413,10 +465,10 @@ export default function ScreenshotsPage() {
             <Popover open={userPopoverOpen} onOpenChange={setUserPopoverOpen}>
               <PopoverTrigger
                 render={
-                  <Button variant="outline" size="sm" className="gap-2 min-w-[140px] justify-start" />
+                  <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5 min-w-[140px] justify-start" />
                 }
               >
-                <Users className="h-3.5 w-3.5 shrink-0" />
+                <Users className="size-3.5 shrink-0" />
                 <span className="truncate">
                   {userFilter === 'all'
                     ? 'All Members'
@@ -463,10 +515,10 @@ export default function ScreenshotsPage() {
           <Popover open={projectPopoverOpen} onOpenChange={setProjectPopoverOpen}>
             <PopoverTrigger
               render={
-                <Button variant="outline" size="sm" className="gap-2 min-w-[140px] justify-start" />
+                <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5 min-w-[140px] justify-start" />
               }
             >
-              <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+              <FolderOpen className="size-3.5 shrink-0" />
               <span className="truncate">
                 {projectFilter === 'all'
                   ? 'All Projects'
@@ -511,26 +563,26 @@ export default function ScreenshotsPage() {
 
         {/* Date Quick Filters */}
         {datePreset !== 'custom' && (
-          <div className="flex items-center gap-1 rounded-lg border border-border bg-muted/50 p-0.5">
+          <div className="flex items-center gap-1 rounded-lg bg-muted p-1">
             {([
               { key: 'today', label: 'Today' },
               { key: 'yesterday', label: 'Yesterday' },
               { key: '7days', label: 'Last 7 Days' },
             ] as const).map(({ key, label }) => (
-              <Button
+              <button
                 key={key}
-                variant={datePreset === key ? 'default' : 'ghost'}
-                size="sm"
+                type="button"
                 className={cn(
-                  'text-xs h-7 px-3',
+                  'rounded-md px-3 py-1.5 text-[0.65rem] font-medium transition-colors',
                   datePreset === key
-                    ? ''
+                    ? 'bg-background text-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'
                 )}
                 onClick={() => handlePresetChange(key)}
+                aria-pressed={datePreset === key}
               >
                 {label}
-              </Button>
+              </button>
             ))}
           </div>
         )}
@@ -538,18 +590,16 @@ export default function ScreenshotsPage() {
 
       {/* Content */}
       {isScreenshotsError ? (
-        <Card className="border-border bg-card">
-          <CardContent className="py-16">
-            <div className="text-center">
-              <Camera className="h-10 w-10 text-red-500/60 mx-auto mb-3" />
-              <p className="text-muted-foreground font-medium">Failed to load screenshots</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                Please try again.
-              </p>
+        <Card>
+          <CardContent className="py-12">
+            <div className="flex flex-col items-center gap-2">
+              <Camera className="h-8 w-8 text-destructive/60" />
+              <p className="text-sm text-muted-foreground font-medium">Failed to load screenshots</p>
+              <p className="text-xs text-muted-foreground">Please try again.</p>
               <Button
                 variant="outline"
                 size="sm"
-                className="mt-4"
+                className="mt-2 h-8 text-xs"
                 onClick={() => refetchScreenshots()}
               >
                 Try Again
@@ -558,28 +608,28 @@ export default function ScreenshotsPage() {
           </CardContent>
         </Card>
       ) : isLoading ? (
-        <div className="space-y-8">
+        <div className="space-y-6">
           {/* Loading skeleton: simulate 2 hour groups */}
           {[0, 1].map((groupIdx) => (
-            <div key={groupIdx} className="space-y-4">
+            <div key={groupIdx} className="space-y-3">
               <div className="flex items-center gap-3">
-                <Skeleton className="h-5 w-20" />
+                <Skeleton className="h-4 w-20" />
                 <Separator className="flex-1" />
               </div>
-              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {Array.from({ length: 4 }).map((_, i) => (
-                  <Card key={i} className="overflow-hidden border-border bg-card">
+                  <Card key={i} className="overflow-hidden">
                     <Skeleton className="aspect-[16/10] w-full" />
                     <CardContent className="p-3 space-y-2">
                       <div className="flex items-center gap-2">
-                        <Skeleton className="h-6 w-6 rounded-full" />
-                        <Skeleton className="h-4 w-24" />
-                        <Skeleton className="h-4 w-12 ml-auto" />
+                        <Skeleton className="h-5 w-5 rounded-full" />
+                        <Skeleton className="h-3 w-20" />
+                        <Skeleton className="h-3 w-10 ml-auto" />
                       </div>
-                      <Skeleton className="h-3 w-32" />
+                      <Skeleton className="h-2.5 w-28" />
                       <div className="flex items-center gap-3">
-                        <Skeleton className="h-3 w-16" />
-                        <Skeleton className="h-3 w-16" />
+                        <Skeleton className="h-2.5 w-12" />
+                        <Skeleton className="h-2.5 w-12" />
                       </div>
                     </CardContent>
                   </Card>
@@ -589,30 +639,30 @@ export default function ScreenshotsPage() {
           ))}
         </div>
       ) : screenshots.length === 0 ? (
-        <Card className="border-border bg-card">
-          <CardContent className="py-16">
-            <div className="text-center">
-              <Camera className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-              <p className="text-muted-foreground font-medium">No screenshots found</p>
-              <p className="text-sm text-muted-foreground mt-1">
+        <Card>
+          <CardContent className="py-12">
+            <div className="flex flex-col items-center gap-2">
+              <Camera className="h-8 w-8 text-muted-foreground/40" />
+              <p className="text-sm text-muted-foreground font-medium">No screenshots found</p>
+              <p className="text-xs text-muted-foreground">
                 Adjust your date range or filters to view screenshots
               </p>
             </div>
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-6">
           {/* Hourly groups */}
           {[...hourlyGroups.entries()].map(([hourKey, group]) => (
-            <div key={hourKey} className="space-y-4">
+            <div key={hourKey} className="space-y-3">
               {/* Hour heading */}
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-2 shrink-0">
-                  <Clock className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-sm font-semibold text-foreground">
+                  <Clock className="size-3.5 text-muted-foreground" />
+                  <span className="text-xs font-semibold text-foreground">
                     {formatHourLabel(hourKey)}
                   </span>
-                  <Badge variant="secondary" className="text-[10px] tabular-nums">
+                  <Badge variant="secondary" className="text-[0.6rem] h-4 px-1.5 tabular-nums">
                     {group.length}
                   </Badge>
                 </div>
@@ -620,7 +670,7 @@ export default function ScreenshotsPage() {
               </div>
 
               {/* Screenshot cards grid */}
-              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {group.map((screenshot) => (
                   <ScreenshotCard
                     key={screenshot.id}
@@ -638,28 +688,30 @@ export default function ScreenshotsPage() {
 
           {/* Pagination */}
           {meta && meta.last_page > 1 && (
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-border">
-              <p className="text-sm text-muted-foreground">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-border">
+              <p className="text-[0.65rem] text-muted-foreground tabular-nums">
                 Page {meta.current_page} of {meta.last_page} ({meta.total} screenshots)
               </p>
               <div className="flex items-center gap-2">
                 <Button
                   variant="outline"
                   size="sm"
+                  className="h-8 text-xs"
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
                   disabled={page <= 1}
                 >
-                  <ChevronLeft className="h-4 w-4 mr-1" />
+                  <ChevronLeft className="size-3.5 mr-1" />
                   Previous
                 </Button>
                 <Button
                   variant="outline"
                   size="sm"
+                  className="h-8 text-xs"
                   onClick={() => setPage((p) => Math.min(meta.last_page, p + 1))}
                   disabled={page >= meta.last_page}
                 >
                   Next
-                  <ChevronRight className="h-4 w-4 ml-1" />
+                  <ChevronRight className="size-3.5 ml-1" />
                 </Button>
               </div>
             </div>
@@ -677,21 +729,21 @@ export default function ScreenshotsPage() {
         <DialogContent className="sm:max-w-4xl bg-card border-border">
           <DialogHeader>
             <DialogTitle className="flex items-center justify-between">
-              <span className="flex items-center gap-2 text-foreground">
+              <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
                 {isManager && selectedScreenshot?.user_name && (
                   <>
                     <Avatar size="sm">
                       <AvatarFallback
                         style={{ backgroundColor: getAvatarColor(selectedScreenshot.user_avatar_color) }}
-                        className="text-white text-[10px]"
+                        className="text-white text-[9px]"
                       >
                         {getInitials(selectedScreenshot.user_name)}
                       </AvatarFallback>
                     </Avatar>
                     <span>{selectedScreenshot.user_name}</span>
                     {selectedScreenshot.project_name && (
-                      <span className="text-muted-foreground font-normal">
-                        working on <strong className="text-foreground">{selectedScreenshot.project_name}</strong>
+                      <span className="text-xs text-muted-foreground font-normal">
+                        working on <strong className="text-foreground font-medium">{selectedScreenshot.project_name}</strong>
                       </span>
                     )}
                   </>
@@ -702,37 +754,39 @@ export default function ScreenshotsPage() {
                   </span>
                 )}
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
                 <Button
                   variant="ghost"
                   size="sm"
+                  className="h-7 w-7 p-0"
                   onClick={() => navigateScreenshot(-1)}
                   disabled={currentIndex <= 0}
                   aria-label="Previous screenshot"
                 >
-                  <ChevronLeft className="h-4 w-4" />
+                  <ChevronLeft className="size-4" />
                 </Button>
-                <span className="text-sm text-muted-foreground tabular-nums">
+                <span className="text-[0.65rem] text-muted-foreground tabular-nums">
                   {currentIndex + 1} / {total}
                 </span>
                 <Button
                   variant="ghost"
                   size="sm"
+                  className="h-7 w-7 p-0"
                   onClick={() => navigateScreenshot(1)}
                   disabled={currentIndex >= total - 1}
                   aria-label="Next screenshot"
                 >
-                  <ChevronRight className="h-4 w-4" />
+                  <ChevronRight className="size-4" />
                 </Button>
               </div>
             </DialogTitle>
             <DialogDescription>
               {selectedScreenshot && (
-                <span className="flex items-center gap-2 flex-wrap">
+                <span className="flex items-center gap-2 flex-wrap text-xs">
                   <span className="text-foreground font-medium">
                     {format(parseISO(selectedScreenshot.captured_at), 'MMM d, yyyy h:mm:ss a')}
                   </span>
-                  <Badge className={cn('text-xs tabular-nums', getActivityColor(selectedScreenshot.activity_score).badge)}>
+                  <Badge className={cn('text-[0.6rem] tabular-nums', getActivityColor(selectedScreenshot.activity_score).badge)}>
                     {selectedScreenshot.activity_score}%
                   </Badge>
                   {selectedScreenshot.app_name && (
@@ -771,47 +825,47 @@ export default function ScreenshotsPage() {
                 onClick={handleRefreshUrls}
               >
                 <Monitor className="h-8 w-8 text-muted-foreground" />
-                <span className="text-xs text-muted-foreground">Click to reload images</span>
+                <span className="text-[0.65rem] text-muted-foreground">Click to reload images</span>
               </div>
             ) : (
-              <div className="flex flex-col items-center gap-3 text-muted-foreground">
-                <Monitor className="h-16 w-16" />
-                <span className="text-sm">Screenshot preview not available</span>
+              <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                <Monitor className="h-12 w-12" />
+                <span className="text-xs">Screenshot preview not available</span>
               </div>
             )}
           </div>
 
           {/* Session Summary + Actions */}
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between pt-2">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between pt-1">
             {/* Session summary */}
             {selectedScreenshot && (() => {
               const session = getSessionInfo(selectedScreenshot);
               if (!session) return null;
               return (
-                <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                <div className="flex items-center gap-3 text-[0.65rem] text-muted-foreground">
                   <div className="flex items-center gap-1.5">
-                    <Clock className="h-3.5 w-3.5" />
+                    <Clock className="size-3" />
                     <span>{session.timeRange}</span>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span
                       className={cn(
-                        'inline-block h-2 w-2 rounded-full',
+                        'inline-block h-1.5 w-1.5 rounded-full',
                         getActivityDotColor(session.avgActivity)
                       )}
                     />
                     <span>Avg {session.avgActivity}%</span>
                   </div>
                   {selectedScreenshot.keyboard_events != null && (
-                    <div className="flex items-center gap-1.5">
-                      <Keyboard className="h-3.5 w-3.5" />
-                      <span>{selectedScreenshot.keyboard_events}</span>
+                    <div className="flex items-center gap-1">
+                      <Keyboard className="size-3" />
+                      <span className="tabular-nums">{selectedScreenshot.keyboard_events}</span>
                     </div>
                   )}
                   {selectedScreenshot.mouse_events != null && (
-                    <div className="flex items-center gap-1.5">
-                      <Mouse className="h-3.5 w-3.5" />
-                      <span>{selectedScreenshot.mouse_events}</span>
+                    <div className="flex items-center gap-1">
+                      <Mouse className="size-3" />
+                      <span className="tabular-nums">{selectedScreenshot.mouse_events}</span>
                     </div>
                   )}
                   {session.count > 1 && (
@@ -833,8 +887,8 @@ export default function ScreenshotsPage() {
                   rel="noopener noreferrer"
                   className="inline-flex"
                 >
-                  <Button variant="outline" size="sm" className="border-border text-foreground">
-                    <Download className="h-4 w-4 mr-2" />
+                  <Button variant="outline" size="sm" className="h-8 text-xs">
+                    <Download className="size-3.5 mr-1.5" />
                     Download
                   </Button>
                 </a>
@@ -843,10 +897,11 @@ export default function ScreenshotsPage() {
                 <Button
                   variant="destructive"
                   size="sm"
+                  className="h-8 text-xs"
                   onClick={() => handleDelete(selectedScreenshot.id)}
                   disabled={deleteScreenshot.isPending}
                 >
-                  <Trash2 className="h-4 w-4 mr-2" />
+                  <Trash2 className="size-3.5 mr-1.5" />
                   {deleteScreenshot.isPending ? 'Deleting...' : 'Delete'}
                 </Button>
               )}
@@ -882,7 +937,7 @@ function ScreenshotCard({
 
   return (
     <Card
-      className="overflow-hidden cursor-pointer group hover:ring-1 hover:ring-ring/20 transition-all border-border bg-card"
+      className="overflow-hidden cursor-pointer group hover:ring-1 hover:ring-ring/20 transition-all border-border"
       onClick={onClick}
     >
       {/* Thumbnail */}
@@ -904,85 +959,82 @@ function ScreenshotCard({
             onClick={(e) => { e.stopPropagation(); onRefreshUrls(); }}
           >
             <Monitor className="h-8 w-8 text-muted-foreground" />
-            <span className="text-xs text-muted-foreground">Click to reload</span>
+            <span className="text-[0.65rem] text-muted-foreground">Click to reload</span>
           </div>
         ) : (
-          <div className="flex flex-col items-center gap-2 text-muted-foreground">
-            <Monitor className="h-8 w-8" />
-            <span className="text-xs">No preview</span>
+          <div className="flex flex-col items-center gap-1.5 text-muted-foreground">
+            <Monitor className="h-6 w-6" />
+            <span className="text-[0.6rem]">No preview</span>
           </div>
         )}
 
         {/* Time badge overlay - top left */}
-        <div className="absolute top-2 left-2">
-          <span className="inline-flex items-center gap-1 rounded-md bg-black/70 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm">
+        <div className="absolute top-1.5 left-1.5">
+          <span className="inline-flex items-center gap-1 rounded-md bg-black/70 px-1.5 py-0.5 text-[0.6rem] font-medium text-white backdrop-blur-sm">
             {timeLabel}
           </span>
         </div>
 
         {/* Low activity badge - top right */}
         {isLowActivity && (
-          <div className="absolute top-2 right-2">
-            <span className="inline-flex items-center gap-1 rounded-md bg-red-600/90 px-2 py-0.5 text-[10px] font-semibold text-white uppercase tracking-wider">
-              <AlertTriangle className="h-3 w-3" />
-              Low Activity
+          <div className="absolute top-1.5 right-1.5">
+            <span className="inline-flex items-center gap-1 rounded-md bg-red-600/90 px-1.5 py-0.5 text-[0.55rem] font-semibold text-white uppercase tracking-wider">
+              <AlertTriangle className="size-2.5" />
+              Low
             </span>
           </div>
         )}
 
         {/* Expand icon on hover */}
-        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-end justify-end p-2 opacity-0 group-hover:opacity-100">
+        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-end justify-end p-1.5 opacity-0 group-hover:opacity-100">
           <button
-            className="rounded-md bg-black/60 p-1.5 text-white hover:bg-black/80 transition-colors"
+            className="rounded-md bg-black/60 p-1 text-white hover:bg-black/80 transition-colors"
             onClick={(e) => {
               e.stopPropagation();
               onClick();
             }}
             aria-label="Expand screenshot"
           >
-            <Maximize2 className="h-3.5 w-3.5" />
+            <Maximize2 className="size-3" />
           </button>
         </div>
       </div>
 
       {/* Card body */}
-      <CardContent className="p-3 space-y-2">
+      <CardContent className="p-2.5 space-y-1.5">
         {/* User info row */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           {isManager && (
             <>
               <Avatar size="sm">
                 <AvatarFallback
                   style={{ backgroundColor: getAvatarColor(screenshot.user_avatar_color) }}
-                  className="text-white text-[10px]"
+                  className="text-white text-[8px]"
                 >
                   {getInitials(screenshot.user_name)}
                 </AvatarFallback>
               </Avatar>
-              <span className="text-sm font-medium text-foreground truncate flex-1">
+              <span className="text-[0.75rem] font-medium text-foreground truncate flex-1">
                 {screenshot.user_name}
               </span>
             </>
           )}
-          <div className="flex items-center gap-1.5 ml-auto shrink-0">
+          <div className="flex items-center gap-1 ml-auto shrink-0">
             <span
               className={cn(
-                'inline-block h-2 w-2 rounded-full',
+                'inline-block h-1.5 w-1.5 rounded-full',
                 getActivityDotColor(screenshot.activity_score)
               )}
             />
-            <span className={cn('text-xs tabular-nums font-medium', activityColors.text)}>
+            <span className={cn('text-[0.65rem] tabular-nums font-medium', activityColors.text)}>
               {screenshot.activity_score}%
-            </span>
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">
-              activity
             </span>
           </div>
         </div>
 
         {/* Project name */}
         {screenshot.project_name && (
-          <p className="text-xs text-muted-foreground truncate">
+          <p className="text-[0.65rem] text-muted-foreground truncate leading-tight">
             {screenshot.project_name}
             {screenshot.app_name && (
               <span className="text-muted-foreground/60"> - {screenshot.app_name}</span>
@@ -991,26 +1043,26 @@ function ScreenshotCard({
         )}
 
         {/* Footer: keyboard/mouse counts */}
-        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2.5 text-[0.65rem] text-muted-foreground">
           {screenshot.keyboard_events != null ? (
-            <div className="flex items-center gap-1">
-              <Keyboard className="h-3 w-3" />
+            <div className="flex items-center gap-0.5">
+              <Keyboard className="size-2.5" />
               <span className="tabular-nums">{screenshot.keyboard_events}</span>
             </div>
           ) : (
-            <div className="flex items-center gap-1">
-              <Keyboard className="h-3 w-3 opacity-40" />
+            <div className="flex items-center gap-0.5">
+              <Keyboard className="size-2.5 opacity-40" />
               <span className="opacity-40">&mdash;</span>
             </div>
           )}
           {screenshot.mouse_events != null ? (
-            <div className="flex items-center gap-1">
-              <Mouse className="h-3 w-3" />
+            <div className="flex items-center gap-0.5">
+              <Mouse className="size-2.5" />
               <span className="tabular-nums">{screenshot.mouse_events}</span>
             </div>
           ) : (
-            <div className="flex items-center gap-1">
-              <Mouse className="h-3 w-3 opacity-40" />
+            <div className="flex items-center gap-0.5">
+              <Mouse className="size-2.5 opacity-40" />
               <span className="opacity-40">&mdash;</span>
             </div>
           )}
