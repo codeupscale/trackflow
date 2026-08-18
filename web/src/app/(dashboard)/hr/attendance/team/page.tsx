@@ -1,13 +1,12 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { Search, Users, X } from 'lucide-react';
+import { CalendarDays, Clock, Search, Users, X, CheckCircle2, XCircle, Timer } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Separator } from '@/components/ui/separator';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -25,7 +24,6 @@ import {
   PaginationPrevious,
 } from '@/components/ui/pagination';
 
-import { AttendanceStatusBadge } from '@/components/hr/AttendanceStatusBadge';
 import { CheckInStatusBadge, type CheckInBadgeStatus } from '@/components/hr/CheckInStatusBadge';
 import { DepartmentSelect } from '@/components/hr/DepartmentSelect';
 import {
@@ -39,6 +37,15 @@ import { useTodayStatus } from '@/hooks/hr/use-check-in';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
 import { formatDate } from '@/lib/utils';
+
+const statusDot: Record<string, { dot: string; text: string; label: string }> = {
+  present: { dot: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-400', label: 'Present' },
+  absent: { dot: 'bg-red-500', text: 'text-red-600 dark:text-red-400', label: 'Absent' },
+  half_day: { dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400', label: 'Half Day' },
+  on_leave: { dot: 'bg-blue-500', text: 'text-blue-600 dark:text-blue-400', label: 'On Leave' },
+  holiday: { dot: 'bg-violet-500', text: 'text-violet-600 dark:text-violet-400', label: 'Holiday' },
+  weekend: { dot: 'bg-muted-foreground/40', text: 'text-muted-foreground', label: 'Weekend' },
+};
 
 export default function TeamAttendancePage() {
   const router = useRouter();
@@ -110,6 +117,15 @@ export default function TeamAttendancePage() {
   const records = data?.data ?? [];
   const totalPages = data?.last_page ?? 1;
 
+  // Derive summary stats from the current page of records
+  const stats = useMemo(() => {
+    const present = records.filter((r) => r.status === 'present').length;
+    const absent = records.filter((r) => r.status === 'absent').length;
+    const late = records.filter((r) => (r.check_in_late_minutes ?? r.late_minutes ?? 0) > 0).length;
+    const overtimeTotal = records.reduce((sum, r) => sum + Number(r.overtime_hours || 0), 0);
+    return { present, absent, late, overtimeTotal };
+  }, [records]);
+
   // Role gate: show loading until auth resolves
   if (!user || !isManager) {
     return (
@@ -123,28 +139,28 @@ export default function TeamAttendancePage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Team Attendance</h1>
-        <p className="text-sm text-muted-foreground mt-1">
+        <h1 className="text-lg font-semibold tracking-tight">Team Attendance</h1>
+        <p className="text-xs text-muted-foreground">
           View attendance records for your team members
         </p>
       </div>
 
       {/* Filters */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
-        <div className="flex flex-col gap-1.5 w-full sm:w-[260px]">
-          <Label htmlFor="employee-search">Employee</Label>
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+        <div className="flex flex-col gap-1 w-full sm:w-[220px]">
+          <Label htmlFor="employee-search" className="text-xs">Employee</Label>
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
             <Input
               id="employee-search"
               type="search"
               placeholder="Search by name, email, or ID..."
               value={search}
               onChange={(e) => handleSearchChange(e.target.value)}
-              className="pl-9 pr-9"
+              className="pl-8 pr-8 h-8 text-xs"
               aria-label="Search employees"
             />
             {search && (
@@ -154,15 +170,15 @@ export default function TeamAttendancePage() {
                 size="icon"
                 onClick={clearSearch}
                 aria-label="Clear employee search"
-                className="absolute right-1 top-1/2 -translate-y-1/2 size-7 text-muted-foreground hover:text-foreground"
+                className="absolute right-0.5 top-1/2 -translate-y-1/2 size-7 text-muted-foreground hover:text-foreground"
               >
-                <X className="size-3.5" />
+                <X className="size-3" />
               </Button>
             )}
           </div>
         </div>
-        <div className="flex flex-col gap-1.5 w-full sm:w-[200px]">
-          <Label htmlFor="department-filter">Department</Label>
+        <div className="flex flex-col gap-1 w-full sm:w-[180px]">
+          <Label htmlFor="department-filter" className="text-xs">Department</Label>
           <DepartmentSelect
             value={departmentId}
             onChange={(val) => {
@@ -172,8 +188,8 @@ export default function TeamAttendancePage() {
             placeholder="All departments"
           />
         </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="date-from">From</Label>
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="date-from" className="text-xs">From</Label>
           <Input
             id="date-from"
             type="date"
@@ -182,11 +198,11 @@ export default function TeamAttendancePage() {
               setDateFrom(e.target.value);
               setCurrentPage(1);
             }}
-            className="w-[160px]"
+            className="w-[140px] h-8 text-xs"
           />
         </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="date-to">To</Label>
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="date-to" className="text-xs">To</Label>
           <Input
             id="date-to"
             type="date"
@@ -195,27 +211,73 @@ export default function TeamAttendancePage() {
               setDateTo(e.target.value);
               setCurrentPage(1);
             }}
-            className="w-[160px]"
+            className="w-[140px] h-8 text-xs"
           />
         </div>
       </div>
 
+      {/* Stats Strip */}
+      {isLoading ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i}><CardContent className="p-3"><Skeleton className="h-10" /></CardContent></Card>
+          ))}
+        </div>
+      ) : records.length > 0 ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            { label: 'Present', value: stats.present, icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
+            { label: 'Absent', value: stats.absent, icon: XCircle, color: 'text-red-500', bg: 'bg-red-500/10' },
+            { label: 'Late', value: stats.late, icon: Clock, color: 'text-amber-500', bg: 'bg-amber-500/10' },
+            { label: 'Overtime', value: `${stats.overtimeTotal.toFixed(1)}h`, icon: Timer, color: 'text-violet-500', bg: 'bg-violet-500/10' },
+          ].map((s) => (
+            <Card key={s.label} className="border-border">
+              <CardContent className="p-3">
+                <div className="flex items-center gap-2.5">
+                  <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${s.bg} shrink-0`}>
+                    <s.icon className={`h-4 w-4 ${s.color}`} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">{s.label}</p>
+                    <p className="text-base font-bold text-foreground tabular-nums leading-tight">{s.value}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : null}
+
       {/* Team Attendance Table */}
       <section aria-label="Team attendance records">
         {isError ? (
-          <Card>
-            <CardContent className="py-8">
-              <p className="text-center text-muted-foreground">
-                Failed to load team attendance
-              </p>
+          <Card className="border-destructive/50">
+            <CardContent className="py-12">
+              <div className="flex flex-col items-center gap-2">
+                <CalendarDays className="h-8 w-8 text-destructive/60" />
+                <p className="text-sm text-muted-foreground font-medium">Failed to load team attendance</p>
+                <p className="text-xs text-muted-foreground">Please try again later.</p>
+              </div>
             </CardContent>
           </Card>
         ) : isLoading ? (
           <Card>
-            <CardContent className="p-4">
-              <div className="flex flex-col gap-2">
-                {Array.from({ length: 8 }).map((_, i) => (
-                  <Skeleton key={i} className="h-12" />
+            <CardContent className="p-0">
+              <div className="flex flex-col">
+                <div className="flex items-center gap-4 px-4 py-2.5 border-b border-border/50">
+                  {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-3 w-14" />)}
+                </div>
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-border/50 last:border-0">
+                    <Skeleton className="h-3.5 w-24" />
+                    <Skeleton className="h-3.5 w-20" />
+                    <Skeleton className="h-3.5 w-14" />
+                    <Skeleton className="h-3.5 w-14" />
+                    <Skeleton className="h-3.5 w-14" />
+                    <Skeleton className="h-3.5 w-12" />
+                    <Skeleton className="h-3.5 w-10" />
+                    <Skeleton className="h-3.5 w-10" />
+                  </div>
                 ))}
               </div>
             </CardContent>
@@ -223,14 +285,14 @@ export default function TeamAttendancePage() {
         ) : records.length === 0 ? (
           <Card>
             <CardContent className="py-12">
-              <div className="text-center">
-                <Users className="mx-auto mb-2 text-muted-foreground" />
-                <p className="text-muted-foreground font-medium">
+              <div className="flex flex-col items-center text-center gap-2">
+                <Users className="h-8 w-8 text-muted-foreground/40" />
+                <p className="text-sm text-muted-foreground font-medium">
                   {debouncedSearch
                     ? `No employees match "${debouncedSearch}"`
                     : 'No attendance records found'}
                 </p>
-                <p className="text-sm text-muted-foreground mt-1">
+                <p className="text-xs text-muted-foreground">
                   Adjust your filters or date range to view records.
                 </p>
                 {debouncedSearch && (
@@ -238,7 +300,7 @@ export default function TeamAttendancePage() {
                     variant="outline"
                     size="sm"
                     onClick={clearSearch}
-                    className="mt-4"
+                    className="mt-2 h-8 text-xs"
                   >
                     Clear search
                   </Button>
@@ -247,99 +309,115 @@ export default function TeamAttendancePage() {
             </CardContent>
           </Card>
         ) : (
-          <Card>
-            <CardContent className="p-0">
-              {/* Header row */}
-              <div className="hidden lg:grid lg:grid-cols-8 gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border">
-                <span>Employee</span>
-                <span>Date</span>
-                <span>Status</span>
-                <span>Clock In</span>
-                <span>Clock Out</span>
-                <span className="text-right">Hours</span>
-                <span className="text-right">Late</span>
-                <span className="text-right">Overtime</span>
-              </div>
-
-              {records.map((record, idx) => (
-                <div key={record.id}>
-                  {idx > 0 && <Separator />}
-                  <div className="grid grid-cols-2 gap-2 px-4 py-3 lg:grid-cols-8 lg:gap-4 lg:items-center">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-foreground truncate">
-                        {record.user?.name || '—'}
-                      </p>
-                      <p className="text-xs text-muted-foreground truncate lg:hidden">
-                        {record.user?.email || ''}
-                      </p>
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      {formatDate(record.date)}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-1">
-                      <AttendanceStatusBadge status={record.status} />
-                      {/* Late and early-checkout coexist by design — render each
-                          applicable badge (order: Late → Early Checkout → Missing
-                          Checkout). Tooltips are omitted here (team view has no policy
-                          context loaded). */}
-                      {deriveCheckInBadges(record).map((s) => (
-                        <CheckInStatusBadge key={s} status={s as CheckInBadgeStatus} />
-                      ))}
-                    </div>
-                    <div className="text-sm text-foreground tabular-nums">
-                      {record.clock_in || '—'}
-                    </div>
-                    <div className="text-sm text-foreground tabular-nums">
-                      {record.clock_out || '—'}
-                    </div>
-                    <div className="text-sm text-foreground tabular-nums text-right">
-                      {(() => {
-                        // Prefer exact worked_seconds; fall back to rounded total_hours.
+          <>
+            <Card>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-border/50">
+                        <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Employee</th>
+                        <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Date</th>
+                        <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Status</th>
+                        <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Clock In</th>
+                        <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Clock Out</th>
+                        <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Hours</th>
+                        <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Late</th>
+                        <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Overtime</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {records.map((record) => {
+                        const sd = statusDot[record.status] ?? statusDot.absent;
+                        const checkInBadges = deriveCheckInBadges(record);
                         const secs =
                           record.worked_seconds != null
                             ? record.worked_seconds
                             : Number(record.total_hours) * 3600;
-                        return secs > 0 ? formatDuration(secs) : '—';
-                      })()}
-                    </div>
-                    <div className="text-sm tabular-nums text-right">
-                      {(record.check_in_late_minutes ?? 0) > 0 ? (
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={<span />}
-                            className="cursor-help text-amber-600 dark:text-amber-400"
-                            tabIndex={0}
-                          >
-                            {formatMinutes(record.check_in_late_minutes)}
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            {checkInBadgeTooltip('late', {
-                              lateMinutes: record.check_in_late_minutes,
-                              checkInTime: policyCheckInTime,
-                            })}
-                          </TooltipContent>
-                        </Tooltip>
-                      ) : (
-                        '—'
-                      )}
-                    </div>
-                    <div className="text-sm tabular-nums text-right">
-                      {Number(record.overtime_hours) > 0 ? (
-                        <span className="text-purple-600 dark:text-purple-400">
-                          {Number(record.overtime_hours).toFixed(1)}h
-                        </span>
-                      ) : (
-                        '—'
-                      )}
-                    </div>
-                  </div>
+
+                        return (
+                          <tr key={record.id} className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors">
+                            <td className="px-4 py-2.5 whitespace-nowrap">
+                              <p className="text-[0.75rem] font-medium text-foreground truncate max-w-[180px]">
+                                {record.user?.name || '—'}
+                              </p>
+                            </td>
+                            <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] text-muted-foreground">
+                              {formatDate(record.date)}
+                            </td>
+                            <td className="px-4 py-2.5 whitespace-nowrap">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className={`inline-flex items-center gap-1.5 text-[0.7rem] font-medium ${sd.text}`}>
+                                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${sd.dot}`} />
+                                  {sd.label}
+                                </span>
+                                {/* Late and early-checkout coexist by design — render each
+                                    applicable badge (order: Late -> Early Checkout -> Missing
+                                    Checkout). */}
+                                {checkInBadges.map((s) => (
+                                  <CheckInStatusBadge
+                                    key={s}
+                                    status={s as CheckInBadgeStatus}
+                                    tooltip={checkInBadgeTooltip(s, {
+                                      lateMinutes: record.check_in_late_minutes,
+                                      checkInTime: policyCheckInTime,
+                                    })}
+                                  />
+                                ))}
+                              </div>
+                            </td>
+                            <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] tabular-nums">
+                              {record.clock_in || <span className="text-muted-foreground/40">&mdash;</span>}
+                            </td>
+                            <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] tabular-nums">
+                              {record.clock_out || <span className="text-muted-foreground/40">&mdash;</span>}
+                            </td>
+                            <td className="px-4 py-2.5 whitespace-nowrap text-right text-[0.75rem] tabular-nums">
+                              {secs > 0 ? formatDuration(secs) : <span className="text-muted-foreground/40">&mdash;</span>}
+                            </td>
+                            <td className="px-4 py-2.5 whitespace-nowrap text-right">
+                              {(record.check_in_late_minutes ?? 0) > 0 ? (
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={<span />}
+                                    className="cursor-help text-[0.75rem] tabular-nums text-amber-600 dark:text-amber-400 font-medium"
+                                    tabIndex={0}
+                                  >
+                                    {formatMinutes(record.check_in_late_minutes)}
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    {checkInBadgeTooltip('late', {
+                                      lateMinutes: record.check_in_late_minutes,
+                                      checkInTime: policyCheckInTime,
+                                    })}
+                                  </TooltipContent>
+                                </Tooltip>
+                              ) : (
+                                <span className="text-[0.75rem] text-muted-foreground/40">&mdash;</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-2.5 whitespace-nowrap text-right">
+                              {Number(record.overtime_hours) > 0 ? (
+                                <span className="text-[0.75rem] tabular-nums text-purple-600 dark:text-purple-400 font-medium">
+                                  {Number(record.overtime_hours).toFixed(1)}h
+                                </span>
+                              ) : (
+                                <span className="text-[0.75rem] text-muted-foreground/40">&mdash;</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-              ))}
-            </CardContent>
+              </CardContent>
+            </Card>
 
             {/* Pagination */}
             {totalPages > 1 && (
-              <div className="flex items-center justify-center border-t border-border p-4">
+              <div className="flex items-center justify-between mt-1">
+                <p className="text-[0.65rem] text-muted-foreground">Page {currentPage} of {totalPages}</p>
                 <Pagination>
                   <PaginationContent>
                     <PaginationItem>
@@ -391,7 +469,7 @@ export default function TeamAttendancePage() {
                         }
                         aria-disabled={currentPage === totalPages}
                         className={
-                          currentPage === totalPages
+                          currentPage >= totalPages
                             ? 'pointer-events-none opacity-50'
                             : 'cursor-pointer'
                         }
@@ -401,7 +479,7 @@ export default function TeamAttendancePage() {
                 </Pagination>
               </div>
             )}
-          </Card>
+          </>
         )}
       </section>
     </div>

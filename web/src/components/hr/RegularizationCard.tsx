@@ -18,8 +18,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { AttendanceStatusBadge } from '@/components/hr/AttendanceStatusBadge';
-import { formatDate } from '@/lib/utils';
+import { cn, formatDate } from '@/lib/utils';
 import type { AttendanceRegularization } from '@/lib/validations/attendance';
 
 const rejectReviewSchema = z.object({
@@ -31,6 +30,28 @@ const rejectReviewSchema = z.object({
 
 type RejectReviewFormData = z.infer<typeof rejectReviewSchema>;
 
+/* ── Attendance status dot ────────────────────────────────── */
+const STATUS_DOT_CONFIG: Record<string, { dot: string; text: string; label: string }> = {
+  present:  { dot: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-400', label: 'Present' },
+  absent:   { dot: 'bg-red-500',     text: 'text-red-600 dark:text-red-400',         label: 'Absent' },
+  half_day: { dot: 'bg-amber-500',   text: 'text-amber-600 dark:text-amber-400',     label: 'Half Day' },
+  on_leave: { dot: 'bg-blue-500',    text: 'text-blue-600 dark:text-blue-400',       label: 'On Leave' },
+  weekend:  { dot: 'bg-slate-400',   text: 'text-slate-600 dark:text-slate-400',     label: 'Weekend' },
+  holiday:  { dot: 'bg-sky-500',     text: 'text-sky-600 dark:text-sky-400',         label: 'Holiday' },
+};
+
+function StatusDot({ status }: { status: string }) {
+  const fallback = { dot: 'bg-slate-400', text: 'text-slate-600 dark:text-slate-400', label: status };
+  const c = STATUS_DOT_CONFIG[status] ?? fallback;
+  return (
+    <span className={cn('inline-flex items-center gap-1.5 text-[0.7rem] font-medium', c.text)}>
+      <span className={cn('inline-block w-1.5 h-1.5 rounded-full', c.dot)} />
+      {c.label}
+    </span>
+  );
+}
+
+/* ── Component ────────────────────────────────────────────── */
 interface RegularizationCardProps {
   regularization: AttendanceRegularization;
   onApprove: (id: string) => void;
@@ -73,14 +94,14 @@ export function RegularizationCard({
   return (
     <>
       <Card>
-        <CardContent className="p-4">
-          <div className="flex items-start gap-4">
-            <Avatar className="size-10 shrink-0">
+        <CardContent className="p-3">
+          <div className="flex items-start gap-3">
+            <Avatar className="size-8 shrink-0">
               <AvatarImage
                 src={regularization.user.avatar_url || undefined}
                 alt={regularization.user.name}
               />
-              <AvatarFallback className="bg-primary text-primary-foreground text-xs font-medium">
+              <AvatarFallback className="bg-primary text-primary-foreground text-[0.6rem] font-medium">
                 {userInitials}
               </AvatarFallback>
             </Avatar>
@@ -88,56 +109,49 @@ export function RegularizationCard({
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <p className="text-sm font-medium text-foreground">
+                  <p className="text-[0.75rem] font-medium text-foreground">
                     {regularization.user.name}
                   </p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-[0.65rem] text-muted-foreground">
                     {regularization.user.email}
                   </p>
                 </div>
               </div>
 
-              <div className="mt-3 flex flex-col gap-2">
-                <div className="text-xs text-muted-foreground">
+              <div className="mt-2.5 flex flex-col gap-1.5">
+                <div className="text-[0.65rem] text-muted-foreground">
                   <span className="font-medium text-foreground">Date:</span>{' '}
                   {formatDate(regularization.attendance_record.date)}
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap">
-                  <AttendanceStatusBadge
-                    status={regularization.current_status}
-                  />
-                  <ArrowRight className="size-3.5 text-muted-foreground shrink-0" />
-                  <AttendanceStatusBadge
-                    status={regularization.requested_status}
-                  />
+                  <StatusDot status={regularization.current_status} />
+                  <ArrowRight className="size-3 text-muted-foreground shrink-0" />
+                  <StatusDot status={regularization.requested_status} />
                 </div>
 
-                <div className="mt-1">
-                  <p className="text-xs text-muted-foreground">Reason:</p>
-                  <p className="text-xs text-foreground mt-0.5">
+                <div className="mt-0.5">
+                  <p className="text-[0.65rem] text-muted-foreground">Reason:</p>
+                  <p className="text-[0.7rem] text-foreground mt-0.5">
                     {regularization.reason}
                   </p>
                 </div>
 
-                <p className="text-[10px] text-muted-foreground">
+                <p className="text-[0.6rem] text-muted-foreground">
                   Requested {formatDate(regularization.created_at)}
                 </p>
               </div>
 
               {regularization.status === 'pending' && (
-                <div className="mt-3 flex items-center gap-2">
+                <div className="mt-2.5 flex items-center gap-2">
                   <Button
                     size="sm"
                     onClick={() => onApprove(regularization.id)}
                     disabled={isApproving}
-                    className="bg-green-600 hover:bg-green-700 text-white"
+                    className="h-7 text-xs bg-green-600 hover:bg-green-700 text-white"
                   >
                     {isApproving && (
-                      <Loader2
-                        className="animate-spin"
-                        data-icon="inline-start"
-                      />
+                      <Loader2 className="size-3 animate-spin" />
                     )}
                     Approve
                   </Button>
@@ -146,13 +160,10 @@ export function RegularizationCard({
                     variant="outline"
                     onClick={() => setRejectDialogOpen(true)}
                     disabled={isRejecting}
-                    className="border-red-300 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20"
+                    className="h-7 text-xs border-red-300 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20"
                   >
                     {isRejecting && (
-                      <Loader2
-                        className="animate-spin"
-                        data-icon="inline-start"
-                      />
+                      <Loader2 className="size-3 animate-spin" />
                     )}
                     Reject
                   </Button>
@@ -162,7 +173,7 @@ export function RegularizationCard({
               {regularization.status !== 'pending' &&
                 regularization.reviewer && (
                   <div className="mt-2 rounded-md bg-muted p-2">
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-[0.65rem] text-muted-foreground">
                       <span className="font-medium">
                         {regularization.status === 'approved'
                           ? 'Approved'
@@ -177,7 +188,7 @@ export function RegularizationCard({
 
               {regularization.review_note && (
                 <div className="mt-2 rounded-md bg-red-50 p-2 dark:bg-red-900/10">
-                  <p className="text-xs text-red-700 dark:text-red-400">
+                  <p className="text-[0.65rem] text-red-700 dark:text-red-400">
                     <span className="font-medium">Review note:</span>{' '}
                     {regularization.review_note}
                   </p>
@@ -199,7 +210,7 @@ export function RegularizationCard({
               </DialogDescription>
             </DialogHeader>
             <div className="py-4">
-              <Label htmlFor="review_note">Review Note</Label>
+              <Label htmlFor="review_note" className="text-xs">Review Note</Label>
               <Textarea
                 id="review_note"
                 placeholder="Enter the reason for rejection..."
@@ -224,8 +235,7 @@ export function RegularizationCard({
               <Button type="submit" variant="destructive" disabled={isRejecting}>
                 {isRejecting && (
                   <Loader2
-                    className="animate-spin"
-                    data-icon="inline-start"
+                    className="size-3.5 animate-spin"
                   />
                 )}
                 Reject Request

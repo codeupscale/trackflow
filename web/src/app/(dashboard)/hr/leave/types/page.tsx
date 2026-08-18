@@ -1,21 +1,19 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Plus, Pencil, Loader2, Settings } from 'lucide-react';
+import { Plus, Pencil, Loader2, Settings, CheckCircle2, XCircle, DollarSign } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Separator } from '@/components/ui/separator';
 import {
   Select,
   SelectContent,
@@ -25,13 +23,13 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-  SheetFooter,
-} from '@/components/ui/sheet';
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 import { useLeaveTypes } from '@/hooks/hr/use-leave-types';
 import { usePermissionStore } from '@/stores/permission-store';
@@ -155,38 +153,85 @@ export default function LeaveTypesPage() {
 
   const isPending = createMutation.isPending || updateMutation.isPending;
 
+  const stats = useMemo(() => {
+    if (!leaveTypes) return { total: 0, active: 0, inactive: 0, paid: 0 };
+    const total = leaveTypes.length;
+    const active = leaveTypes.filter((lt) => lt.is_active).length;
+    const inactive = total - active;
+    const paid = leaveTypes.filter((lt) => lt.type === 'paid').length;
+    return { total, active, inactive, paid };
+  }, [leaveTypes]);
+
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Leave Types</h1>
-          <p className="text-sm text-muted-foreground mt-1">
+          <h1 className="text-lg font-semibold tracking-tight">Leave Types</h1>
+          <p className="text-xs text-muted-foreground">
             Configure leave types for your organization
           </p>
         </div>
-        <Button onClick={openCreate}>
-          <Plus data-icon="inline-start" />
+        <Button size="sm" className="h-8 text-xs" onClick={openCreate}>
+          <Plus className="h-3.5 w-3.5 mr-1" />
           Add Leave Type
         </Button>
       </div>
 
-      {/* Leave Types List */}
+      {/* Stats Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { label: 'Total Types', value: stats.total, icon: Settings, color: 'text-blue-500', bg: 'bg-blue-500/10' },
+          { label: 'Active', value: stats.active, icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
+          { label: 'Inactive', value: stats.inactive, icon: XCircle, color: 'text-red-500', bg: 'bg-red-500/10' },
+          { label: 'Paid', value: stats.paid, icon: DollarSign, color: 'text-violet-500', bg: 'bg-violet-500/10' },
+        ].map((s) => (
+          <Card key={s.label} className="border-border">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-2.5">
+                <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${s.bg} shrink-0`}>
+                  <s.icon className={`h-4 w-4 ${s.color}`} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">{s.label}</p>
+                  <p className="text-base font-bold text-foreground tabular-nums leading-tight">{isLoading ? '--' : s.value}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Leave Types Table */}
       {isError ? (
-        <Card>
-          <CardContent className="py-8">
-            <div className="text-center">
-              <Settings className="mx-auto mb-2 text-muted-foreground" />
-              <p className="text-muted-foreground font-medium">Failed to load leave types</p>
+        <Card className="border-destructive/50">
+          <CardContent className="py-12">
+            <div className="flex flex-col items-center text-center gap-2">
+              <Settings className="size-8 text-destructive/60" />
+              <p className="text-sm text-muted-foreground font-medium">Failed to load leave types</p>
+              <p className="text-xs text-muted-foreground">Please try again later.</p>
             </div>
           </CardContent>
         </Card>
       ) : isLoading ? (
         <Card>
-          <CardContent className="p-4">
-            <div className="flex flex-col gap-2">
+          <CardContent className="p-0">
+            <div className="flex flex-col">
+              <div className="flex items-center gap-4 px-4 py-2.5 border-b border-border/50">
+                {Array.from({ length: 7 }).map((_, i) => (
+                  <Skeleton key={i} className="h-3 w-16" />
+                ))}
+              </div>
               {Array.from({ length: 4 }).map((_, i) => (
-                <Skeleton key={i} className="h-16" />
+                <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-border/50 last:border-0">
+                  <Skeleton className="h-3.5 w-24" />
+                  <Skeleton className="h-3.5 w-14" />
+                  <Skeleton className="h-3.5 w-12" />
+                  <Skeleton className="h-3.5 w-8" />
+                  <Skeleton className="h-3.5 w-16" />
+                  <Skeleton className="h-3.5 w-8" />
+                  <Skeleton className="h-3.5 w-10 ml-auto" />
+                </div>
               ))}
             </div>
           </CardContent>
@@ -194,10 +239,10 @@ export default function LeaveTypesPage() {
       ) : !leaveTypes || leaveTypes.length === 0 ? (
         <Card>
           <CardContent className="py-12">
-            <div className="text-center">
-              <Settings className="mx-auto mb-2 text-muted-foreground" />
-              <p className="text-muted-foreground font-medium">No leave types configured</p>
-              <p className="text-sm text-muted-foreground mt-1">
+            <div className="flex flex-col items-center text-center gap-2">
+              <Settings className="size-8 text-muted-foreground/40" />
+              <p className="text-sm text-muted-foreground font-medium">No leave types configured</p>
+              <p className="text-xs text-muted-foreground">
                 Add your first leave type to get started.
               </p>
             </div>
@@ -206,83 +251,114 @@ export default function LeaveTypesPage() {
       ) : (
         <Card>
           <CardContent className="p-0">
-            {/* Header row */}
-            <div className="hidden md:grid md:grid-cols-7 gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border">
-              <span>Name</span>
-              <span>Code</span>
-              <span>Type</span>
-              <span className="text-center">Days/Year</span>
-              <span>Accrual</span>
-              <span className="text-center">Carryover</span>
-              <span className="text-right">Actions</span>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-border/50">
+                    <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">Name</th>
+                    <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">Code</th>
+                    <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">Type</th>
+                    <th className="text-center text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">Days/Year</th>
+                    <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">Accrual</th>
+                    <th className="text-center text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">Carryover</th>
+                    <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">Status</th>
+                    <th className="text-right text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leaveTypes.map((lt) => (
+                    <tr key={lt.id} className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-2.5 text-[0.75rem] font-medium text-foreground">
+                        {lt.name}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <code className="rounded bg-muted px-1.5 py-0.5 text-[0.65rem] font-mono text-muted-foreground">{lt.code}</code>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        {lt.type === 'paid' ? (
+                          <span className="inline-flex items-center gap-1.5 text-[0.7rem] font-medium text-emerald-600 dark:text-emerald-400">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                            Paid
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 text-[0.7rem] font-medium text-amber-600 dark:text-amber-400">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
+                            Unpaid
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-[0.75rem] text-foreground tabular-nums text-center">
+                        {lt.days_per_year}
+                      </td>
+                      <td className="px-4 py-2.5 text-[0.75rem] text-muted-foreground capitalize">
+                        {lt.accrual_method}
+                      </td>
+                      <td className="px-4 py-2.5 text-[0.75rem] text-foreground tabular-nums text-center">
+                        {lt.max_carry_over}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        {lt.is_active ? (
+                          <span className="inline-flex items-center gap-1.5 text-[0.7rem] font-medium text-emerald-600 dark:text-emerald-400">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                            Active
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 text-[0.7rem] font-medium text-red-600 dark:text-red-400">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" />
+                            Inactive
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs gap-1"
+                          onClick={() => openEdit(lt)}
+                        >
+                          <Pencil className="h-3 w-3" />
+                          Edit
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-
-            {leaveTypes.map((lt, idx) => (
-              <div key={lt.id}>
-                {idx > 0 && <Separator />}
-                <div className="grid grid-cols-2 gap-2 px-4 py-3 md:grid-cols-7 md:gap-4 md:items-center">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-foreground">{lt.name}</span>
-                    {!lt.is_active && (
-                      <Badge variant="outline" className="text-[10px]">
-                        Inactive
-                      </Badge>
-                    )}
-                  </div>
-                  <div className="text-xs text-muted-foreground md:text-sm">
-                    <code className="rounded bg-muted px-1 py-0.5 text-xs">{lt.code}</code>
-                  </div>
-                  <div>
-                    <Badge variant={lt.type === 'paid' ? 'default' : 'secondary'}>
-                      {lt.type}
-                    </Badge>
-                  </div>
-                  <div className="text-sm text-foreground tabular-nums md:text-center">
-                    {lt.days_per_year}
-                  </div>
-                  <div className="text-xs text-muted-foreground capitalize md:text-sm">
-                    {lt.accrual_method}
-                  </div>
-                  <div className="text-sm text-foreground tabular-nums md:text-center">
-                    {lt.max_carry_over}
-                  </div>
-                  <div className="flex justify-end col-span-2 md:col-span-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => openEdit(lt)}
-                    >
-                      <Pencil data-icon="inline-start" />
-                      Edit
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            ))}
           </CardContent>
         </Card>
       )}
 
-      {/* Create/Edit Sheet */}
-      <Sheet open={sheetOpen} onOpenChange={(open) => { if (!open) closeSheet(); }}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>{editingType ? 'Edit Leave Type' : 'New Leave Type'}</SheetTitle>
-            <SheetDescription>
-              {editingType
-                ? 'Update the details for this leave type.'
-                : 'Configure a new leave type for your organization.'}
-            </SheetDescription>
-          </SheetHeader>
+      {/* Create/Edit Dialog */}
+      <Dialog open={sheetOpen} onOpenChange={(open) => { if (!open) closeSheet(); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <div className="flex items-center gap-3">
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
+                <Settings className="h-3.5 w-3.5 text-primary" />
+              </div>
+              <div>
+                <DialogTitle className="text-base">{editingType ? 'Edit Leave Type' : 'New Leave Type'}</DialogTitle>
+                <DialogDescription className="text-xs">
+                  {editingType
+                    ? 'Update the details for this leave type.'
+                    : 'Configure a new leave type for your organization.'}
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
 
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4 p-6 flex-1 overflow-y-auto">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-3 max-h-[60vh] overflow-y-auto py-1 pr-1">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="lt-name">Name</Label>
+              <Label htmlFor="lt-name" className="text-xs">Name</Label>
               <Input
                 id="lt-name"
                 placeholder="e.g., Annual Leave"
                 {...form.register('name')}
                 aria-invalid={!!form.formState.errors.name}
+                className="h-9 text-sm"
               />
               {form.formState.errors.name && (
                 <p className="text-xs text-destructive">{form.formState.errors.name.message}</p>
@@ -290,101 +366,108 @@ export default function LeaveTypesPage() {
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="lt-code">Code</Label>
+              <Label htmlFor="lt-code" className="text-xs">Code</Label>
               <Input
                 id="lt-code"
                 placeholder="e.g., annual"
                 {...form.register('code')}
                 aria-invalid={!!form.formState.errors.code}
+                className="h-9 text-sm"
               />
               {form.formState.errors.code && (
                 <p className="text-xs text-destructive">{form.formState.errors.code.message}</p>
               )}
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <Label>Type</Label>
-              <Controller
-                control={form.control}
-                name="type"
-                render={({ field }) => (
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Select type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="paid">Paid</SelectItem>
-                        <SelectItem value="unpaid">Unpaid</SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs">Type</Label>
+                <Controller
+                  control={form.control}
+                  name="type"
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger className="h-9 text-sm w-full">
+                        <SelectValue placeholder="Select type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="paid">Paid</SelectItem>
+                          <SelectItem value="unpaid">Unpaid</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+                {form.formState.errors.type && (
+                  <p className="text-xs text-destructive">{form.formState.errors.type.message}</p>
                 )}
-              />
-              {form.formState.errors.type && (
-                <p className="text-xs text-destructive">{form.formState.errors.type.message}</p>
-              )}
-            </div>
+              </div>
 
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="lt-days">Days Per Year</Label>
-              <Input
-                id="lt-days"
-                type="number"
-                min="0"
-                max="365"
-                {...form.register('days_per_year')}
-                aria-invalid={!!form.formState.errors.days_per_year}
-              />
-              {form.formState.errors.days_per_year && (
-                <p className="text-xs text-destructive">{form.formState.errors.days_per_year.message}</p>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <Label>Accrual Method</Label>
-              <Controller
-                control={form.control}
-                name="accrual_method"
-                render={({ field }) => (
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Select accrual method" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="annual">Annual (all at once)</SelectItem>
-                        <SelectItem value="monthly">Monthly (accrue each month)</SelectItem>
-                        <SelectItem value="none">None</SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="lt-days" className="text-xs">Days/Year</Label>
+                <Input
+                  id="lt-days"
+                  type="number"
+                  min="0"
+                  max="365"
+                  {...form.register('days_per_year')}
+                  aria-invalid={!!form.formState.errors.days_per_year}
+                  className="h-9 text-sm"
+                />
+                {form.formState.errors.days_per_year && (
+                  <p className="text-xs text-destructive">{form.formState.errors.days_per_year.message}</p>
                 )}
-              />
-              {form.formState.errors.accrual_method && (
-                <p className="text-xs text-destructive">{form.formState.errors.accrual_method.message}</p>
-              )}
+              </div>
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="lt-carryover">Max Carry Over (days)</Label>
-              <Input
-                id="lt-carryover"
-                type="number"
-                min="0"
-                max="365"
-                {...form.register('max_carry_over')}
-                aria-invalid={!!form.formState.errors.max_carry_over}
-              />
-              {form.formState.errors.max_carry_over && (
-                <p className="text-xs text-destructive">{form.formState.errors.max_carry_over.message}</p>
-              )}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs">Accrual Method</Label>
+                <Controller
+                  control={form.control}
+                  name="accrual_method"
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger className="h-9 text-sm w-full">
+                        <SelectValue placeholder="Accrual method" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="annual">Annual</SelectItem>
+                          <SelectItem value="monthly">Monthly</SelectItem>
+                          <SelectItem value="none">None</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+                {form.formState.errors.accrual_method && (
+                  <p className="text-xs text-destructive">{form.formState.errors.accrual_method.message}</p>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="lt-carryover" className="text-xs">Max Carryover</Label>
+                <Input
+                  id="lt-carryover"
+                  type="number"
+                  min="0"
+                  max="365"
+                  {...form.register('max_carry_over')}
+                  aria-invalid={!!form.formState.errors.max_carry_over}
+                  className="h-9 text-sm"
+                />
+                {form.formState.errors.max_carry_over && (
+                  <p className="text-xs text-destructive">{form.formState.errors.max_carry_over.message}</p>
+                )}
+              </div>
             </div>
 
             <div className="flex items-center justify-between rounded-lg border border-border p-3">
               <div>
-                <Label htmlFor="lt-active" className="text-sm">Active</Label>
-                <p className="text-xs text-muted-foreground">
+                <Label htmlFor="lt-active" className="text-xs">Active</Label>
+                <p className="text-[0.65rem] text-muted-foreground">
                   Inactive types cannot be used for new requests
                 </p>
               </div>
@@ -402,23 +485,25 @@ export default function LeaveTypesPage() {
             </div>
           </form>
 
-          <SheetFooter>
+          <DialogFooter>
             <Button
               variant="outline"
+              className="h-8 text-xs"
               onClick={closeSheet}
             >
               Cancel
             </Button>
             <Button
+              className="h-8 text-xs"
               onClick={handleSubmit}
               disabled={isPending}
             >
-              {isPending && <Loader2 className="animate-spin" data-icon="inline-start" />}
+              {isPending && <Loader2 className="animate-spin h-3.5 w-3.5 mr-1" />}
               {editingType ? 'Save Changes' : 'Create Type'}
             </Button>
-          </SheetFooter>
-        </SheetContent>
-      </Sheet>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

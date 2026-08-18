@@ -4,7 +4,18 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
-import { CheckCircle, ChevronsUpDown, Clock, Info, Loader2, Plus } from 'lucide-react';
+import {
+  CheckCircle,
+  ChevronsUpDown,
+  Clock,
+  Filter,
+  Info,
+  Loader2,
+  Plus,
+  Search,
+  Timer,
+  X,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -12,9 +23,6 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip
 import {
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -137,6 +145,7 @@ export default function TimePage() {
   const [projectComboboxOpen, setProjectComboboxOpen] = useState(false);
   const [memberComboboxOpen, setMemberComboboxOpen] = useState(false);
   const [manualEntryOpen, setManualEntryOpen] = useState(false);
+  const [showFilters, setShowFilters] = useState(true);
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ['projects-list'],
@@ -174,13 +183,10 @@ export default function TimePage() {
         params.user_id = memberFilter;
       }
       const res = await api.get('/time-entries', { params });
-      // Backend returns is_approved boolean, map to status string for UI
       const data = res.data;
       if (data.data) {
         data.data = data.data.map((entry: Record<string, unknown>) => ({
           ...entry,
-          // Prefer the authoritative approval_status; fall back to the legacy
-          // is_approved boolean for tracked entries that predate the field.
           status: entry.approval_status ?? (entry.is_approved ? 'approved' : 'pending'),
         }));
       }
@@ -196,12 +202,6 @@ export default function TimePage() {
     total: entriesData.total!,
   } : undefined);
 
-  // Live tick for running entries so duration counts up in real time.
-  // NOTE: the displayed duration is DERIVED from started_at in getDisplayDuration()
-  // on every render — this interval only forces re-renders, it never accumulates a
-  // counter. Background tabs throttle setInterval (and pause it), so on refocus we
-  // also force an immediate re-render via visibilitychange/focus. Because the value
-  // is derived, that next render snaps straight to the correct time with no jump.
   const [, setTick] = useState(0);
   const hasRunningEntry = entries.some((e) => !e.ended_at);
   useEffect(() => {
@@ -265,15 +265,29 @@ export default function TimePage() {
 
   const totalSeconds = entries.reduce((sum, e) => sum + getDisplayDuration(e), 0);
 
+  const activeFilterCount = [
+    projectFilter !== 'all',
+    typeFilter !== 'all',
+    isManagerOrAbove && memberFilter !== 'all',
+  ].filter(Boolean).length;
+
+  const clearFilters = () => {
+    setProjectFilter('all');
+    setTypeFilter('all');
+    setMemberFilter('all');
+    setPage(1);
+  };
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Time Entries</h1>
-          <p className="text-muted-foreground text-sm mt-1">Track and manage your work hours</p>
+          <h1 className="text-lg font-semibold tracking-tight text-foreground">Time Entries</h1>
+          <p className="text-muted-foreground text-xs mt-0.5">Track and manage your work hours</p>
         </div>
-        <Button onClick={() => setManualEntryOpen(true)} className="shrink-0">
-          <Plus data-icon="inline-start" />
+        <Button onClick={() => setManualEntryOpen(true)} size="sm" className="shrink-0">
+          <Plus className="h-4 w-4 mr-1.5" />
           Log Time
         </Button>
       </div>
@@ -284,156 +298,182 @@ export default function TimePage() {
         canLogOnBehalf={canApprove}
       />
 
-      {/* Filters */}
-      <Card className="border-border bg-card">
-        <CardContent className="pt-6">
-          <div className="flex flex-col sm:flex-row gap-4 items-end flex-wrap">
-            <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-foreground">
-                From
-              </label>
-              <DatePicker
-                value={dateFrom}
-                onChange={(val) => { setDateFrom(val); setPage(1); }}
-                placeholder="Start date"
-              />
+      {/* Stats Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Card className="border-border">
+          <CardContent className="p-3">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10 shrink-0">
+                <Clock className="h-4 w-4 text-blue-500" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Total Hours</p>
+                <p className="text-base font-bold text-foreground tabular-nums leading-tight">{formatDuration(totalSeconds)}</p>
+              </div>
             </div>
-            <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-foreground">
-                To
-              </label>
-              <DatePicker
-                value={dateTo}
-                onChange={(val) => { setDateTo(val); setPage(1); }}
-                placeholder="End date"
-              />
+          </CardContent>
+        </Card>
+        <Card className="border-border">
+          <CardContent className="p-3">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/10 shrink-0">
+                <CheckCircle className="h-4 w-4 text-emerald-500" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Entries</p>
+                <p className="text-base font-bold text-foreground tabular-nums leading-tight">{meta?.total ?? entries.length}</p>
+              </div>
             </div>
-            <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-foreground">Project</label>
-              <Popover open={projectComboboxOpen} onOpenChange={setProjectComboboxOpen}>
-                <PopoverTrigger
-                  render={
-                    <Button
-                      variant="outline"
-                      className="w-[200px] justify-between font-normal"
-                    />
-                  }
-                >
-                  <span className="truncate">
-                    {projectFilter === 'all'
-                      ? 'All Projects'
-                      : projects?.find((p) => p.id === projectFilter)?.name ?? 'All Projects'}
-                  </span>
-                  <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
-                </PopoverTrigger>
-                <PopoverContent className="w-[200px] p-0">
-                  <Command>
-                    <CommandInput placeholder="Search projects..." />
-                    <CommandList>
-                      <CommandEmpty>No projects found.</CommandEmpty>
-                      <CommandGroup>
-                        <CommandItem
-                          value="all"
-                          data-checked={projectFilter === 'all' ? true : undefined}
-                          onSelect={() => {
-                            setProjectFilter('all');
-                            setPage(1);
-                            setProjectComboboxOpen(false);
-                          }}
-                        >
-                          All Projects
-                        </CommandItem>
-                        {projects?.map((project) => (
-                          <CommandItem
-                            key={project.id}
-                            value={project.name}
-                            data-checked={projectFilter === project.id ? true : undefined}
-                            onSelect={() => {
-                              setProjectFilter(project.id);
-                              setPage(1);
-                              setProjectComboboxOpen(false);
-                            }}
-                          >
-                            <div className="flex items-center gap-2">
-                              <div
-                                className="h-2 w-2 rounded-full shrink-0"
-                                style={{ backgroundColor: project.color || '#6366f1' }}
-                              />
-                              {project.name}
-                            </div>
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
+          </CardContent>
+        </Card>
+        <Card className="border-border">
+          <CardContent className="p-3">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10 shrink-0">
+                <Timer className="h-4 w-4 text-amber-500" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Pending</p>
+                <p className="text-base font-bold text-foreground tabular-nums leading-tight">{entries.filter((e) => e.status === 'pending').length}</p>
+              </div>
             </div>
-            <div className="grid gap-1.5">
-              <label className="text-sm font-medium text-foreground">Time type</label>
-              <Select value={typeFilter} onValueChange={(val) => { setTypeFilter(val ?? 'all'); setPage(1); }}>
-                <SelectTrigger className="w-[160px] bg-muted border-border">
-                  <SelectValue placeholder="All types" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  <SelectItem value="tracked">Tracked</SelectItem>
-                  <SelectItem value="manual">Manual</SelectItem>
-                  <SelectItem value="idle">Idle</SelectItem>
-                </SelectContent>
-              </Select>
+          </CardContent>
+        </Card>
+        <Card className="border-border">
+          <CardContent className="p-3">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/10 shrink-0">
+                <Search className="h-4 w-4 text-violet-500" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Projects</p>
+                <p className="text-base font-bold text-foreground tabular-nums leading-tight">{new Set(entries.map((e) => e.project_id).filter(Boolean)).size}</p>
+              </div>
             </div>
+          </CardContent>
+        </Card>
+      </div>
 
-            {isManagerOrAbove && (
-              <div className="grid gap-1.5">
-                <label className="text-sm font-medium text-foreground">Member</label>
-                <Popover open={memberComboboxOpen} onOpenChange={setMemberComboboxOpen}>
+      {/* Filter Bar */}
+      <Card className="border-border">
+        <CardContent className="p-3">
+          {/* Filter Controls Row */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Date Range */}
+            <DatePicker
+              value={dateFrom}
+              onChange={(val) => { setDateFrom(val); setPage(1); }}
+              placeholder="From"
+              className="w-[140px] h-8 text-xs"
+            />
+            <span className="text-xs text-muted-foreground">to</span>
+            <DatePicker
+              value={dateTo}
+              onChange={(val) => { setDateTo(val); setPage(1); }}
+              placeholder="To"
+              className="w-[140px] h-8 text-xs"
+            />
+
+            <div className="h-5 w-px bg-border mx-1 hidden sm:block" />
+
+            {/* Toggle Filters Button */}
+            <Button
+              variant={showFilters ? 'secondary' : 'outline'}
+              size="sm"
+              className="h-8 text-xs gap-1.5"
+              onClick={() => setShowFilters(!showFilters)}
+            >
+              <Filter className="h-3.5 w-3.5" />
+              Filters
+              {activeFilterCount > 0 && (
+                <Badge className="h-4 w-4 p-0 flex items-center justify-center text-[0.55rem] rounded-full bg-primary text-primary-foreground">
+                  {activeFilterCount}
+                </Badge>
+              )}
+            </Button>
+
+            {activeFilterCount > 0 && (
+              <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground gap-1" onClick={clearFilters}>
+                <X className="h-3 w-3" />
+                Clear
+              </Button>
+            )}
+
+            {/* Approve Button (right side) */}
+            {canApprove && selectedEntries.length > 0 && (
+              <Button
+                onClick={() => approveMutation.mutate(selectedEntries)}
+                disabled={approveMutation.isPending}
+                size="sm"
+                className="ml-auto h-8 text-xs"
+              >
+                {approveMutation.isPending ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <CheckCircle className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                Approve ({selectedEntries.length})
+              </Button>
+            )}
+          </div>
+
+          {/* Expandable Filter Panel */}
+          {showFilters && (
+            <div className="flex items-end gap-3 flex-wrap mt-3 pt-3 border-t border-border/50">
+              {/* Project */}
+              <div className="grid gap-1">
+                <label className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Project</label>
+                <Popover open={projectComboboxOpen} onOpenChange={setProjectComboboxOpen}>
                   <PopoverTrigger
                     render={
                       <Button
                         variant="outline"
-                        className="w-[200px] justify-between font-normal"
+                        size="sm"
+                        className="w-[180px] h-8 justify-between font-normal text-xs"
                       />
                     }
                   >
                     <span className="truncate">
-                      {memberFilter === 'all'
-                        ? 'All Members'
-                        : teamUsers?.find((u) => u.id === memberFilter)?.name ?? 'All Members'}
+                      {projectFilter === 'all'
+                        ? 'All Projects'
+                        : projects?.find((p) => p.id === projectFilter)?.name ?? 'All Projects'}
                     </span>
-                    <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+                    <ChevronsUpDown className="ml-2 h-3 w-3 shrink-0 opacity-50" />
                   </PopoverTrigger>
                   <PopoverContent className="w-[200px] p-0">
                     <Command>
-                      <CommandInput placeholder="Search members..." />
+                      <CommandInput placeholder="Search projects..." />
                       <CommandList>
-                        <CommandEmpty>No members found.</CommandEmpty>
+                        <CommandEmpty>No projects found.</CommandEmpty>
                         <CommandGroup>
                           <CommandItem
                             value="all"
-                            data-checked={memberFilter === 'all' ? true : undefined}
+                            data-checked={projectFilter === 'all' ? true : undefined}
                             onSelect={() => {
-                              setMemberFilter('all');
+                              setProjectFilter('all');
                               setPage(1);
-                              setMemberComboboxOpen(false);
+                              setProjectComboboxOpen(false);
                             }}
                           >
-                            All Members
+                            All Projects
                           </CommandItem>
-                          {teamUsers?.map((member) => (
+                          {projects?.map((project) => (
                             <CommandItem
-                              key={member.id}
-                              value={member.name}
-                              data-checked={memberFilter === member.id ? true : undefined}
+                              key={project.id}
+                              value={project.name}
+                              data-checked={projectFilter === project.id ? true : undefined}
                               onSelect={() => {
-                                setMemberFilter(member.id);
+                                setProjectFilter(project.id);
                                 setPage(1);
-                                setMemberComboboxOpen(false);
+                                setProjectComboboxOpen(false);
                               }}
                             >
-                              <div className="flex flex-col">
-                                <span>{member.name}</span>
-                                <span className="text-xs text-muted-foreground">{member.email}</span>
+                              <div className="flex items-center gap-2">
+                                <div
+                                  className="h-2 w-2 rounded-full shrink-0"
+                                  style={{ backgroundColor: project.color || '#6366f1' }}
+                                />
+                                {project.name}
                               </div>
                             </CommandItem>
                           ))}
@@ -443,203 +483,272 @@ export default function TimePage() {
                   </PopoverContent>
                 </Popover>
               </div>
-            )}
 
-            {canApprove && selectedEntries.length > 0 && (
-              <Button
-                onClick={() => approveMutation.mutate(selectedEntries)}
-                disabled={approveMutation.isPending}
-                className="ml-auto"
-              >
-                {approveMutation.isPending ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <CheckCircle className="mr-2 h-4 w-4" />
-                )}
-                Approve ({selectedEntries.length})
-              </Button>
-            )}
-          </div>
+              {/* Type */}
+              <div className="grid gap-1">
+                <label className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Type</label>
+                <Select value={typeFilter} onValueChange={(val) => { setTypeFilter(val ?? 'all'); setPage(1); }}>
+                  <SelectTrigger className="w-[130px] h-8 text-xs">
+                    <SelectValue placeholder="All types" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Types</SelectItem>
+                    <SelectItem value="tracked">Tracked</SelectItem>
+                    <SelectItem value="manual">Manual</SelectItem>
+                    <SelectItem value="idle">Idle</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Member (manager+) */}
+              {isManagerOrAbove && (
+                <div className="grid gap-1">
+                  <label className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Member</label>
+                  <Popover open={memberComboboxOpen} onOpenChange={setMemberComboboxOpen}>
+                    <PopoverTrigger
+                      render={
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-[180px] h-8 justify-between font-normal text-xs"
+                        />
+                      }
+                    >
+                      <span className="truncate">
+                        {memberFilter === 'all'
+                          ? 'All Members'
+                          : teamUsers?.find((u) => u.id === memberFilter)?.name ?? 'All Members'}
+                      </span>
+                      <ChevronsUpDown className="ml-2 h-3 w-3 shrink-0 opacity-50" />
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[200px] p-0">
+                      <Command>
+                        <CommandInput placeholder="Search members..." />
+                        <CommandList>
+                          <CommandEmpty>No members found.</CommandEmpty>
+                          <CommandGroup>
+                            <CommandItem
+                              value="all"
+                              data-checked={memberFilter === 'all' ? true : undefined}
+                              onSelect={() => {
+                                setMemberFilter('all');
+                                setPage(1);
+                                setMemberComboboxOpen(false);
+                              }}
+                            >
+                              All Members
+                            </CommandItem>
+                            {teamUsers?.map((member) => (
+                              <CommandItem
+                                key={member.id}
+                                value={member.name}
+                                data-checked={memberFilter === member.id ? true : undefined}
+                                onSelect={() => {
+                                  setMemberFilter(member.id);
+                                  setPage(1);
+                                  setMemberComboboxOpen(false);
+                                }}
+                              >
+                                <div className="flex flex-col">
+                                  <span>{member.name}</span>
+                                  <span className="text-xs text-muted-foreground">{member.email}</span>
+                                </div>
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
-      {/* Time Entries Table */}
-      <Card className="border-border bg-card">
-        <CardHeader>
-          <CardTitle className="text-foreground">Entries</CardTitle>
-          <CardDescription className="text-muted-foreground">
-            {meta && meta.total != null
-              ? `Showing ${entries.length} of ${meta.total} entries`
-              : `${entries.length} entries`}{' '}
-            | Page Total: {formatDuration(totalSeconds)}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      {/* Entries Table */}
+      <Card className="border-border">
+        <CardContent className="p-0">
+          {/* Table Header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border/50">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-foreground">Entries</h2>
+              <Badge variant="outline" className="text-[0.6rem] h-5 tabular-nums">
+                {meta && meta.total != null
+                  ? `${entries.length} of ${meta.total}`
+                  : entries.length}
+              </Badge>
+            </div>
+          </div>
+
           {isLoading ? (
-            <div className="space-y-3">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="h-12 bg-muted rounded animate-pulse" />
+            <div className="p-4 space-y-2">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="h-10 bg-muted rounded animate-pulse" />
               ))}
             </div>
           ) : entries.length === 0 ? (
-            <div className="text-center py-12">
-              <Clock className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-              <p className="text-muted-foreground font-medium">No time entries found</p>
-              <p className="text-sm text-muted-foreground mt-1">
+            <div className="text-center py-16">
+              <Clock className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
+              <p className="text-sm text-muted-foreground font-medium">No time entries found</p>
+              <p className="text-xs text-muted-foreground/70 mt-1">
                 Start the timer or adjust your filters to see entries
               </p>
             </div>
           ) : (
             <>
-              <div className="rounded-lg border border-border overflow-hidden">
               <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-border hover:bg-transparent">
-                    {canApprove && (
-                      <TableHead className="w-[40px]">
-                        <Checkbox
-                          checked={
-                            selectedEntries.length ===
-                            entries.filter((e) => e.status === 'pending').length &&
-                            entries.filter((e) => e.status === 'pending').length > 0
-                          }
-                          onCheckedChange={toggleAll}
-                          aria-label="Select all pending entries"
-                        />
-                      </TableHead>
-                    )}
-                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Date</TableHead>
-                    {isManagerOrAbove && (
-                      <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Member</TableHead>
-                    )}
-                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Type</TableHead>
-                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Project</TableHead>
-                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Task</TableHead>
-                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">Duration</TableHead>
-                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">
-                      <span className="inline-flex items-center gap-1">
-                        Activity
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={<span />}
-                            className="inline-flex"
-                            aria-label="Activity info"
-                          >
-                            <Info className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground transition-colors" />
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            Activity is calculated from keyboard and mouse events during each tracking interval. Higher % means more consistent input activity.
-                          </TooltipContent>
-                        </Tooltip>
-                      </span>
-                    </TableHead>
-                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-center">Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {entries.map((entry) => (
-                    <TableRow key={entry.id} className="border-border hover:bg-muted/50 transition-colors">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-border hover:bg-transparent">
                       {canApprove && (
-                        <TableCell>
-                          {entry.status === 'pending' && (
-                            <Checkbox
-                              checked={selectedEntries.includes(entry.id)}
-                              onCheckedChange={() => toggleEntry(entry.id)}
-                              aria-label={`Select entry ${entry.id}`}
-                            />
+                        <TableHead className="w-[40px] px-3">
+                          <Checkbox
+                            checked={
+                              selectedEntries.length ===
+                              entries.filter((e) => e.status === 'pending').length &&
+                              entries.filter((e) => e.status === 'pending').length > 0
+                            }
+                            onCheckedChange={toggleAll}
+                            aria-label="Select all pending entries"
+                          />
+                        </TableHead>
+                      )}
+                      <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground">Date</TableHead>
+                      {isManagerOrAbove && (
+                        <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground">Member</TableHead>
+                      )}
+                      <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground">Type</TableHead>
+                      <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground">Project</TableHead>
+                      <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground">Task</TableHead>
+                      <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground text-right">Duration</TableHead>
+                      <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground text-right">
+                        <span className="inline-flex items-center gap-1">
+                          Activity
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={<span />}
+                              className="inline-flex"
+                              aria-label="Activity info"
+                            >
+                              <Info className="h-3 w-3 text-muted-foreground hover:text-foreground transition-colors" />
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              Activity is calculated from keyboard and mouse events during each tracking interval. Higher % means more consistent input activity.
+                            </TooltipContent>
+                          </Tooltip>
+                        </span>
+                      </TableHead>
+                      <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground text-center">Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {entries.map((entry) => (
+                      <TableRow key={entry.id} className="border-border/50 hover:bg-muted/30 transition-colors">
+                        {canApprove && (
+                          <TableCell className="px-3">
+                            {entry.status === 'pending' && (
+                              <Checkbox
+                                checked={selectedEntries.includes(entry.id)}
+                                onCheckedChange={() => toggleEntry(entry.id)}
+                                aria-label={`Select entry ${entry.id}`}
+                              />
+                            )}
+                          </TableCell>
+                        )}
+                        <TableCell className="py-2.5">
+                          <div>
+                            <span className="text-[0.7rem] font-medium text-foreground">
+                              {format(new Date(entry.started_at), 'MMM d, yyyy')}
+                            </span>
+                            <div className="text-[0.65rem] text-muted-foreground tabular-nums">
+                              {(() => {
+                                const start = new Date(entry.started_at);
+                                if (!entry.ended_at) return format(start, 'hh:mm a');
+                                const end = new Date(entry.ended_at);
+                                const earlier = start <= end ? start : end;
+                                const later = start <= end ? end : start;
+                                return `${format(earlier, 'hh:mm a')} - ${format(later, 'hh:mm a')}`;
+                              })()}
+                            </div>
+                          </div>
+                        </TableCell>
+                        {isManagerOrAbove && (
+                          <TableCell className="py-2.5">
+                            <div>
+                              <span className="text-[0.7rem] font-medium text-foreground">{entry.user?.name || '—'}</span>
+                              <div className="text-[0.6rem] text-muted-foreground">{entry.user?.email || ''}</div>
+                            </div>
+                          </TableCell>
+                        )}
+                        <TableCell className="py-2.5">
+                          <Badge
+                            variant="outline"
+                            className={`text-[0.55rem] px-1.5 py-0 h-4 font-medium ${
+                              entry.type === 'tracked'
+                                ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20'
+                                : entry.type === 'manual'
+                                ? 'bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20'
+                                : 'bg-muted text-muted-foreground border-border'
+                            }`}
+                          >
+                            {entry.type === 'idle' ? 'Idle' : entry.type === 'manual' ? 'Manual' : 'Tracked'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="py-2.5">
+                          {entry.project ? (
+                            <div className="flex items-center gap-1.5">
+                              <div
+                                className="h-2 w-2 rounded-full shrink-0"
+                                style={{ backgroundColor: entry.project.color || '#6366f1' }}
+                              />
+                              <span className="text-[0.7rem] font-medium text-foreground">{entry.project.name}</span>
+                            </div>
+                          ) : (
+                            <span className="text-[0.65rem] text-muted-foreground">No project</span>
                           )}
                         </TableCell>
-                      )}
-                      <TableCell>
-                        <span className="text-sm text-foreground">
-                          {format(new Date(entry.started_at), 'MMM d, yyyy')}
-                        </span>
-                        <div className="text-xs text-muted-foreground">
-                          {(() => {
-                            const start = new Date(entry.started_at);
-                            if (!entry.ended_at) return format(start, 'HH:mm');
-                            const end = new Date(entry.ended_at);
-                            // Ensure chronological order (idle entries can have start > end)
-                            const earlier = start <= end ? start : end;
-                            const later = start <= end ? end : start;
-                            return `${format(earlier, 'HH:mm')} - ${format(later, 'HH:mm')}`;
-                          })()}
-                        </div>
-                      </TableCell>
-                      {isManagerOrAbove && (
-                        <TableCell>
-                          <div className="flex flex-col">
-                            <span className="text-sm text-foreground">{entry.user?.name || '—'}</span>
-                            <span className="text-xs text-muted-foreground">{entry.user?.email || ''}</span>
+                        <TableCell className="text-[0.7rem] text-foreground py-2.5">
+                          {entry.task?.title || <span className="text-muted-foreground text-[0.65rem]">No task</span>}
+                        </TableCell>
+                        <TableCell className="text-right py-2.5">
+                          {entry.ended_at ? (
+                            <span className="text-[0.7rem] font-mono font-semibold text-foreground tabular-nums">{formatDuration(entry.duration_seconds)}</span>
+                          ) : (
+                            <span className="text-[0.7rem] font-mono font-semibold text-emerald-500 tabular-nums">{formatDuration(getDisplayDuration(entry))} <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse ml-0.5 align-middle" /></span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right py-2.5">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <div className="w-10 h-1 bg-muted rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${getActivityColor(entry.activity_score).bar}`}
+                                style={{ width: `${Math.min(entry.activity_score, 100)}%` }}
+                              />
+                            </div>
+                            <span className={`text-[0.6rem] font-mono tabular-nums font-medium ${getActivityColor(entry.activity_score).text}`}>
+                              {entry.activity_score}%
+                            </span>
                           </div>
                         </TableCell>
-                      )}
-                      <TableCell>
-                        <Badge variant={
-                          entry.type === 'idle'
-                            ? 'outline'
-                            : entry.type === 'manual'
-                            ? 'secondary'
-                            : 'default'
-                        }>
-                          {entry.type === 'idle' ? 'Idle' : entry.type === 'manual' ? 'Manual' : 'Tracked'}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {entry.project ? (
-                          <div className="flex items-center gap-2">
-                            <div
-                              className="h-2 w-2 rounded-full shrink-0"
-                              style={{ backgroundColor: entry.project.color || '#6366f1' }}
-                            />
-                            <span className="text-sm text-foreground">{entry.project.name}</span>
-                          </div>
-                        ) : (
-                          <span className="text-sm text-muted-foreground">No project</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-sm text-foreground">
-                        {entry.task?.title || <span className="text-muted-foreground text-xs">No task</span>}
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-sm tabular-nums">
-                        {entry.ended_at ? (
-                          <span className="text-foreground">{formatDuration(entry.duration_seconds)}</span>
-                        ) : (
-                          <span className="text-green-400">{formatDuration(getDisplayDuration(entry))} ●</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <div className="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${getActivityColor(entry.activity_score).bar}`}
-                              style={{ width: `${Math.min(entry.activity_score, 100)}%` }}
-                            />
-                          </div>
-                          <Badge variant="outline" className={`text-xs tabular-nums ${getActivityColor(entry.activity_score).badge}`}>
-                            {entry.activity_score}%
-                          </Badge>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <ApprovalStatusBadge
-                          status={entry.approval_status ?? entry.status}
-                          rejectionReason={entry.rejection_reason}
-                        />
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              </div>
+                        <TableCell className="text-center py-2.5">
+                          <ApprovalStatusBadge
+                            status={entry.approval_status ?? entry.status}
+                            rejectionReason={entry.rejection_reason}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
 
               {/* Pagination */}
               {meta && meta.last_page > 1 && (
-                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-4 pt-4 border-t border-border">
-                  <p className="text-sm text-muted-foreground">
-                    Showing {((meta.current_page - 1) * 20) + 1}&ndash;{Math.min(meta.current_page * 20, meta.total)} of {meta.total} entries
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-border/50">
+                  <p className="text-[0.65rem] text-muted-foreground tabular-nums">
+                    Showing {((meta.current_page - 1) * 20) + 1}&ndash;{Math.min(meta.current_page * 20, meta.total)} of {meta.total}
                   </p>
                   <Pagination>
                     <PaginationContent>

@@ -26,30 +26,40 @@ export function ShiftSelect({
   const { data, isLoading } = useShifts({ is_active: true });
   const shifts = data?.data ?? [];
 
+  const selectedShift = value ? shifts.find((s) => s.id === value) : null;
+
   return (
     <Select
       value={value ?? undefined}
       onValueChange={(val) => { if (val) onChange(val); }}
       disabled={disabled || isLoading}
     >
-      <SelectTrigger aria-label="Select shift">
-        <SelectValue placeholder={isLoading ? 'Loading...' : placeholder} />
+      <SelectTrigger className="h-9 text-sm" aria-label="Select shift">
+        {selectedShift ? (
+          <span className="flex items-center gap-2 truncate">
+            <span
+              className="size-2 rounded-full shrink-0"
+              style={{ backgroundColor: selectedShift.color }}
+              aria-hidden="true"
+            />
+            {selectedShift.name}
+          </span>
+        ) : (
+          <SelectValue placeholder={isLoading ? 'Loading...' : placeholder} />
+        )}
       </SelectTrigger>
       <SelectContent>
         <SelectGroup>
           {shifts.map((shift) => (
             <SelectItem key={shift.id} value={shift.id}>
-              <div className="flex items-center gap-2">
-                <div
-                  className="size-2.5 rounded-full shrink-0"
+              <span className="flex items-center gap-2">
+                <span
+                  className="size-2 rounded-full shrink-0"
                   style={{ backgroundColor: shift.color }}
                   aria-hidden="true"
                 />
-                <span>{shift.name}</span>
-                <span className="text-xs text-muted-foreground">
-                  {shift.start_time}&ndash;{shift.end_time}
-                </span>
-              </div>
+                {shift.name}
+              </span>
             </SelectItem>
           ))}
         </SelectGroup>

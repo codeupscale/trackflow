@@ -17,11 +17,9 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { EmptyState } from "@/components/common/EmptyState";
-import { PageHeader } from "@/components/common/PageHeader";
 import { PageLoading } from "@/components/page-loading";
 import { ProjectTimeFilterBar } from "@/components/reports/ProjectTimeFilterBar";
 import { ReportsSectionNav } from "@/components/reports/ReportsSectionNav";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -34,14 +32,6 @@ import {
 } from "@/components/ui/pagination";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table";
-import {
     buildProjectTimeParams,
     useProjectTimeReport,
     type ProjectTimeFilters,
@@ -51,6 +41,11 @@ import { formatDuration } from "@/lib/check-in-time";
 import { readBlobError, triggerDownload } from "@/lib/download";
 import { useAuthStore } from "@/stores/auth-store";
 import { usePermissionStore } from "@/stores/permission-store";
+
+const typeDot: Record<string, { dot: string; text: string }> = {
+    Tracked: { dot: "bg-emerald-500", text: "text-emerald-600 dark:text-emerald-400" },
+    Manual: { dot: "bg-amber-500", text: "text-amber-600 dark:text-amber-400" },
+};
 
 function defaultFilters(): ProjectTimeFilters {
     const today = new Date();
@@ -151,6 +146,7 @@ export default function ProjectTimeReportPage() {
         ? [
               {
                   icon: Clock,
+                  color: "blue",
                   label: "Total Hours",
                   value: (summary.total_seconds / 3600).toLocaleString(
                       undefined,
@@ -161,99 +157,106 @@ export default function ProjectTimeReportPage() {
               },
               {
                   icon: DollarSign,
+                  color: "emerald",
                   label: "Billable Amount",
                   value: `$${summary.billable_amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
               },
               {
                   icon: ListChecks,
+                  color: "violet",
                   label: "Entries",
                   value: summary.entry_count.toLocaleString(),
               },
               {
                   icon: Users,
+                  color: "amber",
                   label: "Resources",
                   value: summary.resource_count.toLocaleString(),
               },
               {
                   icon: Layers,
+                  color: "rose",
                   label: "Projects",
                   value: summary.project_count.toLocaleString(),
               },
           ]
         : [];
 
+    const tileIconBg: Record<string, string> = {
+        blue: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+        emerald: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+        violet: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+        amber: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+        rose: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+    };
+
     return (
         <div className="flex flex-col gap-6">
             <ReportsSectionNav />
 
-            <PageHeader
-                title="Project Time Report"
-                description="Per-entry breakdown by employee and project. Includes approved tracked and manual time."
-                action={
-                    <div className="flex items-center gap-2">
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleExport("csv")}
-                            disabled={
-                                !canExport || exporting !== null || !rows.length
-                            }
-                        >
-                            {exporting === "csv" ? (
-                                <Loader2
-                                    className="animate-spin"
-                                    data-icon="inline-start"
-                                />
-                            ) : (
-                                <Download data-icon="inline-start" />
-                            )}
-                            CSV
-                        </Button>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleExport("pdf")}
-                            disabled={
-                                !canExport || exporting !== null || !rows.length
-                            }
-                        >
-                            {exporting === "pdf" ? (
-                                <Loader2
-                                    className="animate-spin"
-                                    data-icon="inline-start"
-                                />
-                            ) : (
-                                <FileText data-icon="inline-start" />
-                            )}
-                            PDF
-                        </Button>
-                    </div>
-                }
-            />
+            {/* Header */}
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h1 className="text-lg font-semibold tracking-tight">Project Time Report</h1>
+                    <p className="text-xs text-muted-foreground">Per-entry breakdown by employee and project. Includes approved tracked and manual time.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                    <Button
+                        variant="outline"
+                        className="h-8 text-xs"
+                        onClick={() => handleExport("csv")}
+                        disabled={
+                            !canExport || exporting !== null || !rows.length
+                        }
+                    >
+                        {exporting === "csv" ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                            <Download className="size-3.5" />
+                        )}
+                        CSV
+                    </Button>
+                    <Button
+                        variant="outline"
+                        className="h-8 text-xs"
+                        onClick={() => handleExport("pdf")}
+                        disabled={
+                            !canExport || exporting !== null || !rows.length
+                        }
+                    >
+                        {exporting === "pdf" ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                            <FileText className="size-3.5" />
+                        )}
+                        PDF
+                    </Button>
+                </div>
+            </div>
 
             <ProjectTimeFilterBar filters={filters} onChange={patch} />
 
             {/* Summary tiles */}
             {isLoading ? (
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                     {Array.from({ length: 5 }).map((_, i) => (
-                        <Skeleton key={i} className="h-24 w-full rounded-lg" />
+                        <Skeleton key={i} className="h-[76px] w-full rounded-lg" />
                     ))}
                 </div>
             ) : summary ? (
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                     {summaryTiles.map((tile) => (
                         <Card key={tile.label}>
-                            <CardContent className="flex flex-col gap-1 pt-6">
-                                <div className="flex items-center gap-2 text-muted-foreground">
-                                    <tile.icon className="size-4" />
-                                    <span className="text-xs font-semibold uppercase tracking-wider">
-                                        {tile.label}
-                                    </span>
+                            <CardContent className="p-3">
+                                <div className="flex items-center gap-2.5">
+                                    <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${tileIconBg[tile.color]}`}>
+                                        <tile.icon className="size-4" />
+                                    </div>
+                                    <div className="min-w-0">
+                                        <p className="text-[0.65rem] font-medium uppercase tracking-wider text-muted-foreground">{tile.label}</p>
+                                        <p className="text-base font-bold tabular-nums leading-tight">{tile.value}</p>
+                                    </div>
                                 </div>
-                                <span className="text-2xl font-bold text-foreground">
-                                    {tile.value}
-                                </span>
                             </CardContent>
                         </Card>
                     ))}
@@ -263,22 +266,22 @@ export default function ProjectTimeReportPage() {
             {/* Rows */}
             {isError ? (
                 <Card>
-                    <CardContent className="py-12">
+                    <CardContent className="py-10">
                         <div className="text-center">
-                            <BarChart3 className="mx-auto mb-2 size-8 text-destructive/60" />
-                            <p className="font-medium text-muted-foreground">
+                            <BarChart3 className="mx-auto mb-2 size-7 text-destructive/60" />
+                            <p className="text-sm font-medium text-muted-foreground">
                                 Failed to load report
                             </p>
-                            <p className="mt-1 text-sm text-muted-foreground">
+                            <p className="mt-0.5 text-xs text-muted-foreground">
                                 Please try again.
                             </p>
                         </div>
                     </CardContent>
                 </Card>
             ) : isLoading ? (
-                <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-2">
                     {Array.from({ length: 6 }).map((_, i) => (
-                        <Skeleton key={i} className="h-12 w-full rounded-lg" />
+                        <Skeleton key={i} className="h-10 w-full rounded-lg" />
                     ))}
                 </div>
             ) : rows.length === 0 ? (
@@ -291,43 +294,37 @@ export default function ProjectTimeReportPage() {
                 <Card>
                     <CardContent className="p-0">
                         <div className="overflow-x-auto">
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Resource</TableHead>
-                                        <TableHead>Project</TableHead>
-                                        <TableHead>Task</TableHead>
-                                        <TableHead>Type</TableHead>
-                                        <TableHead>Date</TableHead>
-                                        <TableHead>Time</TableHead>
+                            <table className="w-full text-left">
+                                <thead>
+                                    <tr className="border-b border-border/50">
+                                        <th className="px-4 py-2.5 text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Resource</th>
+                                        <th className="px-4 py-2.5 text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Project</th>
+                                        <th className="px-4 py-2.5 text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Task</th>
+                                        <th className="px-4 py-2.5 text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Type</th>
+                                        <th className="px-4 py-2.5 text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Date</th>
+                                        <th className="px-4 py-2.5 text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Time</th>
                                         {groupByDay ? (
-                                            <TableHead className="text-right">
-                                                Entries
-                                            </TableHead>
+                                            <th className="px-4 py-2.5 text-right text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Entries</th>
                                         ) : null}
-                                        <TableHead className="text-right">
-                                            Duration
-                                        </TableHead>
-                                        <TableHead className="text-right">
-                                            Activity
-                                        </TableHead>
-                                        <TableHead className="text-right">
-                                            Billable
-                                        </TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {rows.map((row) => (
-                                        <TableRow key={row.id}>
-                                            <TableCell className="text-sm font-medium text-foreground">
+                                        <th className="px-4 py-2.5 text-right text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Duration</th>
+                                        <th className="px-4 py-2.5 text-right text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Activity</th>
+                                        <th className="px-4 py-2.5 text-right text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Billable</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {rows.map((row) => {
+                                        const td = typeDot[row.type] ?? { dot: "bg-muted-foreground/40", text: "text-muted-foreground" };
+                                        return (
+                                        <tr key={row.id} className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors">
+                                            <td className="px-4 py-2.5 text-[0.75rem] font-medium text-foreground whitespace-nowrap">
                                                 {row.user_name}
-                                            </TableCell>
-                                            <TableCell className="text-sm">
+                                            </td>
+                                            <td className="px-4 py-2.5 text-[0.75rem] text-foreground whitespace-nowrap">
                                                 {row.project_name}
-                                            </TableCell>
-                                            <TableCell className="max-w-[220px]">
+                                            </td>
+                                            <td className="max-w-[220px] px-4 py-2.5">
                                                 <span
-                                                    className="block truncate text-sm text-foreground"
+                                                    className="block truncate text-[0.75rem] text-foreground"
                                                     title={row.task_name ?? ""}
                                                 >
                                                     {row.task_name || (
@@ -336,25 +333,20 @@ export default function ProjectTimeReportPage() {
                                                         </span>
                                                     )}
                                                 </span>
-                                            </TableCell>
-                                            <TableCell>
-                                                <Badge
-                                                    variant={
-                                                        row.type === "Manual"
-                                                            ? "outline"
-                                                            : "secondary"
-                                                    }
-                                                >
+                                            </td>
+                                            <td className="px-4 py-2.5">
+                                                <span className={`inline-flex items-center gap-1.5 text-[0.7rem] font-medium ${td.text}`}>
+                                                    <span className={`inline-block h-1.5 w-1.5 rounded-full ${td.dot}`} />
                                                     {row.type}
-                                                </Badge>
-                                            </TableCell>
-                                            <TableCell className="text-sm text-foreground">
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-2.5 text-[0.75rem] text-foreground whitespace-nowrap">
                                                 {format(
                                                     new Date(row.date),
                                                     "MMM d, yyyy",
                                                 )}
-                                            </TableCell>
-                                            <TableCell className="font-mono text-sm tabular-nums text-foreground">
+                                            </td>
+                                            <td className="px-4 py-2.5 font-mono text-[0.75rem] tabular-nums text-foreground whitespace-nowrap">
                                                 {groupByDay &&
                                                 (row.entry_count ?? 1) > 1 ? (
                                                     <span
@@ -376,38 +368,40 @@ export default function ProjectTimeReportPage() {
                                                             : ""}
                                                     </>
                                                 )}
-                                            </TableCell>
+                                            </td>
                                             {groupByDay ? (
-                                                <TableCell className="text-right text-sm tabular-nums text-muted-foreground">
+                                                <td className="px-4 py-2.5 text-right text-[0.75rem] tabular-nums text-muted-foreground">
                                                     {row.entry_count ?? 1}
-                                                </TableCell>
+                                                </td>
                                             ) : null}
-                                            <TableCell className="text-right font-mono text-sm tabular-nums">
+                                            <td className="px-4 py-2.5 text-right font-mono text-[0.75rem] tabular-nums">
                                                 {formatDuration(
                                                     row.duration_seconds,
                                                 )}
-                                            </TableCell>
-                                            <TableCell className="text-right text-sm tabular-nums">
+                                            </td>
+                                            <td className="px-4 py-2.5 text-right text-[0.75rem] tabular-nums">
                                                 {row.activity_score}%
-                                            </TableCell>
-                                            <TableCell className="text-right">
+                                            </td>
+                                            <td className="px-4 py-2.5 text-right whitespace-nowrap">
                                                 {row.billable ? (
-                                                    <span className="text-sm font-medium text-foreground">
+                                                    <span className="text-[0.75rem] font-medium text-foreground">
                                                         $
                                                         {row.billable_amount.toFixed(
                                                             2,
                                                         )}
                                                     </span>
                                                 ) : (
-                                                    <Badge variant="secondary">
+                                                    <span className="inline-flex items-center gap-1.5 text-[0.7rem] font-medium text-muted-foreground">
+                                                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
                                                         Non-billable
-                                                    </Badge>
+                                                    </span>
                                                 )}
-                                            </TableCell>
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
+                                            </td>
+                                        </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
                         </div>
                     </CardContent>
                 </Card>
@@ -416,7 +410,7 @@ export default function ProjectTimeReportPage() {
             {/* Pagination */}
             {totalPages > 1 && (
                 <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">
+                    <span className="text-xs text-muted-foreground">
                         Page {meta?.current_page ?? filters.page} of{" "}
                         {totalPages}
                     </span>

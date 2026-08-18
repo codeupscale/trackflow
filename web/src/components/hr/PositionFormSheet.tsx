@@ -5,13 +5,13 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader2 } from 'lucide-react';
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet';
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
@@ -72,6 +72,7 @@ export function PositionFormSheet({
   });
 
   useEffect(() => {
+    if (!open) return;
     if (position) {
       form.reset({
         title: position.title,
@@ -91,7 +92,7 @@ export function PositionFormSheet({
         is_active: true,
       });
     }
-  }, [position, form]);
+  }, [open, position, form]);
 
   const createMutation = useCreatePosition();
   const updateMutation = useUpdatePosition();
@@ -111,61 +112,68 @@ export function PositionFormSheet({
   };
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="sm:max-w-lg">
-        <SheetHeader>
-          <SheetTitle>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
             {isEditing ? 'Edit Position' : 'New Position'}
-          </SheetTitle>
-          <SheetDescription>
+          </DialogTitle>
+          <DialogDescription>
             {isEditing
               ? 'Update the position details below.'
               : 'Create a new position within a department.'}
-          </SheetDescription>
-        </SheetHeader>
+          </DialogDescription>
+        </DialogHeader>
 
         <Form {...form}>
           <form
             onSubmit={form.handleSubmit(onSubmit)}
-            className="flex flex-col flex-1 gap-6 p-6 overflow-y-auto"
+            className="flex flex-col gap-4"
           >
-            <FormField
-              control={form.control}
-              name="title"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Title</FormLabel>
-                  <FormControl>
-                    <Input
-                      placeholder="e.g. Senior Software Engineer"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            <div className="grid grid-cols-2 gap-3">
+              <FormField
+                control={form.control}
+                name="title"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-xs">Title</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="e.g. Senior Engineer"
+                        className="h-8 text-sm"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-            <FormField
-              control={form.control}
-              name="code"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Code</FormLabel>
-                  <FormControl>
-                    <Input placeholder="e.g. SSE-001" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+              <FormField
+                control={form.control}
+                name="code"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-xs">Code</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="e.g. SSE-001"
+                        className="h-8 text-sm"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
 
             <FormField
               control={form.control}
               name="department_id"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Department</FormLabel>
+                  <FormLabel className="text-xs">Department</FormLabel>
                   <FormControl>
                     <DepartmentSelect
                       value={field.value || null}
@@ -177,19 +185,19 @@ export function PositionFormSheet({
               )}
             />
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-3">
               <FormField
                 control={form.control}
                 name="level"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Level</FormLabel>
+                    <FormLabel className="text-xs">Level</FormLabel>
                     <Select
                       value={field.value}
                       onValueChange={field.onChange}
                     >
                       <FormControl>
-                        <SelectTrigger className="w-full">
+                        <SelectTrigger className="h-8 w-full text-sm">
                           <SelectValue placeholder="Select level" />
                         </SelectTrigger>
                       </FormControl>
@@ -213,13 +221,13 @@ export function PositionFormSheet({
                 name="employment_type"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Employment Type</FormLabel>
+                    <FormLabel className="text-xs">Employment Type</FormLabel>
                     <Select
                       value={field.value}
                       onValueChange={field.onChange}
                     >
                       <FormControl>
-                        <SelectTrigger className="w-full">
+                        <SelectTrigger className="h-8 w-full text-sm">
                           <SelectValue placeholder="Select type" />
                         </SelectTrigger>
                       </FormControl>
@@ -243,10 +251,10 @@ export function PositionFormSheet({
               control={form.control}
               name="is_active"
               render={({ field }) => (
-                <FormItem className="flex items-center justify-between rounded-lg border border-border p-4">
+                <FormItem className="flex items-center justify-between rounded-lg border border-border p-3">
                   <div>
-                    <FormLabel>Active</FormLabel>
-                    <p className="text-xs text-muted-foreground">
+                    <FormLabel className="text-xs">Active</FormLabel>
+                    <p className="text-[0.65rem] text-muted-foreground">
                       Inactive positions are hidden from assignment
                     </p>
                   </div>
@@ -260,28 +268,26 @@ export function PositionFormSheet({
               )}
             />
 
-            <SheetFooter className="mt-auto gap-2">
+            <DialogFooter className="gap-2 pt-2">
               <Button
                 type="button"
                 variant="outline"
+                size="sm"
                 onClick={() => onOpenChange(false)}
                 disabled={isPending}
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={isPending}>
+              <Button type="submit" size="sm" disabled={isPending}>
                 {isPending && (
-                  <Loader2
-                    data-icon="inline-start"
-                    className="animate-spin"
-                  />
+                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                 )}
                 {isEditing ? 'Save Changes' : 'Create Position'}
               </Button>
-            </SheetFooter>
+            </DialogFooter>
           </form>
         </Form>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }

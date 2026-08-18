@@ -5,27 +5,19 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader2 } from 'lucide-react';
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet';
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Checkbox } from '@/components/ui/checkbox';
-import {
-  Form,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormControl,
-  FormMessage,
-  FormDescription,
-} from '@/components/ui/form';
 import {
   shiftSchema,
   type ShiftFormData,
@@ -33,31 +25,35 @@ import {
   type DayOfWeek,
 } from '@/lib/validations/shift';
 import { useCreateShift, useUpdateShift } from '@/hooks/hr/use-shifts';
+import { cn } from '@/lib/utils';
 
-const DAYS_OF_WEEK: { value: DayOfWeek; label: string }[] = [
-  { value: 'monday', label: 'Monday' },
-  { value: 'tuesday', label: 'Tuesday' },
-  { value: 'wednesday', label: 'Wednesday' },
-  { value: 'thursday', label: 'Thursday' },
-  { value: 'friday', label: 'Friday' },
-  { value: 'saturday', label: 'Saturday' },
-  { value: 'sunday', label: 'Sunday' },
+const DAYS_OF_WEEK: { value: DayOfWeek; label: string; short: string }[] = [
+  { value: 'monday', label: 'Monday', short: 'Mon' },
+  { value: 'tuesday', label: 'Tuesday', short: 'Tue' },
+  { value: 'wednesday', label: 'Wednesday', short: 'Wed' },
+  { value: 'thursday', label: 'Thursday', short: 'Thu' },
+  { value: 'friday', label: 'Friday', short: 'Fri' },
+  { value: 'saturday', label: 'Saturday', short: 'Sat' },
+  { value: 'sunday', label: 'Sunday', short: 'Sun' },
 ];
 
-interface ShiftFormSheetProps {
+interface ShiftFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   shift?: Shift | null;
 }
 
-export function ShiftFormSheet({
-  open,
-  onOpenChange,
-  shift,
-}: ShiftFormSheetProps) {
+export function ShiftFormSheet({ open, onOpenChange, shift }: ShiftFormDialogProps) {
   const isEditing = !!shift;
 
-  const form = useForm<ShiftFormData>({
+  const {
+    register,
+    handleSubmit,
+    reset,
+    watch,
+    setValue,
+    formState: { errors },
+  } = useForm<ShiftFormData>({
     resolver: zodResolver(shiftSchema) as any,
     defaultValues: {
       name: '',
@@ -75,8 +71,9 @@ export function ShiftFormSheet({
   });
 
   useEffect(() => {
+    if (!open) return;
     if (shift) {
-      form.reset({
+      reset({
         name: shift.name,
         start_time: shift.start_time.slice(0, 5),
         end_time: shift.end_time.slice(0, 5),
@@ -90,7 +87,7 @@ export function ShiftFormSheet({
         is_active: shift.is_active,
       });
     } else {
-      form.reset({
+      reset({
         name: '',
         start_time: '09:00',
         end_time: '17:00',
@@ -104,17 +101,31 @@ export function ShiftFormSheet({
         is_active: true,
       });
     }
-  }, [shift, form]);
+  }, [open, shift, reset]);
 
   const createMutation = useCreateShift();
   const updateMutation = useUpdateShift();
   const isPending = createMutation.isPending || updateMutation.isPending;
 
+  const daysValue = watch('days_of_week') ?? [];
+  const colorValue = watch('color') ?? '#3B82F6';
+  const allowEarlyValue = watch('allow_early_check_in') ?? false;
+  const isActiveValue = watch('is_active') ?? true;
+
+  const toggleDay = (day: DayOfWeek) => {
+    const current = daysValue;
+    if (current.includes(day)) {
+      setValue('days_of_week', current.filter((d) => d !== day), { shouldValidate: true });
+    } else {
+      setValue('days_of_week', [...current, day], { shouldValidate: true });
+    }
+  };
+
   const onSubmit = (data: ShiftFormData) => {
     if (isEditing && shift) {
       updateMutation.mutate(
         { id: shift.id, ...data },
-        { onSuccess: () => onOpenChange(false) }
+        { onSuccess: () => onOpenChange(false) },
       );
     } else {
       createMutation.mutate(data, {
@@ -124,268 +135,193 @@ export function ShiftFormSheet({
   };
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="sm:max-w-lg">
-        <SheetHeader>
-          <SheetTitle>{isEditing ? 'Edit Shift' : 'New Shift'}</SheetTitle>
-          <SheetDescription>
-            {isEditing
-              ? 'Update the shift details below.'
-              : 'Create a new shift for your organization.'}
-          </SheetDescription>
-        </SheetHeader>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
+        <form onSubmit={handleSubmit(onSubmit)}>
+          <DialogHeader>
+            <DialogTitle className="text-base">
+              {isEditing ? 'Edit Shift' : 'New Shift'}
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              {isEditing
+                ? 'Update the shift details below.'
+                : 'Create a new shift for your organization.'}
+            </DialogDescription>
+          </DialogHeader>
 
-        <Form {...form}>
-          <form
-            onSubmit={form.handleSubmit(onSubmit)}
-            className="flex flex-col flex-1 gap-6 p-6 overflow-y-auto"
-          >
-            <FormField
-              control={form.control}
-              name="name"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Name</FormLabel>
-                  <FormControl>
-                    <Input placeholder="e.g. Morning Shift" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <div className="grid grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="start_time"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Start Time</FormLabel>
-                    <FormControl>
-                      <Input type="time" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
+          <div className="flex flex-col gap-3 py-4">
+            {/* Name */}
+            <div className="grid gap-1.5">
+              <Label htmlFor="shift-name" className="text-xs">Name</Label>
+              <Input
+                id="shift-name"
+                placeholder="e.g. Morning Shift"
+                className="h-9 text-sm"
+                {...register('name')}
+                aria-invalid={!!errors.name}
               />
+              {errors.name && <p className="text-[0.65rem] text-destructive">{errors.name.message}</p>}
+            </div>
 
-              <FormField
-                control={form.control}
-                name="end_time"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>End Time</FormLabel>
-                    <FormControl>
-                      <Input type="time" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
+            {/* Start / End Time */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-1.5">
+                <Label htmlFor="shift-start" className="text-xs">Start Time</Label>
+                <Input
+                  id="shift-start"
+                  type="time"
+                  className="h-9 text-sm"
+                  {...register('start_time')}
+                  aria-invalid={!!errors.start_time}
+                />
+                {errors.start_time && <p className="text-[0.65rem] text-destructive">{errors.start_time.message}</p>}
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="shift-end" className="text-xs">End Time</Label>
+                <Input
+                  id="shift-end"
+                  type="time"
+                  className="h-9 text-sm"
+                  {...register('end_time')}
+                  aria-invalid={!!errors.end_time}
+                />
+                {errors.end_time && <p className="text-[0.65rem] text-destructive">{errors.end_time.message}</p>}
+              </div>
+            </div>
+
+            {/* Working Days */}
+            <div className="grid gap-1.5">
+              <Label className="text-xs">Working Days</Label>
+              <div className="flex items-center gap-1">
+                {DAYS_OF_WEEK.map((day) => {
+                  const selected = daysValue.includes(day.value);
+                  return (
+                    <button
+                      key={day.value}
+                      type="button"
+                      onClick={() => toggleDay(day.value)}
+                      className={cn(
+                        'flex items-center justify-center rounded-md h-8 w-9 text-[0.6rem] font-semibold transition-colors',
+                        selected
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-muted text-muted-foreground hover:text-foreground',
+                      )}
+                      aria-pressed={selected}
+                      title={day.label}
+                    >
+                      {day.short}
+                    </button>
+                  );
+                })}
+              </div>
+              {errors.days_of_week && <p className="text-[0.65rem] text-destructive">{errors.days_of_week.message}</p>}
+            </div>
+
+            {/* Break / Grace */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-1.5">
+                <Label htmlFor="shift-break" className="text-xs">Break (min)</Label>
+                <Input
+                  id="shift-break"
+                  type="number"
+                  min={0}
+                  max={120}
+                  className="h-9 text-sm"
+                  {...register('break_minutes')}
+                  aria-invalid={!!errors.break_minutes}
+                />
+                {errors.break_minutes && <p className="text-[0.65rem] text-destructive">{errors.break_minutes.message}</p>}
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="shift-grace" className="text-xs">Grace (min)</Label>
+                <Input
+                  id="shift-grace"
+                  type="number"
+                  min={0}
+                  max={60}
+                  className="h-9 text-sm"
+                  {...register('grace_period_minutes')}
+                  aria-invalid={!!errors.grace_period_minutes}
+                />
+                {errors.grace_period_minutes && <p className="text-[0.65rem] text-destructive">{errors.grace_period_minutes.message}</p>}
+              </div>
+            </div>
+
+            {/* Color */}
+            <div className="grid gap-1.5">
+              <Label className="text-xs">Color</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="color"
+                  className="h-9 w-10 p-1 cursor-pointer shrink-0"
+                  value={colorValue}
+                  onChange={(e) => setValue('color', e.target.value)}
+                />
+                <Input
+                  className="h-9 text-sm flex-1"
+                  placeholder="#3B82F6"
+                  {...register('color')}
+                />
+              </div>
+              {errors.color && <p className="text-[0.65rem] text-destructive">{errors.color.message}</p>}
+            </div>
+
+            {/* Description */}
+            <div className="grid gap-1.5">
+              <Label htmlFor="shift-desc" className="text-xs">Description</Label>
+              <Textarea
+                id="shift-desc"
+                rows={2}
+                placeholder="Optional description..."
+                className="text-sm resize-none"
+                {...register('description')}
               />
             </div>
 
-            <FormField
-              control={form.control}
-              name="days_of_week"
-              render={() => (
-                <FormItem>
-                  <FormLabel>Working Days</FormLabel>
-                  <div className="grid grid-cols-2 gap-2">
-                    {DAYS_OF_WEEK.map((day) => (
-                      <FormField
-                        key={day.value}
-                        control={form.control}
-                        name="days_of_week"
-                        render={({ field }) => (
-                          <FormItem className="flex items-center gap-2">
-                            <FormControl>
-                              <Checkbox
-                                checked={field.value?.includes(day.value)}
-                                onCheckedChange={(checked) => {
-                                  const current = field.value || [];
-                                  if (checked) {
-                                    field.onChange([...current, day.value]);
-                                  } else {
-                                    field.onChange(
-                                      current.filter(
-                                        (d: string) => d !== day.value
-                                      )
-                                    );
-                                  }
-                                }}
-                              />
-                            </FormControl>
-                            <FormLabel className="text-sm font-normal cursor-pointer">
-                              {day.label}
-                            </FormLabel>
-                          </FormItem>
-                        )}
-                      />
-                    ))}
-                  </div>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <div className="grid grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
-                name="break_minutes"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Break (minutes)</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={120}
-                        {...field}
-                        value={field.value ?? ''}
-                        // Keep the raw string so the field can be cleared while
-                        // editing; the zod schema coerces '' → 0 on submit. (The old
-                        // Number() here forced an empty input straight back to 0.)
-                        onChange={(e) => field.onChange(e.target.value)}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="grace_period_minutes"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Grace Period (min)</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={60}
-                        {...field}
-                        value={field.value ?? ''}
-                        // Raw string while editing so the 0 can be erased; schema
-                        // coerces '' → 0 on submit.
-                        onChange={(e) => field.onChange(e.target.value)}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+            {/* Toggles */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
+                <div>
+                  <p className="text-xs font-medium">Allow early check-in</p>
+                  <p className="text-[0.6rem] text-muted-foreground">Let employees check in before the shift start time</p>
+                </div>
+                <Switch
+                  checked={allowEarlyValue}
+                  onCheckedChange={(val) => setValue('allow_early_check_in', val)}
+                />
+              </div>
+              <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
+                <div>
+                  <p className="text-xs font-medium">Active</p>
+                  <p className="text-[0.6rem] text-muted-foreground">Inactive shifts are hidden from selection</p>
+                </div>
+                <Switch
+                  checked={isActiveValue}
+                  onCheckedChange={(val) => setValue('is_active', val)}
+                />
+              </div>
             </div>
+          </div>
 
-            <FormField
-              control={form.control}
-              name="color"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Color</FormLabel>
-                  <div className="flex items-center gap-3">
-                    <FormControl>
-                      <Input
-                        type="color"
-                        className="size-10 p-1 cursor-pointer"
-                        {...field}
-                      />
-                    </FormControl>
-                    <Input
-                      value={field.value}
-                      onChange={field.onChange}
-                      placeholder="#3B82F6"
-                      className="flex-1"
-                    />
-                  </div>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="description"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Description</FormLabel>
-                  <FormControl>
-                    <Textarea
-                      placeholder="Optional description..."
-                      rows={3}
-                      {...field}
-                      value={field.value ?? ''}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="allow_early_check_in"
-              render={({ field }) => (
-                <FormItem className="flex items-center justify-between rounded-lg border border-border p-4">
-                  <div>
-                    <FormLabel>Allow early check-in</FormLabel>
-                    <FormDescription>
-                      Let employees check in before the shift start time
-                    </FormDescription>
-                  </div>
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="is_active"
-              render={({ field }) => (
-                <FormItem className="flex items-center justify-between rounded-lg border border-border p-4">
-                  <div>
-                    <FormLabel>Active</FormLabel>
-                    <FormDescription>
-                      Inactive shifts are hidden from selection
-                    </FormDescription>
-                  </div>
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                </FormItem>
-              )}
-            />
-
-            <SheetFooter className="mt-auto gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => onOpenChange(false)}
-                disabled={isPending}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={isPending}>
-                {isPending && (
-                  <Loader2
-                    data-icon="inline-start"
-                    className="animate-spin"
-                  />
-                )}
-                {isEditing ? 'Save Changes' : 'Create Shift'}
-              </Button>
-            </SheetFooter>
-          </form>
-        </Form>
-      </SheetContent>
-    </Sheet>
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onOpenChange(false)}
+              disabled={isPending}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" disabled={isPending}>
+              {isPending && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+              {isEditing ? 'Save Changes' : 'Create Shift'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
+
+export { ShiftFormSheet as ShiftFormDialog };
