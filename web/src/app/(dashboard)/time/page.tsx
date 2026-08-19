@@ -14,6 +14,7 @@ import {
   Plus,
   Search,
   Timer,
+  Trash2,
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -132,6 +133,7 @@ export default function TimePage() {
   const searchParams = useSearchParams();
   const { hasPermission, hasPermissionWithScope } = usePermissionStore();
   const canApprove = hasPermission('time_entries.approve');
+  const canDelete = hasPermission('time_entries.delete');
 
   const isManagerOrAbove = hasPermissionWithScope('time_entries.view', 'project');
 
@@ -249,6 +251,20 @@ export default function TimePage() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async (entryIds: string[]) => {
+      await Promise.all(entryIds.map((id) => api.delete(`/time-entries/${id}`)));
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['time-entries'] });
+      setSelectedEntries([]);
+      toast.success(`${variables.length} time ${variables.length === 1 ? 'entry' : 'entries'} deleted`);
+    },
+    onError: () => {
+      toast.error('Failed to delete entries');
+    },
+  });
+
   const toggleEntry = (id: string) => {
     setSelectedEntries((prev) =>
       prev.includes(id) ? prev.filter((e) => e !== id) : [...prev, id]
@@ -256,13 +272,16 @@ export default function TimePage() {
   };
 
   const toggleAll = () => {
-    const pendingIds = entries.filter((e) => e.status === 'pending').map((e) => e.id);
-    if (selectedEntries.length === pendingIds.length) {
+    const allIds = entries.map((e) => e.id);
+    if (selectedEntries.length === allIds.length) {
       setSelectedEntries([]);
     } else {
-      setSelectedEntries(pendingIds);
+      setSelectedEntries(allIds);
     }
   };
+
+  const showCheckboxes = canDelete || canApprove;
+  const selectedPendingCount = selectedEntries.filter((id) => entries.find((e) => e.id === id && e.status === 'pending')).length;
 
   const totalSeconds = entries.reduce((sum, e) => sum + getDisplayDuration(e), 0);
 
@@ -410,21 +429,44 @@ export default function TimePage() {
               </Button>
             )}
 
-            {/* Approve Button (right side) */}
-            {canApprove && selectedEntries.length > 0 && (
-              <Button
-                onClick={() => approveMutation.mutate(selectedEntries)}
-                disabled={approveMutation.isPending}
-                size="sm"
-                className="ml-auto h-8 text-xs"
-              >
-                {approveMutation.isPending ? (
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <CheckCircle className="mr-1.5 h-3.5 w-3.5" />
+            {/* Bulk Actions (right side) */}
+            {selectedEntries.length > 0 && (
+              <div className="flex items-center gap-2 ml-auto">
+                {canApprove && selectedPendingCount > 0 && (
+                  <Button
+                    onClick={() => {
+                      const pendingIds = selectedEntries.filter((id) => entries.find((e) => e.id === id && e.status === 'pending'));
+                      approveMutation.mutate(pendingIds);
+                    }}
+                    disabled={approveMutation.isPending}
+                    size="sm"
+                    className="h-8 text-xs"
+                  >
+                    {approveMutation.isPending ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <CheckCircle className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Approve ({selectedPendingCount})
+                  </Button>
                 )}
-                Approve ({selectedEntries.length})
-              </Button>
+                {canDelete && (
+                  <Button
+                    onClick={() => deleteMutation.mutate(selectedEntries)}
+                    disabled={deleteMutation.isPending}
+                    variant="destructive"
+                    size="sm"
+                    className="h-8 text-xs"
+                  >
+                    {deleteMutation.isPending ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Delete ({selectedEntries.length})
+                  </Button>
+                )}
+              </div>
             )}
           </div>
 
@@ -613,16 +655,15 @@ export default function TimePage() {
                 <Table>
                   <TableHeader>
                     <TableRow className="border-border hover:bg-transparent">
-                      {canApprove && (
+                      {showCheckboxes && (
                         <TableHead className="w-[40px] px-3">
                           <Checkbox
                             checked={
-                              selectedEntries.length ===
-                              entries.filter((e) => e.status === 'pending').length &&
-                              entries.filter((e) => e.status === 'pending').length > 0
+                              selectedEntries.length === entries.length &&
+                              entries.length > 0
                             }
                             onCheckedChange={toggleAll}
-                            aria-label="Select all pending entries"
+                            aria-label="Select all entries"
                           />
                         </TableHead>
                       )}
@@ -657,15 +698,13 @@ export default function TimePage() {
                   <TableBody>
                     {entries.map((entry) => (
                       <TableRow key={entry.id} className="border-border/50 hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => setViewEntry(entry)}>
-                        {canApprove && (
+                        {showCheckboxes && (
                           <TableCell className="px-3" onClick={(e) => e.stopPropagation()}>
-                            {entry.status === 'pending' && (
-                              <Checkbox
-                                checked={selectedEntries.includes(entry.id)}
-                                onCheckedChange={() => toggleEntry(entry.id)}
-                                aria-label={`Select entry ${entry.id}`}
-                              />
-                            )}
+                            <Checkbox
+                              checked={selectedEntries.includes(entry.id)}
+                              onCheckedChange={() => toggleEntry(entry.id)}
+                              aria-label={`Select entry ${entry.id}`}
+                            />
                           </TableCell>
                         )}
                         <TableCell className="py-2.5">

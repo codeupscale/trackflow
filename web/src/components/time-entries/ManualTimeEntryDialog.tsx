@@ -216,21 +216,7 @@ export function ManualTimeEntryDialog({
       <DialogContent className="sm:max-w-lg">
         <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
           <DialogHeader>
-            <div className="flex items-center justify-between">
-              <DialogTitle>{dialogTitle}</DialogTitle>
-              {isViewMode && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5"
-                  onClick={() => setMode('edit')}
-                >
-                  <Pencil className="h-3 w-3" />
-                  Edit
-                </Button>
-              )}
-            </div>
+            <DialogTitle>{dialogTitle}</DialogTitle>
             <DialogDescription>{dialogDescription}</DialogDescription>
           </DialogHeader>
 
@@ -454,9 +440,19 @@ export function ManualTimeEntryDialog({
 
           <DialogFooter>
             {isViewMode ? (
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                Close
-              </Button>
+              <div className="flex w-full gap-2 justify-end">
+                <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                  Close
+                </Button>
+                <Button
+                  type="button"
+                  className="gap-1.5"
+                  onClick={() => setMode('edit')}
+                >
+                  <Pencil className="h-3 w-3" />
+                  Edit
+                </Button>
+              </div>
             ) : (
               <>
                 <Button
