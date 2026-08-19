@@ -301,7 +301,8 @@ function TeamTab() {
           <Input
             type="date"
             value={dateFrom}
-            onChange={(e) => { setDateFrom(e.target.value); setCurrentPage(1); }}
+            max={dateTo}
+            onChange={(e) => { setDateFrom(e.target.value); if (e.target.value > dateTo) setDateTo(e.target.value); setCurrentPage(1); }}
             className="h-8 text-xs w-[140px]"
           />
         </div>
@@ -310,6 +311,7 @@ function TeamTab() {
           <Input
             type="date"
             value={dateTo}
+            min={dateFrom}
             onChange={(e) => { setDateTo(e.target.value); setCurrentPage(1); }}
             className="h-8 text-xs w-[140px]"
           />

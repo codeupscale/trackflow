@@ -362,9 +362,10 @@ export default function TimePage() {
             {/* Date Range */}
             <DatePicker
               value={dateFrom}
-              onChange={(val) => { setDateFrom(val); setPage(1); }}
+              onChange={(val) => { setDateFrom(val); if (val > dateTo) setDateTo(val); setPage(1); }}
               placeholder="From"
               className="w-[140px] h-8 text-xs"
+              maxDate={dateTo}
             />
             <span className="text-xs text-muted-foreground">to</span>
             <DatePicker
@@ -372,6 +373,7 @@ export default function TimePage() {
               onChange={(val) => { setDateTo(val); setPage(1); }}
               placeholder="To"
               className="w-[140px] h-8 text-xs"
+              minDate={dateFrom}
             />
 
             <div className="h-5 w-px bg-border mx-1 hidden sm:block" />

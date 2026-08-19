@@ -303,7 +303,13 @@ export default function PayrollPeriodsPage() {
                     type="date"
                     className="h-8 text-xs"
                     value={formData.start_date}
-                    onChange={(e) => setFormData((d) => ({ ...d, start_date: e.target.value }))}
+                    max={formData.end_date}
+                    onChange={(e) => setFormData((d) => {
+                      const v = e.target.value;
+                      const patch: typeof d = { ...d, start_date: v };
+                      if (v > d.end_date) patch.end_date = v;
+                      return patch;
+                    })}
                   />
                 </div>
                 <div className="grid gap-1">
@@ -313,6 +319,7 @@ export default function PayrollPeriodsPage() {
                     type="date"
                     className="h-8 text-xs"
                     value={formData.end_date}
+                    min={formData.start_date}
                     onChange={(e) => setFormData((d) => ({ ...d, end_date: e.target.value }))}
                   />
                 </div>

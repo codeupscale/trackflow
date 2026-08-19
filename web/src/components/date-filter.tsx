@@ -108,9 +108,10 @@ export function DateFilter({
             <div className="flex items-center gap-2">
               <DatePicker
                 value={localFrom}
-                onChange={setLocalFrom}
+                onChange={(val) => { setLocalFrom(val); if (val > localTo) setLocalTo(val); }}
                 placeholder="From"
                 className="flex-1 min-w-0"
+                maxDate={localTo}
               />
               <span className="text-muted-foreground shrink-0">--</span>
               <DatePicker
@@ -118,6 +119,7 @@ export function DateFilter({
                 onChange={setLocalTo}
                 placeholder="To"
                 className="flex-1 min-w-0"
+                minDate={localFrom}
               />
             </div>
             <Button

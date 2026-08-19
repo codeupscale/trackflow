@@ -285,9 +285,13 @@ export default function ApplyLeavePage() {
                       render={({ field }) => (
                         <DatePicker
                           value={field.value}
-                          onChange={field.onChange}
+                          onChange={(val) => {
+                            field.onChange(val);
+                            if (val > watchedValues.end_date) form.setValue('end_date', val);
+                          }}
                           placeholder="Select start date"
                           className="w-full"
+                          maxDate={watchedValues.end_date}
                         />
                       )}
                     />
@@ -306,6 +310,7 @@ export default function ApplyLeavePage() {
                           onChange={field.onChange}
                           placeholder="Select end date"
                           className="w-full"
+                          minDate={watchedValues.start_date}
                         />
                       )}
                     />

@@ -1126,6 +1126,7 @@ export default function DashboardPage() {
                   <input
                     type="date"
                     value={attCustomFrom}
+                    max={attCustomTo}
                     onChange={(e) => {
                       setAttCustomFrom(e.target.value);
                       if (e.target.value > attCustomTo) setAttCustomTo(e.target.value);

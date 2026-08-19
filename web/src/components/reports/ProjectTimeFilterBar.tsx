@@ -319,8 +319,9 @@ export function ProjectTimeFilterBar({
                         <div className="flex items-center gap-2">
                             <DatePicker
                                 value={filters.start_date}
-                                onChange={(v) => onChange({ start_date: v })}
+                                onChange={(v) => { onChange({ start_date: v }); if (v > filters.end_date) onChange({ end_date: v }); }}
                                 placeholder="Start date"
+                                maxDate={filters.end_date}
                             />
                             <span className="text-sm text-muted-foreground">
                                 to
@@ -329,6 +330,7 @@ export function ProjectTimeFilterBar({
                                 value={filters.end_date}
                                 onChange={(v) => onChange({ end_date: v })}
                                 placeholder="End date"
+                                minDate={filters.start_date}
                             />
                         </div>
                     </div>
