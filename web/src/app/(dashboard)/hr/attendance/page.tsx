@@ -55,6 +55,7 @@ import { CheckInStatusBadge, type CheckInBadgeStatus } from '@/components/hr/Che
 import { useAttendance, useAttendanceSummary, useRequestRegularization } from '@/hooks/hr/use-attendance';
 import { useTodayStatus } from '@/hooks/hr/use-check-in';
 import { usePermissionStore } from '@/stores/permission-store';
+import { useAuthStore } from '@/stores/auth-store';
 import { regularizationSchema, type RegularizationFormData, type AttendanceRecord } from '@/lib/validations/attendance';
 import { cn, formatDate } from '@/lib/utils';
 import {
@@ -102,7 +103,21 @@ export default function MyAttendancePage() {
   const { data: summary, isLoading: summaryLoading } = useAttendanceSummary(selectedMonth, selectedYear);
   const regularizeMutation = useRequestRegularization();
   const { hasPermission } = usePermissionStore();
+  const { user } = useAuthStore();
   const canCheckIn = hasPermission('attendance.check_in');
+
+  // Lateness is a management signal, not something a person is shown about themselves on
+  // their own attendance page — only the owner and HR may see it here. This gates EVERY
+  // late surface on the page (the Late column, the Late badge on the status cell, and the
+  // Late Days stat tile); hiding only one of the three would leak the same number from
+  // the other two. Deliberately a ROLE check, not `attendance.view_all` — that permission
+  // is also held by org_manager and finance_manager, who must NOT see it.
+  const canSeeLate = user?.role === 'owner' || user?.role === 'hr_manager';
+
+  // Present / Absent / [Late Days] / On Leave / Overtime. Whole class names so Tailwind
+  // sees them at build time; the skeleton count matches so the strip does not reflow.
+  const statCount = canSeeLate ? 5 : 4;
+  const statGridCols = canSeeLate ? 'lg:grid-cols-5' : 'lg:grid-cols-4';
 
   const { data: todayStatus } = useTodayStatus({ enabled: canCheckIn });
   const policyCheckInTime = todayStatus?.policy?.check_in_time;
@@ -201,17 +216,19 @@ export default function MyAttendancePage() {
 
       {/* Stats Strip */}
       {summaryLoading ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-          {Array.from({ length: 5 }).map((_, i) => (
+        <div className={cn('grid grid-cols-2 sm:grid-cols-3 gap-3', statGridCols)}>
+          {Array.from({ length: statCount }).map((_, i) => (
             <Card key={i}><CardContent className="p-3"><Skeleton className="h-10" /></CardContent></Card>
           ))}
         </div>
       ) : summary ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div className={cn('grid grid-cols-2 sm:grid-cols-3 gap-3', statGridCols)}>
           {[
             { label: 'Present', value: summary.present_days, sub: `of ${summary.total_working_days}`, icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
             { label: 'Absent', value: summary.absent_days, icon: XCircle, color: 'text-red-500', bg: 'bg-red-500/10' },
-            { label: 'Late Days', value: summary.late_days, icon: Clock, color: 'text-amber-500', bg: 'bg-amber-500/10' },
+            ...(canSeeLate
+              ? [{ label: 'Late Days', value: summary.late_days, icon: Clock, color: 'text-amber-500', bg: 'bg-amber-500/10' }]
+              : []),
             { label: 'On Leave', value: summary.on_leave_days, icon: Palmtree, color: 'text-blue-500', bg: 'bg-blue-500/10' },
             { label: 'Overtime', value: `${Number(summary.overtime_hours).toFixed(1)}h`, icon: Timer, color: 'text-violet-500', bg: 'bg-violet-500/10' },
           ].map((s) => (
@@ -313,14 +330,18 @@ export default function MyAttendancePage() {
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Clock In</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Clock Out</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Hours</th>
-                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Late</th>
+                      {canSeeLate && <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Late</th>}
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {records.map((record) => {
                       const sd = statusDot[record.status] ?? statusDot.absent;
-                      const checkInBadges = deriveCheckInBadges(record);
+                      // The late badge carries the same signal as the Late column, so it
+                      // rides the same gate — hiding the column alone would leak it here.
+                      const checkInBadges = deriveCheckInBadges(record).filter(
+                        (badge) => canSeeLate || badge !== 'late'
+                      );
                       const secs =
                         record.worked_seconds != null
                           ? record.worked_seconds
@@ -363,27 +384,29 @@ export default function MyAttendancePage() {
                           <td className="px-4 py-2.5 whitespace-nowrap text-right text-[0.75rem] tabular-nums">
                             {secs > 0 ? formatDuration(secs) : <span className="text-muted-foreground/40">&mdash;</span>}
                           </td>
-                          <td className="px-4 py-2.5 whitespace-nowrap text-right">
-                            {record.late_minutes > 0 ? (
-                              <Tooltip>
-                                <TooltipTrigger
-                                  render={<span />}
-                                  className="cursor-help text-[0.75rem] tabular-nums text-amber-600 dark:text-amber-400 font-medium"
-                                  tabIndex={0}
-                                >
-                                  {formatMinutes(record.late_minutes)}
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  {checkInBadgeTooltip('late', {
-                                    lateMinutes: record.late_minutes,
-                                    checkInTime: policyCheckInTime,
-                                  })}
-                                </TooltipContent>
-                              </Tooltip>
-                            ) : (
-                              <span className="text-[0.75rem] text-muted-foreground/40">&mdash;</span>
-                            )}
-                          </td>
+                          {canSeeLate && (
+                            <td className="px-4 py-2.5 whitespace-nowrap text-right">
+                              {record.late_minutes > 0 ? (
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={<span />}
+                                    className="cursor-help text-[0.75rem] tabular-nums text-amber-600 dark:text-amber-400 font-medium"
+                                    tabIndex={0}
+                                  >
+                                    {formatMinutes(record.late_minutes)}
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    {checkInBadgeTooltip('late', {
+                                      lateMinutes: record.late_minutes,
+                                      checkInTime: policyCheckInTime,
+                                    })}
+                                  </TooltipContent>
+                                </Tooltip>
+                              ) : (
+                                <span className="text-[0.75rem] text-muted-foreground/40">&mdash;</span>
+                              )}
+                            </td>
+                          )}
                           <td className="px-4 py-2.5 whitespace-nowrap text-right">
                             {canRegularize(record) ? (
                               <Button
