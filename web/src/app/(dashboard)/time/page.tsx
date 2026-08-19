@@ -137,8 +137,8 @@ export default function TimePage() {
 
   const isManagerOrAbove = hasPermissionWithScope('time_entries.view', 'project');
 
-  const [dateFrom, setDateFrom] = useState(() => searchParams.get('from') || format(new Date(), 'yyyy-MM-dd'));
-  const [dateTo, setDateTo] = useState(() => searchParams.get('to') || format(new Date(), 'yyyy-MM-dd'));
+  const [dateFrom, setDateFrom] = useState(() => searchParams.get('from') || '');
+  const [dateTo, setDateTo] = useState(() => searchParams.get('to') || '');
   const [projectFilter, setProjectFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [memberFilter, setMemberFilter] = useState<string>('all');
@@ -171,11 +171,11 @@ export default function TimePage() {
     queryKey: ['time-entries', dateFrom, dateTo, projectFilter, typeFilter, memberFilter, page],
     queryFn: async () => {
       const params: Record<string, string | number> = {
-        date_from: dateFrom,
-        date_to: dateTo,
         page,
         per_page: 20,
       };
+      if (dateFrom) params.date_from = dateFrom;
+      if (dateTo) params.date_to = dateTo;
       if (projectFilter && projectFilter !== 'all') {
         params.project_id = projectFilter;
       }
@@ -286,12 +286,15 @@ export default function TimePage() {
   const totalSeconds = entries.reduce((sum, e) => sum + getDisplayDuration(e), 0);
 
   const activeFilterCount = [
+    dateFrom || dateTo,
     projectFilter !== 'all',
     typeFilter !== 'all',
     isManagerOrAbove && memberFilter !== 'all',
   ].filter(Boolean).length;
 
   const clearFilters = () => {
+    setDateFrom('');
+    setDateTo('');
     setProjectFilter('all');
     setTypeFilter('all');
     setMemberFilter('all');
@@ -390,18 +393,18 @@ export default function TimePage() {
             {/* Date Range */}
             <DatePicker
               value={dateFrom}
-              onChange={(val) => { setDateFrom(val); if (val > dateTo) setDateTo(val); setPage(1); }}
-              placeholder="From"
+              onChange={(val) => { setDateFrom(val); if (dateTo && val > dateTo) setDateTo(val); setPage(1); }}
+              placeholder="From date"
               className="w-[140px] h-8 text-xs"
-              maxDate={dateTo}
+              maxDate={dateTo || undefined}
             />
             <span className="text-xs text-muted-foreground">to</span>
             <DatePicker
               value={dateTo}
               onChange={(val) => { setDateTo(val); setPage(1); }}
-              placeholder="To"
+              placeholder="To date"
               className="w-[140px] h-8 text-xs"
-              minDate={dateFrom}
+              minDate={dateFrom || undefined}
             />
 
             <div className="h-5 w-px bg-border mx-1 hidden sm:block" />
