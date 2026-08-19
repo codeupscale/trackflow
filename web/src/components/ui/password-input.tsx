@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, Lock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 
@@ -13,9 +13,12 @@ const PasswordInput = React.forwardRef<
 
   return (
     <div className="relative">
+      <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">
+        <Lock className="h-4 w-4" />
+      </span>
       <Input
         type={showPassword ? 'text' : 'password'}
-        className={cn('pr-10', className)}
+        className={cn('pl-12 pr-10', className)}
         ref={ref}
         {...props}
       />

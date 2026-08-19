@@ -1,12 +1,19 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   Building2,
   Plus,
   MoreHorizontal,
   Pencil,
   Archive,
+  Search,
+  SlidersHorizontal,
+  X,
+  Layers,
+  CheckCircle2,
+  XCircle,
+  Network,
 } from 'lucide-react';
 import { usePermissionStore } from '@/stores/permission-store';
 import {
@@ -14,13 +21,13 @@ import {
   useArchiveDepartment,
 } from '@/hooks/hr/use-departments';
 import type { Department } from '@/lib/validations/department';
-import { PageHeader } from '@/components/common/PageHeader';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { DepartmentFormSheet } from '@/components/hr/DepartmentFormSheet';
 
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent } from '@/components/ui/card';
 import {
@@ -38,6 +45,13 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   Pagination,
   PaginationContent,
   PaginationEllipsis,
@@ -52,25 +66,63 @@ export default function DepartmentsPage() {
   const canManage = hasPermission('departments.create');
 
   const [page, setPage] = useState(1);
-  const [sheetOpen, setSheetOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const [editingDept, setEditingDept] = useState<Department | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<Department | null>(null);
+
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [showFilters, setShowFilters] = useState(false);
 
   const { data, isLoading, isError } = useDepartments({ page });
   const archiveMutation = useArchiveDepartment();
 
-  const departments = data?.data ?? [];
+  const allDepartments = data?.data ?? [];
   const meta = data?.meta;
   const totalPages = meta?.last_page ?? 1;
 
+  const departments = useMemo(() => {
+    let filtered = allDepartments;
+    if (search) {
+      const q = search.toLowerCase();
+      filtered = filtered.filter(
+        (d) =>
+          d.name.toLowerCase().includes(q) ||
+          d.code.toLowerCase().includes(q)
+      );
+    }
+    if (statusFilter !== 'all') {
+      filtered = filtered.filter((d) =>
+        statusFilter === 'active' ? d.is_active : !d.is_active
+      );
+    }
+    return filtered;
+  }, [allDepartments, search, statusFilter]);
+
+  const stats = useMemo(() => {
+    const total = allDepartments.length;
+    const active = allDepartments.filter((d) => d.is_active).length;
+    const inactive = total - active;
+    const withParent = allDepartments.filter((d) => d.parent_department_id).length;
+    return { total, active, inactive, withParent };
+  }, [allDepartments]);
+
+  const activeFilterCount =
+    (statusFilter !== 'all' ? 1 : 0);
+
+  const clearFilters = () => {
+    setStatusFilter('all');
+    setSearch('');
+  };
+
   const openCreate = () => {
     setEditingDept(null);
-    setSheetOpen(true);
+    setDialogOpen(true);
   };
 
   const openEdit = (dept: Department) => {
     setEditingDept(dept);
-    setSheetOpen(true);
+    setDialogOpen(true);
   };
 
   const handleArchiveConfirm = () => {
@@ -81,23 +133,107 @@ export default function DepartmentsPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Departments"
-        description="Manage your organization's department structure"
-        action={
-          canManage ? (
-            <Button onClick={openCreate}>
-              <Plus data-icon="inline-start" />
-              Add Department
-            </Button>
-          ) : undefined
-        }
-      />
+    <div className="flex flex-col gap-3">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Departments</h1>
+          <p className="text-xs text-muted-foreground">
+            Manage your organization&apos;s department structure
+          </p>
+        </div>
+        {canManage && (
+          <Button size="sm" className="h-8 text-xs" onClick={openCreate}>
+            <Plus className="h-3.5 w-3.5 mr-1" />
+            Add Department
+          </Button>
+        )}
+      </div>
 
+      {/* Stats Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { label: 'Total', value: stats.total, icon: Building2, color: 'text-blue-500', bg: 'bg-blue-500/10' },
+          { label: 'Active', value: stats.active, icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
+          { label: 'Inactive', value: stats.inactive, icon: XCircle, color: 'text-red-500', bg: 'bg-red-500/10' },
+          { label: 'Sub-departments', value: stats.withParent, icon: Network, color: 'text-violet-500', bg: 'bg-violet-500/10' },
+        ].map((s) => (
+          <Card key={s.label} className="border-border">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-2.5">
+                <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${s.bg} shrink-0`}>
+                  <s.icon className={`h-4 w-4 ${s.color}`} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">{s.label}</p>
+                  <p className="text-base font-bold text-foreground tabular-nums leading-tight">{isLoading ? '--' : s.value}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Filter Bar */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1 max-w-xs">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            placeholder="Search departments..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-8 pl-8 text-xs"
+          />
+        </div>
+
+        <Button
+          variant={showFilters ? 'secondary' : 'outline'}
+          size="sm"
+          className="h-8 text-xs gap-1.5"
+          onClick={() => setShowFilters(!showFilters)}
+        >
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          Filters
+          {activeFilterCount > 0 && (
+            <Badge variant="secondary" className="h-4 px-1 text-[0.6rem] rounded-full ml-0.5">
+              {activeFilterCount}
+            </Badge>
+          )}
+        </Button>
+
+        {activeFilterCount > 0 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 text-xs gap-1 text-muted-foreground"
+            onClick={clearFilters}
+          >
+            <X className="h-3 w-3" />
+            Clear
+          </Button>
+        )}
+      </div>
+
+      {/* Collapsible Filters */}
+      {showFilters && (
+        <div className="flex items-center gap-3">
+          <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v ?? 'all')}>
+            <SelectTrigger className="h-8 w-[140px] text-xs">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Status</SelectItem>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="inactive">Inactive</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      {/* Content */}
       {isError ? (
         <Card className="border-destructive/50">
-          <CardContent className="py-16">
+          <CardContent className="py-10">
             <div className="flex flex-col items-center text-center gap-3">
               <Building2 className="size-10 text-destructive/60" />
               <p className="text-muted-foreground font-medium">
@@ -112,62 +248,70 @@ export default function DepartmentsPage() {
       ) : isLoading ? (
         <Card>
           <CardContent className="p-0">
-            <div className="flex flex-col gap-0">
-              {/* Header skeleton */}
-              <div className="flex items-center gap-4 px-4 py-3 border-b border-border">
-                {/* Name, Code, Parent Department, Positions, Status */}
+            <div className="flex flex-col">
+              <div className="flex items-center gap-4 px-4 py-2 border-b border-border/50">
                 {Array.from({ length: 5 }).map((_, i) => (
-                  <Skeleton key={i} className="h-4 w-24" />
+                  <Skeleton key={i} className="h-3 w-20" />
                 ))}
               </div>
-              {/* Row skeletons */}
               {Array.from({ length: 5 }).map((_, i) => (
                 <div
                   key={i}
-                  className="flex items-center gap-4 px-4 py-3 border-b border-border last:border-0"
+                  className="flex items-center gap-4 px-4 py-3 border-b border-border/50 last:border-0"
                 >
-                  <Skeleton className="h-4 w-32" />
-                  <Skeleton className="h-4 w-16" />
-                  <Skeleton className="h-4 w-28" />
-                  <Skeleton className="h-4 w-12" />
-                  <Skeleton className="h-5 w-16" />
+                  <Skeleton className="h-3.5 w-32" />
+                  <Skeleton className="h-3.5 w-14" />
+                  <Skeleton className="h-3.5 w-28" />
+                  <Skeleton className="h-3.5 w-10" />
+                  <Skeleton className="h-5 w-14" />
                 </div>
               ))}
             </div>
           </CardContent>
         </Card>
-      ) : departments.length === 0 ? (
+      ) : departments.length === 0 && !search && statusFilter === 'all' ? (
         <EmptyState
           icon={Building2}
           title="No departments yet"
           description="Create your first department to start organizing your team structure."
           action={
             canManage ? (
-              <Button onClick={openCreate}>
-                <Plus data-icon="inline-start" />
+              <Button size="sm" onClick={openCreate}>
+                <Plus className="h-3.5 w-3.5 mr-1" />
                 Add Department
               </Button>
             ) : undefined
           }
         />
+      ) : departments.length === 0 ? (
+        <Card>
+          <CardContent className="py-8">
+            <div className="flex flex-col items-center text-center gap-2">
+              <Search className="h-8 w-8 text-muted-foreground/40" />
+              <p className="text-sm text-muted-foreground font-medium">No results found</p>
+              <p className="text-xs text-muted-foreground">
+                Try adjusting your search or filters
+              </p>
+              <Button variant="ghost" size="sm" className="mt-1 text-xs" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       ) : (
         <>
           <Card>
             <CardContent className="p-0">
               <Table>
                 <TableHeader>
-                  <TableRow>
-                    {/* Only Name is unconstrained, so it absorbs the spare
-                        width. Without widths the browser hands the slack to
-                        whichever column has the widest header, which left a
-                        large gap in the middle of the row. */}
-                    <TableHead>Name</TableHead>
-                    <TableHead className="w-[140px]">Code</TableHead>
-                    <TableHead className="w-[220px]">Parent Department</TableHead>
-                    <TableHead className="w-[110px]">Positions</TableHead>
-                    <TableHead className="w-[120px]">Status</TableHead>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[240px]">Name</TableHead>
+                    <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[100px]">Code</TableHead>
+                    <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[180px]">Parent</TableHead>
+                    <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[80px]">Positions</TableHead>
+                    <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[80px]">Status</TableHead>
                     {canManage && (
-                      <TableHead className="w-12">
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-10">
                         <span className="sr-only">Actions</span>
                       </TableHead>
                     )}
@@ -175,47 +319,65 @@ export default function DepartmentsPage() {
                 </TableHeader>
                 <TableBody>
                   {departments.map((dept) => (
-                    <TableRow key={dept.id}>
-                      <TableCell className="font-medium">
-                        {dept.name}
+                    <TableRow key={dept.id} className="border-border/50 hover:bg-muted/30">
+                      <TableCell className="text-[0.7rem] font-medium py-2">
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center justify-center h-6 w-6 rounded bg-primary/10 text-primary shrink-0">
+                            <Building2 className="h-3 w-3" />
+                          </div>
+                          <span className="truncate">{dept.name}</span>
+                        </div>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {dept.code}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {dept.parent_department?.name ?? '--'}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {dept.positions_count ?? 0}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={dept.is_active ? 'default' : 'secondary'}
-                        >
-                          {dept.is_active ? 'Active' : 'Inactive'}
+                      <TableCell className="text-[0.7rem] text-muted-foreground py-2">
+                        <Badge variant="outline" className="text-[0.6rem] font-mono px-1.5 py-0">
+                          {dept.code}
                         </Badge>
                       </TableCell>
+                      <TableCell className="text-[0.7rem] text-muted-foreground py-2">
+                        {dept.parent_department?.name ? (
+                          <div className="flex items-center gap-1.5">
+                            <Layers className="h-3 w-3 text-muted-foreground/60" />
+                            {dept.parent_department.name}
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground/40">--</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-[0.7rem] text-muted-foreground py-2">
+                        {dept.positions_count ?? 0}
+                      </TableCell>
+                      <TableCell className="py-2">
+                        {dept.is_active ? (
+                          <span className="inline-flex items-center gap-1 text-[0.6rem] text-emerald-600 dark:text-emerald-400">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                            Active
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[0.6rem] text-muted-foreground">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
+                            Inactive
+                          </span>
+                        )}
+                      </TableCell>
                       {canManage && (
-                        <TableCell>
+                        <TableCell className="py-2">
                           <DropdownMenu>
                             <DropdownMenuTrigger
-                              className="inline-flex items-center justify-center rounded-md size-8 hover:bg-muted text-muted-foreground"
+                              className="inline-flex items-center justify-center rounded-md size-7 hover:bg-muted text-muted-foreground"
                               aria-label={`Actions for ${dept.name}`}
                             >
-                              <MoreHorizontal />
+                              <MoreHorizontal className="h-3.5 w-3.5" />
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={() => openEdit(dept)}
-                              >
-                                <Pencil data-icon="inline-start" />
+                              <DropdownMenuItem onClick={() => openEdit(dept)}>
+                                <Pencil className="h-3.5 w-3.5 mr-2" />
                                 Edit
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 variant="destructive"
                                 onClick={() => setArchiveTarget(dept)}
                               >
-                                <Archive data-icon="inline-start" />
+                                <Archive className="h-3.5 w-3.5 mr-2" />
                                 Archive
                               </DropdownMenuItem>
                             </DropdownMenuContent>
@@ -229,12 +391,11 @@ export default function DepartmentsPage() {
             </CardContent>
           </Card>
 
-          {/* Pagination */}
           {totalPages > 1 && (
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-              <p className="text-sm text-muted-foreground">
+            <div className="flex items-center justify-between">
+              <p className="text-[0.65rem] text-muted-foreground">
                 Showing {meta?.from ?? 0}&ndash;{meta?.to ?? 0} of{' '}
-                {meta?.total ?? 0} departments
+                {meta?.total ?? 0}
               </p>
               <Pagination>
                 <PaginationContent>
@@ -298,11 +459,11 @@ export default function DepartmentsPage() {
         </>
       )}
 
-      {/* Create/Edit Sheet */}
+      {/* Create/Edit Dialog */}
       <DepartmentFormSheet
-        open={sheetOpen}
+        open={dialogOpen}
         onOpenChange={(open) => {
-          setSheetOpen(open);
+          setDialogOpen(open);
           if (!open) setEditingDept(null);
         }}
         department={editingDept}

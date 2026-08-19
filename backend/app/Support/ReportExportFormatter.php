@@ -128,7 +128,9 @@ class ReportExportFormatter
         foreach (($data['daily'] ?? []) as $row) {
             fputcsv($out, [
                 self::val($row, 'date'),
-                self::hours(self::val($row, 'tracked_seconds', 0)),
+                // "Time Utilized" is worked time (approved manual included), not the
+                // tracker-only bucket — must match the dashboard and the reports page.
+                self::hours(self::val($row, 'worked_seconds', self::val($row, 'tracked_seconds', 0))),
                 self::hours(self::val($row, 'idle_seconds', 0)),
                 self::hours(self::val($row, 'total_seconds', 0)),
                 round((float) self::val($row, 'activity_score_avg', 0)),
@@ -139,7 +141,7 @@ class ReportExportFormatter
         fputcsv($out, []);
         fputcsv($out, [
             'TOTAL',
-            self::hours($data['total_seconds_tracked'] ?? 0),
+            self::hours($data['total_seconds_worked'] ?? $data['total_seconds_tracked'] ?? 0),
             self::hours($data['total_seconds_idle'] ?? 0),
             self::hours($data['total_seconds'] ?? 0),
             round((float) ($data['avg_activity'] ?? 0)),

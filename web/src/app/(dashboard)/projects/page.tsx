@@ -15,21 +15,29 @@ import {
   DollarSign,
   ChevronsUpDown,
   Shield,
+  ArchiveRestore,
+  CircleDot,
 } from 'lucide-react';
-import { SearchInput } from '@/components/ui/search-input';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import {
   Pagination,
   PaginationContent,
@@ -39,7 +47,6 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from '@/components/ui/pagination';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Switch } from '@/components/ui/switch';
 import {
   Dialog,
@@ -318,199 +325,306 @@ export default function ProjectsPage() {
 
   const isPending = createMutation.isPending || updateMutation.isPending;
 
+  // Derive stats from loaded projects
+  const activeCount = projects.filter((p) => !p.is_archived).length;
+  const archivedCount = projects.filter((p) => p.is_archived).length;
+  const billableCount = projects.filter((p) => p.billable).length;
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+    <div className="flex flex-col gap-3">
+      {/* Header */}
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Projects</h1>
-          <p className="text-muted-foreground text-sm mt-1">Manage your projects and tasks</p>
+          <h1 className="text-lg font-semibold tracking-tight">Projects</h1>
+          <p className="text-xs text-muted-foreground">
+            Manage your projects and tasks
+          </p>
         </div>
         {canCreateProjects && (
-          <Button onClick={openCreate}>
-            <Plus className="mr-2 h-4 w-4" />
+          <Button
+            size="sm"
+            className="h-8 text-xs"
+            onClick={openCreate}
+          >
+            <Plus className="h-3.5 w-3.5 mr-1" />
             New Project
           </Button>
         )}
       </div>
 
-      {/* Search */}
-      <SearchInput
-        value={searchQuery}
-        onChange={handleSearch}
-        placeholder="Search projects..."
-      />
+      {/* Stats Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { label: 'Total Projects', value: totalCount, icon: FolderOpen, color: 'text-blue-500', bg: 'bg-blue-500/10' },
+          { label: 'Active', value: activeCount, icon: CircleDot, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
+          { label: 'Archived', value: archivedCount, icon: Archive, color: 'text-red-500', bg: 'bg-red-500/10' },
+          { label: 'Billable', value: billableCount, icon: DollarSign, color: 'text-amber-500', bg: 'bg-amber-500/10' },
+        ].map((s) => (
+          <Card key={s.label} className="border-border">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-2.5">
+                <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${s.bg} shrink-0`}>
+                  <s.icon className={`h-4 w-4 ${s.color}`} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">{s.label}</p>
+                  <p className="text-base font-bold text-foreground tabular-nums leading-tight">{isLoading ? '--' : s.value}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
 
-      {/* Projects Grid */}
+      {/* Search */}
+      <div className="relative max-w-xs">
+        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+        <Input
+          value={searchQuery}
+          onChange={(e) => handleSearch(e.target.value)}
+          placeholder="Search projects..."
+          className="h-8 pl-8 text-xs"
+        />
+      </div>
+
+      {/* Projects Table */}
       {isProjectsError ? (
-        <Card className="border-border bg-card">
+        <Card className="border-destructive/50">
           <CardContent className="py-16">
-            <div className="text-center">
-              <FolderOpen className="h-10 w-10 text-red-500/60 mx-auto mb-3" />
+            <div className="flex flex-col items-center text-center gap-3">
+              <FolderOpen className="size-10 text-destructive/60" />
               <p className="text-muted-foreground font-medium">Failed to load projects</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                Please try again.
-              </p>
+              <p className="text-xs text-muted-foreground">Please try again later.</p>
             </div>
           </CardContent>
         </Card>
       ) : isLoading ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Card key={i} className="border-border bg-card">
-              <CardContent className="p-6">
-                <div className="h-32 bg-muted rounded animate-pulse" />
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        <Card>
+          <CardContent className="p-0">
+            <div className="flex flex-col">
+              <div className="flex items-center gap-4 px-4 py-2 border-b border-border/50">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <Skeleton key={i} className="h-3 w-20" />
+                ))}
+              </div>
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-border/50 last:border-0">
+                  <Skeleton className="h-3 w-3 rounded-full" />
+                  <Skeleton className="h-3.5 w-32" />
+                  <Skeleton className="h-3.5 w-20" />
+                  <Skeleton className="h-3.5 w-16" />
+                  <Skeleton className="h-3.5 w-14" />
+                  <Skeleton className="h-3.5 w-10" />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       ) : !projects || projects.length === 0 ? (
-        <Card className="border-border bg-card">
-          <CardContent className="py-16">
-            <div className="text-center">
-              <FolderOpen className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-              <p className="text-muted-foreground font-medium">
+        <Card>
+          <CardContent className="py-12">
+            <div className="flex flex-col items-center text-center gap-2">
+              <FolderOpen className="h-8 w-8 text-muted-foreground/40" />
+              <p className="text-sm text-muted-foreground font-medium">
                 {!canCreateProjects ? 'No projects assigned' : 'No projects yet'}
               </p>
-              <p className="text-sm text-muted-foreground mt-1">
+              <p className="text-xs text-muted-foreground">
                 {!canCreateProjects
                   ? 'Ask your manager to assign you to a project.'
                   : 'Create your first project to start tracking time'}
               </p>
+              {canCreateProjects && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="mt-1 text-xs"
+                  onClick={openCreate}
+                >
+                  <Plus className="h-3 w-3 mr-1" />
+                  Create Project
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {projects.map((project) => (
-            <Card
-              key={project.id}
-              className={`border-border bg-card transition-all hover:border-border cursor-pointer ${
-                project.is_archived ? 'opacity-60' : ''
-              }`}
-              onClick={() =>
-                setExpandedProject(expandedProject === project.id ? null : project.id)
-              }
-            >
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
+        <>
+          <Card>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[240px]">Name</TableHead>
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[90px]">Status</TableHead>
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[100px]">Billing</TableHead>
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[70px]">Tasks</TableHead>
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[70px]">Members</TableHead>
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[110px]">Manager</TableHead>
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-10">
+                        <span className="sr-only">Actions</span>
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {projects.map((project) => (
+                      <TableRow
+                        key={project.id}
+                        className={`border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors cursor-pointer ${
+                          project.is_archived ? 'opacity-60' : ''
+                        }`}
+                        onClick={() =>
+                          setExpandedProject(expandedProject === project.id ? null : project.id)
+                        }
+                      >
+                        <TableCell className="px-4 py-2">
+                          <div className="flex items-center gap-2.5">
+                            <div
+                              className="h-3 w-3 rounded-full shrink-0"
+                              style={{ backgroundColor: project.color }}
+                            />
+                            <span className="text-[0.75rem] font-medium text-foreground truncate max-w-[200px]">
+                              {project.name}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="px-4 py-2">
+                          {project.is_archived ? (
+                            <span className="inline-flex items-center gap-1.5 text-[0.65rem] text-red-600 dark:text-red-400">
+                              <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" />
+                              Archived
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 text-[0.65rem] text-emerald-600 dark:text-emerald-400">
+                              <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                              Active
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="px-4 py-2">
+                          {project.billable ? (
+                            <span className="text-[0.75rem] text-foreground">
+                              {project.hourly_rate ? `$${project.hourly_rate}/hr` : 'Billable'}
+                            </span>
+                          ) : (
+                            <span className="text-[0.75rem] text-muted-foreground">
+                              Non-billable
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="px-4 py-2 text-[0.75rem] text-muted-foreground tabular-nums">
+                          {project.tasks?.length || 0}
+                        </TableCell>
+                        <TableCell className="px-4 py-2 text-[0.75rem] text-muted-foreground tabular-nums">
+                          {String((project as unknown as { members_count?: number }).members_count ?? 0)}
+                        </TableCell>
+                        <TableCell className="px-4 py-2 text-[0.75rem] text-muted-foreground truncate max-w-[120px]">
+                          {project.manager?.name || '--'}
+                        </TableCell>
+                        <TableCell className="px-4 py-2">
+                          {(canManageMembers || canUpdateProjects || canDeleteProjects) && (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger
+                                className="inline-flex items-center justify-center rounded-md size-7 hover:bg-muted text-muted-foreground"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <MoreHorizontal className="h-3.5 w-3.5" />
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                {canManageMembers && (
+                                  <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openMembers(project); }}>
+                                    <Users className="mr-2 h-3.5 w-3.5" />
+                                    Members
+                                  </DropdownMenuItem>
+                                )}
+                                {canUpdateProjects && (
+                                  <>
+                                    <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openEdit(project); }}>
+                                      <Pencil className="mr-2 h-3.5 w-3.5" />
+                                      Edit
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        updateMutation.mutate({ id: project.id, is_archived: !project.is_archived });
+                                      }}
+                                    >
+                                      {project.is_archived ? (
+                                        <>
+                                          <ArchiveRestore className="mr-2 h-3.5 w-3.5" />
+                                          Unarchive
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Archive className="mr-2 h-3.5 w-3.5" />
+                                          Archive
+                                        </>
+                                      )}
+                                    </DropdownMenuItem>
+                                  </>
+                                )}
+                                {canDeleteProjects && (
+                                  <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                      variant="destructive"
+                                      onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(project.id); }}
+                                    >
+                                      <Trash2 className="mr-2 h-3.5 w-3.5" />
+                                      Delete
+                                    </DropdownMenuItem>
+                                  </>
+                                )}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Expanded tasks (shown below table as a subtle card) */}
+          {expandedProject && (() => {
+            const project = projects.find((p) => p.id === expandedProject);
+            if (!project || !project.tasks || project.tasks.length === 0) return null;
+            return (
+              <Card className="border-border">
+                <CardContent className="p-3">
+                  <div className="flex items-center gap-2 mb-2">
                     <div
-                      className="h-4 w-4 rounded-full shrink-0"
+                      className="h-2.5 w-2.5 rounded-full shrink-0"
                       style={{ backgroundColor: project.color }}
                     />
-                    <div>
-                      <CardTitle className="text-base text-foreground">{project.name}</CardTitle>
-                    </div>
+                    <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">
+                      {project.name} &mdash; Tasks ({project.tasks.length})
+                    </p>
                   </div>
-                  {(canManageMembers || canUpdateProjects || canDeleteProjects) && (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        className="inline-flex items-center justify-center rounded-md h-8 w-8 hover:bg-muted text-muted-foreground"
-                        onClick={(e) => e.stopPropagation()}
+                  <div className="flex flex-wrap gap-1.5">
+                    {project.tasks.map((task) => (
+                      <span
+                        key={task.id}
+                        className="inline-flex items-center gap-1.5 text-[0.7rem] text-foreground bg-muted/50 rounded-md px-2 py-1"
                       >
-                        <MoreHorizontal className="h-4 w-4" />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        {canManageMembers && (
-                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openMembers(project); }}>
-                            <Users className="mr-2 h-4 w-4" />
-                            Members
-                          </DropdownMenuItem>
-                        )}
-                        {canUpdateProjects && (
-                          <>
-                            <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openEdit(project); }}>
-                              <Pencil className="mr-2 h-4 w-4" />
-                              Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                updateMutation.mutate({ id: project.id, is_archived: !project.is_archived });
-                              }}
-                            >
-                              <Archive className="mr-2 h-4 w-4" />
-                              {project.is_archived ? 'Unarchive' : 'Archive'}
-                            </DropdownMenuItem>
-                          </>
-                        )}
-                        {canDeleteProjects && (
-                          <>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              variant="destructive"
-                              onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(project.id); }}
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Delete
-                            </DropdownMenuItem>
-                          </>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <div className="flex items-center gap-4 text-sm flex-wrap">
-                  <div className="flex items-center gap-1.5 text-muted-foreground">
-                    <FolderOpen className="h-3.5 w-3.5" />
-                    <span>{project.tasks?.length || 0} tasks</span>
+                        <span className="h-1 w-1 rounded-full bg-muted-foreground" />
+                        {task.name}
+                      </span>
+                    ))}
                   </div>
-                  <div className="flex items-center gap-1.5 text-muted-foreground">
-                    <Users className="h-3.5 w-3.5" />
-                    <span>{String((project as unknown as { members_count?: number }).members_count ?? 0)} members</span>
-                  </div>
-                  {project.manager && (
-                    <div className="flex items-center gap-1.5 text-muted-foreground">
-                      <Shield className="h-3.5 w-3.5" />
-                      <span>{project.manager.name}</span>
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2 mt-3">
-                  {project.billable ? (
-                    <Badge variant="default" className="text-xs">
-                      <DollarSign className="h-3 w-3 mr-0.5" />
-                      {project.hourly_rate ? `$${project.hourly_rate}/hr` : 'Billable'}
-                    </Badge>
-                  ) : (
-                    <Badge variant="secondary" className="text-xs">
-                      Non-billable
-                    </Badge>
-                  )}
-                  {project.is_archived && (
-                    <Badge variant="outline" className="text-xs">
-                      Archived
-                    </Badge>
-                  )}
-                </div>
-
-                {/* Expanded tasks */}
-                {expandedProject === project.id && project.tasks && project.tasks.length > 0 && (
-                  <div className="mt-4 pt-3 border-t border-border">
-                    <p className="text-xs font-medium text-muted-foreground mb-2">Tasks</p>
-                    <div className="space-y-1">
-                      {project.tasks.map((task) => (
-                        <div key={task.id} className="text-sm text-foreground flex items-center gap-2">
-                          <div className="h-1 w-1 rounded-full bg-muted-foreground" />
-                          {task.name}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+                </CardContent>
+              </Card>
+            );
+          })()}
+        </>
       )}
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-          <p className="text-sm text-muted-foreground">
+        <div className="flex items-center justify-between">
+          <p className="text-[0.65rem] text-muted-foreground">
             Showing {from}&ndash;{to} of {totalCount} projects
           </p>
           <Pagination>
@@ -560,37 +674,44 @@ export default function ProjectsPage() {
 
       {/* Create/Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) closeDialog(); }}>
-        <DialogContent className="bg-card border-border">
+        <DialogContent className="sm:max-w-md">
           <form onSubmit={handleSubmit}>
             <DialogHeader>
-              <DialogTitle className="text-foreground">{editingProject ? 'Edit Project' : 'New Project'}</DialogTitle>
-              <DialogDescription className="text-muted-foreground">
-                {editingProject ? 'Update project details.' : 'Create a new project to track time against.'}
-              </DialogDescription>
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 shrink-0">
+                  <FolderOpen className="h-3.5 w-3.5 text-primary" />
+                </div>
+                <div>
+                  <DialogTitle className="text-base">{editingProject ? 'Edit Project' : 'New Project'}</DialogTitle>
+                  <DialogDescription className="text-xs">
+                    {editingProject ? 'Update project details.' : 'Create a new project to track time against.'}
+                  </DialogDescription>
+                </div>
+              </div>
             </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
-                <Label htmlFor="project-name" className="text-foreground">Name</Label>
+            <div className="flex flex-col gap-3 py-4">
+              <div className="grid gap-1.5">
+                <Label htmlFor="project-name" className="text-xs">Name</Label>
                 <Input
                   id="project-name"
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
                   placeholder="Project name"
-                  className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                  className="h-9 text-sm"
                   required
                 />
               </div>
-              <div className="grid gap-2">
-                <Label className="text-foreground">Color</Label>
+              <div className="grid gap-1.5">
+                <Label className="text-xs">Color</Label>
                 <div className="flex gap-2">
                   {COLORS.map((c) => (
                     <button
                       key={c}
                       type="button"
                       onClick={() => setFormColor(c)}
-                      className={`h-8 w-8 rounded-full transition-all ${
+                      className={`h-7 w-7 rounded-full transition-all ${
                         formColor === c
-                          ? 'ring-2 ring-offset-2 ring-offset-background ring-blue-500 scale-110'
+                          ? 'ring-2 ring-offset-2 ring-offset-background ring-primary scale-110'
                           : 'hover:scale-105'
                       }`}
                       style={{ backgroundColor: c }}
@@ -598,10 +719,10 @@ export default function ProjectsPage() {
                   ))}
                 </div>
               </div>
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between rounded-lg border border-border p-3">
                 <div>
-                  <Label className="text-foreground">Billable</Label>
-                  <p className="text-xs text-muted-foreground">Track billable hours for this project</p>
+                  <Label className="text-xs">Billable</Label>
+                  <p className="text-[0.65rem] text-muted-foreground">Track billable hours for this project</p>
                 </div>
                 <Switch
                   checked={formBillable}
@@ -609,8 +730,8 @@ export default function ProjectsPage() {
                 />
               </div>
               {formBillable && (
-                <div className="grid gap-2">
-                  <Label htmlFor="hourly-rate" className="text-foreground">Hourly Rate ($)</Label>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="hourly-rate" className="text-xs">Hourly Rate ($)</Label>
                   <Input
                     id="hourly-rate"
                     type="number"
@@ -619,21 +740,21 @@ export default function ProjectsPage() {
                     value={formRate}
                     onChange={(e) => setFormRate(e.target.value)}
                     placeholder="0.00"
-                    className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                    className="h-9 text-sm"
                   />
                 </div>
               )}
 
               {/* Manager */}
               {canManageMembers && (
-                <div className="grid gap-2">
-                  <Label className="text-foreground">Manager</Label>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs">Manager</Label>
                   <Popover open={managerComboboxOpen} onOpenChange={setManagerComboboxOpen}>
                     <PopoverTrigger
                       render={
                         <Button
                           variant="outline"
-                          className="w-full justify-between font-normal"
+                          className="w-full justify-between font-normal h-9 text-sm"
                         />
                       }
                     >
@@ -673,7 +794,7 @@ export default function ProjectsPage() {
                                   }}
                                 >
                                   <div className="flex flex-col">
-                                    <span>{u.name}</span>
+                                    <span className="text-sm">{u.name}</span>
                                     <span className="text-xs text-muted-foreground">{u.email}</span>
                                   </div>
                                 </CommandItem>
@@ -688,16 +809,16 @@ export default function ProjectsPage() {
 
               {/* Members Multi-select */}
               {canManageMembers && (
-                <div className="grid gap-2">
+                <div className="grid gap-1.5">
                   <div className="flex items-center justify-between">
-                    <Label className="text-foreground">Members</Label>
-                    <span className="text-xs text-muted-foreground">{formMemberIds.length} selected</span>
+                    <Label className="text-xs">Members</Label>
+                    <span className="text-[0.65rem] text-muted-foreground">{formMemberIds.length} selected</span>
                   </div>
                   <div className="rounded-lg border border-border max-h-[180px] overflow-y-auto">
                     {!orgUsers ? (
                       <div className="flex items-center justify-center py-4">
                         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                        <span className="ml-2 text-sm text-muted-foreground">Loading...</span>
+                        <span className="ml-2 text-xs text-muted-foreground">Loading...</span>
                       </div>
                     ) : (
                       [...orgUsers].sort((a, b) => a.name.localeCompare(b.name)).map((u) => {
@@ -705,7 +826,7 @@ export default function ProjectsPage() {
                         return (
                           <label
                             key={u.id}
-                            className={`flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors border-b border-border last:border-b-0 ${
+                            className={`flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors border-b border-border/50 last:border-b-0 ${
                               checked ? 'bg-primary/8 hover:bg-primary/12' : 'hover:bg-muted/50'
                             }`}
                           >
@@ -720,8 +841,8 @@ export default function ProjectsPage() {
                               }}
                             />
                             <div className="min-w-0 flex-1">
-                              <div className="text-sm font-medium text-foreground truncate">{u.name}</div>
-                              <div className="text-xs text-muted-foreground truncate">{u.email}</div>
+                              <div className="text-[0.75rem] font-medium text-foreground truncate">{u.name}</div>
+                              <div className="text-[0.65rem] text-muted-foreground truncate">{u.email}</div>
                             </div>
                             <Badge
                               variant={u.role === 'owner' ? 'default' : 'secondary'}
@@ -737,12 +858,12 @@ export default function ProjectsPage() {
                 </div>
               )}
             </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={closeDialog} className="border-border text-foreground">
+            <DialogFooter className="gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={closeDialog}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={isPending}>
-                {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              <Button type="submit" size="sm" disabled={isPending}>
+                {isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
                 {editingProject ? 'Save Changes' : 'Create Project'}
               </Button>
             </DialogFooter>
@@ -762,22 +883,32 @@ export default function ProjectsPage() {
           }
         }}
       >
-        <DialogContent className="bg-card border-border sm:max-w-md flex flex-col max-h-[90vh]">
+        <DialogContent className="sm:max-w-md flex flex-col max-h-[90vh]">
           <DialogHeader className="shrink-0">
-            <DialogTitle className="text-foreground">Project Members</DialogTitle>
-            <DialogDescription className="text-muted-foreground">
-              Assign team members to <span className="font-medium text-foreground">{membersProject?.name}</span>
-            </DialogDescription>
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 shrink-0">
+                <Users className="h-3.5 w-3.5 text-primary" />
+              </div>
+              <div>
+                <DialogTitle className="text-base">Project Members</DialogTitle>
+                <DialogDescription className="text-xs">
+                  Assign team members to <span className="font-medium text-foreground">{membersProject?.name}</span>
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
           <div className="flex flex-col gap-3 min-h-0 flex-1">
             {/* Search */}
-            <SearchInput
-              value={memberSearch}
-              onChange={setMemberSearch}
-              placeholder="Search members..."
-              className="shrink-0"
-            />
+            <div className="relative shrink-0">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                value={memberSearch}
+                onChange={(e) => setMemberSearch(e.target.value)}
+                placeholder="Search members..."
+                className="h-8 pl-8 text-xs"
+              />
+            </div>
 
             {/* Stats bar */}
             <div className="flex items-center justify-between text-xs text-muted-foreground shrink-0">
@@ -785,7 +916,7 @@ export default function ProjectsPage() {
               {orgUsers && orgUsers.length > 0 && (
                 <button
                   type="button"
-                  className="text-primary hover:text-primary/80 font-medium transition-colors"
+                  className="text-primary hover:text-primary/80 font-medium transition-colors text-xs"
                   onClick={() => {
                     const filtered = (orgUsers || []).filter((u) => {
                       if (!memberSearch.trim()) return true;
@@ -818,19 +949,19 @@ export default function ProjectsPage() {
               {!orgUsers ? (
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                  <span className="ml-2 text-sm text-muted-foreground">Loading members...</span>
+                  <span className="ml-2 text-xs text-muted-foreground">Loading members...</span>
                 </div>
               ) : (() => {
                 const q = memberSearch.toLowerCase().trim();
                 const filtered = orgUsers.filter((u) =>
                   !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q) || u.role.includes(q)
                 );
-                // Sort alphabetically only — stable, no jumping when checking/unchecking
+                // Sort alphabetically only -- stable, no jumping when checking/unchecking
                 const sorted = [...filtered].sort((a, b) => a.name.localeCompare(b.name));
 
                 if (sorted.length === 0) {
                   return (
-                    <div className="py-8 text-center text-sm text-muted-foreground">
+                    <div className="py-8 text-center text-xs text-muted-foreground">
                       No members match &ldquo;{memberSearch}&rdquo;
                     </div>
                   );
@@ -847,7 +978,7 @@ export default function ProjectsPage() {
                   return (
                     <label
                       key={u.id}
-                      className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors border-b border-border last:border-b-0 ${
+                      className={`flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors border-b border-border/50 last:border-b-0 ${
                         checked ? 'bg-primary/8 hover:bg-primary/12' : 'hover:bg-muted/50'
                       }`}
                     >
@@ -870,8 +1001,8 @@ export default function ProjectsPage() {
                         {initials}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="text-sm font-medium text-foreground truncate">{u.name}</div>
-                        <div className="text-xs text-muted-foreground truncate">{u.email}</div>
+                        <div className="text-[0.75rem] font-medium text-foreground truncate">{u.name}</div>
+                        <div className="text-[0.65rem] text-muted-foreground truncate">{u.email}</div>
                       </div>
                       <Badge
                         variant={u.role === 'owner' ? 'default' : 'secondary'}
@@ -890,13 +1021,14 @@ export default function ProjectsPage() {
             <Button
               type="button"
               variant="outline"
+              size="sm"
               onClick={() => setMembersDialogOpen(false)}
-              className="border-border text-foreground"
             >
               Cancel
             </Button>
             <Button
               type="button"
+              size="sm"
               disabled={!membersProject?.id || syncMembersMutation.isPending || (
                 memberIds.length === initialMemberIds.length &&
                 memberIds.every((id) => initialMemberIds.includes(id))
@@ -906,7 +1038,7 @@ export default function ProjectsPage() {
                 syncMembersMutation.mutate({ projectId: membersProject.id, userIds: memberIds });
               }}
             >
-              {syncMembersMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {syncMembersMutation.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
               {(() => {
                 const added = memberIds.filter((id) => !initialMemberIds.includes(id)).length;
                 const removed = initialMemberIds.filter((id) => !memberIds.includes(id)).length;

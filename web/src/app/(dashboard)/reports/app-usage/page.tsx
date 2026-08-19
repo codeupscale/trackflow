@@ -13,15 +13,8 @@ import { Bar, BarChart, Cell, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
 
 import { ReportsSectionNav } from "@/components/reports/ReportsSectionNav";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-    Card,
-    CardContent,
-    CardDescription,
-    CardHeader,
-    CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
     ChartContainer,
     ChartTooltip,
@@ -31,14 +24,6 @@ import {
 import { DatePicker } from "@/components/ui/date-picker";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
     useMyAppUsage,
@@ -107,18 +92,26 @@ const chartConfig = {
 function ProductivityBadge({ isProductive }: { isProductive: boolean | null }) {
     if (isProductive === true) {
         return (
-            <Badge
-                variant="outline"
-                className="text-green-600 border-green-300 bg-green-50"
-            >
+            <span className="inline-flex items-center gap-1.5 text-[0.7rem] font-medium text-green-600 dark:text-green-400">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500" />
                 Productive
-            </Badge>
+            </span>
         );
     }
     if (isProductive === false) {
-        return <Badge variant="destructive">Unproductive</Badge>;
+        return (
+            <span className="inline-flex items-center gap-1.5 text-[0.7rem] font-medium text-red-600 dark:text-red-400">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" />
+                Unproductive
+            </span>
+        );
     }
-    return <Badge variant="secondary">Uncategorized</Badge>;
+    return (
+        <span className="inline-flex items-center gap-1.5 text-[0.7rem] font-medium text-muted-foreground">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-muted-foreground/50" />
+            Uncategorized
+        </span>
+    );
 }
 
 function AppUsageTableSkeleton() {
@@ -134,10 +127,10 @@ function AppUsageTableSkeleton() {
 function ErrorCard({ message }: { message: string }) {
     return (
         <Card className="border-destructive/50">
-            <CardContent className="pt-6">
-                <div className="flex items-center gap-3 text-destructive">
-                    <AlertCircle className="size-5" />
-                    <p>{message}</p>
+            <CardContent className="p-3">
+                <div className="flex items-center gap-2 text-destructive">
+                    <AlertCircle className="size-4" />
+                    <p className="text-[0.75rem]">{message}</p>
                 </div>
             </CardContent>
         </Card>
@@ -153,11 +146,11 @@ function EmptyState({
 }) {
     return (
         <Card>
-            <CardContent className="pt-6">
-                <div className="flex flex-col items-center justify-center gap-2 py-10 text-muted-foreground">
-                    <AppWindow className="size-10" />
-                    <p className="font-medium">{title}</p>
-                    <p className="text-sm">{description}</p>
+            <CardContent className="p-3">
+                <div className="flex flex-col items-center justify-center gap-1.5 py-8 text-muted-foreground">
+                    <AppWindow className="size-8" />
+                    <p className="text-[0.75rem] font-medium">{title}</p>
+                    <p className="text-[0.65rem]">{description}</p>
                 </div>
             </CardContent>
         </Card>
@@ -182,42 +175,44 @@ function AppUsageTable({
 
     return (
         <Card>
-            <CardContent className="pt-6">
-                <Table>
-                    <TableHeader>
-                        <TableRow>
-                            <TableHead>App Name</TableHead>
-                            <TableHead>Duration</TableHead>
-                            <TableHead>% of Total</TableHead>
-                            <TableHead>Productive</TableHead>
-                        </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                        {entries.map((entry, idx) => (
-                            <TableRow key={`${entry.app_name}-${idx}`}>
-                                <TableCell className="font-medium">
-                                    {entry.app_name}
-                                </TableCell>
-                                <TableCell>
-                                    {formatAppDuration(entry.duration_seconds)}
-                                </TableCell>
-                                <TableCell>
-                                    {totalSeconds > 0
-                                        ? getPercentOfTotal(
-                                              entry.duration_seconds,
-                                              totalSeconds,
-                                          )
-                                        : "—"}
-                                </TableCell>
-                                <TableCell>
-                                    <ProductivityBadge
-                                        isProductive={entry.is_productive}
-                                    />
-                                </TableCell>
-                            </TableRow>
-                        ))}
-                    </TableBody>
-                </Table>
+            <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                    <table className="w-full">
+                        <thead>
+                            <tr className="border-b border-border">
+                                <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">App Name</th>
+                                <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">Duration</th>
+                                <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">% of Total</th>
+                                <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">Productive</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {entries.map((entry, idx) => (
+                                <tr key={`${entry.app_name}-${idx}`} className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors">
+                                    <td className="px-4 py-2.5 text-[0.75rem] font-medium text-foreground">
+                                        {entry.app_name}
+                                    </td>
+                                    <td className="px-4 py-2.5 text-[0.75rem] text-foreground tabular-nums">
+                                        {formatAppDuration(entry.duration_seconds)}
+                                    </td>
+                                    <td className="px-4 py-2.5 text-[0.75rem] text-foreground tabular-nums">
+                                        {totalSeconds > 0
+                                            ? getPercentOfTotal(
+                                                  entry.duration_seconds,
+                                                  totalSeconds,
+                                              )
+                                            : "—"}
+                                    </td>
+                                    <td className="px-4 py-2.5">
+                                        <ProductivityBadge
+                                            isProductive={entry.is_productive}
+                                        />
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
             </CardContent>
         </Card>
     );
@@ -247,47 +242,50 @@ function TeamUsageTable({ entries }: { entries: TeamAppUsageEntry[] }) {
 
     return (
         <Card>
-            <CardContent className="pt-6">
-                <Table>
-                    <TableHeader>
-                        <TableRow>
-                            <TableHead>Team Member</TableHead>
-                            <TableHead>App Name</TableHead>
-                            <TableHead>Duration</TableHead>
-                            <TableHead>% of Total</TableHead>
-                            <TableHead>Productive</TableHead>
-                        </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                        {entries.map((entry, idx) => (
-                            <TableRow
-                                key={`${entry.user_id}-${entry.app_name}-${idx}`}
-                            >
-                                <TableCell className="font-medium">
-                                    {entry.user_name}
-                                </TableCell>
-                                <TableCell>{entry.app_name}</TableCell>
-                                <TableCell>
-                                    {formatAppDuration(entry.duration_seconds)}
-                                </TableCell>
-                                <TableCell>
-                                    {hasAnyDuration &&
-                                    userTotals[entry.user_id] > 0
-                                        ? getPercentOfTotal(
-                                              entry.duration_seconds,
-                                              userTotals[entry.user_id],
-                                          )
-                                        : "—"}
-                                </TableCell>
-                                <TableCell>
-                                    <ProductivityBadge
-                                        isProductive={entry.is_productive}
-                                    />
-                                </TableCell>
-                            </TableRow>
-                        ))}
-                    </TableBody>
-                </Table>
+            <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                    <table className="w-full">
+                        <thead>
+                            <tr className="border-b border-border">
+                                <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">Team Member</th>
+                                <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">App Name</th>
+                                <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">Duration</th>
+                                <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">% of Total</th>
+                                <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">Productive</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {entries.map((entry, idx) => (
+                                <tr
+                                    key={`${entry.user_id}-${entry.app_name}-${idx}`}
+                                    className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors"
+                                >
+                                    <td className="px-4 py-2.5 text-[0.75rem] font-medium text-foreground">
+                                        {entry.user_name}
+                                    </td>
+                                    <td className="px-4 py-2.5 text-[0.75rem] text-foreground">{entry.app_name}</td>
+                                    <td className="px-4 py-2.5 text-[0.75rem] text-foreground tabular-nums">
+                                        {formatAppDuration(entry.duration_seconds)}
+                                    </td>
+                                    <td className="px-4 py-2.5 text-[0.75rem] text-foreground tabular-nums">
+                                        {hasAnyDuration &&
+                                        userTotals[entry.user_id] > 0
+                                            ? getPercentOfTotal(
+                                                  entry.duration_seconds,
+                                                  userTotals[entry.user_id],
+                                              )
+                                            : "—"}
+                                    </td>
+                                    <td className="px-4 py-2.5">
+                                        <ProductivityBadge
+                                            isProductive={entry.is_productive}
+                                        />
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
             </CardContent>
         </Card>
     );
@@ -323,14 +321,14 @@ function TopAppsChart({ entries }: { entries: TopAppEntry[] }) {
     const chartHeight = Math.max(300, chartData.length * 44);
 
     return (
-        <div className="flex flex-col gap-6">
+        <div className="flex flex-col gap-3">
             <Card>
-                <CardHeader>
-                    <CardTitle>Top Applications</CardTitle>
-                    <CardDescription>
+                <div className="px-4 pt-3 pb-1">
+                    <h3 className="text-sm font-semibold">Top Applications</h3>
+                    <p className="text-[0.65rem] text-muted-foreground">
                         Most used applications by total duration
-                    </CardDescription>
-                </CardHeader>
+                    </p>
+                </div>
                 <CardContent>
                     {hasChartData ? (
                         <>
@@ -428,12 +426,12 @@ function TopAppsChart({ entries }: { entries: TopAppEntry[] }) {
                             </div>
                         </>
                     ) : (
-                        <div className="flex flex-col items-center justify-center gap-2 py-10 text-muted-foreground">
-                            <AppWindow className="size-10" />
-                            <p className="font-medium">
+                        <div className="flex flex-col items-center justify-center gap-1.5 py-8 text-muted-foreground">
+                            <AppWindow className="size-8" />
+                            <p className="text-[0.75rem] font-medium">
                                 No usage data for this period
                             </p>
-                            <p className="text-sm">
+                            <p className="text-[0.65rem]">
                                 Application usage will appear here once the
                                 desktop agent records activity.
                             </p>
@@ -443,44 +441,46 @@ function TopAppsChart({ entries }: { entries: TopAppEntry[] }) {
             </Card>
 
             <Card>
-                <CardContent className="pt-6">
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>App Name</TableHead>
-                                <TableHead>Duration</TableHead>
-                                <TableHead>% of Total</TableHead>
-                                <TableHead>Productive</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {entries.map((entry, idx) => (
-                                <TableRow key={`${entry.app_name}-${idx}`}>
-                                    <TableCell className="font-medium">
-                                        {entry.app_name}
-                                    </TableCell>
-                                    <TableCell>
-                                        {formatAppDuration(
-                                            entry.duration_seconds,
-                                        )}
-                                    </TableCell>
-                                    <TableCell>
-                                        {totalSeconds > 0
-                                            ? getPercentOfTotal(
-                                                  entry.duration_seconds,
-                                                  totalSeconds,
-                                              )
-                                            : "—"}
-                                    </TableCell>
-                                    <TableCell>
-                                        <ProductivityBadge
-                                            isProductive={entry.is_productive}
-                                        />
-                                    </TableCell>
-                                </TableRow>
-                            ))}
-                        </TableBody>
-                    </Table>
+                <CardContent className="p-0">
+                    <div className="overflow-x-auto">
+                        <table className="w-full">
+                            <thead>
+                                <tr className="border-b border-border">
+                                    <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">App Name</th>
+                                    <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">Duration</th>
+                                    <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">% of Total</th>
+                                    <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">Productive</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {entries.map((entry, idx) => (
+                                    <tr key={`${entry.app_name}-${idx}`} className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors">
+                                        <td className="px-4 py-2.5 text-[0.75rem] font-medium text-foreground">
+                                            {entry.app_name}
+                                        </td>
+                                        <td className="px-4 py-2.5 text-[0.75rem] text-foreground tabular-nums">
+                                            {formatAppDuration(
+                                                entry.duration_seconds,
+                                            )}
+                                        </td>
+                                        <td className="px-4 py-2.5 text-[0.75rem] text-foreground tabular-nums">
+                                            {totalSeconds > 0
+                                                ? getPercentOfTotal(
+                                                      entry.duration_seconds,
+                                                      totalSeconds,
+                                                  )
+                                                : "—"}
+                                        </td>
+                                        <td className="px-4 py-2.5">
+                                            <ProductivityBadge
+                                                isProductive={entry.is_productive}
+                                            />
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 </CardContent>
             </Card>
         </div>
@@ -565,15 +565,15 @@ export default function AppUsagePage() {
         <div className="flex flex-col gap-6">
             <ReportsSectionNav />
 
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between -mt-2">
-                <p className="text-sm text-muted-foreground">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between -mt-2">
+                <p className="text-xs text-muted-foreground">
                     Track application usage across your team.
                 </p>
                 {canExport && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                         <Button
                             variant="outline"
-                            size="sm"
+                            className="h-8 text-xs"
                             onClick={() => handleExport("csv")}
                             disabled={exporting !== null}
                         >
@@ -589,7 +589,7 @@ export default function AppUsagePage() {
                         </Button>
                         <Button
                             variant="outline"
-                            size="sm"
+                            className="h-8 text-xs"
                             onClick={() => handleExport("pdf")}
                             disabled={exporting !== null}
                         >
@@ -609,17 +609,17 @@ export default function AppUsagePage() {
 
             {/* Date Range Controls */}
             <Card>
-                <CardContent className="pt-6">
-                    <div className="flex flex-wrap items-end gap-4">
-                        <div className="flex flex-col gap-1.5">
-                            <Label>Start Date</Label>
+                <CardContent className="p-3">
+                    <div className="flex flex-wrap items-end gap-3">
+                        <div className="flex flex-col gap-1">
+                            <Label className="text-xs">Start Date</Label>
                             <DatePicker
                                 value={startDate}
                                 onChange={setStartDate}
                             />
                         </div>
-                        <div className="flex flex-col gap-1.5">
-                            <Label>End Date</Label>
+                        <div className="flex flex-col gap-1">
+                            <Label className="text-xs">End Date</Label>
                             <DatePicker value={endDate} onChange={setEndDate} />
                         </div>
                     </div>
@@ -655,11 +655,11 @@ export default function AppUsagePage() {
                 </div>
 
                 {/* My Usage Tab */}
-                <TabsContent value="my-usage" className="mt-6">
-                    <div className="flex flex-col gap-4">
-                        <div className="flex items-end gap-4">
-                            <div className="flex flex-col gap-1.5">
-                                <Label>Date</Label>
+                <TabsContent value="my-usage" className="mt-4">
+                    <div className="flex flex-col gap-3">
+                        <div className="flex items-end gap-3">
+                            <div className="flex flex-col gap-1">
+                                <Label className="text-xs">Date</Label>
                                 <DatePicker
                                     value={myDate}
                                     onChange={setMyDate}
@@ -682,8 +682,8 @@ export default function AppUsagePage() {
 
                 {/* Team Tab */}
                 {isManagerOrAdmin && (
-                    <TabsContent value="team" className="mt-6">
-                        <div className="flex flex-col gap-4">
+                    <TabsContent value="team" className="mt-4">
+                        <div className="flex flex-col gap-3">
                             {teamUsage.isLoading && <AppUsageTableSkeleton />}
                             {teamUsage.isError && (
                                 <ErrorCard message="Failed to load team app usage data." />
@@ -697,8 +697,8 @@ export default function AppUsagePage() {
 
                 {/* Top Apps Tab */}
                 {isManagerOrAdmin && (
-                    <TabsContent value="top-apps" className="mt-6">
-                        <div className="flex flex-col gap-4">
+                    <TabsContent value="top-apps" className="mt-4">
+                        <div className="flex flex-col gap-3">
                             {topApps.isLoading && <AppUsageTableSkeleton />}
                             {topApps.isError && (
                                 <ErrorCard message="Failed to load top apps data." />

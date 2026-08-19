@@ -6,7 +6,6 @@ import { ShieldAlert } from 'lucide-react';
 
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Badge } from '@/components/ui/badge';
 import {
   Pagination,
   PaginationContent,
@@ -76,15 +75,15 @@ export default function RegularizationsPage() {
     <div className="flex flex-col gap-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
+        <h1 className="text-lg font-semibold tracking-tight text-foreground flex items-center gap-2">
           Regularization Requests
           {pendingCount > 0 && statusFilter === 'pending' && (
-            <Badge variant="destructive" className="text-xs">
+            <span className="inline-flex items-center justify-center h-5 min-w-5 rounded-full bg-red-500/10 px-1.5 text-[0.65rem] font-semibold text-red-600 dark:text-red-400">
               {pendingCount}
-            </Badge>
+            </span>
           )}
         </h1>
-        <p className="text-sm text-muted-foreground mt-1">
+        <p className="text-xs text-muted-foreground mt-0.5">
           Review and manage attendance regularization requests
         </p>
       </div>
@@ -100,7 +99,7 @@ export default function RegularizationsPage() {
               setCurrentPage(1);
             }}
             className={cn(
-              'rounded-md px-3 py-1.5 text-xs font-medium transition-colors capitalize',
+              'rounded-md px-3 py-1.5 text-[0.65rem] font-medium transition-colors capitalize',
               statusFilter === status
                 ? 'bg-background text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground'
@@ -118,35 +117,35 @@ export default function RegularizationsPage() {
           <Card>
             <CardContent className="py-8">
               <div className="text-center">
-                <ShieldAlert className="mx-auto mb-2 text-muted-foreground" />
-                <p className="text-muted-foreground font-medium">
+                <ShieldAlert className="mx-auto mb-2 size-5 text-muted-foreground" />
+                <p className="text-xs font-medium text-muted-foreground">
                   Failed to load requests
                 </p>
-                <p className="text-sm text-muted-foreground mt-1">
+                <p className="text-[0.7rem] text-muted-foreground mt-0.5">
                   Please try again later.
                 </p>
               </div>
             </CardContent>
           </Card>
         ) : isLoading ? (
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-3">
             {Array.from({ length: 3 }).map((_, i) => (
               <Card key={i}>
-                <CardContent className="p-4">
-                  <Skeleton className="h-24" />
+                <CardContent className="p-3">
+                  <Skeleton className="h-20" />
                 </CardContent>
               </Card>
             ))}
           </div>
         ) : regularizations.length === 0 ? (
           <Card>
-            <CardContent className="py-12">
+            <CardContent className="py-10">
               <div className="text-center">
-                <ShieldAlert className="mx-auto mb-2 text-muted-foreground" />
-                <p className="text-muted-foreground font-medium">
+                <ShieldAlert className="mx-auto mb-2 size-5 text-muted-foreground" />
+                <p className="text-xs font-medium text-muted-foreground">
                   No {statusFilter} regularization requests
                 </p>
-                <p className="text-sm text-muted-foreground mt-1">
+                <p className="text-[0.7rem] text-muted-foreground mt-0.5">
                   {statusFilter === 'pending'
                     ? 'All caught up! No pending requests to review.'
                     : 'No requests match the selected filter.'}
@@ -155,7 +154,7 @@ export default function RegularizationsPage() {
             </CardContent>
           </Card>
         ) : (
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-3">
             {regularizations.map((reg) => (
               <RegularizationCard
                 key={reg.id}

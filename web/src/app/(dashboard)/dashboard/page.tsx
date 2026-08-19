@@ -9,10 +9,14 @@ import {
   FolderOpen,
   Monitor,
   TrendingUp,
-  TrendingDown,
   Timer,
   ArrowRight,
   BarChart3,
+  CalendarCheck,
+  ClipboardList,
+  CalendarDays,
+  FileEdit,
+  CalendarOff,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -26,11 +30,8 @@ import {
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
-  CardTitle,
 } from '@/components/ui/card';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import {
   Table,
@@ -49,6 +50,13 @@ import {
   type ChartConfig,
 } from '@/components/ui/chart';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import Link from 'next/link';
 import api from '@/lib/api';
 import { formatDuration } from '@/lib/utils';
@@ -101,15 +109,27 @@ type FilterPreset = 'today' | 'yesterday' | 'week' | 'last-week' | 'this-month' 
 // ─── Chart configs ───────────────────────────────────────────────
 
 const adminChartConfig = {
-  hours: {
-    label: "Hours Tracked",
-    color: "hsl(var(--chart-1))",
-  },
   activity: {
     label: "Activity %",
-    color: "hsl(var(--chart-2))",
+    color: "hsl(32 95% 55%)",
+  },
+  hours: {
+    label: "Hours Tracked",
+    color: "hsl(217 91% 60%)",
   },
 } satisfies ChartConfig;
+
+
+
+const ATTENDANCE_STATUS_STYLES: Record<string, { label: string; className: string }> = {
+  present: { label: 'Present', className: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/20' },
+  absent: { label: 'Absent', className: 'bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/20' },
+  half_day: { label: 'Half Day', className: 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 border-cyan-500/20' },
+  on_leave: { label: 'On Leave', className: 'bg-violet-500/15 text-violet-600 dark:text-violet-400 border-violet-500/20' },
+  weekend: { label: 'Weekend', className: 'bg-muted text-muted-foreground border-border' },
+  holiday: { label: 'Holiday', className: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/20' },
+};
+
 
 const employeeChartConfig = {
   hours: {
@@ -181,6 +201,12 @@ function formatSecondsToHM(seconds: number): string {
   return `${h}h ${m}m`;
 }
 
+function formatTimeShort(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+}
+
 // ─── Main Dashboard ───────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -192,6 +218,10 @@ export default function DashboardPage() {
   const [dateFrom, setDateFrom] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [dateTo, setDateTo] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [chartPeriod, setChartPeriod] = useState<string>('7d');
+  const [teamPeriod, setTeamPeriod] = useState<string>('7d');
+  const [attendanceFilter, setAttendanceFilter] = useState<string>('today');
+  const [attCustomFrom, setAttCustomFrom] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  const [attCustomTo, setAttCustomTo] = useState(() => format(new Date(), 'yyyy-MM-dd'));
 
   const rangeLabel = useMemo(() => {
     if (filterPreset === 'today') {
@@ -350,6 +380,118 @@ export default function DashboardPage() {
     task?: { title: string };
   }>;
 
+  // ── Attendance overview (admin only) ──
+
+  const attendanceDateRange = useMemo(() => {
+    const today = new Date();
+    switch (attendanceFilter) {
+      case '7d':
+        return { start_date: format(subDays(today, 6), 'yyyy-MM-dd'), end_date: format(today, 'yyyy-MM-dd') };
+      case '30d':
+        return { start_date: format(subDays(today, 29), 'yyyy-MM-dd'), end_date: format(today, 'yyyy-MM-dd') };
+      case 'month':
+        return { start_date: format(startOfMonth(today), 'yyyy-MM-dd'), end_date: format(today, 'yyyy-MM-dd') };
+      case 'custom':
+        return { start_date: attCustomFrom, end_date: attCustomTo };
+      default:
+        return { start_date: format(today, 'yyyy-MM-dd'), end_date: format(today, 'yyyy-MM-dd') };
+    }
+  }, [attendanceFilter, attCustomFrom, attCustomTo]);
+
+  const { data: attendanceRecords, isLoading: attendanceLoading } = useQuery({
+    queryKey: ['dashboard-attendance-list', attendanceDateRange],
+    queryFn: async () => {
+      try {
+        const res = await api.get('/hr/attendance/check-ins', {
+          params: { ...attendanceDateRange, per_page: 10 },
+        });
+        return (res.data?.data ?? []) as Array<{
+          id: string;
+          date: string;
+          status: string;
+          check_in_at: string | null;
+          check_out_at: string | null;
+          check_in_status: string | null;
+          is_early_checkout: boolean;
+          late_minutes: number;
+          user?: { id: string; name: string; email: string; avatar_url: string | null };
+        }>;
+      } catch {
+        return [];
+      }
+    },
+    enabled: !isEmployee,
+  });
+
+  // ── On Leave employees (admin only) ──
+
+  const { data: onLeaveData, isLoading: onLeaveLoading } = useQuery({
+    queryKey: ['dashboard-on-leave'],
+    queryFn: async () => {
+      try {
+        const todayStr = format(new Date(), 'yyyy-MM-dd');
+        const res = await api.get('/hr/leave-requests', {
+          params: { status: 'approved', per_page: 50 },
+        });
+        const requests = (res.data?.data ?? []) as Array<{
+          id: string; start_date: string; end_date: string; days_count: number;
+          user?: { id: string; name: string; avatar_url: string | null };
+          leave_type?: { name: string };
+        }>;
+        return requests
+          .filter((r) => {
+            const start = r.start_date?.slice(0, 10) ?? '';
+            const end = r.end_date?.slice(0, 10) ?? '';
+            return start <= todayStr && end >= todayStr;
+          })
+          .map((r) => {
+            let dateLabel = '';
+            if (r.days_count <= 1) {
+              try {
+                const d = new Date(r.start_date?.slice(0, 10) ?? '');
+                if (!isNaN(d.getTime())) dateLabel = format(d, 'MM-dd-yy');
+              } catch { /* fallback */ }
+              if (!dateLabel) dateLabel = r.start_date?.slice(0, 10) ?? '';
+            } else {
+              dateLabel = `${Math.ceil(r.days_count)} days`;
+            }
+            return {
+              id: r.id,
+              userName: r.user?.name ?? '—',
+              avatarUrl: r.user?.avatar_url ?? null,
+              leaveType: r.leave_type?.name ?? 'Leave',
+              dateLabel,
+            };
+          });
+      } catch {
+        return [];
+      }
+    },
+    enabled: !isEmployee,
+  });
+
+  // ── Pending approvals counts (admin only) ──
+
+  const { data: pendingCounts } = useQuery({
+    queryKey: ['dashboard-pending-counts'],
+    queryFn: async () => {
+      const counts = { timeEntries: 0, leaveRequests: 0, regularizations: 0 };
+      try {
+        const [teRes, leaveRes, regRes] = await Promise.allSettled([
+          api.get('/time-entries/pending', { params: { per_page: 1 } }),
+          api.get('/hr/leave-requests', { params: { status: 'pending', per_page: 1 } }),
+          api.get('/hr/attendance/regularizations', { params: { status: 'pending', per_page: 1 } }),
+        ]);
+        if (teRes.status === 'fulfilled') counts.timeEntries = teRes.value.data?.meta?.total ?? teRes.value.data?.total ?? 0;
+        if (leaveRes.status === 'fulfilled') counts.leaveRequests = leaveRes.value.data?.meta?.total ?? leaveRes.value.data?.total ?? 0;
+        if (regRes.status === 'fulfilled') counts.regularizations = regRes.value.data?.meta?.total ?? regRes.value.data?.total ?? 0;
+      } catch {}
+      return counts;
+    },
+    enabled: !isEmployee,
+    refetchInterval: 60000,
+  });
+
   // ── Live tick for running entries (so duration counts up in real time) ──
   // The displayed duration is DERIVED from started_at in getDisplayDuration() on
   // every render — this interval only forces re-renders, it never accumulates a
@@ -425,6 +567,8 @@ export default function DashboardPage() {
   // ── Employee activity score — real value from activity_logs via API ──
   const employeeActivityScore = data?.activityPercentage ?? null;
 
+  const totalPendingCount = (pendingCounts?.timeEntries ?? 0) + (pendingCounts?.leaveRequests ?? 0) + (pendingCounts?.regularizations ?? 0);
+
   const maxEntries = isEmployeeView ? 5 : 10;
 
   if (error) {
@@ -436,12 +580,12 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       {/* Page header + date filter */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
-          <p className="text-muted-foreground text-sm mt-1">
+          <h1 className="text-lg font-semibold tracking-tight text-foreground">Dashboard</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">
             {isEmployeeView
               ? filterPreset === 'today' && isSameDay(new Date(dateFrom + 'T00:00:00'), new Date())
                 ? 'Your activity overview for today'
@@ -462,579 +606,853 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* Stat Cards — dashboard-01 style */}
+      {/* Stat cards */}
       {isEmployeeView ? (
-        <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {/* Today's Hours */}
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardDescription>
-                {filterPreset === 'today' && isSameDay(new Date(dateFrom + 'T00:00:00'), new Date())
-                  ? "Today's Hours"
-                  : 'Hours'}
-              </CardDescription>
-              <Badge variant="outline" className="flex items-center gap-1 text-xs">
-                <TrendingUp className="h-3 w-3" />
-                +12%
-              </Badge>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold tabular-nums">
-                {isLoading ? (
-                  <span className="inline-block h-9 w-20 bg-muted rounded animate-pulse" />
-                ) : (
-                  stats?.today_hours != null ? formatHoursMinutes(stats.today_hours) : '0h 0m'
-                )}
+            <CardContent className="p-3">
+              <div className="flex items-center gap-3">
+                <div className="h-8 w-8 rounded-lg bg-orange-500/10 flex items-center justify-center shrink-0">
+                  <Clock className="size-4 text-orange-500" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">
+                    {filterPreset === 'today' && isSameDay(new Date(dateFrom + 'T00:00:00'), new Date())
+                      ? "Today's Hours"
+                      : 'Hours'}
+                  </p>
+                  {isLoading ? (
+                    <span className="inline-block h-5 w-14 bg-muted rounded animate-pulse mt-0.5" />
+                  ) : (
+                    <p className="text-base font-bold tabular-nums leading-tight">
+                      {stats?.today_hours != null ? formatHoursMinutes(stats.today_hours) : '0h 0m'}
+                    </p>
+                  )}
+                </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">vs. yesterday</p>
             </CardContent>
           </Card>
 
           {/* This Week */}
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardDescription>This Week</CardDescription>
-              {(data?.weeklyHoursTarget ?? 0) > 0 && (
-                <Badge variant="outline" className="text-xs">
-                  {data!.weeklyHoursTarget}h target
-                </Badge>
-              )}
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold tabular-nums">
-                {isLoading ? (
-                  <span className="inline-block h-9 w-20 bg-muted rounded animate-pulse" />
-                ) : (
-                  formatSecondsToHM(data?.weekSeconds || 0)
-                )}
+            <CardContent className="p-3">
+              <div className="flex items-center gap-3">
+                <div className="h-8 w-8 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0">
+                  <BarChart3 className="size-4 text-blue-500" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">This Week</p>
+                  {isLoading ? (
+                    <span className="inline-block h-5 w-14 bg-muted rounded animate-pulse mt-0.5" />
+                  ) : (
+                    <p className="text-base font-bold tabular-nums leading-tight">
+                      {formatSecondsToHM(data?.weekSeconds || 0)}
+                    </p>
+                  )}
+                  {(data?.weeklyHoursTarget ?? 0) > 0 && (
+                    <p className="text-[0.6rem] text-muted-foreground tabular-nums">
+                      {Math.round(((data?.weekSeconds || 0) / ((data?.weeklyHoursTarget || 1) * 3600)) * 100)}% of {data!.weeklyHoursTarget}h target
+                    </p>
+                  )}
+                </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {(data?.weeklyHoursTarget ?? 0) > 0
-                  ? `${Math.round(((data?.weekSeconds || 0) / ((data?.weeklyHoursTarget || 1) * 3600)) * 100)}% of weekly target`
-                  : 'Mon - Sun'}
-              </p>
             </CardContent>
           </Card>
 
-          {/* Activity Score / Status */}
+          {/* Activity / Status */}
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardDescription>Status</CardDescription>
-              <Badge
-                variant="outline"
-                className={`flex items-center gap-1 text-xs ${
-                  data?.timer
-                    ? 'border-green-500/30 text-green-600 dark:text-green-400'
-                    : ''
-                }`}
-              >
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${
-                    data?.timer ? 'bg-green-500' : 'bg-muted-foreground'
-                  }`}
-                />
-                {data?.timer ? 'Tracking' : 'Idle'}
-              </Badge>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold tabular-nums">
-                {isLoading ? (
-                  <span className="inline-block h-9 w-16 bg-muted rounded animate-pulse" />
-                ) : employeeActivityScore !== null ? (
-                  `${employeeActivityScore}%`
-                ) : (
-                  'N/A'
-                )}
+            <CardContent className="p-3">
+              <div className="flex items-center gap-3">
+                <div className="h-8 w-8 rounded-lg bg-emerald-500/10 flex items-center justify-center shrink-0">
+                  <TrendingUp className="size-4 text-emerald-500" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Activity</p>
+                    <span className={`h-1.5 w-1.5 rounded-full ${data?.timer ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground/40'}`} />
+                    <span className={`text-[0.6rem] ${data?.timer ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}>
+                      {data?.timer ? 'Tracking' : 'Idle'}
+                    </span>
+                  </div>
+                  {isLoading ? (
+                    <span className="inline-block h-5 w-10 bg-muted rounded animate-pulse mt-0.5" />
+                  ) : (
+                    <p className="text-base font-bold tabular-nums leading-tight">
+                      {employeeActivityScore !== null ? `${employeeActivityScore}%` : 'N/A'}
+                    </p>
+                  )}
+                </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {employeeActivityScore !== null
-                  ? employeeActivityScore >= 75
-                    ? 'Great productivity'
-                    : employeeActivityScore >= 50
-                    ? 'Good progress'
-                    : 'Keep going'
-                  : 'No activity data'}
-              </p>
             </CardContent>
           </Card>
         </div>
       ) : (
-        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
-          {/* Total Hours Today */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {/* Total Hours */}
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardDescription>
-                {filterPreset === 'today' && isSameDay(new Date(dateFrom + 'T00:00:00'), new Date())
-                  ? 'Total Hours Today'
-                  : 'Total Hours'}
-              </CardDescription>
-              <Badge variant="outline" className="flex items-center gap-1 text-xs">
-                <TrendingUp className="h-3 w-3" />
-                +12%
-              </Badge>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold tabular-nums">
-                {isLoading ? (
-                  <span className="inline-block h-9 w-20 bg-muted rounded animate-pulse" />
-                ) : (
-                  stats?.today_hours != null ? formatHoursMinutes(stats.today_hours) : '0h 0m'
-                )}
+            <CardContent className="p-3">
+              <div className="flex items-center gap-3">
+                <div className="h-8 w-8 rounded-lg bg-orange-500/10 flex items-center justify-center shrink-0">
+                  <Clock className="size-4 text-orange-500" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">
+                    {filterPreset === 'today' && isSameDay(new Date(dateFrom + 'T00:00:00'), new Date())
+                      ? 'Hours Today'
+                      : 'Total Hours'}
+                  </p>
+                  {isLoading ? (
+                    <span className="inline-block h-5 w-14 bg-muted rounded animate-pulse mt-0.5" />
+                  ) : (
+                    <p className="text-base font-bold tabular-nums leading-tight">
+                      {stats?.today_hours != null ? formatHoursMinutes(stats.today_hours) : '0h 0m'}
+                    </p>
+                  )}
+                </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">vs. yesterday</p>
             </CardContent>
           </Card>
 
           {/* Team Online */}
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardDescription>Team Online</CardDescription>
-              <Badge variant="outline" className="flex items-center gap-1 text-xs">
-                <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-                {isLoading ? '...' : `${stats?.total_online ?? 0} active now`}
-              </Badge>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold tabular-nums">
-                {isLoading ? (
-                  <span className="inline-block h-9 w-12 bg-muted rounded animate-pulse" />
-                ) : (
-                  stats?.total_online ?? 0
-                )}
+            <CardContent className="p-3">
+              <div className="flex items-center gap-3">
+                <div className="h-8 w-8 rounded-lg bg-emerald-500/10 flex items-center justify-center shrink-0">
+                  <Monitor className="size-4 text-emerald-500" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Team Online</p>
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  </div>
+                  {isLoading ? (
+                    <span className="inline-block h-5 w-8 bg-muted rounded animate-pulse mt-0.5" />
+                  ) : (
+                    <p className="text-base font-bold tabular-nums leading-tight">
+                      {stats?.total_online ?? 0}
+                      <span className="text-[0.65rem] font-normal text-muted-foreground ml-1">/ {stats?.total_members ?? 0}</span>
+                    </p>
+                  )}
+                </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">members currently active</p>
             </CardContent>
           </Card>
 
           {/* Active Projects */}
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardDescription>Active Projects</CardDescription>
-              <FolderOpen className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold tabular-nums">
-                {isLoading ? (
-                  <span className="inline-block h-9 w-12 bg-muted rounded animate-pulse" />
-                ) : (
-                  stats?.active_projects ?? 0
-                )}
+            <CardContent className="p-3">
+              <div className="flex items-center gap-3">
+                <div className="h-8 w-8 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0">
+                  <FolderOpen className="size-4 text-blue-500" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Projects</p>
+                  {isLoading ? (
+                    <span className="inline-block h-5 w-8 bg-muted rounded animate-pulse mt-0.5" />
+                  ) : (
+                    <p className="text-base font-bold tabular-nums leading-tight">{stats?.active_projects ?? 0}</p>
+                  )}
+                </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">across your organization</p>
             </CardContent>
           </Card>
 
           {/* Team Members */}
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardDescription>Team Members</CardDescription>
-              <Users className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold tabular-nums">
-                {isLoading ? (
-                  <span className="inline-block h-9 w-12 bg-muted rounded animate-pulse" />
-                ) : (
-                  stats?.total_members ?? 0
-                )}
+            <CardContent className="p-3">
+              <div className="flex items-center gap-3">
+                <div className="h-8 w-8 rounded-lg bg-violet-500/10 flex items-center justify-center shrink-0">
+                  <Users className="size-4 text-violet-500" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Members</p>
+                  {isLoading ? (
+                    <span className="inline-block h-5 w-8 bg-muted rounded animate-pulse mt-0.5" />
+                  ) : (
+                    <p className="text-base font-bold tabular-nums leading-tight">{stats?.total_members ?? 0}</p>
+                  )}
+                </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">in your workspace</p>
             </CardContent>
           </Card>
         </div>
       )}
 
-      {/* Area Chart — Admin: Team Activity / Employee: Your Hours */}
+      {/* Chart + Team Activity — side by side on desktop (admin view) */}
       {!isEmployeeView && team.length > 0 && (
-        <Card>
-          <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <CardTitle className="text-base">Team Activity This Week</CardTitle>
-              <CardDescription>Hours tracked and activity scores across your team</CardDescription>
-            </div>
-            <ToggleGroup
-              value={[chartPeriod]}
-              onValueChange={(val) => {
-                if (val.length > 0) setChartPeriod(val[0]);
-              }}
-              variant="outline"
-              size="sm"
-            >
-              <ToggleGroupItem value="90d">Last 3 months</ToggleGroupItem>
-              <ToggleGroupItem value="30d">Last 30 days</ToggleGroupItem>
-              <ToggleGroupItem value="7d">Last 7 days</ToggleGroupItem>
-            </ToggleGroup>
-          </CardHeader>
-          <CardContent>
-            <ChartContainer config={adminChartConfig} className="aspect-auto h-[300px] w-full">
-              <AreaChart data={adminChartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="fillHours" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--color-hours)" stopOpacity={0.4} />
-                    <stop offset="95%" stopColor="var(--color-hours)" stopOpacity={0.05} />
-                  </linearGradient>
-                  <linearGradient id="fillActivity" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--color-activity)" stopOpacity={0.4} />
-                    <stop offset="95%" stopColor="var(--color-activity)" stopOpacity={0.05} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid vertical={false} />
-                <XAxis
-                  dataKey="day"
-                  tickLine={false}
-                  axisLine={false}
-                  tickMargin={8}
-                />
-                <YAxis
-                  tickLine={false}
-                  axisLine={false}
-                  tickMargin={8}
-                  width={40}
-                />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Area
-                  dataKey="hours"
-                  type="natural"
-                  fill="url(#fillHours)"
-                  stroke="var(--color-hours)"
-                  strokeWidth={2}
-                />
-                <Area
-                  dataKey="activity"
-                  type="natural"
-                  fill="url(#fillActivity)"
-                  stroke="var(--color-activity)"
-                  strokeWidth={2}
-                />
-                <ChartLegend content={<ChartLegendContent />} />
-              </AreaChart>
-            </ChartContainer>
-          </CardContent>
-        </Card>
-      )}
-
-      {isEmployeeView && employeeChartData.length > 0 && (
-        <Card>
-          <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <CardTitle className="text-base">Your Hours This Week</CardTitle>
-              <CardDescription>Daily hours tracked (Mon - Sun)</CardDescription>
-            </div>
-            <ToggleGroup
-              value={[chartPeriod]}
-              onValueChange={(val) => {
-                if (val.length > 0) setChartPeriod(val[0]);
-              }}
-              variant="outline"
-              size="sm"
-            >
-              <ToggleGroupItem value="90d">Last 3 months</ToggleGroupItem>
-              <ToggleGroupItem value="30d">Last 30 days</ToggleGroupItem>
-              <ToggleGroupItem value="7d">Last 7 days</ToggleGroupItem>
-            </ToggleGroup>
-          </CardHeader>
-          <CardContent>
-            <ChartContainer config={employeeChartConfig} className="aspect-auto h-[300px] w-full">
-              <AreaChart data={employeeChartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="fillEmployeeHours" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--color-hours)" stopOpacity={0.4} />
-                    <stop offset="95%" stopColor="var(--color-hours)" stopOpacity={0.05} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid vertical={false} />
-                <XAxis
-                  dataKey="day"
-                  tickLine={false}
-                  axisLine={false}
-                  tickMargin={8}
-                />
-                <YAxis
-                  tickLine={false}
-                  axisLine={false}
-                  tickMargin={8}
-                  width={40}
-                  tickFormatter={(v: number) => `${v}h`}
-                />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                {(data?.weeklyHoursTarget ?? 0) > 0 && (
-                  <ReferenceLine
-                    y={(data!.weeklyHoursTarget) / 5}
-                    stroke="hsl(var(--chart-4))"
-                    strokeDasharray="4 4"
-                    label={{ value: 'Daily target', position: 'right', fontSize: 11 }}
-                  />
-                )}
-                <Area
-                  dataKey="hours"
-                  type="natural"
-                  fill="url(#fillEmployeeHours)"
-                  stroke="var(--color-hours)"
-                  strokeWidth={2}
-                />
-                <ChartLegend content={<ChartLegendContent />} />
-              </AreaChart>
-            </ChartContainer>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Weekly Hours Target — employee view only, shown for current-week filters */}
-      {isEmployeeView && (filterPreset === 'today' || filterPreset === 'week') && (data?.weeklyHoursTarget ?? 0) > 0 && (() => {
-        const target = data!.weeklyHoursTarget;
-        const targetSec = target * 3600;
-        const ws = data?.weekSeconds || 0;
-        const pct = Math.min(ws / targetSec, 1);
-        const completed = ws >= targetSec;
-        const remainSec = Math.max(0, targetSec - ws);
-        const remainH = Math.floor(remainSec / 3600);
-        const remainM = Math.round((remainSec % 3600) / 60);
-        const workedH = Math.floor(ws / 3600);
-        const workedM = Math.round((ws % 3600) / 60);
-
-        return (
-          <Card className={`overflow-hidden ${completed ? 'ring-2 ring-green-500/30' : ''}`}>
-            <CardHeader className="flex flex-row items-center justify-between pb-3">
-              <div className="flex items-center gap-2">
-                <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${completed ? 'bg-green-500/10' : 'bg-blue-500/10'}`}>
-                  {completed ? (
-                    <svg className="h-5 w-5 text-green-500" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  ) : (
-                    <TrendingUp className="h-5 w-5 text-blue-500" />
-                  )}
+        <div className="grid gap-4 grid-cols-1 lg:grid-cols-5">
+          {/* Chart — left column (3/5 width) */}
+          <Card className="lg:col-span-3">
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <div className="flex items-center gap-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
+                  <BarChart3 className="h-4 w-4 text-primary" />
                 </div>
                 <div>
-                  <CardTitle className="text-sm">Weekly Target</CardTitle>
-                  <CardDescription>{target}h required (Mon - Sun)</CardDescription>
+                  <h3 className="text-sm font-semibold">Team Activity</h3>
+                  <p className="text-[0.65rem] text-muted-foreground mt-0.5">Hours tracked and activity scores</p>
                 </div>
               </div>
-              {completed ? (
-                <Badge className="bg-green-500/10 text-green-500 border-green-500/20 gap-1 px-3 py-1">
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
-                  Goal Achieved
+              <ToggleGroup
+                value={[chartPeriod]}
+                onValueChange={(val) => {
+                  if (val.length > 0) setChartPeriod(val[0]);
+                }}
+                variant="outline"
+                size="sm"
+                className="bg-muted/50 rounded-lg p-0.5"
+              >
+                <ToggleGroupItem value="90d" className="text-[0.65rem] rounded-md px-2 data-[state=on]:bg-background data-[state=on]:shadow-sm">3 months</ToggleGroupItem>
+                <ToggleGroupItem value="30d" className="text-[0.65rem] rounded-md px-2 data-[state=on]:bg-background data-[state=on]:shadow-sm">30 days</ToggleGroupItem>
+                <ToggleGroupItem value="7d" className="text-[0.65rem] rounded-md px-2 data-[state=on]:bg-background data-[state=on]:shadow-sm">7 days</ToggleGroupItem>
+              </ToggleGroup>
+            </CardHeader>
+            <CardContent className="pb-3">
+              <ChartContainer config={adminChartConfig} className="aspect-auto h-[220px] w-full">
+                <AreaChart data={adminChartData} margin={{ top: 5, right: 5, left: -5, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="fillActivity" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--color-activity)" stopOpacity={0.5} />
+                      <stop offset="95%" stopColor="var(--color-activity)" stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" className="opacity-30" />
+                  <XAxis
+                    dataKey="day"
+                    tickLine={false}
+                    axisLine={false}
+                    tickMargin={8}
+                    fontSize={11}
+                  />
+                  <YAxis
+                    yAxisId="left"
+                    tickLine={false}
+                    axisLine={false}
+                    tickMargin={4}
+                    width={35}
+                    fontSize={10}
+                    tickFormatter={(v: number) => `${v}%`}
+                    domain={[0, 100]}
+                  />
+                  <YAxis
+                    yAxisId="right"
+                    orientation="right"
+                    tickLine={false}
+                    axisLine={false}
+                    tickMargin={4}
+                    width={30}
+                    fontSize={10}
+                    tickFormatter={(v: number) => `${v}h`}
+                  />
+                  <ChartTooltip content={<ChartTooltipContent />} />
+                  <Area
+                    yAxisId="left"
+                    dataKey="activity"
+                    type="monotone"
+                    fill="url(#fillActivity)"
+                    stroke="var(--color-activity)"
+                    strokeWidth={2.5}
+                  />
+                  <Area
+                    yAxisId="right"
+                    dataKey="hours"
+                    type="monotone"
+                    fill="none"
+                    stroke="var(--color-hours)"
+                    strokeWidth={2}
+                    dot={{ r: 3.5, fill: "var(--color-hours)", strokeWidth: 2, stroke: "var(--card)" }}
+                    activeDot={{ r: 5, strokeWidth: 2 }}
+                  />
+                  <ChartLegend content={<ChartLegendContent />} />
+                </AreaChart>
+              </ChartContainer>
+            </CardContent>
+          </Card>
+
+          {/* Team Activity — right column (2/5 width), compact list */}
+          <Card className="lg:col-span-2">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10">
+                    <Users className="h-4 w-4 text-blue-500" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold">Team Activity</h3>
+                    <p className="text-[0.65rem] text-muted-foreground mt-0.5">Real-time status</p>
+                  </div>
+                </div>
+                <Badge variant="outline" className="text-[0.65rem]">
+                  {team.filter(m => m.is_online).length}/{team.length} online
                 </Badge>
+              </div>
+              <ToggleGroup
+                value={[teamPeriod]}
+                onValueChange={(val) => {
+                  if (val.length > 0) setTeamPeriod(val[0]);
+                }}
+                variant="outline"
+                size="sm"
+                className="bg-muted/50 rounded-lg p-0.5"
+              >
+                <ToggleGroupItem value="90d" className="text-[0.65rem] rounded-md px-2 data-[state=on]:bg-background data-[state=on]:shadow-sm">3 months</ToggleGroupItem>
+                <ToggleGroupItem value="30d" className="text-[0.65rem] rounded-md px-2 data-[state=on]:bg-background data-[state=on]:shadow-sm">30 days</ToggleGroupItem>
+                <ToggleGroupItem value="7d" className="text-[0.65rem] rounded-md px-2 data-[state=on]:bg-background data-[state=on]:shadow-sm">7 days</ToggleGroupItem>
+              </ToggleGroup>
+            </CardHeader>
+            <CardContent className="px-0 pb-1">
+              {isLoading ? (
+                <div className="flex flex-col gap-1 px-4">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <div key={i} className="h-9 bg-muted rounded animate-pulse" />
+                  ))}
+                </div>
+              ) : team.length === 0 ? (
+                <div className="text-center py-8">
+                  <Users className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-muted-foreground text-sm font-medium">No team members yet</p>
+                </div>
               ) : (
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  {remainH}h {remainM}m remaining
-                </span>
+                <div className="overflow-y-auto max-h-[260px]">
+                  <Table>
+                    <TableHeader className="sticky top-0 bg-card z-10">
+                      <TableRow className="hover:bg-transparent border-b border-border/50">
+                        <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground h-7 px-4">Name</TableHead>
+                        <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground h-7 px-2">Status</TableHead>
+                        <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground h-7 px-2">Hours</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {team.map((member) => (
+                        <TableRow key={member.id} className="hover:bg-muted/30 border-b border-border/30">
+                          <TableCell className="py-2 px-4">
+                            <span className="text-[0.7rem] font-medium text-foreground truncate block max-w-[100px]">
+                              {member.name}
+                            </span>
+                          </TableCell>
+                          <TableCell className="py-2 px-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`h-1.5 w-1.5 rounded-full ${
+                                member.is_online
+                                  ? 'bg-emerald-500'
+                                  : 'bg-muted-foreground/40'
+                              }`} />
+                              <span className={`text-[0.65rem] font-medium ${
+                                member.is_online
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : 'text-muted-foreground'
+                              }`}>
+                                {member.is_online ? 'Online' : 'Offline'}
+                              </span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="py-2 px-2">
+                            <span className="text-[0.7rem] font-mono font-semibold text-foreground tabular-nums">
+                              {formatTimeShort(member.today_seconds)}
+                            </span>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Employee chart + weekly target side by side */}
+      {isEmployeeView && employeeChartData.length > 0 && (
+        <div className="grid gap-4 grid-cols-1 lg:grid-cols-5">
+          <Card className={`${isEmployeeView && (filterPreset === 'today' || filterPreset === 'week') && (data?.weeklyHoursTarget ?? 0) > 0 ? 'lg:col-span-3' : 'lg:col-span-5'}`}>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <div className="flex items-center gap-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10">
+                  <BarChart3 className="h-4 w-4 text-blue-500" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold">Your Hours This Week</h3>
+                  <p className="text-[0.65rem] text-muted-foreground mt-0.5">Daily hours tracked (Mon - Sun)</p>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="pb-3">
+              <ChartContainer config={employeeChartConfig} className="aspect-auto h-[220px] w-full">
+                <AreaChart data={employeeChartData} margin={{ top: 5, right: 5, left: -5, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="fillEmployeeHours" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--color-hours)" stopOpacity={0.5} />
+                      <stop offset="95%" stopColor="var(--color-hours)" stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" className="opacity-30" />
+                  <XAxis
+                    dataKey="day"
+                    tickLine={false}
+                    axisLine={false}
+                    tickMargin={8}
+                    fontSize={11}
+                  />
+                  <YAxis
+                    tickLine={false}
+                    axisLine={false}
+                    tickMargin={4}
+                    width={30}
+                    fontSize={10}
+                    tickFormatter={(v: number) => `${v}h`}
+                  />
+                  <ChartTooltip content={<ChartTooltipContent />} />
+                  {(data?.weeklyHoursTarget ?? 0) > 0 && (
+                    <ReferenceLine
+                      y={(data!.weeklyHoursTarget) / 5}
+                      stroke="hsl(var(--chart-4))"
+                      strokeDasharray="4 4"
+                      label={{ value: 'Daily target', position: 'right', fontSize: 11 }}
+                    />
+                  )}
+                  <Area
+                    dataKey="hours"
+                    type="monotone"
+                    fill="url(#fillEmployeeHours)"
+                    stroke="var(--color-hours)"
+                    strokeWidth={2.5}
+                    dot={{ r: 3.5, fill: "var(--color-hours)", strokeWidth: 2, stroke: "var(--card)" }}
+                    activeDot={{ r: 5, strokeWidth: 2 }}
+                  />
+                  <ChartLegend content={<ChartLegendContent />} />
+                </AreaChart>
+              </ChartContainer>
+            </CardContent>
+          </Card>
+
+          {/* Weekly Target — beside the chart */}
+          {isEmployeeView && (filterPreset === 'today' || filterPreset === 'week') && (data?.weeklyHoursTarget ?? 0) > 0 && (() => {
+            const target = data!.weeklyHoursTarget;
+            const targetSec = target * 3600;
+            const ws = data?.weekSeconds || 0;
+            const pct = Math.min(ws / targetSec, 1);
+            const completed = ws >= targetSec;
+            const remainSec = Math.max(0, targetSec - ws);
+            const remainH = Math.floor(remainSec / 3600);
+            const remainM = Math.round((remainSec % 3600) / 60);
+            const workedH = Math.floor(ws / 3600);
+            const workedM = Math.round((ws % 3600) / 60);
+
+            return (
+              <Card className={`lg:col-span-2 overflow-hidden ${completed ? 'ring-2 ring-green-500/30' : ''}`}>
+                <CardHeader className="flex flex-row items-center justify-between pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${completed ? 'bg-green-500/10' : 'bg-blue-500/10'}`}>
+                      {completed ? (
+                        <svg className="h-4 w-4 text-green-500" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                      ) : (
+                        <TrendingUp className="h-4 w-4 text-blue-500" />
+                      )}
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold">Weekly Target</h3>
+                      <p className="text-[0.65rem] text-muted-foreground">{target}h required</p>
+                    </div>
+                  </div>
+            </CardHeader>
+                <CardContent>
+                  <div className="flex flex-col items-center justify-center py-4">
+                    <div className="relative h-28 w-28">
+                      <svg className="h-28 w-28 -rotate-90" viewBox="0 0 100 100">
+                        <circle cx="50" cy="50" r="42" fill="none" stroke="currentColor" strokeWidth="8" className="text-muted" />
+                        <circle cx="50" cy="50" r="42" fill="none" strokeWidth="8" strokeLinecap="round"
+                          className={completed ? 'text-emerald-500' : pct >= 0.75 ? 'text-blue-500' : 'text-violet-500'}
+                          stroke="currentColor"
+                          strokeDasharray={`${Math.round(pct * 264)} 264`}
+                        />
+                      </svg>
+                      <div className="absolute inset-0 flex flex-col items-center justify-center">
+                        <span className="text-2xl font-bold tabular-nums">{Math.round(pct * 100)}%</span>
+                      </div>
+                    </div>
+                    <div className="mt-3 text-center">
+                      <p className="text-xs font-medium text-foreground tabular-nums">{workedH}h {workedM}m / {target}h</p>
+                      {completed ? (
+                        <Badge className="mt-1.5 bg-green-500/10 text-green-500 border-green-500/20 gap-1 text-[0.65rem]">
+                          Goal Achieved
+                        </Badge>
+                      ) : (
+                        <p className="text-[0.65rem] text-muted-foreground mt-1 tabular-nums">
+                          {remainH}h {remainM}m remaining
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Attendance Overview + Project Hours + Pending Approvals (admin only) */}
+      {!isEmployeeView && (
+        <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
+          {/* Attendance Overview — Tabular Listing */}
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/10">
+                    <CalendarCheck className="h-4 w-4 text-emerald-500" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold">Attendance Overview</h3>
+                    <p className="text-[0.65rem] text-muted-foreground mt-0.5">Employee check-in records</p>
+                  </div>
+                </div>
+                <Select value={attendanceFilter} onValueChange={(v) => { if (v) setAttendanceFilter(v); }}>
+                  <SelectTrigger className="h-7 w-[120px] text-[0.65rem] rounded-md">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="today" className="text-xs">Today</SelectItem>
+                    <SelectItem value="7d" className="text-xs">Last 7 days</SelectItem>
+                    <SelectItem value="month" className="text-xs">This month</SelectItem>
+                    <SelectItem value="30d" className="text-xs">Last 30 days</SelectItem>
+                    <SelectItem value="custom" className="text-xs">Custom</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {attendanceFilter === 'custom' && (
+                <div className="flex items-center gap-2 mt-2">
+                  <input
+                    type="date"
+                    value={attCustomFrom}
+                    onChange={(e) => {
+                      setAttCustomFrom(e.target.value);
+                      if (e.target.value > attCustomTo) setAttCustomTo(e.target.value);
+                    }}
+                    className="h-7 rounded-md border border-input bg-background px-2 text-[0.65rem] text-foreground"
+                  />
+                  <span className="text-[0.6rem] text-muted-foreground">to</span>
+                  <input
+                    type="date"
+                    value={attCustomTo}
+                    min={attCustomFrom}
+                    onChange={(e) => setAttCustomTo(e.target.value)}
+                    className="h-7 rounded-md border border-input bg-background px-2 text-[0.65rem] text-foreground"
+                  />
+                </div>
               )}
             </CardHeader>
-            <CardContent>
-              {/* Progress bar */}
-              <div className="relative h-3 rounded-full bg-muted overflow-hidden">
-                <div
-                  className={`absolute inset-y-0 left-0 rounded-full transition-all duration-700 ease-out ${
-                    completed
-                      ? 'bg-gradient-to-r from-green-500 to-emerald-400'
-                      : pct >= 0.75
-                      ? 'bg-gradient-to-r from-blue-500 to-cyan-400'
-                      : 'bg-gradient-to-r from-purple-500 to-blue-500'
-                  }`}
-                  style={{ width: `${Math.round(pct * 100)}%` }}
-                />
-              </div>
+            <CardContent className="px-0 pb-1">
+              {attendanceLoading ? (
+                <div className="flex flex-col gap-1 px-4">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="h-9 bg-muted rounded animate-pulse" />
+                  ))}
+                </div>
+              ) : !attendanceRecords || attendanceRecords.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8">
+                  <CalendarCheck className="h-8 w-8 text-muted-foreground/40 mb-2" />
+                  <p className="text-sm text-muted-foreground font-medium">No attendance data</p>
+                  <p className="text-xs text-muted-foreground/70 mt-0.5">Check-in records will appear here</p>
+                </div>
+              ) : (
+                <div className="overflow-y-auto max-h-[260px]">
+                  <Table>
+                    <TableHeader className="sticky top-0 bg-card z-10">
+                      <TableRow className="hover:bg-transparent border-b border-border/50">
+                        <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground h-7 px-4">Date</TableHead>
+                        <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground h-7 px-2">Employee</TableHead>
+                        <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground h-7 px-2">Status</TableHead>
+                        <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground h-7 px-2">Check In</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {attendanceRecords.map((record) => {
+                        const statusStyle = ATTENDANCE_STATUS_STYLES[record.status] ?? { label: record.status ?? 'Unknown', className: 'bg-muted text-muted-foreground border-border' };
+                        let checkInTime = '—';
+                        try {
+                          if (record.check_in_at) {
+                            const d = new Date(record.check_in_at);
+                            if (!isNaN(d.getTime())) checkInTime = format(d, 'hh:mm a');
+                          }
+                        } catch { /* invalid date */ }
+                        let dateStr = '—';
+                        try {
+                          if (record.date) {
+                            const d = new Date(record.date);
+                            if (!isNaN(d.getTime())) dateStr = format(d, 'MMM dd');
+                          }
+                        } catch { /* invalid date */ }
+                        return (
+                          <TableRow key={record.id} className="hover:bg-muted/30 border-b border-border/30">
+                            <TableCell className="text-[0.7rem] font-medium tabular-nums py-2 px-4">{dateStr}</TableCell>
+                            <TableCell className="py-2 px-2">
+                              <span className="text-[0.7rem] font-medium text-foreground truncate block max-w-[100px]">
+                                {record.user?.name ?? '—'}
+                              </span>
+                            </TableCell>
+                            <TableCell className="py-2 px-2">
+                              <div className="flex flex-wrap gap-0.5">
+                                <Badge variant="outline" className={`text-[0.55rem] px-1.5 py-0 h-4 font-medium ${statusStyle.className}`}>
+                                  {statusStyle.label}
+                                  {record.check_in_status === 'late' && record.status === 'present' && (
+                                    <span className="ml-0.5 text-amber-500">*</span>
+                                  )}
+                                </Badge>
+                                {record.is_early_checkout && (
+                                  <Badge variant="outline" className="text-[0.55rem] px-1.5 py-0 h-4 font-medium bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/20">
+                                    Early Checkout
+                                  </Badge>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-[0.7rem] font-mono tabular-nums py-2 px-2 text-muted-foreground">{checkInTime}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
-              <div className="flex items-center justify-between mt-2 text-xs text-muted-foreground tabular-nums">
-                <span>{workedH}h {workedM}m worked</span>
-                <span className="font-medium">{Math.round(pct * 100)}%</span>
+          {/* Approved Leave — Who's on leave today */}
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/10">
+                    <CalendarOff className="h-4 w-4 text-violet-500" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold">Approved Leave</h3>
+                    <p className="text-[0.65rem] text-muted-foreground mt-0.5">Employees on leave today</p>
+                  </div>
+                </div>
+                {(onLeaveData?.length ?? 0) > 0 && (
+                  <Badge className="bg-violet-500/15 text-violet-600 dark:text-violet-400 border-violet-500/20 hover:bg-violet-500/15 text-[0.65rem]">
+                    {onLeaveData!.length} on leave
+                  </Badge>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="px-0 pb-1">
+              {onLeaveLoading ? (
+                <div className="flex flex-col gap-1 px-4">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <div key={i} className="h-9 bg-muted rounded animate-pulse" />
+                  ))}
+                </div>
+              ) : !onLeaveData || onLeaveData.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8">
+                  <CalendarCheck className="h-8 w-8 text-emerald-500/40 mb-2" />
+                  <p className="text-sm text-emerald-600 dark:text-emerald-400 font-medium">All Present</p>
+                  <p className="text-xs text-muted-foreground/70 mt-0.5">No one is on leave today</p>
+                </div>
+              ) : (
+                <div className="overflow-y-auto max-h-[260px]">
+                  <Table>
+                    <TableHeader className="sticky top-0 bg-card z-10">
+                      <TableRow className="hover:bg-transparent border-b border-border/50">
+                        <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground h-7 px-4">Employee</TableHead>
+                        <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground h-7 px-2">Status</TableHead>
+                        <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground h-7 px-2">Date</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {onLeaveData.map((item) => (
+                        <TableRow key={item.id} className="hover:bg-muted/30 border-b border-border/30">
+                          <TableCell className="py-2 px-4">
+                            <span className="text-[0.7rem] font-medium text-foreground truncate block max-w-[100px]">
+                              {item.userName}
+                            </span>
+                          </TableCell>
+                          <TableCell className="py-2 px-2">
+                            <Badge variant="outline" className="text-[0.55rem] px-1.5 py-0 h-4 font-medium bg-violet-500/15 text-violet-600 dark:text-violet-400 border-violet-500/20">
+                              On Leave
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-[0.7rem] text-muted-foreground py-2 px-2">
+                            {item.dateLabel}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Pending Approvals */}
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10">
+                    <ClipboardList className="h-4 w-4 text-amber-500" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold">Pending Approvals</h3>
+                    <p className="text-[0.65rem] text-muted-foreground mt-0.5">{totalPendingCount > 0 ? `${totalPendingCount} items need attention` : 'All clear'}</p>
+                  </div>
+                </div>
+                {totalPendingCount > 0 && (
+                  <Badge className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/20 hover:bg-amber-500/15 text-[0.65rem]">
+                    {totalPendingCount} pending
+                  </Badge>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                <Link href="/time-entries/approvals" className="flex items-center justify-between rounded-lg px-3 py-2.5 hover:bg-muted/50 transition-colors group border border-border/50">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-500/10">
+                      <Clock className="h-4 w-4 text-blue-500" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold text-foreground">Time Entries</p>
+                      <p className="text-[0.65rem] text-muted-foreground">Manual time submissions</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-lg font-bold tabular-nums ${(pendingCounts?.timeEntries ?? 0) > 0 ? 'text-amber-500' : 'text-muted-foreground/40'}`}>
+                      {pendingCounts?.timeEntries ?? 0}
+                    </span>
+                    <ArrowRight className="h-3.5 w-3.5 text-muted-foreground/50 group-hover:text-foreground transition-colors" />
+                  </div>
+                </Link>
+                <Link href="/hr/leave/approvals" className="flex items-center justify-between rounded-lg px-3 py-2.5 hover:bg-muted/50 transition-colors group border border-border/50">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-500/10">
+                      <CalendarDays className="h-4 w-4 text-violet-500" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold text-foreground">Leave Requests</p>
+                      <p className="text-[0.65rem] text-muted-foreground">Employee leave applications</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-lg font-bold tabular-nums ${(pendingCounts?.leaveRequests ?? 0) > 0 ? 'text-amber-500' : 'text-muted-foreground/40'}`}>
+                      {pendingCounts?.leaveRequests ?? 0}
+                    </span>
+                    <ArrowRight className="h-3.5 w-3.5 text-muted-foreground/50 group-hover:text-foreground transition-colors" />
+                  </div>
+                </Link>
+                <Link href="/hr/attendance/regularizations" className="flex items-center justify-between rounded-lg px-3 py-2.5 hover:bg-muted/50 transition-colors group border border-border/50">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-cyan-500/10">
+                      <FileEdit className="h-4 w-4 text-cyan-500" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold text-foreground">Regularizations</p>
+                      <p className="text-[0.65rem] text-muted-foreground">Attendance corrections</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-lg font-bold tabular-nums ${(pendingCounts?.regularizations ?? 0) > 0 ? 'text-amber-500' : 'text-muted-foreground/40'}`}>
+                      {pendingCounts?.regularizations ?? 0}
+                    </span>
+                    <ArrowRight className="h-3.5 w-3.5 text-muted-foreground/50 group-hover:text-foreground transition-colors" />
+                  </div>
+                </Link>
               </div>
             </CardContent>
           </Card>
-        );
-      })()}
-
-      {/* Team activity table — only for admin/manager/owner */}
-      {!isEmployeeView && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Team Activity</CardTitle>
-            <CardDescription>
-              Real-time activity status of your team members
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="flex flex-col gap-3">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="h-12 bg-muted rounded animate-pulse" />
-                ))}
-              </div>
-            ) : team.length === 0 ? (
-              <div className="text-center py-12">
-                <Users className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-                <p className="text-muted-foreground font-medium">No team members yet</p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Invite your team to start tracking time together
-                </p>
-              </div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-border hover:bg-transparent">
-                    <TableHead className="text-muted-foreground">Member</TableHead>
-                    <TableHead className="text-muted-foreground">Status</TableHead>
-                    <TableHead className="text-muted-foreground">
-                      {filterPreset === 'today' && isSameDay(new Date(dateFrom + 'T00:00:00'), new Date())
-                        ? "Today's Hours"
-                        : 'Hours'}
-                    </TableHead>
-                    <TableHead className="text-muted-foreground">Activity</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {team.map((member) => {
-                    const initials = member.name
-                      .split(' ')
-                      .map((n) => n[0])
-                      .join('')
-                      .toUpperCase()
-                      .slice(0, 2);
-
-                    return (
-                      <TableRow key={member.id} className="border-border">
-                        <TableCell>
-                          <div className="flex items-center gap-3">
-                            <div className="relative">
-                              <Avatar className="h-8 w-8 border border-border">
-                                <AvatarImage
-                                  src={member.avatar_url || undefined}
-                                  alt={member.name}
-                                />
-                                <AvatarFallback className="bg-muted text-foreground text-xs">
-                                  {initials}
-                                </AvatarFallback>
-                              </Avatar>
-                              <span
-                                className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-background ${
-                                  member.is_online ? 'bg-green-500' : 'bg-muted-foreground'
-                                }`}
-                              />
-                            </div>
-                            <div>
-                              <p className="text-sm font-medium text-foreground">{member.name}</p>
-                              <p className="text-xs text-muted-foreground">{member.email}</p>
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="gap-1.5">
-                            <span
-                              className={`h-1.5 w-1.5 rounded-full ${
-                                member.is_online ? 'bg-green-500' : 'bg-muted-foreground'
-                              }`}
-                            />
-                            {member.is_online ? 'Online' : 'Offline'}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <span className="text-sm font-mono text-foreground tabular-nums">
-                            {formatDuration(member.today_seconds)}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-3">
-                            <div className="flex-1 h-2 bg-muted rounded-full max-w-[120px]">
-                              <div
-                                className={`h-full rounded-full transition-all ${
-                                  member.activity_score >= 70
-                                    ? 'bg-green-500'
-                                    : member.activity_score >= 40
-                                    ? 'bg-amber-500'
-                                    : 'bg-red-500'
-                                }`}
-                                style={{ width: `${Math.min(member.activity_score, 100)}%` }}
-                              />
-                            </div>
-                            <span className="text-xs text-muted-foreground w-8 text-right tabular-nums">
-                              {member.activity_score}%
-                            </span>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
+        </div>
       )}
 
       {/* Timesheet (both roles see their own entries) */}
       <Card>
-        <CardHeader>
-          <CardTitle>Timesheet</CardTitle>
-          <CardDescription>
-            Your time entries for {rangeLabel.toLowerCase()}
-          </CardDescription>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-500/10">
+                <Timer className="h-4 w-4 text-orange-500" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold">Timesheet</h3>
+                <p className="text-[0.65rem] text-muted-foreground mt-0.5">
+                  Your time entries for {rangeLabel.toLowerCase()}
+                </p>
+              </div>
+            </div>
+            {timeEntries.length > maxEntries && (
+              <Link
+                href={`/time?from=${dateFrom}&to=${dateTo}`}
+                className="inline-flex items-center gap-1 text-xs font-medium text-orange-600 hover:text-orange-500 dark:text-orange-400 dark:hover:text-orange-300 transition-colors"
+              >
+                View all ({timeEntries.length})
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+            )}
+          </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="pb-3">
           {timesheetLoading ? (
-            <div className="flex flex-col gap-3">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="h-12 bg-muted rounded animate-pulse" />
+            <div className="flex flex-col gap-2">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="h-9 bg-muted rounded animate-pulse" />
               ))}
             </div>
           ) : timeEntries.length === 0 ? (
-            <div className="text-center py-12">
-              <Clock className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-              <p className="text-muted-foreground font-medium">No time entries in this range</p>
-              <p className="text-sm text-muted-foreground mt-1">
+            <div className="text-center py-8">
+              <Clock className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+              <p className="text-muted-foreground text-sm font-medium">No time entries in this range</p>
+              <p className="text-xs text-muted-foreground mt-1">
                 Start the timer or log time on the Time page
               </p>
             </div>
           ) : (
-            <>
-              <Table>
-                <TableHeader>
+            <div className="overflow-y-auto max-h-[400px]">
+            <Table>
+                <TableHeader className="sticky top-0 bg-card z-10">
                   <TableRow className="border-border hover:bg-transparent">
-                    <TableHead className="text-muted-foreground">Date / Time</TableHead>
-                    <TableHead className="text-muted-foreground">Project</TableHead>
-                    <TableHead className="text-muted-foreground">Task</TableHead>
-                    <TableHead className="text-muted-foreground text-right">Duration</TableHead>
+                    <TableHead className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground py-2">Date / Time</TableHead>
+                    <TableHead className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground py-2">Project</TableHead>
+                    <TableHead className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground py-2">Task</TableHead>
+                    <TableHead className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground py-2 text-right">Duration</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {timeEntries.slice(0, maxEntries).map((entry) => (
-                    <TableRow key={entry.id} className="border-border">
-                      <TableCell className="text-foreground font-mono text-sm">
-                        {format(new Date(entry.started_at), 'MMM d, yyyy HH:mm')}
+                    <TableRow key={entry.id} className="border-border hover:bg-muted/50 transition-colors">
+                      <TableCell className="text-foreground font-mono text-xs py-2">
+                        {(() => {
+                          try {
+                            const d = new Date(entry.started_at);
+                            if (!isNaN(d.getTime())) return format(d, 'MMM d, yyyy HH:mm');
+                          } catch { /* invalid date */ }
+                          return '—';
+                        })()}
                       </TableCell>
-                      <TableCell>
-                        <span className="text-sm text-foreground">
+                      <TableCell className="py-2">
+                        <span className="text-xs text-foreground">
                           {entry.project?.name ?? '\u2014'}
                         </span>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="py-2">
                         {entry.task?.title ? (
-                          <span className="text-sm text-muted-foreground">{entry.task.title}</span>
+                          <span className="text-xs text-muted-foreground">{entry.task.title}</span>
                         ) : (
-                          <span className="text-muted-foreground text-xs">No task</span>
+                          <span className="text-muted-foreground text-[0.65rem]">No task</span>
                         )}
                       </TableCell>
-                      <TableCell className="text-right font-mono text-sm tabular-nums">
+                      <TableCell className="text-right font-mono text-xs tabular-nums py-2">
                         {entry.ended_at ? (
-                          <span className="text-foreground">{formatDuration(entry.duration_seconds)}</span>
+                          <span className="text-foreground font-semibold">{formatDuration(entry.duration_seconds)}</span>
                         ) : (
-                          <span className="text-green-400">{formatDuration(getDisplayDuration(entry))} ●</span>
+                          <span className="text-emerald-500 font-semibold">{formatDuration(getDisplayDuration(entry))} ●</span>
                         )}
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
-              {timeEntries.length > maxEntries && (
-                <div className="mt-4 pt-4 border-t border-border text-center">
-                  <Link
-                    href={`/time?from=${dateFrom}&to=${dateTo}`}
-                    className="inline-flex items-center gap-1.5 text-sm text-primary hover:text-primary/80 transition-colors"
-                  >
-                    View all {timeEntries.length} entries
-                    <ArrowRight className="h-4 w-4" />
-                  </Link>
-                </div>
-              )}
-            </>
+            </Table>
+            </div>
           )}
         </CardContent>
       </Card>

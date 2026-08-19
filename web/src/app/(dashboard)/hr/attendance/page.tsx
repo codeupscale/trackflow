@@ -4,20 +4,19 @@ import { useState, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
-  CheckCircle2,
-  XCircle,
-  Clock,
   CalendarDays,
-  Palmtree,
-  Timer,
+  CheckCircle2,
+  Clock,
   FileEdit,
   Loader2,
+  Palmtree,
+  Timer,
+  XCircle,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Separator } from '@/components/ui/separator';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -45,15 +44,12 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from '@/components/ui/pagination';
-
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 
-import { AttendanceStatusBadge } from '@/components/hr/AttendanceStatusBadge';
-import { AttendanceSummaryCard } from '@/components/hr/AttendanceSummaryCard';
 import { CheckInCard } from '@/components/hr/CheckInCard';
 import { CheckInStatusBadge, type CheckInBadgeStatus } from '@/components/hr/CheckInStatusBadge';
 import { useAttendance, useAttendanceSummary, useRequestRegularization } from '@/hooks/hr/use-attendance';
@@ -75,6 +71,15 @@ const MONTHS = [
 
 const STATUS_FILTERS = ['all', 'present', 'absent', 'on_leave'] as const;
 
+const statusDot: Record<string, { dot: string; text: string; label: string }> = {
+  present: { dot: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-400', label: 'Present' },
+  absent: { dot: 'bg-red-500', text: 'text-red-600 dark:text-red-400', label: 'Absent' },
+  half_day: { dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400', label: 'Half Day' },
+  on_leave: { dot: 'bg-blue-500', text: 'text-blue-600 dark:text-blue-400', label: 'On Leave' },
+  holiday: { dot: 'bg-violet-500', text: 'text-violet-600 dark:text-violet-400', label: 'Holiday' },
+  weekend: { dot: 'bg-muted-foreground/40', text: 'text-muted-foreground', label: 'Weekend' },
+};
+
 export default function MyAttendancePage() {
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
@@ -83,7 +88,6 @@ export default function MyAttendancePage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [regularizeTarget, setRegularizeTarget] = useState<AttendanceRecord | null>(null);
 
-  // Compute date range from selected month/year
   const dateFrom = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`;
   const lastDay = new Date(selectedYear, selectedMonth, 0).getDate();
   const dateTo = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
@@ -95,31 +99,18 @@ export default function MyAttendancePage() {
     page: currentPage,
   });
 
-  const { data: summary, isLoading: summaryLoading } = useAttendanceSummary(
-    selectedMonth,
-    selectedYear
-  );
-
+  const { data: summary, isLoading: summaryLoading } = useAttendanceSummary(selectedMonth, selectedYear);
   const regularizeMutation = useRequestRegularization();
   const { hasPermission } = usePermissionStore();
   const canCheckIn = hasPermission('attendance.check_in');
 
-  // Pull the org policy times (official start / checkout) so the late / early
-  // tooltips can name a concrete anchor ("after the 11:30 AM official start").
-  // The `today` endpoint requires `attendance.check_in`; gate the query on it and
-  // fall back to generic phrasing when the policy isn't available. Shares the query
-  // key with CheckInCard, so no extra request when both are on-screen.
   const { data: todayStatus } = useTodayStatus({ enabled: canCheckIn });
   const policyCheckInTime = todayStatus?.policy?.check_in_time;
   const policyCheckoutTime = todayStatus?.policy?.checkout_time;
 
   const records = attendanceData?.data ?? [];
   const totalPages = attendanceData?.last_page ?? 1;
-
-  // Hide the Shift column entirely when NOT a single row in this result set carries
-  // shift data — an all-"—" column is noise. Rendered with real names when any exists.
   const hasAnyShift = records.some((r) => Boolean(r.shift_name));
-  const gridCols = hasAnyShift ? 'lg:grid-cols-9' : 'lg:grid-cols-8';
 
   const {
     register,
@@ -143,14 +134,10 @@ export default function MyAttendancePage() {
 
   const handleRegularize = (data: RegularizationFormData) => {
     regularizeMutation.mutate(data, {
-      onSuccess: () => {
-        setRegularizeTarget(null);
-        reset();
-      },
+      onSuccess: () => { setRegularizeTarget(null); reset(); },
     });
   };
 
-  // Generate year options (current year and 2 previous)
   const yearOptions = useMemo(() => {
     const current = new Date().getFullYear();
     return [current, current - 1, current - 2];
@@ -158,7 +145,6 @@ export default function MyAttendancePage() {
 
   const canRegularize = (record: AttendanceRecord) => {
     return (
-      // Synthetic rows (days with no persisted record) have no regularizable id.
       !record.is_synthetic &&
       (record.status === 'absent' || record.status === 'half_day') &&
       !record.is_regularized &&
@@ -167,55 +153,42 @@ export default function MyAttendancePage() {
   };
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">My Attendance</h1>
-          <p className="text-sm text-muted-foreground mt-1">
+          <h1 className="text-lg font-semibold tracking-tight">My Attendance</h1>
+          <p className="text-xs text-muted-foreground">
             View your attendance records and request corrections
           </p>
         </div>
-
-        {/* Month/Year Picker */}
         <div className="flex items-center gap-2">
           <Select
             value={String(selectedMonth)}
-            onValueChange={(v) => {
-              setSelectedMonth(Number(v));
-              setCurrentPage(1);
-            }}
+            onValueChange={(v) => { setSelectedMonth(Number(v)); setCurrentPage(1); }}
           >
-            <SelectTrigger className="w-[140px]" aria-label="Select month">
+            <SelectTrigger className="w-[120px] h-8 text-xs" aria-label="Select month">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
                 {MONTHS.map((name, idx) => (
-                  <SelectItem key={idx} value={String(idx + 1)}>
-                    {name}
-                  </SelectItem>
+                  <SelectItem key={idx} value={String(idx + 1)}>{name}</SelectItem>
                 ))}
               </SelectGroup>
             </SelectContent>
           </Select>
-
           <Select
             value={String(selectedYear)}
-            onValueChange={(v) => {
-              setSelectedYear(Number(v));
-              setCurrentPage(1);
-            }}
+            onValueChange={(v) => { setSelectedYear(Number(v)); setCurrentPage(1); }}
           >
-            <SelectTrigger className="w-[100px]" aria-label="Select year">
+            <SelectTrigger className="w-[80px] h-8 text-xs" aria-label="Select year">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
                 {yearOptions.map((year) => (
-                  <SelectItem key={year} value={String(year)}>
-                    {year}
-                  </SelectItem>
+                  <SelectItem key={year} value={String(year)}>{year}</SelectItem>
                 ))}
               </SelectGroup>
             </SelectContent>
@@ -223,82 +196,57 @@ export default function MyAttendancePage() {
         </div>
       </div>
 
-      {/* Check-in / Checkout */}
-      {canCheckIn && (
-        <section aria-label="Check in and out">
-          <CheckInCard className="sm:max-w-2xl" />
-        </section>
-      )}
+      {/* Check-in Card */}
+      {canCheckIn && <CheckInCard className="sm:max-w-2xl" />}
 
-      {/* Summary Cards */}
-      <section aria-label="Attendance summary">
-        {summaryLoading ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <Card key={i}>
-                <CardContent className="p-4">
-                  <Skeleton className="h-16" />
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        ) : summary ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-            <AttendanceSummaryCard
-              label="Present Days"
-              value={summary.present_days}
-              subtext={`of ${summary.total_working_days} working days`}
-              icon={CheckCircle2}
-              variant="green"
-              tooltip="A working day with 4h+ of tracked time, or any physical check-in. Holiday, leave and weekend take priority."
-            />
-            <AttendanceSummaryCard
-              label="Absent Days"
-              value={summary.absent_days}
-              icon={XCircle}
-              variant="red"
-              tooltip="A working day with under 2h of tracked time and no check-in."
-            />
-            <AttendanceSummaryCard
-              label="Late Days"
-              value={summary.late_days}
-              icon={Clock}
-              variant="amber"
-              tooltip="Days your first check-in was after the org late threshold (default 11:45). Late minutes are counted from the official start (default 11:30)."
-            />
-            <AttendanceSummaryCard
-              label="On Leave"
-              value={summary.on_leave_days}
-              icon={Palmtree}
-              variant="blue"
-              tooltip="Days covered by an approved leave request."
-            />
-            <AttendanceSummaryCard
-              label="Overtime Hours"
-              value={Number(summary.overtime_hours).toFixed(1)}
-              icon={Timer}
-              variant="purple"
-              tooltip="Time worked past the org checkout time (default 20:30), totaled across the month."
-            />
-          </div>
-        ) : null}
-      </section>
+      {/* Stats Strip */}
+      {summaryLoading ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Card key={i}><CardContent className="p-3"><Skeleton className="h-10" /></CardContent></Card>
+          ))}
+        </div>
+      ) : summary ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          {[
+            { label: 'Present', value: summary.present_days, sub: `of ${summary.total_working_days}`, icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
+            { label: 'Absent', value: summary.absent_days, icon: XCircle, color: 'text-red-500', bg: 'bg-red-500/10' },
+            { label: 'Late Days', value: summary.late_days, icon: Clock, color: 'text-amber-500', bg: 'bg-amber-500/10' },
+            { label: 'On Leave', value: summary.on_leave_days, icon: Palmtree, color: 'text-blue-500', bg: 'bg-blue-500/10' },
+            { label: 'Overtime', value: `${Number(summary.overtime_hours).toFixed(1)}h`, icon: Timer, color: 'text-violet-500', bg: 'bg-violet-500/10' },
+          ].map((s) => (
+            <Card key={s.label} className="border-border">
+              <CardContent className="p-3">
+                <div className="flex items-center gap-2.5">
+                  <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${s.bg} shrink-0`}>
+                    <s.icon className={`h-4 w-4 ${s.color}`} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">{s.label}</p>
+                    <div className="flex items-baseline gap-1">
+                      <p className="text-base font-bold text-foreground tabular-nums leading-tight">{s.value}</p>
+                      {s.sub && <span className="text-[0.55rem] text-muted-foreground">/ {s.sub.replace('of ', '')}</span>}
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : null}
 
-      {/* Status Filter Tabs */}
+      {/* Filter Tabs */}
       <div className="flex items-center gap-1 rounded-lg bg-muted p-1 w-fit">
         {STATUS_FILTERS.map((status) => (
           <button
             key={status}
             type="button"
-            onClick={() => {
-              setStatusFilter(status);
-              setCurrentPage(1);
-            }}
+            onClick={() => { setStatusFilter(status); setCurrentPage(1); }}
             className={cn(
-              'rounded-md px-3 py-1.5 text-xs font-medium transition-colors capitalize',
+              'rounded-md px-3 py-1.5 text-[0.65rem] font-medium transition-colors capitalize',
               statusFilter === status
                 ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
+                : 'text-muted-foreground hover:text-foreground',
             )}
             aria-pressed={statusFilter === status}
           >
@@ -308,267 +256,244 @@ export default function MyAttendancePage() {
       </div>
 
       {/* Attendance Table */}
-      <section aria-label="Attendance records">
-        {isError ? (
-          <Card>
-            <CardContent className="py-8">
-              <p className="text-center text-muted-foreground">
-                Failed to load attendance records
-              </p>
-            </CardContent>
-          </Card>
-        ) : isLoading ? (
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex flex-col gap-2">
-                {Array.from({ length: 8 }).map((_, i) => (
-                  <Skeleton key={i} className="h-12" />
-                ))}
+      {isError ? (
+        <Card className="border-destructive/50">
+          <CardContent className="py-12">
+            <div className="flex flex-col items-center gap-2">
+              <CalendarDays className="h-8 w-8 text-destructive/60" />
+              <p className="text-sm text-muted-foreground font-medium">Failed to load attendance records</p>
+              <p className="text-xs text-muted-foreground">Please try again later.</p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : isLoading ? (
+        <Card>
+          <CardContent className="p-0">
+            <div className="flex flex-col">
+              <div className="flex items-center gap-4 px-4 py-2.5 border-b border-border/50">
+                {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-3 w-14" />)}
               </div>
-            </CardContent>
-          </Card>
-        ) : records.length === 0 ? (
-          <Card>
-            <CardContent className="py-12">
-              <div className="text-center">
-                <CalendarDays className="mx-auto mb-2 text-muted-foreground" />
-                <p className="text-muted-foreground font-medium">
-                  No attendance records found
-                </p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  {statusFilter !== 'all'
-                    ? 'No records match the selected filter.'
-                    : 'Attendance records will appear here once generated.'}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        ) : (
-          <Card>
-            <CardContent className="p-0">
-              {/* Header row */}
-              <div className={cn('hidden lg:grid gap-4 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b border-border', gridCols)}>
-                <span>Date</span>
-                <span>Day</span>
-                <span>Status</span>
-                {hasAnyShift && <span>Shift</span>}
-                <span>Clock In</span>
-                <span>Clock Out</span>
-                <span className="text-right">Hours</span>
-                <span className="text-right">Late</span>
-                <span className="text-right">Actions</span>
-              </div>
-
-              {records.map((record, idx) => (
-                <div key={record.id}>
-                  {idx > 0 && <Separator />}
-                  <div className={cn('grid grid-cols-2 gap-2 px-4 py-3 lg:gap-4 lg:items-center', gridCols)}>
-                    <div className="text-sm font-medium text-foreground">
-                      {formatDate(record.date)}
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      {record.day}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-1">
-                      <AttendanceStatusBadge status={record.status} />
-                      {/* All applicable check-in signals — late AND early-checkout
-                          coexist by design, so each renders its own badge (deterministic
-                          order: Late → Early Checkout → Missing Checkout). The check-ins
-                          list row carries late_minutes but not the early-checkout minute
-                          count, so early_checkout falls back to generic phrasing while
-                          late names the exact "Xh Ym". */}
-                      {deriveCheckInBadges(record).map((s) => (
-                        <CheckInStatusBadge
-                          key={s}
-                          status={s as CheckInBadgeStatus}
-                          tooltip={checkInBadgeTooltip(s, {
-                            lateMinutes: record.late_minutes,
-                            checkInTime: policyCheckInTime,
-                            checkoutTime: policyCheckoutTime,
-                          })}
-                        />
-                      ))}
-                    </div>
-                    {hasAnyShift && (
-                      <div className="text-sm text-muted-foreground">
-                        {record.shift_name || '—'}
-                      </div>
-                    )}
-                    <div className="text-sm text-foreground tabular-nums">
-                      {record.clock_in || '—'}
-                    </div>
-                    <div className="text-sm text-foreground tabular-nums">
-                      {record.clock_out || '—'}
-                    </div>
-                    <div className="text-sm text-foreground tabular-nums text-right">
-                      {(() => {
-                        // Prefer exact worked_seconds when present; fall back to the
-                        // rounded total_hours float (× 3600) for tracker-only rows.
-                        const secs =
-                          record.worked_seconds != null
-                            ? record.worked_seconds
-                            : Number(record.total_hours) * 3600;
-                        return secs > 0 ? formatDuration(secs) : '—';
-                      })()}
-                    </div>
-                    <div className="text-sm tabular-nums text-right">
-                      {record.late_minutes > 0 ? (
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={<span />}
-                            className="cursor-help text-amber-600 dark:text-amber-400"
-                            tabIndex={0}
-                          >
-                            {formatMinutes(record.late_minutes)}
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            {checkInBadgeTooltip('late', {
-                              lateMinutes: record.late_minutes,
-                              checkInTime: policyCheckInTime,
-                            })}
-                          </TooltipContent>
-                        </Tooltip>
-                      ) : (
-                        '—'
-                      )}
-                    </div>
-                    <div className="flex justify-end col-span-2 lg:col-span-1">
-                      {canRegularize(record) && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => openRegularizeDialog(record)}
-                          aria-label={`Request regularization for ${formatDate(record.date)}`}
-                        >
-                          <FileEdit data-icon="inline-start" />
-                          Regularize
-                        </Button>
-                      )}
-                      {record.regularization_status === 'pending' && (
-                        <span className="text-xs text-amber-600 dark:text-amber-400 self-center">
-                          Pending review
-                        </span>
-                      )}
-                      {record.regularization_status === 'approved' && (
-                        <span className="text-xs text-green-600 dark:text-green-400 self-center">
-                          Regularized
-                        </span>
-                      )}
-                      {record.regularization_status === 'rejected' && (
-                        <span className="text-xs text-red-600 dark:text-red-400 self-center">
-                          Rejected
-                        </span>
-                      )}
-                    </div>
-                  </div>
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-border/50 last:border-0">
+                  <Skeleton className="h-3.5 w-20" />
+                  <Skeleton className="h-3.5 w-10" />
+                  <Skeleton className="h-5 w-16" />
+                  <Skeleton className="h-3.5 w-14" />
+                  <Skeleton className="h-3.5 w-14" />
+                  <Skeleton className="h-3.5 w-12" />
                 </div>
               ))}
-            </CardContent>
+            </div>
+          </CardContent>
+        </Card>
+      ) : records.length === 0 ? (
+        <Card>
+          <CardContent className="py-12">
+            <div className="flex flex-col items-center text-center gap-2">
+              <CalendarDays className="h-8 w-8 text-muted-foreground/40" />
+              <p className="text-sm text-muted-foreground font-medium">No attendance records found</p>
+              <p className="text-xs text-muted-foreground">
+                {statusFilter !== 'all' ? 'No records match the selected filter.' : 'Attendance records will appear here once generated.'}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          <Card>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-border/50">
+                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Date</th>
+                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Day</th>
+                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Status</th>
+                      {hasAnyShift && <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Shift</th>}
+                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Clock In</th>
+                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Clock Out</th>
+                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Hours</th>
+                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Late</th>
+                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {records.map((record) => {
+                      const sd = statusDot[record.status] ?? statusDot.absent;
+                      const checkInBadges = deriveCheckInBadges(record);
+                      const secs =
+                        record.worked_seconds != null
+                          ? record.worked_seconds
+                          : Number(record.total_hours) * 3600;
 
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-center border-t border-border p-4">
-                <Pagination>
-                  <PaginationContent>
-                    <PaginationItem>
-                      <PaginationPrevious
-                        onClick={() =>
-                          setCurrentPage((p) => Math.max(1, p - 1))
-                        }
-                        aria-disabled={currentPage === 1}
-                        className={
-                          currentPage === 1
-                            ? 'pointer-events-none opacity-50'
-                            : 'cursor-pointer'
-                        }
-                      />
-                    </PaginationItem>
-                    {Array.from({ length: totalPages }, (_, i) => i + 1)
-                      .filter(
-                        (p) =>
-                          p === 1 ||
-                          p === totalPages ||
-                          Math.abs(p - currentPage) <= 1
-                      )
-                      .reduce((acc, p, idx, arr) => {
-                        if (idx > 0 && p - arr[idx - 1] > 1) acc.push(-1);
-                        acc.push(p);
-                        return acc;
-                      }, [] as number[])
-                      .map((p, idx) =>
-                        p === -1 ? (
-                          <PaginationItem key={`ellipsis-${idx}`}>
-                            <PaginationEllipsis />
-                          </PaginationItem>
-                        ) : (
-                          <PaginationItem key={p}>
-                            <PaginationLink
-                              isActive={p === currentPage}
-                              onClick={() => setCurrentPage(p)}
-                              className="cursor-pointer"
-                            >
-                              {p}
-                            </PaginationLink>
-                          </PaginationItem>
-                        )
-                      )}
-                    <PaginationItem>
-                      <PaginationNext
-                        onClick={() =>
-                          setCurrentPage((p) => Math.min(totalPages, p + 1))
-                        }
-                        aria-disabled={currentPage === totalPages}
-                        className={
-                          currentPage === totalPages
-                            ? 'pointer-events-none opacity-50'
-                            : 'cursor-pointer'
-                        }
-                      />
-                    </PaginationItem>
-                  </PaginationContent>
-                </Pagination>
+                      return (
+                        <tr key={record.id} className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors">
+                          <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] font-medium">{formatDate(record.date)}</td>
+                          <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] text-muted-foreground">{record.day}</td>
+                          <td className="px-4 py-2.5 whitespace-nowrap">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className={`inline-flex items-center gap-1.5 text-[0.7rem] font-medium ${sd.text}`}>
+                                <span className={`inline-block w-1.5 h-1.5 rounded-full ${sd.dot}`} />
+                                {sd.label}
+                              </span>
+                              {checkInBadges.map((s) => (
+                                <CheckInStatusBadge
+                                  key={s}
+                                  status={s as CheckInBadgeStatus}
+                                  tooltip={checkInBadgeTooltip(s, {
+                                    lateMinutes: record.late_minutes,
+                                    checkInTime: policyCheckInTime,
+                                    checkoutTime: policyCheckoutTime,
+                                  })}
+                                />
+                              ))}
+                            </div>
+                          </td>
+                          {hasAnyShift && (
+                            <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] text-muted-foreground">
+                              {record.shift_name || <span className="text-muted-foreground/40">&mdash;</span>}
+                            </td>
+                          )}
+                          <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] tabular-nums">
+                            {record.clock_in || <span className="text-muted-foreground/40">&mdash;</span>}
+                          </td>
+                          <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] tabular-nums">
+                            {record.clock_out || <span className="text-muted-foreground/40">&mdash;</span>}
+                          </td>
+                          <td className="px-4 py-2.5 whitespace-nowrap text-right text-[0.75rem] tabular-nums">
+                            {secs > 0 ? formatDuration(secs) : <span className="text-muted-foreground/40">&mdash;</span>}
+                          </td>
+                          <td className="px-4 py-2.5 whitespace-nowrap text-right">
+                            {record.late_minutes > 0 ? (
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={<span />}
+                                  className="cursor-help text-[0.75rem] tabular-nums text-amber-600 dark:text-amber-400 font-medium"
+                                  tabIndex={0}
+                                >
+                                  {formatMinutes(record.late_minutes)}
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {checkInBadgeTooltip('late', {
+                                    lateMinutes: record.late_minutes,
+                                    checkInTime: policyCheckInTime,
+                                  })}
+                                </TooltipContent>
+                              </Tooltip>
+                            ) : (
+                              <span className="text-[0.75rem] text-muted-foreground/40">&mdash;</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2.5 whitespace-nowrap text-right">
+                            {canRegularize(record) ? (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-2.5 text-[0.6rem]"
+                                onClick={() => openRegularizeDialog(record)}
+                                aria-label={`Request regularization for ${formatDate(record.date)}`}
+                              >
+                                <FileEdit className="h-3 w-3 mr-1" />
+                                Regularize
+                              </Button>
+                            ) : record.regularization_status === 'pending' ? (
+                              <span className="inline-flex items-center gap-1.5 text-[0.65rem] font-medium text-amber-600 dark:text-amber-400">
+                                <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
+                                Pending
+                              </span>
+                            ) : record.regularization_status === 'approved' ? (
+                              <span className="inline-flex items-center gap-1.5 text-[0.65rem] font-medium text-emerald-600 dark:text-emerald-400">
+                                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                Regularized
+                              </span>
+                            ) : record.regularization_status === 'rejected' ? (
+                              <span className="inline-flex items-center gap-1.5 text-[0.65rem] font-medium text-red-600 dark:text-red-400">
+                                <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500" />
+                                Rejected
+                              </span>
+                            ) : (
+                              <span className="text-[0.65rem] text-muted-foreground/40">&mdash;</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-            )}
+            </CardContent>
           </Card>
-        )}
-      </section>
+
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between mt-1">
+              <p className="text-[0.65rem] text-muted-foreground">Page {currentPage} of {totalPages}</p>
+              <Pagination>
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      aria-disabled={currentPage === 1}
+                      className={currentPage === 1 ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                    />
+                  </PaginationItem>
+                  {Array.from({ length: totalPages }, (_, i) => i + 1)
+                    .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                    .reduce((acc, p, idx, arr) => {
+                      if (idx > 0 && p - arr[idx - 1] > 1) acc.push(-1);
+                      acc.push(p);
+                      return acc;
+                    }, [] as number[])
+                    .map((p, idx) =>
+                      p === -1 ? (
+                        <PaginationItem key={`e-${idx}`}><PaginationEllipsis /></PaginationItem>
+                      ) : (
+                        <PaginationItem key={p}>
+                          <PaginationLink isActive={p === currentPage} onClick={() => setCurrentPage(p)} className="cursor-pointer">
+                            {p}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ),
+                    )}
+                  <PaginationItem>
+                    <PaginationNext
+                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                      aria-disabled={currentPage === totalPages}
+                      className={currentPage >= totalPages ? 'pointer-events-none opacity-50' : 'cursor-pointer'}
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            </div>
+          )}
+        </>
+      )}
 
       {/* Regularization Dialog */}
       <Dialog
         open={!!regularizeTarget}
-        onOpenChange={(open) => {
-          if (!open) {
-            setRegularizeTarget(null);
-            reset();
-          }
-        }}
+        onOpenChange={(open) => { if (!open) { setRegularizeTarget(null); reset(); } }}
       >
-        <DialogContent>
+        <DialogContent className="sm:max-w-md">
           <form onSubmit={handleSubmit(handleRegularize)}>
             <DialogHeader>
-              <DialogTitle>Request Regularization</DialogTitle>
-              <DialogDescription>
+              <DialogTitle className="text-base">Request Regularization</DialogTitle>
+              <DialogDescription className="text-xs">
                 Request a correction for your attendance on{' '}
-                {formatDate(regularizeTarget?.date)}.
-                Current status:{' '}
-                {regularizeTarget?.status
-                  ?.replace('_', ' ')
-                  .replace(/\b\w/g, (c) => c.toUpperCase())}
+                <span className="font-medium text-foreground">{formatDate(regularizeTarget?.date)}</span>.
+                Current status: {regularizeTarget?.status?.replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
               </DialogDescription>
             </DialogHeader>
 
             <input type="hidden" {...register('attendance_record_id')} />
 
-            <div className="flex flex-col gap-4 py-4">
-              <div>
-                <Label htmlFor="requested_status">Requested Status</Label>
+            <div className="flex flex-col gap-3 py-4">
+              <div className="grid gap-1.5">
+                <Label htmlFor="requested_status" className="text-xs">Requested Status</Label>
                 <Select
                   value={requestedStatus}
-                  onValueChange={(v) =>
-                    setValue('requested_status', v as 'present' | 'half_day')
-                  }
+                  onValueChange={(v) => setValue('requested_status', v as 'present' | 'half_day')}
                 >
-                  <SelectTrigger className="mt-1.5" aria-label="Requested status">
+                  <SelectTrigger className="h-8 text-sm" aria-label="Requested status">
                     <SelectValue placeholder="Select status" />
                   </SelectTrigger>
                   <SelectContent>
@@ -579,50 +504,31 @@ export default function MyAttendancePage() {
                   </SelectContent>
                 </Select>
                 {errors.requested_status && (
-                  <p className="mt-1 text-xs text-destructive">
-                    {errors.requested_status.message}
-                  </p>
+                  <p className="text-[0.65rem] text-destructive">{errors.requested_status.message}</p>
                 )}
               </div>
-
-              <div>
-                <Label htmlFor="reason">Reason</Label>
+              <div className="grid gap-1.5">
+                <Label htmlFor="reason" className="text-xs">Reason</Label>
                 <Textarea
                   id="reason"
+                  rows={3}
                   placeholder="Explain why your attendance should be corrected..."
-                  className="mt-1.5"
+                  className="text-sm resize-none"
                   {...register('reason')}
                   aria-invalid={!!errors.reason}
                 />
                 {errors.reason && (
-                  <p className="mt-1 text-xs text-destructive">
-                    {errors.reason.message}
-                  </p>
+                  <p className="text-[0.65rem] text-destructive">{errors.reason.message}</p>
                 )}
               </div>
             </div>
 
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setRegularizeTarget(null);
-                  reset();
-                }}
-              >
+            <DialogFooter className="gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => { setRegularizeTarget(null); reset(); }}>
                 Cancel
               </Button>
-              <Button
-                type="submit"
-                disabled={regularizeMutation.isPending}
-              >
-                {regularizeMutation.isPending && (
-                  <Loader2
-                    className="animate-spin"
-                    data-icon="inline-start"
-                  />
-                )}
+              <Button type="submit" size="sm" disabled={regularizeMutation.isPending}>
+                {regularizeMutation.isPending && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
                 Submit Request
               </Button>
             </DialogFooter>

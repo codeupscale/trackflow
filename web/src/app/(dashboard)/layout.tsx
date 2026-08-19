@@ -9,6 +9,7 @@ import {
   LogOut,
   Settings,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { TrackFlowLogo } from '@/components/ui/trackflow-logo';
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -89,6 +90,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const handleLogout = async () => {
     useTimerStore.getState().resetState();
     await logout();
+    toast.success('Logged out successfully');
     router.push('/login');
   };
 
@@ -115,37 +117,48 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     <SidebarProvider className="h-screen overflow-hidden">
       {/* Sidebar */}
       <Sidebar collapsible="icon">
-        <SidebarHeader className="h-14 border-b border-sidebar-border px-3 flex items-center">
+        <SidebarHeader className="h-14 border-b border-sidebar-border px-3 justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:items-center">
           <Link href="/dashboard" className="flex items-center">
             <TrackFlowLogo size={28} showText={true} className="group-data-[collapsible=icon]:[&>span]:hidden" />
           </Link>
         </SidebarHeader>
 
-        <SidebarContent>
-          {navigationConfig.map((group) => {
-            const visibleItems = group.items.filter((item) =>
-              item.requiredScope
-                ? hasPermissionWithScope(item.requiredPermission, item.requiredScope)
-                : hasPermission(item.requiredPermission)
-            );
+        <SidebarContent className="px-2 pt-2">
+          {(() => {
+            const visibleGroups = navigationConfig
+              .map((group) => ({
+                ...group,
+                visibleItems: group.items.filter((item) =>
+                  item.requiredScope
+                    ? hasPermissionWithScope(item.requiredPermission, item.requiredScope)
+                    : hasPermission(item.requiredPermission)
+                ),
+              }))
+              .filter((g) => g.visibleItems.length > 0);
 
-            if (visibleItems.length === 0) return null;
+            const allHrefs = visibleGroups.flatMap((g) => g.visibleItems.map((i) => i.href));
+            const activeHref = allHrefs
+              .filter((href) => pathname === href || pathname.startsWith(href + '/'))
+              .sort((a, b) => b.length - a.length)[0] ?? null;
 
-            return (
-              <SidebarGroup key={group.label}>
-                <SidebarGroupLabel className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{group.label}</SidebarGroupLabel>
+            return visibleGroups.map((group, idx) => (
+              <SidebarGroup key={group.label} className={`group-data-[collapsible=icon]:px-1 group-data-[collapsible=icon]:py-0.5 ${idx > 0 ? 'pt-0' : ''}`}>
+                {idx > 0 && (
+                  <div className="mx-2 mb-1 border-t border-sidebar-border/60 group-data-[collapsible=icon]:mx-0 group-data-[collapsible=icon]:my-1.5" />
+                )}
+                <SidebarGroupLabel className="text-[0.65rem] font-bold text-sidebar-foreground/50 uppercase tracking-[0.12em] mb-1">{group.label}</SidebarGroupLabel>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {visibleItems.map((item) => {
+                    {group.visibleItems.map((item) => {
                       const Icon = item.icon;
-                      const isActive =
-                        pathname === item.href || pathname.startsWith(item.href + '/');
+                      const isActive = item.href === activeHref;
                       return (
                         <SidebarMenuItem key={item.name}>
                           <SidebarMenuButton
                             isActive={isActive}
                             tooltip={item.name}
                             render={<Link href={item.href} />}
+                            className={isActive ? 'border-l-[3px] border-orange-500 rounded-l-none font-semibold' : ''}
                           >
                             <Icon className="h-4 w-4 shrink-0" />
                             <span>{item.name}</span>
@@ -156,23 +169,23 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>
-            );
-          })}
+            ));
+          })()}
         </SidebarContent>
 
-        <SidebarFooter className="border-t border-sidebar-border">
+        <SidebarFooter className="border-t border-sidebar-border p-3 group-data-[collapsible=icon]:p-2">
           <SidebarMenu>
             <SidebarMenuItem>
-              <div className="flex items-center gap-2 px-2 py-1.5 group-data-[collapsible=icon]:justify-center">
-                <Avatar className="h-7 w-7 border border-border">
+              <div className="flex items-center gap-2.5 px-1 py-1.5 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:py-1">
+                <Avatar className="h-8 w-8 ring-2 ring-orange-500/20">
                   <AvatarImage src={user?.avatar_url || undefined} alt={user?.name || 'User'} />
-                  <AvatarFallback className="bg-blue-600 text-white text-xs font-medium">
+                  <AvatarFallback className="bg-gradient-to-br from-orange-500 to-orange-600 text-white text-xs font-bold">
                     {userInitials}
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex flex-col group-data-[collapsible=icon]:hidden">
-                  <span className="text-sm font-medium text-sidebar-foreground leading-none">{user?.name}</span>
-                  <span className="text-xs text-muted-foreground mt-0.5">{user?.organization?.name || 'Organization'}</span>
+                  <span className="text-sm font-semibold text-sidebar-foreground leading-none">{user?.name}</span>
+                  <span className="text-[0.7rem] text-sidebar-foreground/50 mt-0.5">{user?.organization?.name || 'Organization'}</span>
                 </div>
               </div>
             </SidebarMenuItem>
@@ -185,11 +198,10 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       {/* Main Content */}
       <SidebarInset className="flex flex-col overflow-hidden">
         {/* Top Header */}
-        <header className="flex items-center justify-between h-14 px-4 md:px-6 border-b border-border bg-background shrink-0">
-          <div className="flex items-center gap-2 min-w-0">
+        <header className="flex items-center justify-between h-14 px-4 md:px-6 border-b border-border bg-card/80 backdrop-blur-sm shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
             <SidebarTrigger className="hover:bg-muted shrink-0" />
             <Separator orientation="vertical" className="h-5 hidden md:block shrink-0" />
-            {/* Page title — shown on md+ screens */}
             {currentPage && (
               <span className="hidden md:block text-sm font-semibold text-foreground truncate">
                 {currentPage.name}
@@ -226,26 +238,41 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                   <p className="text-xs text-muted-foreground mt-0.5 capitalize">{user?.role}</p>
                 </div>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" side="bottom" sideOffset={8} className="w-56">
-                <DropdownMenuLabel>
-                  <div className="flex flex-col gap-1">
-                    <span className="text-sm font-medium">{user?.name}</span>
-                    <span className="text-xs text-muted-foreground">{user?.email}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {user?.organization?.name}
-                    </span>
+              <DropdownMenuContent align="end" side="bottom" sideOffset={8} className="w-64 p-0 overflow-hidden">
+                <div className="bg-muted/40 px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <Avatar className="h-9 w-9 border border-border shadow-sm">
+                      <AvatarImage src={user?.avatar_url || undefined} alt={user?.name || 'User'} />
+                      <AvatarFallback className="bg-blue-600 text-white text-xs font-semibold">
+                        {userInitials}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[0.8rem] font-semibold text-foreground truncate">{user?.name}</p>
+                      <p className="text-[0.65rem] text-muted-foreground truncate">{user?.email}</p>
+                    </div>
                   </div>
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => router.push('/settings')}>
-                  <Settings className="h-4 w-4 mr-2" />
-                  Settings
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={handleLogout} variant="destructive">
-                  <LogOut className="h-4 w-4 mr-2" />
-                  Log out
-                </DropdownMenuItem>
+                  {user?.organization?.name && (
+                    <div className="mt-2 flex items-center gap-1.5 rounded-md bg-background/60 px-2 py-1">
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                      <span className="text-[0.65rem] text-muted-foreground truncate">{user.organization.name}</span>
+                      {user?.role && (
+                        <span className="ml-auto text-[0.6rem] text-muted-foreground/70 capitalize shrink-0">{user.role.replace('_', ' ')}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <DropdownMenuSeparator className="m-0" />
+                <div className="p-1">
+                  <DropdownMenuItem onClick={() => router.push('/settings')} className="text-[0.75rem] gap-2 rounded-md">
+                    <Settings className="h-3.5 w-3.5" />
+                    Settings
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleLogout} variant="destructive" className="text-[0.75rem] gap-2 rounded-md">
+                    <LogOut className="h-3.5 w-3.5" />
+                    Log out
+                  </DropdownMenuItem>
+                </div>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -255,7 +282,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         <OfflineBanner />
 
         {/* Page Content */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-6">
+        <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-background">
           <ErrorBoundary>
             {children}
           </ErrorBoundary>

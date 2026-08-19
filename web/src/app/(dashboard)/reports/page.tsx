@@ -21,13 +21,7 @@ import { toast } from "sonner";
 
 import { ReportsSectionNav } from "@/components/reports/ReportsSectionNav";
 import { Button } from "@/components/ui/button";
-import {
-    Card,
-    CardContent,
-    CardDescription,
-    CardHeader,
-    CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
     ChartContainer,
     ChartTooltip,
@@ -44,14 +38,6 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table";
 import api from "@/lib/api";
 import { readBlobError, triggerDownload } from "@/lib/download";
 import { cn, formatDuration } from "@/lib/utils";
@@ -200,7 +186,10 @@ function transformReportResponse(
         case "summary": {
             const daily = (raw.daily || []) as Record<string, unknown>[];
             return {
-                // "Time Utilized" = tracked working time (idle shown separately).
+                // "Time Utilized" = worked time — every approved entry that is not idle,
+                // so approved MANUAL entries count. `tracked_seconds` is tracker-only and
+                // dropped them, which is why an approved manual entry showed in the entry
+                // count but never in the hours. Idle stays broken out in its own column.
                 columns: [
                     "date",
                     "tracked_seconds",
@@ -211,7 +200,7 @@ function transformReportResponse(
                 rows: daily.map((d) => ({
                     date: String(d.date ?? ""),
                     tracked_seconds: Number(
-                        d.tracked_seconds ?? d.total_seconds ?? 0,
+                        d.worked_seconds ?? d.tracked_seconds ?? d.total_seconds ?? 0,
                     ),
                     idle_seconds: Number(d.idle_seconds ?? 0),
                     activity_score_avg: Number(d.activity_score_avg ?? 0),
@@ -220,7 +209,10 @@ function transformReportResponse(
                 summary: {
                     total_hours:
                         Number(
-                            raw.total_seconds_tracked ?? raw.total_seconds ?? 0,
+                            raw.total_seconds_worked ??
+                                raw.total_seconds_tracked ??
+                                raw.total_seconds ??
+                                0,
                         ) / 3600,
                     average_activity: Math.round(Number(raw.avg_activity ?? 0)),
                     total_amount: Number(raw.total_earnings ?? 0),
@@ -704,18 +696,18 @@ export default function ReportsPage() {
             <ReportsSectionNav />
 
             {/* ── Section 1: Page Header ── */}
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                    <h1 className="text-2xl font-bold text-foreground">
+                    <h1 className="text-lg font-semibold tracking-tight text-foreground">
                         Reports &amp; Analytics
                     </h1>
-                    <p className="text-muted-foreground text-sm mt-1">
+                    <p className="text-xs text-muted-foreground">
                         Detailed performance and productivity metrics for your
                         team.
                     </p>
                 </div>
-                <div className="flex flex-col items-end gap-3">
-                    <div className="flex items-center gap-1 rounded-lg border border-border p-1">
+                <div className="flex flex-col items-end gap-2">
+                    <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
                         {(
                             [
                                 { value: "today", label: "Today" },
@@ -728,7 +720,7 @@ export default function ReportsPage() {
                                 key={item.value}
                                 onClick={() => handlePreset(item.value)}
                                 className={cn(
-                                    "px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
+                                    "px-2.5 py-1 rounded-md text-xs font-medium transition-colors",
                                     preset === item.value
                                         ? "bg-primary text-primary-foreground"
                                         : "text-muted-foreground hover:text-foreground hover:bg-muted",
@@ -741,7 +733,7 @@ export default function ReportsPage() {
                     </div>
                     <Button
                         variant="outline"
-                        size="sm"
+                        className="h-8 text-xs"
                         onClick={handleExportCSV}
                         disabled={isExporting !== null}
                         aria-label="Export report as CSV"
@@ -767,7 +759,7 @@ export default function ReportsPage() {
                         onChange={setDateFrom}
                         placeholder="Start date"
                     />
-                    <span className="text-muted-foreground text-sm">to</span>
+                    <span className="text-muted-foreground text-xs">to</span>
                     <DatePicker
                         value={dateTo}
                         onChange={setDateTo}
@@ -778,45 +770,45 @@ export default function ReportsPage() {
 
             {/* ── Section 2: KPI Cards ── */}
             {analyticsLoading ? (
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     {Array.from({ length: 4 }).map((_, i) => (
                         <Card key={i}>
-                            <CardContent className="pt-6">
-                                <div className="flex items-center justify-between mb-4">
-                                    <Skeleton className="size-10 rounded-lg" />
-                                    <Skeleton className="h-5 w-16 rounded-full" />
+                            <CardContent className="p-3">
+                                <div className="flex items-center justify-between mb-3">
+                                    <Skeleton className="h-8 w-8 rounded-lg" />
+                                    <Skeleton className="h-4 w-14 rounded-full" />
                                 </div>
-                                <Skeleton className="h-3 w-32 mb-2" />
-                                <Skeleton className="h-8 w-24" />
+                                <Skeleton className="h-2.5 w-24 mb-1.5" />
+                                <Skeleton className="h-5 w-16" />
                             </CardContent>
                         </Card>
                     ))}
                 </div>
             ) : analyticsError ? (
                 <Card>
-                    <CardContent className="py-12 text-center">
-                        <BarChart3 className="size-10 text-destructive/60 mx-auto mb-3" />
-                        <p className="text-muted-foreground font-medium">
+                    <CardContent className="py-10 text-center">
+                        <BarChart3 className="size-8 text-destructive/60 mx-auto mb-2" />
+                        <p className="text-[0.75rem] font-medium text-muted-foreground">
                             Failed to load analytics
                         </p>
-                        <p className="text-sm text-muted-foreground mt-1">
+                        <p className="text-[0.65rem] text-muted-foreground mt-0.5">
                             Please check your connection and try again.
                         </p>
                     </CardContent>
                 </Card>
             ) : analytics ? (
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     {/* Card 1: Total Tracked Hours */}
                     <Card>
-                        <CardContent className="pt-6">
-                            <div className="flex items-center justify-between mb-4">
-                                <div className="flex items-center justify-center size-10 rounded-lg bg-blue-500/10">
-                                    <Clock className="size-5 text-blue-500" />
+                        <CardContent className="p-3">
+                            <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-blue-500/10">
+                                    <Clock className="size-4 text-blue-500" />
                                 </div>
                                 {analytics.hours_change_percent !== null ? (
                                     <span
                                         className={cn(
-                                            "inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-xs font-semibold",
+                                            "inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[0.65rem] font-semibold",
                                             analytics.hours_change_percent >= 0
                                                 ? "bg-green-500/10 text-green-500"
                                                 : "bg-red-500/10 text-red-500",
@@ -833,20 +825,20 @@ export default function ReportsPage() {
                                         %
                                     </span>
                                 ) : (
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-muted text-muted-foreground">
-                                        No prior data
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[0.6rem] font-medium bg-muted text-muted-foreground">
+                                        No prior
                                     </span>
                                 )}
                             </div>
-                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+                            <p className="text-[0.65rem] font-medium uppercase tracking-wider text-muted-foreground mb-0.5">
                                 Total Tracked Hours
                             </p>
-                            <p className="text-3xl font-bold text-foreground">
+                            <p className="text-base font-bold tabular-nums leading-tight text-foreground">
                                 {analytics.total_hours.toLocaleString(
                                     undefined,
                                     { maximumFractionDigits: 1 },
                                 )}
-                                <span className="text-base font-normal text-muted-foreground ml-1">
+                                <span className="text-xs font-normal text-muted-foreground ml-0.5">
                                     h
                                 </span>
                             </p>
@@ -855,22 +847,22 @@ export default function ReportsPage() {
 
                     {/* Card 2: Average Activity % */}
                     <Card>
-                        <CardContent className="pt-6">
-                            <div className="flex items-center justify-between mb-4">
-                                <div className="flex items-center justify-center size-10 rounded-lg bg-teal-500/10">
-                                    <Activity className="size-5 text-teal-500" />
+                        <CardContent className="p-3">
+                            <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-teal-500/10">
+                                    <Activity className="size-4 text-teal-500" />
                                 </div>
-                                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-green-500">
+                                <span className="inline-flex items-center gap-1 text-[0.6rem] font-semibold text-green-500">
                                     <span className="size-1.5 rounded-full bg-green-500 animate-pulse" />
                                     LIVE
                                 </span>
                             </div>
-                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                                Average Activity %
+                            <p className="text-[0.65rem] font-medium uppercase tracking-wider text-muted-foreground mb-0.5">
+                                Average Activity
                             </p>
-                            <p className="text-3xl font-bold text-foreground">
+                            <p className="text-base font-bold tabular-nums leading-tight text-foreground">
                                 {analytics.average_activity.toFixed(1)}
-                                <span className="text-base font-normal text-muted-foreground ml-1">
+                                <span className="text-xs font-normal text-muted-foreground ml-0.5">
                                     %
                                 </span>
                             </p>
@@ -879,15 +871,15 @@ export default function ReportsPage() {
 
                     {/* Card 3: Total Budget Used */}
                     <Card>
-                        <CardContent className="pt-6">
-                            <div className="flex items-center justify-between mb-4">
-                                <div className="flex items-center justify-center size-10 rounded-lg bg-emerald-500/10">
-                                    <DollarSign className="size-5 text-emerald-500" />
+                        <CardContent className="p-3">
+                            <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-emerald-500/10">
+                                    <DollarSign className="size-4 text-emerald-500" />
                                 </div>
                                 {analytics.budget_change_percent !== null ? (
                                     <span
                                         className={cn(
-                                            "inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-xs font-semibold",
+                                            "inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[0.65rem] font-semibold",
                                             analytics.budget_change_percent >= 0
                                                 ? "bg-green-500/10 text-green-500"
                                                 : "bg-red-500/10 text-red-500",
@@ -905,21 +897,21 @@ export default function ReportsPage() {
                                         %
                                     </span>
                                 ) : (
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-muted text-muted-foreground">
-                                        No prior data
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[0.6rem] font-medium bg-muted text-muted-foreground">
+                                        No prior
                                     </span>
                                 )}
                             </div>
-                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                                Total Budget Used
+                            <p className="text-[0.65rem] font-medium uppercase tracking-wider text-muted-foreground mb-0.5">
+                                Budget Used
                             </p>
-                            <p className="text-3xl font-bold text-foreground">
+                            <p className="text-base font-bold tabular-nums leading-tight text-foreground">
                                 $
                                 {analytics.total_budget_used.toLocaleString(
                                     undefined,
                                     { maximumFractionDigits: 0 },
                                 )}
-                                <span className="text-base font-normal text-muted-foreground ml-1">
+                                <span className="text-xs font-normal text-muted-foreground ml-0.5">
                                     USD
                                 </span>
                             </p>
@@ -928,22 +920,22 @@ export default function ReportsPage() {
 
                     {/* Card 4: Billable Ratio */}
                     <Card>
-                        <CardContent className="pt-6">
-                            <div className="flex items-center justify-between mb-4">
-                                <div className="flex items-center justify-center size-10 rounded-lg bg-slate-500/10">
-                                    <PieChart className="size-5 text-slate-400" />
+                        <CardContent className="p-3">
+                            <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-slate-500/10">
+                                    <PieChart className="size-4 text-slate-400" />
                                 </div>
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-muted text-muted-foreground">
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[0.6rem] font-medium bg-muted text-muted-foreground">
                                     Target 90%
                                 </span>
                             </div>
-                            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+                            <p className="text-[0.65rem] font-medium uppercase tracking-wider text-muted-foreground mb-0.5">
                                 Billable Ratio
                             </p>
-                            <p className="text-3xl font-bold text-foreground">
+                            <p className="text-base font-bold tabular-nums leading-tight text-foreground">
                                 {Math.round(analytics.billable_ratio)}:
                                 {Math.round(analytics.non_billable_ratio)}
-                                <span className="text-base font-normal text-muted-foreground ml-1">
+                                <span className="text-xs font-normal text-muted-foreground ml-0.5">
                                     ratio
                                 </span>
                             </p>
@@ -953,15 +945,15 @@ export default function ReportsPage() {
             ) : null}
 
             {/* ── Section 3: Charts ── */}
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-3 lg:grid-cols-2">
                 {/* Left: Time per Project */}
                 <Card>
-                    <CardHeader>
-                        <CardTitle>Time per Project</CardTitle>
-                        <CardDescription>
+                    <div className="px-4 pt-3 pb-1">
+                        <h3 className="text-sm font-semibold">Time per Project</h3>
+                        <p className="text-[0.65rem] text-muted-foreground">
                             Distribution across top active projects
-                        </CardDescription>
-                    </CardHeader>
+                        </p>
+                    </div>
                     <CardContent>
                         {analyticsLoading ? (
                             <div className="flex flex-col gap-3">
@@ -974,13 +966,13 @@ export default function ReportsPage() {
                             </div>
                         ) : analyticsError ? (
                             <div className="flex items-center justify-center h-[280px]">
-                                <p className="text-sm text-muted-foreground">
+                                <p className="text-[0.75rem] text-muted-foreground">
                                     Failed to load chart data
                                 </p>
                             </div>
                         ) : !timePerProject.length ? (
                             <div className="flex items-center justify-center h-[280px]">
-                                <p className="text-sm text-muted-foreground">
+                                <p className="text-[0.75rem] text-muted-foreground">
                                     No project data available
                                 </p>
                             </div>
@@ -1044,12 +1036,12 @@ export default function ReportsPage() {
 
                 {/* Right: Team Activity Levels */}
                 <Card>
-                    <CardHeader>
-                        <CardTitle>Team Activity Levels</CardTitle>
-                        <CardDescription>
+                    <div className="px-4 pt-3 pb-1">
+                        <h3 className="text-sm font-semibold">Team Activity Levels</h3>
+                        <p className="text-[0.65rem] text-muted-foreground">
                             Daily average engagement percentages
-                        </CardDescription>
-                    </CardHeader>
+                        </p>
+                    </div>
                     <CardContent>
                         {analyticsLoading ? (
                             <div className="flex items-end gap-2 h-[280px] pb-8">
@@ -1063,13 +1055,13 @@ export default function ReportsPage() {
                             </div>
                         ) : analyticsError ? (
                             <div className="flex items-center justify-center h-[280px]">
-                                <p className="text-sm text-muted-foreground">
+                                <p className="text-[0.75rem] text-muted-foreground">
                                     Failed to load chart data
                                 </p>
                             </div>
                         ) : !teamActivityLevels.length ? (
                             <div className="flex items-center justify-center h-[280px]">
-                                <p className="text-sm text-muted-foreground">
+                                <p className="text-[0.75rem] text-muted-foreground">
                                     No activity data available
                                 </p>
                             </div>
@@ -1134,12 +1126,12 @@ export default function ReportsPage() {
 
             {/* ── Section 4: Detailed Time Logs Table ── */}
             <Card>
-                <CardHeader>
-                    <CardTitle>Detailed Time Logs</CardTitle>
-                    <CardDescription>
+                <div className="px-4 pt-3 pb-1">
+                    <h3 className="text-sm font-semibold">Detailed Time Logs</h3>
+                    <p className="text-[0.65rem] text-muted-foreground">
                         Individual time entries for the selected period
-                    </CardDescription>
-                </CardHeader>
+                    </p>
+                </div>
                 <CardContent className="p-0">
                     {logsLoading ? (
                         <div className="flex flex-col gap-3 p-6">
@@ -1151,83 +1143,83 @@ export default function ReportsPage() {
                             ))}
                         </div>
                     ) : logsError ? (
-                        <div className="text-center py-12">
-                            <BarChart3 className="size-10 text-destructive/60 mx-auto mb-3" />
-                            <p className="text-muted-foreground font-medium">
+                        <div className="text-center py-10">
+                            <BarChart3 className="size-8 text-destructive/60 mx-auto mb-2" />
+                            <p className="text-[0.75rem] font-medium text-muted-foreground">
                                 Failed to load time logs
                             </p>
-                            <p className="text-sm text-muted-foreground mt-1">
+                            <p className="text-[0.65rem] text-muted-foreground mt-0.5">
                                 Please try again.
                             </p>
                         </div>
                     ) : !logs.length ? (
-                        <div className="text-center py-12">
-                            <BarChart3 className="size-10 text-muted-foreground mx-auto mb-3" />
-                            <p className="text-muted-foreground font-medium">
+                        <div className="text-center py-10">
+                            <BarChart3 className="size-8 text-muted-foreground mx-auto mb-2" />
+                            <p className="text-[0.75rem] font-medium text-muted-foreground">
                                 No time logs found
                             </p>
-                            <p className="text-sm text-muted-foreground mt-1">
+                            <p className="text-[0.65rem] text-muted-foreground mt-0.5">
                                 Try adjusting your date range
                             </p>
                         </div>
                     ) : (
                         <>
                             <div className="overflow-x-auto">
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow className="border-border hover:bg-transparent">
-                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                                <table className="w-full">
+                                    <thead>
+                                        <tr className="border-b border-border">
+                                            <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">
                                                 Member Name
-                                            </TableHead>
-                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                                            </th>
+                                            <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">
                                                 Project
-                                            </TableHead>
-                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                                            </th>
+                                            <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">
                                                 Task
-                                            </TableHead>
-                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                                            </th>
+                                            <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">
                                                 Duration
-                                            </TableHead>
-                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                                            </th>
+                                            <th className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">
                                                 Activity %
-                                            </TableHead>
-                                            <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">
+                                            </th>
+                                            <th className="text-right text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5">
                                                 Billable Amount
-                                            </TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
                                         {logs.map((row, idx) => (
-                                            <TableRow
+                                            <tr
                                                 key={idx}
-                                                className="border-border hover:bg-muted/50 transition-colors"
+                                                className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors"
                                             >
                                                 {/* Member Name */}
-                                                <TableCell>
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="size-9 rounded-full bg-muted flex items-center justify-center text-sm font-semibold text-foreground shrink-0">
+                                                <td className="px-4 py-2.5">
+                                                    <div className="flex items-center gap-2.5">
+                                                        <div className="size-7 rounded-full bg-muted flex items-center justify-center text-[0.65rem] font-semibold text-foreground shrink-0">
                                                             {initials(
                                                                 row.member_name,
                                                             )}
                                                         </div>
                                                         <div>
-                                                            <p className="font-medium text-foreground">
+                                                            <p className="text-[0.75rem] font-medium text-foreground leading-tight">
                                                                 {
                                                                     row.member_name
                                                                 }
                                                             </p>
-                                                            <p className="text-xs text-muted-foreground capitalize">
+                                                            <p className="text-[0.65rem] text-muted-foreground capitalize">
                                                                 {
                                                                     row.member_role
                                                                 }
                                                             </p>
                                                         </div>
                                                     </div>
-                                                </TableCell>
+                                                </td>
                                                 {/* Project */}
-                                                <TableCell>
+                                                <td className="px-4 py-2.5">
                                                     <span
-                                                        className="inline-flex items-center px-2 py-1 rounded text-xs font-medium"
+                                                        className="inline-flex items-center px-1.5 py-0.5 rounded text-[0.7rem] font-medium"
                                                         style={{
                                                             backgroundColor:
                                                                 row.project_color +
@@ -1237,9 +1229,9 @@ export default function ReportsPage() {
                                                     >
                                                         {row.project_name}
                                                     </span>
-                                                </TableCell>
+                                                </td>
                                                 {/* Task */}
-                                                <TableCell className="text-sm text-foreground max-w-[200px]">
+                                                <td className="px-4 py-2.5 text-[0.75rem] text-foreground max-w-[200px]">
                                                     <span
                                                         className="truncate block"
                                                         title={row.task_name}
@@ -1254,20 +1246,20 @@ export default function ReportsPage() {
                                                             : row.task_name ||
                                                               "--"}
                                                     </span>
-                                                </TableCell>
+                                                </td>
                                                 {/* Duration */}
-                                                <TableCell className="text-sm font-mono text-foreground">
+                                                <td className="px-4 py-2.5 text-[0.75rem] font-mono text-foreground">
                                                     {formatHHMMSS(
                                                         row.duration_seconds,
                                                     )}
-                                                </TableCell>
+                                                </td>
                                                 {/* Activity % */}
-                                                <TableCell>
+                                                <td className="px-4 py-2.5">
                                                     <div className="flex items-center gap-2 min-w-[80px]">
-                                                        <div className="flex-1 bg-muted rounded-full h-1.5">
+                                                        <div className="flex-1 bg-muted rounded-full h-1">
                                                             <div
                                                                 className={cn(
-                                                                    "h-1.5 rounded-full",
+                                                                    "h-1 rounded-full",
                                                                     activityBarColor(
                                                                         row.activity_percent,
                                                                     ),
@@ -1277,39 +1269,39 @@ export default function ReportsPage() {
                                                                 }}
                                                             />
                                                         </div>
-                                                        <span className="text-sm text-foreground w-9 text-right">
+                                                        <span className="text-[0.7rem] text-foreground w-8 text-right tabular-nums">
                                                             {
                                                                 row.activity_percent
                                                             }
                                                             %
                                                         </span>
                                                     </div>
-                                                </TableCell>
+                                                </td>
                                                 {/* Billable Amount */}
-                                                <TableCell className="text-sm text-foreground text-right font-medium">
+                                                <td className="px-4 py-2.5 text-[0.75rem] text-foreground text-right font-medium tabular-nums">
                                                     $
                                                     {row.billable_amount.toFixed(
                                                         2,
                                                     )}
-                                                </TableCell>
-                                            </TableRow>
+                                                </td>
+                                            </tr>
                                         ))}
-                                    </TableBody>
-                                </Table>
+                                    </tbody>
+                                </table>
                             </div>
                             {/* Pagination */}
-                            <div className="flex items-center justify-between px-4 py-3 border-t border-border">
-                                <span className="text-sm text-muted-foreground">
+                            <div className="flex items-center justify-between px-4 py-2.5 border-t border-border/50">
+                                <span className="text-[0.7rem] text-muted-foreground">
                                     Showing {(logsPage - 1) * 10 + 1}&ndash;
                                     {Math.min(
                                         logsPage * 10,
                                         logsMeta.total,
                                     )} of {logsMeta.total} logs
                                 </span>
-                                <div className="flex gap-2">
+                                <div className="flex gap-1.5">
                                     <Button
                                         variant="ghost"
-                                        size="sm"
+                                        className="h-7 text-xs px-2"
                                         disabled={logsPage === 1}
                                         onClick={() =>
                                             setLogsPage((p) => p - 1)
@@ -1320,7 +1312,7 @@ export default function ReportsPage() {
                                     </Button>
                                     <Button
                                         variant="ghost"
-                                        size="sm"
+                                        className="h-7 text-xs px-2"
                                         disabled={
                                             logsPage >= logsMeta.last_page
                                         }
@@ -1340,8 +1332,8 @@ export default function ReportsPage() {
 
             {/* ── Section 5: Advanced Report Builder (collapsible) ── */}
             <Card>
-                <CardHeader
-                    className="cursor-pointer select-none"
+                <div
+                    className="flex items-center justify-between px-4 py-3 cursor-pointer select-none"
                     onClick={() => setShowReportBuilder((v) => !v)}
                     role="button"
                     tabIndex={0}
@@ -1353,26 +1345,24 @@ export default function ReportsPage() {
                         }
                     }}
                 >
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <CardTitle>Advanced Report Builder</CardTitle>
-                            <CardDescription>
-                                Generate custom reports with specific filters
-                                and export options
-                            </CardDescription>
-                        </div>
-                        {showReportBuilder ? (
-                            <ChevronUp className="size-5 text-muted-foreground" />
-                        ) : (
-                            <ChevronDown className="size-5 text-muted-foreground" />
-                        )}
+                    <div>
+                        <h3 className="text-sm font-semibold">Advanced Report Builder</h3>
+                        <p className="text-[0.65rem] text-muted-foreground">
+                            Generate custom reports with specific filters
+                            and export options
+                        </p>
                     </div>
-                </CardHeader>
+                    {showReportBuilder ? (
+                        <ChevronUp className="size-4 text-muted-foreground" />
+                    ) : (
+                        <ChevronDown className="size-4 text-muted-foreground" />
+                    )}
+                </div>
                 {showReportBuilder && (
                     <CardContent className="flex flex-col gap-6">
                         {/* Report Type */}
                         <div className="grid gap-1.5">
-                            <label className="text-sm font-medium text-foreground">
+                            <label className="text-xs font-medium text-foreground">
                                 Report Type
                             </label>
                             <Select
@@ -1382,7 +1372,7 @@ export default function ReportsPage() {
                                     setShouldFetch(false);
                                 }}
                             >
-                                <SelectTrigger className="w-full sm:w-[300px]">
+                                <SelectTrigger className="w-full sm:w-[300px] h-9 text-sm">
                                     <SelectValue placeholder="Select report type" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -1396,7 +1386,7 @@ export default function ReportsPage() {
                                     ))}
                                 </SelectContent>
                             </Select>
-                            <p className="text-xs text-muted-foreground">
+                            <p className="text-[0.65rem] text-muted-foreground">
                                 {
                                     reportTypes.find(
                                         (r) => r.value === reportType,
@@ -1408,9 +1398,9 @@ export default function ReportsPage() {
                         <Separator />
 
                         {/* Date Range, User Filter & Generate */}
-                        <div className="flex flex-col sm:flex-row gap-4 items-end">
-                            <div className="grid gap-1.5">
-                                <label className="text-sm font-medium text-foreground">
+                        <div className="flex flex-col sm:flex-row gap-3 items-end">
+                            <div className="grid gap-1">
+                                <label className="text-xs font-medium text-foreground">
                                     From
                                 </label>
                                 <DatePicker
@@ -1422,8 +1412,8 @@ export default function ReportsPage() {
                                     placeholder="Start date"
                                 />
                             </div>
-                            <div className="grid gap-1.5">
-                                <label className="text-sm font-medium text-foreground">
+                            <div className="grid gap-1">
+                                <label className="text-xs font-medium text-foreground">
                                     To
                                 </label>
                                 <DatePicker
@@ -1436,8 +1426,8 @@ export default function ReportsPage() {
                                 />
                             </div>
 
-                            <div className="grid gap-1.5">
-                                <label className="text-sm font-medium text-foreground">
+                            <div className="grid gap-1">
+                                <label className="text-xs font-medium text-foreground">
                                     User
                                 </label>
                                 <Select
@@ -1447,7 +1437,7 @@ export default function ReportsPage() {
                                         setShouldFetch(false);
                                     }}
                                 >
-                                    <SelectTrigger className="w-[200px]">
+                                    <SelectTrigger className="w-[200px] h-9 text-sm">
                                         <span className="truncate">
                                             {userFilter === "all"
                                                 ? "All Users"
@@ -1471,6 +1461,7 @@ export default function ReportsPage() {
                             </div>
 
                             <Button
+                                className="h-8 text-xs"
                                 onClick={handleGenerate}
                                 disabled={reportFetching}
                             >
@@ -1487,7 +1478,7 @@ export default function ReportsPage() {
                         </div>
 
                         {reportType === "apps" && (
-                            <p className="text-xs text-muted-foreground">
+                            <p className="text-[0.65rem] text-muted-foreground">
                                 <strong>All Users</strong> lists one row per
                                 employee per app. Pick a specific user to see
                                 only their applications. For charts and
@@ -1506,9 +1497,9 @@ export default function ReportsPage() {
                         {shouldFetch && (
                             <div className="flex flex-col gap-4">
                                 <Separator />
-                                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                                     <div>
-                                        <h3 className="text-lg font-semibold text-foreground">
+                                        <h3 className="text-sm font-semibold text-foreground">
                                             {
                                                 reportTypes.find(
                                                     (r) =>
@@ -1517,7 +1508,7 @@ export default function ReportsPage() {
                                             }{" "}
                                             Report
                                         </h3>
-                                        <p className="text-sm text-muted-foreground">
+                                        <p className="text-[0.65rem] text-muted-foreground">
                                             {format(
                                                 new Date(builderDateFrom),
                                                 "MMM d, yyyy",
@@ -1530,10 +1521,10 @@ export default function ReportsPage() {
                                         </p>
                                     </div>
                                     {reportData && (
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-1.5">
                                             <Button
                                                 variant="outline"
-                                                size="sm"
+                                                className="h-8 text-xs"
                                                 onClick={() =>
                                                     handleExport("csv")
                                                 }
@@ -1551,7 +1542,7 @@ export default function ReportsPage() {
                                             </Button>
                                             <Button
                                                 variant="outline"
-                                                size="sm"
+                                                className="h-8 text-xs"
                                                 onClick={() =>
                                                     handleExport("pdf")
                                                 }
@@ -1572,34 +1563,34 @@ export default function ReportsPage() {
                                 </div>
 
                                 {isReportError ? (
-                                    <div className="text-center py-12">
-                                        <BarChart3 className="size-10 text-destructive/60 mx-auto mb-3" />
-                                        <p className="text-muted-foreground font-medium">
+                                    <div className="text-center py-10">
+                                        <BarChart3 className="size-8 text-destructive/60 mx-auto mb-2" />
+                                        <p className="text-[0.75rem] font-medium text-muted-foreground">
                                             Failed to load report
                                         </p>
-                                        <p className="text-sm text-muted-foreground mt-1">
+                                        <p className="text-[0.65rem] text-muted-foreground mt-0.5">
                                             Please try again.
                                         </p>
                                     </div>
                                 ) : reportLoading || reportFetching ? (
-                                    <div className="flex flex-col gap-3">
+                                    <div className="flex flex-col gap-2">
                                         {Array.from({ length: 6 }).map(
                                             (_, i) => (
                                                 <Skeleton
                                                     key={i}
-                                                    className="h-10 w-full rounded"
+                                                    className="h-8 w-full rounded"
                                                 />
                                             ),
                                         )}
                                     </div>
                                 ) : !reportData ||
                                   reportData.rows.length === 0 ? (
-                                    <div className="text-center py-12">
-                                        <BarChart3 className="size-10 text-muted-foreground mx-auto mb-3" />
-                                        <p className="text-muted-foreground font-medium">
+                                    <div className="text-center py-10">
+                                        <BarChart3 className="size-8 text-muted-foreground mx-auto mb-2" />
+                                        <p className="text-[0.75rem] font-medium text-muted-foreground">
                                             No data found
                                         </p>
-                                        <p className="text-sm text-muted-foreground mt-1">
+                                        <p className="text-[0.65rem] text-muted-foreground mt-0.5">
                                             Try adjusting your date range or
                                             report type
                                         </p>
@@ -1608,16 +1599,16 @@ export default function ReportsPage() {
                                     <div className="flex flex-col gap-6">
                                         {/* Summary Cards */}
                                         {reportData.summary && (
-                                            <div className="grid gap-4 sm:grid-cols-3">
+                                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                                                 {reportData.summary
                                                     .total_hours !==
                                                     undefined && (
                                                     <Card>
-                                                        <CardContent className="pt-4 pb-3">
-                                                            <p className="text-xs text-muted-foreground">
+                                                        <CardContent className="p-3">
+                                                            <p className="text-[0.65rem] font-medium uppercase tracking-wider text-muted-foreground mb-0.5">
                                                                 Total Hours
                                                             </p>
-                                                            <p className="text-xl font-bold text-foreground">
+                                                            <p className="text-base font-bold tabular-nums leading-tight text-foreground">
                                                                 {reportData.summary.total_hours.toFixed(
                                                                     1,
                                                                 )}
@@ -1630,11 +1621,11 @@ export default function ReportsPage() {
                                                     .total_amount !==
                                                     undefined && (
                                                     <Card>
-                                                        <CardContent className="pt-4 pb-3">
-                                                            <p className="text-xs text-muted-foreground">
+                                                        <CardContent className="p-3">
+                                                            <p className="text-[0.65rem] font-medium uppercase tracking-wider text-muted-foreground mb-0.5">
                                                                 Total Amount
                                                             </p>
-                                                            <p className="text-xl font-bold text-foreground">
+                                                            <p className="text-base font-bold tabular-nums leading-tight text-foreground">
                                                                 $
                                                                 {reportData.summary.total_amount.toFixed(
                                                                     2,
@@ -1647,11 +1638,11 @@ export default function ReportsPage() {
                                                     .average_activity !==
                                                     undefined && (
                                                     <Card>
-                                                        <CardContent className="pt-4 pb-3">
-                                                            <p className="text-xs text-muted-foreground">
+                                                        <CardContent className="p-3">
+                                                            <p className="text-[0.65rem] font-medium uppercase tracking-wider text-muted-foreground mb-0.5">
                                                                 Avg Activity
                                                             </p>
-                                                            <p className="text-xl font-bold text-foreground">
+                                                            <p className="text-base font-bold tabular-nums leading-tight text-foreground">
                                                                 {
                                                                     reportData
                                                                         .summary
@@ -1666,11 +1657,11 @@ export default function ReportsPage() {
                                                     .idle_hours !==
                                                     undefined && (
                                                     <Card>
-                                                        <CardContent className="pt-4 pb-3">
-                                                            <p className="text-xs text-muted-foreground">
+                                                        <CardContent className="p-3">
+                                                            <p className="text-[0.65rem] font-medium uppercase tracking-wider text-muted-foreground mb-0.5">
                                                                 Idle (hr)
                                                             </p>
-                                                            <p className="text-xl font-bold text-foreground">
+                                                            <p className="text-base font-bold tabular-nums leading-tight text-foreground">
                                                                 {reportData.summary.idle_hours.toFixed(
                                                                     1,
                                                                 )}
@@ -1683,11 +1674,11 @@ export default function ReportsPage() {
                                                     .idle_percent !==
                                                     undefined && (
                                                     <Card>
-                                                        <CardContent className="pt-4 pb-3">
-                                                            <p className="text-xs text-muted-foreground">
+                                                        <CardContent className="p-3">
+                                                            <p className="text-[0.65rem] font-medium uppercase tracking-wider text-muted-foreground mb-0.5">
                                                                 Idle (%)
                                                             </p>
-                                                            <p className="text-xl font-bold text-foreground">
+                                                            <p className="text-base font-bold tabular-nums leading-tight text-foreground">
                                                                 {reportData.summary.idle_percent.toFixed(
                                                                     1,
                                                                 )}
@@ -1702,41 +1693,41 @@ export default function ReportsPage() {
                                         {/* Data Table */}
                                         <div className="rounded-lg border border-border overflow-hidden">
                                             <div className="overflow-x-auto">
-                                                <Table>
-                                                    <TableHeader>
-                                                        <TableRow className="border-border hover:bg-transparent">
+                                                <table className="w-full">
+                                                    <thead>
+                                                        <tr className="border-b border-border">
                                                             {reportData.columns.map(
                                                                 (col) => (
-                                                                    <TableHead
+                                                                    <th
                                                                         key={
                                                                             col
                                                                         }
-                                                                        className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+                                                                        className="text-left text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5"
                                                                     >
                                                                         {formatColumnName(
                                                                             col,
                                                                         )}
-                                                                    </TableHead>
+                                                                    </th>
                                                                 ),
                                                             )}
-                                                        </TableRow>
-                                                    </TableHeader>
-                                                    <TableBody>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
                                                         {reportData.rows.map(
                                                             (row, idx) => (
-                                                                <TableRow
+                                                                <tr
                                                                     key={idx}
-                                                                    className="border-border hover:bg-muted/50 transition-colors"
+                                                                    className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors"
                                                                 >
                                                                     {reportData.columns.map(
                                                                         (
                                                                             col,
                                                                         ) => (
-                                                                            <TableCell
+                                                                            <td
                                                                                 key={
                                                                                     col
                                                                                 }
-                                                                                className="text-sm text-foreground"
+                                                                                className="px-4 py-2.5 text-[0.75rem] text-foreground"
                                                                             >
                                                                                 {formatCellValue(
                                                                                     col,
@@ -1744,14 +1735,14 @@ export default function ReportsPage() {
                                                                                         col
                                                                                     ],
                                                                                 )}
-                                                                            </TableCell>
+                                                                            </td>
                                                                         ),
                                                                     )}
-                                                                </TableRow>
+                                                                </tr>
                                                             ),
                                                         )}
-                                                    </TableBody>
-                                                </Table>
+                                                    </tbody>
+                                                </table>
                                             </div>
                                         </div>
                                     </div>
