@@ -145,7 +145,8 @@ export default function TimePage() {
   const [projectComboboxOpen, setProjectComboboxOpen] = useState(false);
   const [memberComboboxOpen, setMemberComboboxOpen] = useState(false);
   const [manualEntryOpen, setManualEntryOpen] = useState(false);
-  const [showFilters, setShowFilters] = useState(true);
+  const [viewEntry, setViewEntry] = useState<TimeEntry | null>(null);
+  const [showFilters, setShowFilters] = useState(false);
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ['projects-list'],
@@ -296,6 +297,14 @@ export default function TimePage() {
         open={manualEntryOpen}
         onOpenChange={setManualEntryOpen}
         canLogOnBehalf={canApprove}
+      />
+
+      <ManualTimeEntryDialog
+        open={!!viewEntry}
+        onOpenChange={(open) => { if (!open) setViewEntry(null); }}
+        canLogOnBehalf={canApprove}
+        entry={viewEntry}
+        initialMode="view"
       />
 
       {/* Stats Strip */}
@@ -647,9 +656,9 @@ export default function TimePage() {
                   </TableHeader>
                   <TableBody>
                     {entries.map((entry) => (
-                      <TableRow key={entry.id} className="border-border/50 hover:bg-muted/30 transition-colors">
+                      <TableRow key={entry.id} className="border-border/50 hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => setViewEntry(entry)}>
                         {canApprove && (
-                          <TableCell className="px-3">
+                          <TableCell className="px-3" onClick={(e) => e.stopPropagation()}>
                             {entry.status === 'pending' && (
                               <Checkbox
                                 checked={selectedEntries.includes(entry.id)}
