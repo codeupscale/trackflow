@@ -114,6 +114,7 @@ class ReportService
                 END as activity_score_avg,
                 COUNT(*) as entry_count,
                 COALESCE(SUM(CASE WHEN type = 'tracked' THEN {$dur} ELSE 0 END), 0) as tracked_seconds,
+                COALESCE(SUM(CASE WHEN type <> 'idle' THEN {$dur} ELSE 0 END), 0) as worked_seconds,
                 COALESCE(SUM(CASE WHEN type = 'idle' THEN {$dur} ELSE 0 END), 0) as idle_seconds
             ")
             ->groupBy(DB::raw('DATE(started_at)'))
@@ -121,6 +122,11 @@ class ReportService
             ->get();
 
             $totalTrackedSeconds = (int) $daily->sum('tracked_seconds');
+            // Hours the user actually worked = every approved entry that is not idle.
+            // `tracked_seconds` is the narrower tracker-only bucket and stays as-is because
+            // idle_percent and the billable gate below are defined against it; it must NOT
+            // be used as the headline total, since it silently drops approved manual time.
+            $totalWorkedSeconds = (int) $daily->sum('worked_seconds');
             $totalIdleSeconds = (int) $daily->sum('idle_seconds');
             $totalWithIdle = $totalTrackedSeconds + $totalIdleSeconds;
             $idlePercent = $totalWithIdle > 0 ? round($totalIdleSeconds / $totalWithIdle * 100, 1) : 0;
@@ -165,13 +171,16 @@ class ReportService
             $prevFrom = date('Y-m-d H:i:s', strtotime($dateFrom) - $periodLengthSeconds);
             $prevTo = $dateFrom;
 
+            // Must mirror the current-period worked total above (every approved non-idle entry).
+            // Filtering the baseline to type='tracked' compared unlike sets and skewed the
+            // period-over-period trend by exactly the manual time in the current window.
             $prevQuery = TimeEntry::withoutGlobalScopes()
                 ->whereNull('time_entries.deleted_at')
                 ->where('organization_id', $orgId)
                 ->where('started_at', '>=', $prevFrom)
                 ->where('started_at', '<', $prevTo)
                 ->whereNotNull('ended_at')
-                ->where('type', 'tracked')
+                ->where('type', '!=', 'idle')
                 ->where('approval_status', 'approved');
 
             if ($userId) {
@@ -208,6 +217,7 @@ class ReportService
                 'daily' => $daily,
                 'total_seconds' => $daily->sum('total_seconds'),
                 'total_seconds_tracked' => $totalTrackedSeconds,
+                'total_seconds_worked' => $totalWorkedSeconds,
                 'total_seconds_idle' => $totalIdleSeconds,
                 'idle_hours' => round($totalIdleSeconds / 3600, 2),
                 'idle_percent' => $idlePercent,

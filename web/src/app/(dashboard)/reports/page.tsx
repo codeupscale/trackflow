@@ -186,7 +186,10 @@ function transformReportResponse(
         case "summary": {
             const daily = (raw.daily || []) as Record<string, unknown>[];
             return {
-                // "Time Utilized" = tracked working time (idle shown separately).
+                // "Time Utilized" = worked time — every approved entry that is not idle,
+                // so approved MANUAL entries count. `tracked_seconds` is tracker-only and
+                // dropped them, which is why an approved manual entry showed in the entry
+                // count but never in the hours. Idle stays broken out in its own column.
                 columns: [
                     "date",
                     "tracked_seconds",
@@ -197,7 +200,7 @@ function transformReportResponse(
                 rows: daily.map((d) => ({
                     date: String(d.date ?? ""),
                     tracked_seconds: Number(
-                        d.tracked_seconds ?? d.total_seconds ?? 0,
+                        d.worked_seconds ?? d.tracked_seconds ?? d.total_seconds ?? 0,
                     ),
                     idle_seconds: Number(d.idle_seconds ?? 0),
                     activity_score_avg: Number(d.activity_score_avg ?? 0),
@@ -206,7 +209,10 @@ function transformReportResponse(
                 summary: {
                     total_hours:
                         Number(
-                            raw.total_seconds_tracked ?? raw.total_seconds ?? 0,
+                            raw.total_seconds_worked ??
+                                raw.total_seconds_tracked ??
+                                raw.total_seconds ??
+                                0,
                         ) / 3600,
                     average_activity: Math.round(Number(raw.avg_activity ?? 0)),
                     total_amount: Number(raw.total_earnings ?? 0),
