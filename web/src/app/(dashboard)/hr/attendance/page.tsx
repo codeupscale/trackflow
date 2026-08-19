@@ -6,7 +6,6 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import {
   CalendarDays,
   CheckCircle2,
-  Clock,
   FileEdit,
   Loader2,
   Palmtree,
@@ -60,7 +59,6 @@ import { cn, formatDate } from '@/lib/utils';
 import {
   deriveCheckInBadges,
   formatDuration,
-  formatMinutes,
   checkInBadgeTooltip,
 } from '@/lib/check-in-time';
 
@@ -211,7 +209,7 @@ export default function MyAttendancePage() {
           {[
             { label: 'Present', value: summary.present_days, sub: `of ${summary.total_working_days}`, icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
             { label: 'Absent', value: summary.absent_days, icon: XCircle, color: 'text-red-500', bg: 'bg-red-500/10' },
-            { label: 'Late Days', value: summary.late_days, icon: Clock, color: 'text-amber-500', bg: 'bg-amber-500/10' },
+
             { label: 'On Leave', value: summary.on_leave_days, icon: Palmtree, color: 'text-blue-500', bg: 'bg-blue-500/10' },
             { label: 'Overtime', value: `${Number(summary.overtime_hours).toFixed(1)}h`, icon: Timer, color: 'text-violet-500', bg: 'bg-violet-500/10' },
           ].map((s) => (
@@ -313,7 +311,7 @@ export default function MyAttendancePage() {
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Clock In</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Clock Out</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Hours</th>
-                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Late</th>
+
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Actions</th>
                     </tr>
                   </thead>
@@ -362,27 +360,6 @@ export default function MyAttendancePage() {
                           </td>
                           <td className="px-4 py-2.5 whitespace-nowrap text-right text-[0.75rem] tabular-nums">
                             {secs > 0 ? formatDuration(secs) : <span className="text-muted-foreground/40">&mdash;</span>}
-                          </td>
-                          <td className="px-4 py-2.5 whitespace-nowrap text-right">
-                            {record.late_minutes > 0 ? (
-                              <Tooltip>
-                                <TooltipTrigger
-                                  render={<span />}
-                                  className="cursor-help text-[0.75rem] tabular-nums text-amber-600 dark:text-amber-400 font-medium"
-                                  tabIndex={0}
-                                >
-                                  {formatMinutes(record.late_minutes)}
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  {checkInBadgeTooltip('late', {
-                                    lateMinutes: record.late_minutes,
-                                    checkInTime: policyCheckInTime,
-                                  })}
-                                </TooltipContent>
-                              </Tooltip>
-                            ) : (
-                              <span className="text-[0.75rem] text-muted-foreground/40">&mdash;</span>
-                            )}
                           </td>
                           <td className="px-4 py-2.5 whitespace-nowrap text-right">
                             {canRegularize(record) ? (
