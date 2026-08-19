@@ -273,7 +273,8 @@ class TimerService
                 ->where('started_at', '>=', $todayStartUtc)
                 ->where('started_at', '<', $todayEndUtc)
                 ->whereNotNull('ended_at')
-                ->where('type', 'tracked')
+                ->where('type', '!=', 'idle')
+                ->where('approval_status', 'approved')
                 ->where('project_id', $entryProjectId)
                 ->sum('duration_seconds');
             $projectTodayTotal += $currentElapsed;
@@ -332,12 +333,18 @@ class TimerService
         [$todayStartUtc, $todayEndUtc] = TimezoneAwareDateRange::userTodayUtcBounds($tz);
         $currentDay = Carbon::now($tz)->toDateString();
 
+        // Every APPROVED non-idle entry of the day, manual included. The desktop cannot compute
+        // manual time locally — the server total is the ONLY place it can come from — and the
+        // agent's assembly rule (server total − live elapsed + local unconfirmed) assumes this sum
+        // is the user's whole day. Idle entries stay out (they are not worked time) and
+        // pending/rejected manual time is excluded via approval_status.
         $baseTodayQuery = fn () => TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('user_id', $user->id)
             ->where('started_at', '>=', $todayStartUtc)
             ->where('started_at', '<', $todayEndUtc)
             ->whereNotNull('ended_at')
-            ->where('type', 'tracked');
+            ->where('type', '!=', 'idle')
+            ->where('approval_status', 'approved');
 
         // Always-global sum across all projects (never scoped). Feeds the desktop
         // "Today, all projects" line and the tray "Today: X" tooltip.
@@ -398,7 +405,8 @@ class TimerService
             ->where('started_at', '>=', $todayStartUtc)
             ->where('started_at', '<', $todayEndUtc)
             ->whereNotNull('ended_at')
-            ->where('type', 'tracked');
+            ->where('type', '!=', 'idle')
+            ->where('approval_status', 'approved');
 
         if ($projectId !== null && $projectId !== '') {
             $query->where('project_id', $projectId);

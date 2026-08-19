@@ -104,13 +104,19 @@ class DashboardController extends Controller
             ];
         }
 
-        // Hours per user in range
+        // Hours per user in range.
+        // Every APPROVED non-idle entry counts, manual included — the card is "hours worked",
+        // not "tracker uptime", and every other rollup (ReportService, timesheets, attendance,
+        // DailyActivitySummaryService) already sums manual time once it is approved. Narrowing
+        // this to type='tracked' made the dashboard the only surface that silently dropped an
+        // approved manual entry. The idle bucket stays excluded, as it always was, and
+        // pending/rejected manual time stays invisible via approval_status.
         $rangeEntries = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('organization_id', $orgId)
             ->where('started_at', '>=', $dateFrom)
             ->where('started_at', '<', $dateTo)
             ->whereNotNull('ended_at')
-            ->where('type', 'tracked')
+            ->where('type', '!=', 'idle')
             ->where('approval_status', 'approved')
             ->selectRaw('user_id, SUM(duration_seconds) as total_seconds')
             ->groupBy('user_id')
@@ -138,7 +144,8 @@ class DashboardController extends Controller
             ->where('started_at', '>=', $dateFrom)
             ->where('started_at', '<', $dateTo)
             ->whereNotNull('ended_at')
-            ->where('type', 'tracked')
+            ->where('type', '!=', 'idle')
+            ->where('approval_status', 'approved')
             ->whereNotNull('project_id')
             ->selectRaw('COUNT(DISTINCT project_id) as c')
             ->value('c');
@@ -224,12 +231,13 @@ class DashboardController extends Controller
             $responseDateTo = $responseDateFrom;
         }
 
+        // Approved non-idle entries, manual included — see the note on the team rollup above.
         $rangeSeconds = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
             ->where('user_id', $user->id)
             ->where('started_at', '>=', $dateFrom)
             ->where('started_at', '<', $dateTo)
             ->whereNotNull('ended_at')
-            ->where('type', 'tracked')
+            ->where('type', '!=', 'idle')
             ->where('approval_status', 'approved')
             ->sum('duration_seconds');
 
@@ -271,7 +279,7 @@ class DashboardController extends Controller
             ->where('started_at', '>=', $weekStartUtc)
             ->where('started_at', '<', $weekEndUtc)
             ->whereNotNull('ended_at')
-            ->where('type', 'tracked')
+            ->where('type', '!=', 'idle')
             ->where('approval_status', 'approved')
             ->sum('duration_seconds');
 
@@ -302,8 +310,8 @@ class DashboardController extends Controller
                 ->where('started_at', '>=', $dayStartUtc)
                 ->where('started_at', '<', $dayEndUtc)
                 ->whereNotNull('ended_at')
-                ->where('type', 'tracked')
-                ->where('approval_status', 'approved')
+                ->where('type', '!=', 'idle')
+            ->where('approval_status', 'approved')
                 ->sum('duration_seconds');
 
             // Add running timer elapsed to today's bar

@@ -20,9 +20,12 @@ use Tests\TestCase;
  * attendance worked-hours computation — plus a regression proving pre-existing
  * tracked entries (approval_status defaulting to 'approved') still count.
  *
- * Note on the dashboard "tracked" widget: it is filtered to type='tracked' by
- * design, so a manual entry (pending OR approved) never appears there. The
- * dashboard test locks that contract in.
+ * Note on the dashboard hours cards and /timer/today-total: they count every
+ * APPROVED entry, manual included — they answer "hours worked", not "tracker
+ * uptime". They previously filtered type='tracked', which made them the only
+ * surfaces that silently dropped an approved manual entry while Time Entries,
+ * reports, timesheets and attendance all counted it. The dashboard and
+ * today-total tests lock the corrected contract in.
  */
 class ManualTimeEntryAggregateTest extends TestCase
 {
@@ -142,25 +145,97 @@ class ManualTimeEntryAggregateTest extends TestCase
         );
     }
 
-    // ── Dashboard (tracked-only widget) ───────────────────────────────────
+    public function test_summary_worked_total_counts_approved_manual_alongside_tracked(): void
+    {
+        // The reports page renders `total_seconds_worked` as "Time Utilized"/"Total Hours".
+        // It used to render `total_seconds_tracked`, which counted the manual entry in
+        // `total_entries` but not in the hours — the entry count and the total disagreed.
+        $this->trackedBaseline();
+        $manual = $this->pendingManual();
 
-    public function test_manual_entries_never_inflate_dashboard_tracked_total(): void
+        $this->actingAs($this->owner, 'sanctum');
+        $this->postJson("/api/v1/time-entries/{$manual->id}/approve")->assertOk();
+
+        $summary = $this->summary();
+
+        $this->assertEquals(
+            self::TRACKED_SECONDS + self::MANUAL_SECONDS,
+            (int) $summary['total_seconds_worked']
+        );
+        // The tracker-only bucket is still reported separately and stays narrow.
+        $this->assertEquals(self::TRACKED_SECONDS, (int) $summary['total_seconds_tracked']);
+        $this->assertEquals(2, (int) $summary['total_entries']);
+
+        $day = collect($summary['daily'])->firstWhere('date', self::DAY);
+        $this->assertEquals(
+            self::TRACKED_SECONDS + self::MANUAL_SECONDS,
+            (int) $day['worked_seconds']
+        );
+    }
+
+    // ── Dashboard hours cards ─────────────────────────────────────────────
+
+    public function test_dashboard_excludes_pending_manual_then_counts_it_on_approval(): void
     {
         $this->trackedBaseline();
 
         $this->actingAs($this->employee, 'sanctum');
         $this->assertEquals(self::TRACKED_SECONDS, $this->dashboardWeekSeconds());
+        $this->assertEquals(self::TRACKED_SECONDS, $this->dashboardTodaySeconds());
 
         // A pending manual entry does not appear...
         $manual = $this->pendingManual();
         $this->assertEquals(self::TRACKED_SECONDS, $this->dashboardWeekSeconds());
+        $this->assertEquals(self::TRACKED_SECONDS, $this->dashboardTodaySeconds());
 
-        // ...and neither does an approved one (the widget is type='tracked' only).
+        // ...and once approved it counts, exactly as it already did in reports,
+        // timesheets and attendance. This is the regression the cards shipped with:
+        // an approved manual entry showed on Time Entries but not in Today's Hours.
         $this->actingAs($this->owner, 'sanctum');
         $this->postJson("/api/v1/time-entries/{$manual->id}/approve")->assertOk();
 
         $this->actingAs($this->employee, 'sanctum');
-        $this->assertEquals(self::TRACKED_SECONDS, $this->dashboardWeekSeconds());
+        $expected = self::TRACKED_SECONDS + self::MANUAL_SECONDS;
+        $this->assertEquals($expected, $this->dashboardWeekSeconds());
+        $this->assertEquals($expected, $this->dashboardTodaySeconds());
+    }
+
+    public function test_dashboard_daily_breakdown_counts_approved_manual_time(): void
+    {
+        $this->trackedBaseline();
+        $manual = $this->pendingManual();
+
+        $this->actingAs($this->owner, 'sanctum');
+        $this->postJson("/api/v1/time-entries/{$manual->id}/approve")->assertOk();
+
+        $this->actingAs($this->employee, 'sanctum');
+        $day = collect($this->getJson('/api/v1/dashboard')->assertOk()->json('daily_breakdown'))
+            ->firstWhere('date', self::DAY);
+
+        $this->assertNotNull($day);
+        $this->assertEquals(self::TRACKED_SECONDS + self::MANUAL_SECONDS, (int) $day['seconds']);
+    }
+
+    // ── /timer/today-total (the figure the desktop agent builds on) ────────
+
+    public function test_today_total_excludes_pending_manual_then_counts_it_on_approval(): void
+    {
+        $this->trackedBaseline();
+
+        $this->actingAs($this->employee, 'sanctum');
+        $this->assertEquals(self::TRACKED_SECONDS, $this->todayTotalSeconds());
+
+        $manual = $this->pendingManual();
+        $this->assertEquals(self::TRACKED_SECONDS, $this->todayTotalSeconds());
+
+        $this->actingAs($this->owner, 'sanctum');
+        $this->postJson("/api/v1/time-entries/{$manual->id}/approve")->assertOk();
+
+        $this->actingAs($this->employee, 'sanctum');
+        $this->assertEquals(
+            self::TRACKED_SECONDS + self::MANUAL_SECONDS,
+            $this->todayTotalSeconds()
+        );
     }
 
     // ── AttendanceService worked-hours ────────────────────────────────────
@@ -285,6 +360,16 @@ class ManualTimeEntryAggregateTest extends TestCase
     private function dashboardWeekSeconds(): int
     {
         return (int) $this->getJson('/api/v1/dashboard')->assertOk()->json('week_seconds');
+    }
+
+    private function dashboardTodaySeconds(): int
+    {
+        return (int) $this->getJson('/api/v1/dashboard')->assertOk()->json('today_seconds');
+    }
+
+    private function todayTotalSeconds(): int
+    {
+        return (int) $this->getJson('/api/v1/timer/today-total')->assertOk()->json('today_total');
     }
 
     private function attendanceReportSeconds(): int
