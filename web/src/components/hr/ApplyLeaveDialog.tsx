@@ -208,9 +208,13 @@ export function ApplyLeaveDialog({ open, onOpenChange }: ApplyLeaveDialogProps) 
                           render={({ field: f }) => (
                             <DatePicker
                               value={f.value}
-                              onChange={f.onChange}
+                              onChange={(val) => {
+                                f.onChange(val);
+                                if (val > watchedEnd) form.setValue('end_date', val);
+                              }}
                               placeholder="Select date"
                               className="w-full"
+                              maxDate={watchedEnd}
                             />
                           )}
                         />
@@ -235,6 +239,7 @@ export function ApplyLeaveDialog({ open, onOpenChange }: ApplyLeaveDialogProps) 
                               onChange={f.onChange}
                               placeholder="Select date"
                               className="w-full"
+                              minDate={watchedStart}
                             />
                           )}
                         />

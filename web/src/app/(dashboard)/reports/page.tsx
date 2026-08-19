@@ -756,14 +756,16 @@ export default function ReportsPage() {
                 <div className="flex items-center gap-3">
                     <DatePicker
                         value={dateFrom}
-                        onChange={setDateFrom}
+                        onChange={(val) => { setDateFrom(val); if (val > dateTo) setDateTo(val); }}
                         placeholder="Start date"
+                        maxDate={dateTo}
                     />
                     <span className="text-muted-foreground text-xs">to</span>
                     <DatePicker
                         value={dateTo}
                         onChange={setDateTo}
                         placeholder="End date"
+                        minDate={dateFrom}
                     />
                 </div>
             )}
@@ -1407,9 +1409,11 @@ export default function ReportsPage() {
                                     value={builderDateFrom}
                                     onChange={(val) => {
                                         setBuilderDateFrom(val);
+                                        if (val > builderDateTo) setBuilderDateTo(val);
                                         setShouldFetch(false);
                                     }}
                                     placeholder="Start date"
+                                    maxDate={builderDateTo}
                                 />
                             </div>
                             <div className="grid gap-1">
@@ -1423,6 +1427,7 @@ export default function ReportsPage() {
                                         setShouldFetch(false);
                                     }}
                                     placeholder="End date"
+                                    minDate={builderDateFrom}
                                 />
                             </div>
 

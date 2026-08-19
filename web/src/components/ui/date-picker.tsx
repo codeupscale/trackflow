@@ -3,6 +3,7 @@
 import * as React from 'react'
 import { format, parse } from 'date-fns'
 import { CalendarIcon } from 'lucide-react'
+import type { Matcher } from 'react-day-picker'
 
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -18,6 +19,8 @@ interface DatePickerProps {
   onChange: (value: string) => void
   placeholder?: string
   className?: string
+  minDate?: string // YYYY-MM-DD — dates before this are disabled
+  maxDate?: string // YYYY-MM-DD — dates after this are disabled
 }
 
 function DatePicker({
@@ -25,6 +28,8 @@ function DatePicker({
   onChange,
   placeholder = 'Pick a date',
   className,
+  minDate,
+  maxDate,
 }: DatePickerProps) {
   const [open, setOpen] = React.useState(false)
 
@@ -37,6 +42,13 @@ function DatePicker({
     if (!selectedDate || !value) return placeholder
     return format(selectedDate, 'MMM d, yyyy')
   }, [selectedDate, value, placeholder])
+
+  const disabledMatcher = React.useMemo(() => {
+    const matchers: Matcher[] = []
+    if (minDate) matchers.push({ before: parse(minDate, 'yyyy-MM-dd', new Date()) })
+    if (maxDate) matchers.push({ after: parse(maxDate, 'yyyy-MM-dd', new Date()) })
+    return matchers.length ? matchers : undefined
+  }, [minDate, maxDate])
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -66,6 +78,7 @@ function DatePicker({
             setOpen(false)
           }}
           defaultMonth={selectedDate}
+          disabled={disabledMatcher}
         />
       </PopoverContent>
     </Popover>
