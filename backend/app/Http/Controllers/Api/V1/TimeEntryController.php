@@ -114,6 +114,7 @@ class TimeEntryController extends Controller
         $request->validate([
             'project_id' => 'nullable|uuid',
             'task_id' => 'nullable|uuid',
+            'task_name' => 'nullable|string|max:255',
             'started_at' => 'sometimes|date',
             'ended_at' => 'nullable|date|after:started_at',
             'notes' => 'nullable|string|max:1000',
@@ -129,7 +130,33 @@ class TimeEntryController extends Controller
             $request->user()->organization->tasks()->findOrFail($request->task_id);
         }
 
-        $data = $request->only(['project_id', 'task_id', 'started_at', 'ended_at', 'notes']);
+        // Auto-create task from free-text name if no task_id provided
+        $taskId = $request->task_id;
+        if (! $taskId && ! empty($request->task_name)) {
+            $projectId = $request->project_id ?? $entry->project_id;
+            if ($projectId) {
+                $org = $request->user()->organization;
+                $task = \App\Models\Task::firstOrCreate(
+                    ['organization_id' => $org->id, 'project_id' => $projectId, 'name' => trim($request->task_name)],
+                    ['created_by' => $request->user()->id]
+                );
+                $taskId = $task->id;
+            }
+        }
+
+        $data = $request->only(['project_id', 'started_at', 'ended_at', 'notes']);
+        if ($request->has('task_id') || $request->has('task_name')) {
+            $data['task_id'] = $taskId;
+        }
+
+        // Check if time fields actually changed before we apply the update.
+        $timeChanged = false;
+        if ($request->has('started_at') && $entry->started_at->toISOString() !== \Carbon\Carbon::parse($request->started_at)->toISOString()) {
+            $timeChanged = true;
+        }
+        if ($request->has('ended_at') && ($entry->ended_at?->toISOString() ?? null) !== ($request->ended_at ? \Carbon\Carbon::parse($request->ended_at)->toISOString() : null)) {
+            $timeChanged = true;
+        }
 
         // Capture pre-edit approval state so we know whether cached report totals
         // (which only include approved entries) need busting after the mutation.
@@ -144,15 +171,12 @@ class TimeEntryController extends Controller
             ]);
         }
 
-        // Approval integrity (HIGH): a self-edit of a manual entry must not keep a
-        // stale 'approved'/'rejected' status when the editor lacks approve
-        // authority — the (possibly inflated) hours must not reach billable/payroll
-        // totals without a fresh re-approval. mustResetOnEdit() preserves the
-        // create() auto-approve-self rule so an org/project-scoped approver editing
-        // their OWN entry is NOT trapped in a queue only they could clear.
-        // Tracked/idle entries are not part of the approval workflow — leave them.
+        // Only reset approval when TIME fields changed — task/notes edits update
+        // immediately without re-approval.
+        $approvalReset = false;
         if (
-            $entry->type === 'manual'
+            $timeChanged
+            && $entry->type === 'manual'
             && in_array($entry->approval_status, ['approved', 'rejected'], true)
             && $this->manualTimeEntries->mustResetOnEdit($request->user(), $entry)
         ) {
@@ -163,6 +187,7 @@ class TimeEntryController extends Controller
                 'approved_at' => null,
                 'rejection_reason' => null,
             ]);
+            $approvalReset = true;
         }
 
         // Cache staleness (LOW 1): editing a manual entry, or any entry that was
@@ -172,7 +197,10 @@ class TimeEntryController extends Controller
             app(ReportService::class)->flushForOrg($entry->organization_id);
         }
 
-        return response()->json(['entry' => $entry->fresh()->load(['project', 'task'])]);
+        return response()->json([
+            'entry' => $entry->fresh()->load(['project', 'task']),
+            'approval_reset' => $approvalReset,
+        ]);
     }
 
     // TIME-07: Delete entry

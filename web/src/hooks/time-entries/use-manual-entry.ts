@@ -36,12 +36,15 @@ export function useUpdateManualEntry() {
   return useMutation({
     mutationFn: async ({ id, ...payload }: ManualTimeEntryPayload & { id: string }) => {
       const res = await api.put(`/time-entries/${id}`, payload);
-      return res.data;
+      return res.data as {
+        entry?: { approval_status?: 'pending' | 'approved' | 'rejected' };
+        approval_reset?: boolean;
+      };
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['time-entries'] });
       queryClient.invalidateQueries({ queryKey: ['reports'] });
-      toast.success('Time entry updated');
+      toast.success(data.approval_reset ? 'Updated & resubmitted for approval' : 'Time entry updated');
     },
     onError: (error: unknown) => {
       const message =

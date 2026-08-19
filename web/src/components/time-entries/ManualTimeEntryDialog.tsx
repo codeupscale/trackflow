@@ -2,26 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
-import { ChevronsUpDown, Loader2, Pencil, X } from 'lucide-react';
-
-import { cn } from '@/lib/utils';
-import api from '@/lib/api';
+import { Loader2, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { DatePicker } from '@/components/ui/date-picker';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from '@/components/ui/command';
 import {
   Dialog,
   DialogContent,
@@ -34,15 +21,9 @@ import { ProjectCombobox } from '@/components/time-entries/ProjectCombobox';
 import { UserCombobox } from '@/components/time-entries/UserCombobox';
 import { useCreateManualEntry, useUpdateManualEntry } from '@/hooks/time-entries/use-manual-entry';
 import {
-  combineDateTime,
   toManualEntryPayload,
   type ManualTimeEntryFormData,
 } from '@/lib/validations/time-entry';
-
-interface TaskOption {
-  id: string;
-  name: string;
-}
 
 export interface TimeEntryForDialog {
   id: string;
@@ -77,7 +58,6 @@ export function ManualTimeEntryDialog({
   const createMutation = useCreateManualEntry();
   const updateMutation = useUpdateManualEntry();
   const isPending = createMutation.isPending || updateMutation.isPending;
-  const [taskOpen, setTaskOpen] = useState(false);
   const [mode, setMode] = useState<DialogMode>(initialMode);
 
   const isViewMode = mode === 'view';
@@ -99,6 +79,7 @@ export function ManualTimeEntryDialog({
       user_id: null,
       project_id: '',
       task_id: null,
+      task_name: '',
       date: today,
       start_time: '',
       end_time: '',
@@ -117,6 +98,7 @@ export function ManualTimeEntryDialog({
         user_id: entry.user?.id ?? null,
         project_id: entry.project?.id ?? '',
         task_id: entry.task?.id ?? null,
+        task_name: entry.task?.name ?? entry.task?.title ?? '',
         date: format(started, 'yyyy-MM-dd'),
         start_time: format(started, 'HH:mm'),
         end_time: ended ? format(ended, 'HH:mm') : '',
@@ -128,6 +110,7 @@ export function ManualTimeEntryDialog({
         user_id: null,
         project_id: '',
         task_id: null,
+        task_name: '',
         date: today,
         start_time: '',
         end_time: '',
@@ -137,21 +120,8 @@ export function ManualTimeEntryDialog({
   }, [open, entry, initialMode, reset, today]);
 
   const projectId = watch('project_id');
-  const taskId = watch('task_id');
   const dateValue = watch('date');
   const userId = watch('user_id');
-
-  const { data: tasks, isLoading: tasksLoading } = useQuery<TaskOption[]>({
-    queryKey: ['tasks-list', projectId],
-    queryFn: async () => {
-      const res = await api.get('/tasks', { params: { project_id: projectId, per_page: 50 } });
-      return res.data.data ?? res.data.tasks ?? (Array.isArray(res.data) ? res.data : []);
-    },
-    enabled: !!projectId,
-    staleTime: 60_000,
-  });
-
-  const selectedTask = tasks?.find((t) => t.id === taskId) ?? null;
 
   const validate = (data: ManualTimeEntryFormData): boolean => {
     let valid = true;
@@ -173,13 +143,9 @@ export function ManualTimeEntryDialog({
       setError('end_time', { message: 'End time is required' });
       valid = false;
     }
-    if (valid && data.date && data.start_time && data.end_time) {
-      const start = combineDateTime(data.date, data.start_time);
-      const end = combineDateTime(data.date, data.end_time);
-      if (end <= start) {
-        setError('end_time', { message: 'End time must be after start time' });
-        valid = false;
-      }
+    if (valid && data.start_time && data.end_time && data.start_time === data.end_time) {
+      setError('end_time', { message: 'End time cannot be the same as start time' });
+      valid = false;
     }
     return valid;
   };
@@ -278,87 +244,17 @@ export function ManualTimeEntryDialog({
               )}
             </div>
 
-            {/* Task (depends on project) */}
+            {/* Task (free text) */}
             <div className="flex flex-col gap-1.5">
-              <Label>Task</Label>
-              {isViewMode ? (
-                <Input
-                  value={entry?.task?.title ?? entry?.task?.name ?? 'No task'}
-                  disabled
-                  className="disabled:opacity-70"
-                />
-              ) : (
-                <Popover open={taskOpen} onOpenChange={setTaskOpen}>
-                  <PopoverTrigger
-                    disabled={!projectId}
-                    render={
-                      <Button
-                        type="button"
-                        variant="outline"
-                        role="combobox"
-                        aria-expanded={taskOpen}
-                        aria-label="Select task"
-                        className={cn(
-                          'w-full justify-between font-normal',
-                          !taskId && 'text-muted-foreground'
-                        )}
-                      />
-                    }
-                  >
-                    <span className="truncate">
-                      {selectedTask ? selectedTask.name : projectId ? 'No task' : 'Select a project first'}
-                    </span>
-                    <div className="flex shrink-0 items-center gap-1">
-                      {taskId && (
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          className="rounded-sm opacity-70 hover:opacity-100"
-                          aria-label="Clear task"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setValue('task_id', null);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.stopPropagation();
-                              setValue('task_id', null);
-                            }
-                          }}
-                        >
-                          <X className="size-3.5" />
-                        </span>
-                      )}
-                      <ChevronsUpDown className="size-3.5 opacity-50" />
-                    </div>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-[var(--anchor-width)] p-0" align="start">
-                    <Command>
-                      <CommandInput placeholder="Search tasks..." />
-                      <CommandList>
-                        <CommandEmpty>{tasksLoading ? 'Loading...' : 'No tasks found.'}</CommandEmpty>
-                        <CommandGroup>
-                          {tasks?.map((t) => (
-                            <CommandItem
-                              key={t.id}
-                              value={t.name}
-                              data-checked={taskId === t.id ? 'true' : undefined}
-                              onSelect={() => {
-                                setValue('task_id', t.id === taskId ? null : t.id, {
-                                  shouldValidate: true,
-                                });
-                                setTaskOpen(false);
-                              }}
-                            >
-                              <span className="truncate">{t.name}</span>
-                            </CommandItem>
-                          ))}
-                        </CommandGroup>
-                      </CommandList>
-                    </Command>
-                  </PopoverContent>
-                </Popover>
-              )}
+              <Label htmlFor="task_name">Task</Label>
+              <Input
+                id="task_name"
+                placeholder={isViewMode ? '' : 'e.g. Fix login bug, Design homepage'}
+                disabled={isViewMode}
+                className={isViewMode ? 'disabled:opacity-70' : ''}
+                {...register('task_name')}
+                maxLength={255}
+              />
             </div>
 
             {/* Date */}

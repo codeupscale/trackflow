@@ -258,8 +258,9 @@ class DashboardController extends Controller
             : null;
 
         // Week range uses the user's timezone so the boundaries align with their calendar week
-        $weekStart = Carbon::now($tz)->startOfWeek(); // Monday 00:00 local
-        $weekEnd = Carbon::now($tz)->endOfWeek();     // Sunday 23:59 local
+        $weekOffset = (int) $request->input('week_offset', 0);
+        $weekStart = Carbon::now($tz)->startOfWeek()->addWeeks($weekOffset);
+        $weekEnd   = Carbon::now($tz)->endOfWeek()->addWeeks($weekOffset);
         [$weekStartUtc, $weekEndUtc] = TimezoneAwareDateRange::toUtcBounds(
             $weekStart->toDateString(),
             $weekEnd->toDateString(),
@@ -326,6 +327,9 @@ class DashboardController extends Controller
             'weekly_hours_target' => $weeklyTarget,
             'daily_breakdown'     => $dailyBreakdown,
             'activity_percentage' => $activityPercentage,
+            'week_offset'         => $weekOffset,
+            'week_start'          => $weekStart->toDateString(),
+            'week_end'            => $weekEnd->toDateString(),
             'date_from'           => $responseDateFrom,
             'date_to'             => $responseDateTo,
         ]);
