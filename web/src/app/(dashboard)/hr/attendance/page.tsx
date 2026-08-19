@@ -107,13 +107,13 @@ export default function MyAttendancePage() {
   const canCheckIn = hasPermission('attendance.check_in');
 
   // Lateness is a management signal, not something a person is shown about themselves on
-  // their own attendance page — only the owner and HR may see it here. This gates EVERY
-  // late surface on the page (the Late column, the Late badge on the status cell, and the
-  // Late Days stat tile); hiding only one of the three leaks the same number from the
-  // others, which is why the badge is included. Deliberately a ROLE check, not
-  // `attendance.view_all` — that permission is also held by org_manager and
-  // finance_manager, who must NOT see it.
-  const canSeeLate = user?.role === 'owner' || user?.role === 'hr_manager';
+  // their own attendance page — the OWNER is the only role that may see it here. This
+  // gates EVERY late surface on the page (the Late column, the Late badge on the status
+  // cell, and the Late Days stat tile); hiding only one of the three leaks the same
+  // number from the others, which is why the badge is included. Deliberately a ROLE
+  // check, not `attendance.view_all` — that permission is held by org_manager,
+  // hr_manager and finance_manager alike, none of whom may see it.
+  const canSeeLate = user?.role === 'owner';
 
   // Present / Absent / [Late Days] / On Leave / Overtime. Whole class names so Tailwind
   // sees them at build time; the skeleton count matches so the strip does not reflow.
