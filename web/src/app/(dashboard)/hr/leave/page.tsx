@@ -266,7 +266,7 @@ export default function MyLeavePage() {
                                                         </td>
                                                         <td className="px-4 py-2.5 whitespace-nowrap text-center">
                                                             <span className="text-[0.75rem] font-semibold tabular-nums">
-                                                                {Number(req.days_count) % 1 === 0 ? Math.round(Number(req.days_count)) : req.days_count}
+                                                                {Number(req.days_count) === 0.5 ? 'Half day' : Math.round(Number(req.days_count))}
                                                             </span>
                                                         </td>
                                                         <td className="px-4 py-2.5 whitespace-nowrap">

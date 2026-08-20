@@ -184,11 +184,10 @@ services:
             XDEBUG_MODE: '${SAIL_XDEBUG_MODE:-off}'
             XDEBUG_CONFIG: '${SAIL_XDEBUG_CONFIG:-client_host=host.docker.internal}'
             IGNITION_LOCAL_SITES_PATH: '${PWD}'
+            PHP_CLI_SERVER_WORKERS: 4
         healthcheck:
-            # Route exists at backend/routes/api.php:46 and touches no database,
-            # so it goes healthy as soon as PHP is serving.
             test: ['CMD', 'curl', '-f', 'http://localhost/api/v1/health/live']
-            interval: 10s
+            interval: 60s
             timeout: 5s
             retries: 5
             start_period: 30s

@@ -280,7 +280,7 @@ export default function CheckInReportPage() {
                 }}
               >
                 <SelectTrigger className="w-[140px] h-9 text-sm" aria-label="Select month">
-                  <SelectValue />
+                  <SelectValue>{MONTHS[month - 1]}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
@@ -303,7 +303,7 @@ export default function CheckInReportPage() {
                 }}
               >
                 <SelectTrigger className="w-[100px] h-9 text-sm" aria-label="Select year">
-                  <SelectValue />
+                  <SelectValue>{year}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>

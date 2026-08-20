@@ -20,6 +20,15 @@ class DepartmentController extends Controller
     {
         $query = Department::where('organization_id', $request->user()->organization_id);
 
+        if ($request->user()->isEmployee()) {
+            $deptId = $request->user()->employeeProfile?->department_id;
+            if ($deptId) {
+                $query->where('id', $deptId);
+            } else {
+                $query->whereRaw('1 = 0');
+            }
+        }
+
         if ($request->has('is_active')) {
             $query->where('is_active', filter_var($request->input('is_active'), FILTER_VALIDATE_BOOLEAN));
         }
@@ -82,6 +91,20 @@ class DepartmentController extends Controller
 
     public function tree(Request $request): JsonResponse
     {
+        if ($request->user()->isEmployee()) {
+            $deptId = $request->user()->employeeProfile?->department_id;
+            if ($deptId) {
+                $dept = Department::where('organization_id', $request->user()->organization_id)
+                    ->with('positions')
+                    ->find($deptId);
+                $tree = $dept ? [$dept->toArray()] : [];
+            } else {
+                $tree = [];
+            }
+
+            return response()->json(['tree' => $tree]);
+        }
+
         $tree = $this->service->getOrgTree($request->user()->organization);
 
         return response()->json(['tree' => $tree]);
