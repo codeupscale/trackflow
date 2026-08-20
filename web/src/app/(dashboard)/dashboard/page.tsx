@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subDays, subWeeks, subMonths, isToday, isSameDay, addDays } from 'date-fns';
 import {
   Clock,
@@ -17,6 +17,8 @@ import {
   CalendarDays,
   FileEdit,
   CalendarOff,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -102,6 +104,8 @@ interface DashboardData {
   weeklyHoursTarget: number; // 0 = disabled
   dailyBreakdown: DailyBreakdown[];
   activityPercentage: number | null; // null = no activity_logs data yet
+  weekStart: string;
+  weekEnd: string;
 }
 
 type FilterPreset = 'today' | 'yesterday' | 'week' | 'last-week' | 'this-month' | 'last-month' | 'custom';
@@ -217,6 +221,7 @@ export default function DashboardPage() {
   const [filterPreset, setFilterPreset] = useState<FilterPreset>('today');
   const [dateFrom, setDateFrom] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [dateTo, setDateTo] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  const [weekOffset, setWeekOffset] = useState(0);
   const [chartPeriod, setChartPeriod] = useState<string>('7d');
   const [teamPeriod, setTeamPeriod] = useState<string>('7d');
   const [attendanceFilter, setAttendanceFilter] = useState<string>('today');
@@ -266,11 +271,12 @@ export default function DashboardPage() {
 
   // ── Fetch dashboard data (handles both admin and employee responses) ──
 
-  const { data, isLoading, error } = useQuery<DashboardData>({
-    queryKey: ['dashboard', dateFrom, dateTo],
+  const { data, isLoading, isFetching, error } = useQuery<DashboardData>({
+    queryKey: ['dashboard', dateFrom, dateTo, weekOffset],
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       const res = await api.get('/dashboard', {
-        params: { date_from: dateFrom, date_to: dateTo },
+        params: { date_from: dateFrom, date_to: dateTo, week_offset: weekOffset },
       });
       const raw = res.data;
 
@@ -291,6 +297,8 @@ export default function DashboardPage() {
           weeklyHoursTarget: raw.weekly_hours_target || 0,
           dailyBreakdown: raw.daily_breakdown || [],
           activityPercentage: raw.activity_percentage ?? null,
+          weekStart: raw.week_start || '',
+          weekEnd: raw.week_end || '',
         };
       }
 
@@ -333,6 +341,8 @@ export default function DashboardPage() {
         weeklyHoursTarget: 0,
         dailyBreakdown: [],
         activityPercentage: null,
+        weekStart: '',
+        weekEnd: '',
       };
     },
     refetchInterval: 30000,
@@ -377,7 +387,7 @@ export default function DashboardPage() {
     ended_at: string | null;
     duration_seconds: number;
     project?: { name: string; color?: string };
-    task?: { title: string };
+    task?: { name: string };
   }>;
 
   // ── Attendance overview (admin only) ──
@@ -672,14 +682,14 @@ export default function DashboardPage() {
                     <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Activity</p>
                     <span className={`h-1.5 w-1.5 rounded-full ${data?.timer ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground/40'}`} />
                     <span className={`text-[0.6rem] ${data?.timer ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}>
-                      {data?.timer ? 'Tracking' : 'Idle'}
+                      {data?.timer ? 'Tracking' : 'Not tracking'}
                     </span>
                   </div>
                   {isLoading ? (
                     <span className="inline-block h-5 w-10 bg-muted rounded animate-pulse mt-0.5" />
                   ) : (
                     <p className="text-base font-bold tabular-nums leading-tight">
-                      {employeeActivityScore !== null ? `${employeeActivityScore}%` : 'N/A'}
+                      {`${employeeActivityScore ?? 0}%`}
                     </p>
                   )}
                 </div>
@@ -844,6 +854,7 @@ export default function DashboardPage() {
                     width={30}
                     fontSize={10}
                     tickFormatter={(v: number) => `${v}h`}
+                    domain={[0, (dataMax: number) => Math.max(dataMax, 1)]}
                   />
                   <ChartTooltip content={<ChartTooltipContent />} />
                   <Area
@@ -965,17 +976,48 @@ export default function DashboardPage() {
 
       {/* Employee chart + weekly target side by side */}
       {isEmployeeView && employeeChartData.length > 0 && (
-        <div className="grid gap-4 grid-cols-1 lg:grid-cols-5">
-          <Card className={`${isEmployeeView && (filterPreset === 'today' || filterPreset === 'week') && (data?.weeklyHoursTarget ?? 0) > 0 ? 'lg:col-span-3' : 'lg:col-span-5'}`}>
+        <div className={`grid gap-4 grid-cols-1 lg:grid-cols-5 transition-opacity duration-300 ${isFetching ? 'opacity-50' : 'opacity-100'}`}>
+          <Card className="lg:col-span-3">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <div className="flex items-center gap-3">
                 <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10">
                   <BarChart3 className="h-4 w-4 text-blue-500" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold">Your Hours This Week</h3>
-                  <p className="text-[0.65rem] text-muted-foreground mt-0.5">Daily hours tracked (Mon - Sun)</p>
+                  <h3 className="text-sm font-semibold">
+                    {weekOffset === 0 ? 'Your Hours This Week' : 'Weekly Hours'}
+                  </h3>
+                  <p className="text-[0.65rem] text-muted-foreground mt-0.5">
+                    {data?.weekStart && data?.weekEnd
+                      ? `${format(new Date(data.weekStart + 'T00:00:00'), 'MMM d')} – ${format(new Date(data.weekEnd + 'T00:00:00'), 'MMM d, yyyy')}`
+                      : 'Daily hours tracked (Mon - Sun)'}
+                  </p>
                 </div>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setWeekOffset(w => w - 1)}
+                  className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"
+                  aria-label="Previous week"
+                >
+                  <ChevronLeft className="h-4 w-4 text-muted-foreground" />
+                </button>
+                {weekOffset !== 0 && (
+                  <button
+                    onClick={() => setWeekOffset(0)}
+                    className="text-[0.65rem] font-medium text-blue-500 hover:text-blue-600 px-1.5"
+                  >
+                    This week
+                  </button>
+                )}
+                <button
+                  onClick={() => setWeekOffset(w => w + 1)}
+                  disabled={weekOffset >= 0}
+                  className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors disabled:opacity-30 disabled:pointer-events-none"
+                  aria-label="Next week"
+                >
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </button>
               </div>
             </CardHeader>
             <CardContent className="pb-3">
@@ -1002,6 +1044,7 @@ export default function DashboardPage() {
                     width={30}
                     fontSize={10}
                     tickFormatter={(v: number) => `${v}h`}
+                    domain={[0, (dataMax: number) => Math.max(dataMax, 1)]}
                   />
                   <ChartTooltip content={<ChartTooltipContent />} />
                   {(data?.weeklyHoursTarget ?? 0) > 0 && (
@@ -1028,13 +1071,14 @@ export default function DashboardPage() {
           </Card>
 
           {/* Weekly Target — beside the chart */}
-          {isEmployeeView && (filterPreset === 'today' || filterPreset === 'week') && (data?.weeklyHoursTarget ?? 0) > 0 && (() => {
-            const target = data!.weeklyHoursTarget;
-            const targetSec = target * 3600;
+          {(() => {
+            const target = data?.weeklyHoursTarget ?? 0;
+            const hasTarget = target > 0;
+            const targetSec = hasTarget ? target * 3600 : 0;
             const ws = data?.weekSeconds || 0;
-            const pct = Math.min(ws / targetSec, 1);
-            const completed = ws >= targetSec;
-            const remainSec = Math.max(0, targetSec - ws);
+            const pct = hasTarget ? Math.min(ws / targetSec, 1) : 0;
+            const completed = hasTarget && ws >= targetSec;
+            const remainSec = hasTarget ? Math.max(0, targetSec - ws) : 0;
             const remainH = Math.floor(remainSec / 3600);
             const remainM = Math.round((remainSec % 3600) / 60);
             const workedH = Math.floor(ws / 3600);
@@ -1052,35 +1096,66 @@ export default function DashboardPage() {
                       )}
                     </div>
                     <div>
-                      <h3 className="text-sm font-semibold">Weekly Target</h3>
-                      <p className="text-[0.65rem] text-muted-foreground">{target}h required</p>
+                      <h3 className="text-sm font-semibold">Weekly Progress</h3>
+                      <p className="text-[0.65rem] text-muted-foreground">
+                        {data?.weekStart && data?.weekEnd
+                          ? `${format(new Date(data.weekStart + 'T00:00:00'), 'MMM d')} – ${format(new Date(data.weekEnd + 'T00:00:00'), 'MMM d')}`
+                          : hasTarget ? `${target}h target` : (weekOffset === 0 ? 'Hours this week' : 'Hours tracked')}
+                      </p>
                     </div>
                   </div>
-            </CardHeader>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => setWeekOffset(w => w - 1)} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors" aria-label="Previous week">
+                      <ChevronLeft className="h-3.5 w-3.5 text-muted-foreground" />
+                    </button>
+                    {weekOffset !== 0 && (
+                      <button onClick={() => setWeekOffset(0)} className="text-[0.6rem] font-medium text-blue-500 hover:text-blue-600 px-1">
+                        Now
+                      </button>
+                    )}
+                    <button onClick={() => setWeekOffset(w => w + 1)} disabled={weekOffset >= 0} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors disabled:opacity-30 disabled:pointer-events-none" aria-label="Next week">
+                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                    </button>
+                  </div>
+                </CardHeader>
                 <CardContent>
                   <div className="flex flex-col items-center justify-center py-4">
                     <div className="relative h-28 w-28">
                       <svg className="h-28 w-28 -rotate-90" viewBox="0 0 100 100">
-                        <circle cx="50" cy="50" r="42" fill="none" stroke="currentColor" strokeWidth="8" className="text-muted" />
-                        <circle cx="50" cy="50" r="42" fill="none" strokeWidth="8" strokeLinecap="round"
-                          className={completed ? 'text-emerald-500' : pct >= 0.75 ? 'text-blue-500' : 'text-violet-500'}
-                          stroke="currentColor"
-                          strokeDasharray={`${Math.round(pct * 264)} 264`}
-                        />
+                        <circle cx="50" cy="50" r="42" fill="none" stroke="currentColor" strokeWidth="8" className="text-muted-foreground/20" />
+                        {hasTarget && (
+                          <circle cx="50" cy="50" r="42" fill="none" strokeWidth="8" strokeLinecap="round"
+                            className={completed ? 'text-emerald-500' : pct >= 0.75 ? 'text-blue-500' : 'text-violet-500'}
+                            stroke="currentColor"
+                            strokeDasharray={`${Math.round(pct * 264)} 264`}
+                          />
+                        )}
                       </svg>
                       <div className="absolute inset-0 flex flex-col items-center justify-center">
-                        <span className="text-2xl font-bold tabular-nums">{Math.round(pct * 100)}%</span>
+                        {hasTarget ? (
+                          <span className="text-2xl font-bold tabular-nums">{Math.round(pct * 100)}%</span>
+                        ) : (
+                          <span className="text-xl font-bold tabular-nums">{workedH}h {workedM}m</span>
+                        )}
                       </div>
                     </div>
                     <div className="mt-3 text-center">
-                      <p className="text-xs font-medium text-foreground tabular-nums">{workedH}h {workedM}m / {target}h</p>
-                      {completed ? (
-                        <Badge className="mt-1.5 bg-green-500/10 text-green-500 border-green-500/20 gap-1 text-[0.65rem]">
-                          Goal Achieved
-                        </Badge>
+                      {hasTarget ? (
+                        <>
+                          <p className="text-xs font-medium text-foreground tabular-nums">{workedH}h {workedM}m / {target}h</p>
+                          {completed ? (
+                            <Badge className="mt-1.5 bg-green-500/10 text-green-500 border-green-500/20 gap-1 text-[0.65rem]">
+                              Goal Achieved
+                            </Badge>
+                          ) : (
+                            <p className="text-[0.65rem] text-muted-foreground mt-1 tabular-nums">
+                              {remainH}h {remainM}m remaining
+                            </p>
+                          )}
+                        </>
                       ) : (
-                        <p className="text-[0.65rem] text-muted-foreground mt-1 tabular-nums">
-                          {remainH}h {remainM}m remaining
+                        <p className="text-[0.65rem] text-muted-foreground mt-1">
+                          {weekOffset === 0 ? 'Total tracked this week' : 'Total tracked'}
                         </p>
                       )}
                     </div>
@@ -1421,13 +1496,21 @@ export default function DashboardPage() {
                 <TableBody>
                   {timeEntries.slice(0, maxEntries).map((entry) => (
                     <TableRow key={entry.id} className="border-border hover:bg-muted/50 transition-colors">
-                      <TableCell className="text-foreground font-mono text-xs py-2">
+                      <TableCell className="py-2">
                         {(() => {
                           try {
-                            const d = new Date(entry.started_at);
-                            if (!isNaN(d.getTime())) return format(d, 'MMM d, yyyy HH:mm');
-                          } catch { /* invalid date */ }
-                          return '—';
+                            const start = new Date(entry.started_at);
+                            if (isNaN(start.getTime())) return <span className="text-xs text-muted-foreground">—</span>;
+                            const end = entry.ended_at ? new Date(entry.ended_at) : null;
+                            return (
+                              <div>
+                                <span className="text-xs font-medium text-foreground">{format(start, 'MMM d, yyyy')}</span>
+                                <div className="text-[0.65rem] text-muted-foreground tabular-nums">
+                                  {format(start, 'hh:mm a')}{end ? ` - ${format(end, 'hh:mm a')}` : ''}
+                                </div>
+                              </div>
+                            );
+                          } catch { return <span className="text-xs text-muted-foreground">—</span>; }
                         })()}
                       </TableCell>
                       <TableCell className="py-2">
@@ -1436,8 +1519,8 @@ export default function DashboardPage() {
                         </span>
                       </TableCell>
                       <TableCell className="py-2">
-                        {entry.task?.title ? (
-                          <span className="text-xs text-muted-foreground">{entry.task.title}</span>
+                        {entry.task?.name ? (
+                          <span className="text-xs text-muted-foreground">{entry.task.name}</span>
                         ) : (
                           <span className="text-muted-foreground text-[0.65rem]">No task</span>
                         )}

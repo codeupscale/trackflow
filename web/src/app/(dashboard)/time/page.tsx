@@ -92,7 +92,7 @@ interface TimeEntry {
   };
   task?: {
     id: string;
-    title: string;
+    name: string;
   };
   user?: {
     id: string;
@@ -700,7 +700,7 @@ export default function TimePage() {
                   </TableHeader>
                   <TableBody>
                     {entries.map((entry) => (
-                      <TableRow key={entry.id} className="border-border/50 hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => setViewEntry(entry)}>
+                      <TableRow key={entry.id} className={`border-border/50 hover:bg-muted/30 transition-colors ${entry.type === 'manual' ? 'cursor-pointer' : ''}`} onClick={() => { if (entry.type === 'manual') setViewEntry(entry); }}>
                         {showCheckboxes && (
                           <TableCell className="px-3" onClick={(e) => e.stopPropagation()}>
                             <Checkbox
@@ -762,8 +762,12 @@ export default function TimePage() {
                             <span className="text-[0.65rem] text-muted-foreground">No project</span>
                           )}
                         </TableCell>
-                        <TableCell className="text-[0.7rem] text-foreground py-2.5">
-                          {entry.task?.title || <span className="text-muted-foreground text-[0.65rem]">No task</span>}
+                        <TableCell className="text-[0.7rem] text-foreground py-2.5 max-w-[150px]">
+                          {entry.task?.name ? (
+                            <span className="block truncate" title={entry.task.name}>{entry.task.name}</span>
+                          ) : (
+                            <span className="text-muted-foreground text-[0.65rem]">No task</span>
+                          )}
                         </TableCell>
                         <TableCell className="text-right py-2.5">
                           {entry.ended_at ? (
