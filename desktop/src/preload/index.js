@@ -67,6 +67,10 @@ contextBridge.exposeInMainWorld('trackflow', {
   onProjectsReady: (callback) => safeOn('projects-ready', () => callback()),
   onIdleData: (callback) => safeOn('idle-data', (_, data) => callback(data)),
   onAutoStopped: (callback) => safeOn('auto-stopped', (_, data) => callback(data)),
+  // Fired when the user returns from a break to a STOPPED timer. Carries playSound so
+  // the renderer can beep — the OS notification's own sound is routinely dropped by
+  // macOS Focus / Windows Action Center, same reason the idle alert has its own.
+  onReturnFromBreak: (callback) => safeOn('return-from-break', (_, data) => callback(data)),
   // Popup lock while an idle alert is waiting for an answer — the main window's
   // timer controls are disabled so the idle window is the only place to act.
   onIdleLock: (callback) => safeOn('idle-lock', (_, data) => callback(data)),
