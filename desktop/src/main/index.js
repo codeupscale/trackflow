@@ -1554,6 +1554,25 @@ function resolveServerEntryIdForQueue(meta) {
     return null;
 }
 
+/**
+ * The entry id the LIVE capture path must post to `POST /screenshots/presign`.
+ *
+ * presign validates `time_entry_id` as a uuid and looks it up in `time_entries`, so a
+ * `local-…` id is rejected outright. Prefer the server entry id whenever the session has
+ * already synced (restore-after-restart, project switch, any session older than one sync
+ * cycle); fall back to the local id only while the server has genuinely never seen this
+ * session — `onSessionConfirmed` rebinds the moment that changes.
+ */
+function liveCaptureEntryId() {
+    if (!currentEntry) return null;
+    const localId = currentEntry._localId || currentEntry.id;
+    const resolved = resolveServerEntryIdForQueue({
+        time_entry_id: localId,
+        idempotency_key: currentEntry.idempotency_key || null,
+    });
+    return resolved || currentEntry.id;
+}
+
 // ── Global Error Handlers ────────────────────────────────────────────────────
 
 process.on("uncaughtException", (error) => {
@@ -2059,6 +2078,17 @@ async function initializeApp() {
         apiClient,
         offlineQueue,
         getTimeZone: () => config?.timezone || DEFAULT_CONFIG.timezone,
+        // The live capture is bound to a `local-…` id at start() time, because starting
+        // a timer makes no network call any more. `POST /screenshots/presign` validates
+        // `time_entry_id` as a uuid, so every live shot 422s until the session earns a
+        // real server id — which only happens here, on the first confirmed push.
+        // Rebinding is what keeps screenshots on the LIVE path instead of dumping the
+        // whole day into the offline queue.
+        onSessionConfirmed: (localId, serverEntryId) => {
+            if (!currentEntry) return;
+            if ((currentEntry._localId || currentEntry.id) !== localId) return;
+            screenshotService?.rebindEntryId(serverEntryId);
+        },
     });
     sessionSyncWorker.start();
 
@@ -2084,6 +2114,17 @@ async function initializeApp() {
         getIsAppVisible,
         activityMonitor,
     );
+    // Same anchor the activity monitor uses. A queued screenshot records the SESSION's
+    // uuid so it can still resolve to a server entry id after the row its `local-…` id
+    // points at has been purged.
+    screenshotService.getCurrentEntryMeta = () =>
+        currentEntry
+            ? {
+                  time_entry_id:
+                      currentEntry._localId || currentEntry.id || null,
+                  idempotency_key: currentEntry.idempotency_key || null,
+              }
+            : null;
     // Register the screenshot-captured callback ONCE at service creation so that
     // _lastScreenshotAt is updated and a live `activity-update` is pushed to the
     // popup on EVERY capture — regardless of which path called screenshotService
@@ -3835,14 +3876,15 @@ function afterStartTimer(projectIdForTotal, todayTotalForPopup) {
             );
         }
         try {
+            const captureEntryId = liveCaptureEntryId();
             console.log(
-                `[afterStartTimer] Calling screenshotService.start(${currentEntry.id})`,
+                `[afterStartTimer] Calling screenshotService.start(${captureEntryId})`,
             );
             // NOTE: the screenshot-captured callback (which updates _lastScreenshotAt
             // and pushes a live `activity-update`) is registered once at service
             // creation in initializeApp(), so it applies to every start() path —
             // not just this one. Do not re-register it here.
-            screenshotService.start(currentEntry.id);
+            screenshotService.start(captureEntryId);
             console.log("[afterStartTimer] screenshotService started");
         } catch (e) {
             console.error(

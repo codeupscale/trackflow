@@ -88,7 +88,11 @@ class OfflineQueue {
       try {
         const resolved = this.resolveServerEntryId({
           time_entry_id: raw,
-          idempotency_key: meta && meta.idempotency_key,
+          // Screenshots carry the owning session's uuid separately, because their own
+          // `idempotency_key` is a per-shot dedupe key that matches no session. For
+          // heartbeats the two are the same value, so passing session_uuid first is
+          // strictly a widening of what can resolve.
+          idempotency_key: (meta && meta.session_uuid) || (meta && meta.idempotency_key),
         });
         if (resolved && !String(resolved).startsWith('local-')) return String(resolved);
       } catch (e) {
@@ -105,12 +109,40 @@ class OfflineQueue {
   // resolve. Holding it loops forever: it is re-read and "held" every flush cycle,
   // spamming the log and blocking the queue. Such orphans must be DROPPED, not held.
   _isUnresolvableOrphan(meta) {
-    const hasIdem = !!(meta && meta.idempotency_key != null && meta.idempotency_key !== '');
+    const hasIdem = !!(
+      (meta && meta.session_uuid != null && meta.session_uuid !== '') ||
+      (meta && meta.idempotency_key != null && meta.idempotency_key !== '')
+    );
     if (hasIdem) return false;
     const raw = meta && meta.time_entry_id != null ? String(meta.time_entry_id) : null;
     // In the unresolved branch a real id would already have resolved, so raw here is
     // either a `local-…` placeholder (keep — may sync later) or null (orphan).
     return raw == null;
+  }
+
+  /**
+   * Local session ids / uuids that queued items still need in order to resolve a server
+   * entry id. The purge must not delete a timer_sessions row while one of these is
+   * outstanding — doing so strands the item permanently (it holds forever, then dies
+   * silently in the 7-day TTL sweep, taking its screenshot file with it).
+   */
+  referencedSessionKeys() {
+    if (!this.db) return [];
+    const keys = new Set();
+    try {
+      const rows = this.db.prepare('SELECT data FROM queue').all();
+      for (const r of rows) {
+        let data;
+        try { data = JSON.parse(r.data); } catch { continue; }
+        const raw = data && data.time_entry_id != null ? String(data.time_entry_id) : null;
+        if (raw && raw.startsWith('local-')) keys.add(raw);
+        if (data && data.session_uuid) keys.add(String(data.session_uuid));
+        if (data && data.idempotency_key) keys.add(String(data.idempotency_key));
+      }
+    } catch (e) {
+      console.warn('[OfflineQueue] referencedSessionKeys failed:', e.message);
+    }
+    return Array.from(keys);
   }
 
   init() {
@@ -298,6 +330,10 @@ class OfflineQueue {
           captured_at: data.captured_at,
           idempotency_key: data.idempotency_key,
         };
+        // The owning session's uuid — the only handle that still resolves to a server
+        // entry id after the 05:00 purge (or a sign-out) deletes the timer_sessions row
+        // this shot's `local-…` id points at.
+        if (data.session_uuid) queueData.session_uuid = data.session_uuid;
         if (data.app_name) queueData.app_name = data.app_name;
         if (data.window_title) queueData.window_title = data.window_title;
         if (data.activity_score != null) queueData.activity_score = data.activity_score;
@@ -344,6 +380,7 @@ class OfflineQueue {
       const screenshotFilesToDelete = []; // Track files to delete after successful upload
       let transientStop = false; // Set when we hit rate-limit/server/network — pause & retry later
       let screenshotsUploadedThisFlush = 0; // For pacing between screenshot uploads
+      let heldScreenshots = 0; // Unresolvable this cycle — surfaced below, never silent
 
       for (const item of items) {
         let data;
@@ -405,6 +442,7 @@ class OfflineQueue {
                 deleteIds.push(item.id);
                 continue;
               }
+              heldScreenshots++;
               console.log(`[OfflineQueue] Holding screenshot — entry not synced yet (entry=${data.time_entry_id})`);
               continue; // leave in queue + keep file; do NOT count an attempt
             }
@@ -521,6 +559,16 @@ class OfflineQueue {
         } catch (e) {
           console.warn(`[OfflineQueue] Failed to delete screenshot file: ${e.message}`);
         }
+      }
+
+      // A held screenshot costs nothing once; a persistently held one is evidence being
+      // lost on a timer, since the 7-day TTL sweep deletes it and its file without a word.
+      if (heldScreenshots > 0) {
+        const level = heldScreenshots >= 50 ? 'error' : 'warn';
+        console[level](
+          `[OfflineQueue] ${heldScreenshots} screenshot(s) could not resolve a server entry id this flush` +
+          (heldScreenshots >= 50 ? ' — these will be dropped by the TTL sweep if they stay unresolvable' : '')
+        );
       }
 
       if (transientStop) {
