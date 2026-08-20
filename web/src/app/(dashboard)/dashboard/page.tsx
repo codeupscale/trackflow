@@ -387,7 +387,7 @@ export default function DashboardPage() {
     ended_at: string | null;
     duration_seconds: number;
     project?: { name: string; color?: string };
-    task?: { title: string };
+    task?: { name: string };
   }>;
 
   // ── Attendance overview (admin only) ──
@@ -1519,8 +1519,8 @@ export default function DashboardPage() {
                         </span>
                       </TableCell>
                       <TableCell className="py-2">
-                        {entry.task?.title ? (
-                          <span className="text-xs text-muted-foreground">{entry.task.title}</span>
+                        {entry.task?.name ? (
+                          <span className="text-xs text-muted-foreground">{entry.task.name}</span>
                         ) : (
                           <span className="text-muted-foreground text-[0.65rem]">No task</span>
                         )}
