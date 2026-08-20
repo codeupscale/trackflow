@@ -74,9 +74,15 @@ class TimeEntryPolicy
             return false;
         }
 
-        // Own entry — only if user has delete permission at own scope
+        // Own entry — allow deleting own manual entries that are pending or rejected
+        // (even without time_entries.delete permission)
         if ($user->id === $entry->user_id) {
-            return app(PermissionService::class)->hasPermission($user, 'time_entries.delete');
+            if (app(PermissionService::class)->hasPermission($user, 'time_entries.delete')) {
+                return true;
+            }
+
+            return $entry->type === 'manual'
+                && in_array($entry->approval_status, ['pending', 'rejected'], true);
         }
 
         $service = app(PermissionService::class);

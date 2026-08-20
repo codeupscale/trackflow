@@ -183,8 +183,11 @@ export default function MyAttendancePage() {
             value={String(selectedMonth)}
             onValueChange={(v) => { setSelectedMonth(Number(v)); setCurrentPage(1); }}
           >
-            <SelectTrigger className="w-[120px] h-8 text-xs" aria-label="Select month">
-              <SelectValue />
+            <SelectTrigger className="w-[130px] h-8 text-xs" aria-label="Select month">
+              <CalendarDays className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <SelectValue>
+                {MONTHS[selectedMonth - 1]}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
@@ -198,8 +201,10 @@ export default function MyAttendancePage() {
             value={String(selectedYear)}
             onValueChange={(v) => { setSelectedYear(Number(v)); setCurrentPage(1); }}
           >
-            <SelectTrigger className="w-[80px] h-8 text-xs" aria-label="Select year">
-              <SelectValue />
+            <SelectTrigger className="w-[85px] h-8 text-xs" aria-label="Select year">
+              <SelectValue>
+                {selectedYear}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>

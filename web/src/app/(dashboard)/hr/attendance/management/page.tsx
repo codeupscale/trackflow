@@ -984,7 +984,7 @@ function ReportTab() {
               <div className="flex flex-col gap-1">
                 <Label className="text-[0.65rem] text-muted-foreground">Month</Label>
                 <Select value={String(month)} onValueChange={(v) => { setMonth(Number(v)); setPage(1); }}>
-                  <SelectTrigger className="w-[130px] h-8 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-[130px] h-8 text-xs"><SelectValue>{MONTHS[month - 1]}</SelectValue></SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
                       {MONTHS.map((name, idx) => (
@@ -997,7 +997,7 @@ function ReportTab() {
               <div className="flex flex-col gap-1">
                 <Label className="text-[0.65rem] text-muted-foreground">Year</Label>
                 <Select value={String(year)} onValueChange={(v) => { setYear(Number(v)); setPage(1); }}>
-                  <SelectTrigger className="w-[90px] h-8 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-[90px] h-8 text-xs"><SelectValue>{year}</SelectValue></SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
                       {yearOptions.map((y) => (

@@ -133,7 +133,8 @@ export default function TimePage() {
   const searchParams = useSearchParams();
   const { hasPermission, hasPermissionWithScope } = usePermissionStore();
   const canApprove = hasPermission('time_entries.approve');
-  const canDelete = hasPermission('time_entries.delete');
+  const canDeleteAll = hasPermission('time_entries.delete');
+  const canDeleteOwnManual = !canDeleteAll;
 
   const isManagerOrAbove = hasPermissionWithScope('time_entries.view', 'project');
 
@@ -280,8 +281,14 @@ export default function TimePage() {
     }
   };
 
+  const canDelete = canDeleteAll || canDeleteOwnManual;
   const showCheckboxes = canDelete || canApprove;
   const selectedPendingCount = selectedEntries.filter((id) => entries.find((e) => e.id === id && e.status === 'pending')).length;
+  const selectedDeletableCount = canDeleteAll
+    ? selectedEntries.length
+    : selectedEntries.filter((id) =>
+        entries.find((e) => e.id === id && e.user_id === user?.id && e.type === 'manual' && (e.status === 'pending' || e.status === 'rejected'))
+      ).length;
 
   const totalSeconds = entries.reduce((sum, e) => sum + getDisplayDuration(e), 0);
 
@@ -453,9 +460,16 @@ export default function TimePage() {
                     Approve ({selectedPendingCount})
                   </Button>
                 )}
-                {canDelete && (
+                {canDelete && selectedDeletableCount > 0 && (
                   <Button
-                    onClick={() => deleteMutation.mutate(selectedEntries)}
+                    onClick={() => {
+                      const deletableIds = canDeleteAll
+                        ? selectedEntries
+                        : selectedEntries.filter((id) =>
+                            entries.find((e) => e.id === id && e.user_id === user?.id && e.type === 'manual' && (e.status === 'pending' || e.status === 'rejected'))
+                          );
+                      deleteMutation.mutate(deletableIds);
+                    }}
                     disabled={deleteMutation.isPending}
                     variant="destructive"
                     size="sm"
@@ -466,7 +480,7 @@ export default function TimePage() {
                     ) : (
                       <Trash2 className="mr-1.5 h-3.5 w-3.5" />
                     )}
-                    Delete ({selectedEntries.length})
+                    Delete ({selectedDeletableCount})
                   </Button>
                 )}
               </div>
