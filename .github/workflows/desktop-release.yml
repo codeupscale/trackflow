@@ -36,7 +36,10 @@ concurrency:
 
 jobs:
   # ── Preflight: resolve version + channel ─────────────────────────────────────
-  # main    → production release  v<version>            (skipped if it already exists)
+  # main    → production release  v<version> — a push to main (i.e. develop was merged)
+  #           resolves to the next UNRELEASED patch, so a merge ALWAYS ships without a
+  #           hand-committed version bump first. An explicit workflow_dispatch version
+  #           is still taken literally and skipped if that release already exists.
   # develop → dev PRERELEASE      v<next-version>-dev.<n> — if package.json's version
   #           has already shipped to production, the patch is auto-bumped so dev builds
   #           sort AFTER the release (semver: 1.0.42-dev.N < 1.0.42 < 1.0.43-dev.1),
@@ -64,14 +67,33 @@ jobs:
           fi
 
           if [ "${{ github.ref_name }}" = "main" ]; then
-            # Production: tag v<base>. Skip if already released so we never silently
-            # republish a shipped version.
             CHANNEL="production"
-            VERSION="${BASE}"
-            if gh release view "v${VERSION}" --repo ${{ github.repository }} > /dev/null 2>&1; then
-              echo "Release v${VERSION} already exists — skipping."
-              SHOULD=false
+
+            if [ -n "${{ inputs.version }}" ]; then
+              # Explicit workflow_dispatch: honour exactly the number asked for, and
+              # still refuse to silently republish a version that already shipped.
+              VERSION="${BASE}"
+              if gh release view "v${VERSION}" --repo ${{ github.repository }} > /dev/null 2>&1; then
+                echo "Release v${VERSION} already exists — skipping."
+                SHOULD=false
+              else
+                SHOULD=true
+              fi
             else
+              # Push to main = develop was merged = this IS the release. Resolve to
+              # the next UNRELEASED patch instead of requiring a hand-committed bump
+              # in desktop/package.json first. Without this the merge silently
+              # produced NO release whenever package.json still held a shipped
+              # version (it sat at 1.0.43 while prod was on v1.0.46), which is what
+              # forced the "commit a bump to develop, merge to main again" chore.
+              # v<BASE> and the dev prereleases v<BASE>-dev.<n> are distinct tags,
+              # and semver sorts 1.0.47-dev.2 < 1.0.47, so promoting the version the
+              # dev channel has been building is exactly right.
+              while gh release view "v${BASE}" --repo ${{ github.repository }} > /dev/null 2>&1; do
+                echo "v${BASE} already shipped — bumping patch."
+                BASE=$(echo "${BASE}" | awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}')
+              done
+              VERSION="${BASE}"
               SHOULD=true
             fi
           else
@@ -518,6 +540,60 @@ jobs:
           - Windows: \`%APPDATA%/trackflow-agent/trackflow.log\`
           - Linux: \`~/.config/trackflow-agent/trackflow.log\`
           "
+
+  # ── Keep desktop/package.json honest on develop ──────────────────────────────
+  # Production only. After a release ships, write the NEXT patch into
+  # desktop/package.json on develop so the committed number tracks reality instead
+  # of drifting (it sat at 1.0.43 while production was on v1.0.46). Preflight no
+  # longer DEPENDS on this — main resolves past shipped versions on its own — this
+  # just keeps the file meaningful and starts the next dev prerelease from the
+  # right base.
+  #
+  # Pushes to DEVELOP, never main: a push to main touching desktop/** would
+  # retrigger this workflow and immediately release the bumped version. (A push
+  # made with GITHUB_TOKEN does not trigger workflows, and [skip ci] is a second
+  # guard, but the branch choice is the real one.)
+  bump-develop-version:
+    needs: [preflight, build-mac, build-windows, build-linux]
+    if: always() && needs.preflight.outputs.channel == 'production' && (needs.build-mac.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump desktop/package.json to the next patch
+        run: |
+          RELEASED="${{ needs.preflight.outputs.version }}"
+          NEXT=$(echo "${RELEASED}" | awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}')
+          CURRENT=$(node -p 'require("./desktop/package.json").version')
+
+          # Never move the version BACKWARDS — develop may already be ahead if a
+          # minor/major was bumped by hand for the next cycle.
+          HIGHEST=$(printf '%s\n%s\n' "${CURRENT}" "${NEXT}" | sort -V | tail -1)
+          if [ "${HIGHEST}" = "${CURRENT}" ] && [ "${CURRENT}" != "${NEXT}" ]; then
+            echo "develop is already at ${CURRENT} (ahead of ${NEXT}) — leaving it alone."
+            exit 0
+          fi
+
+          ( cd desktop && npm version "${NEXT}" --no-git-tag-version --allow-same-version )
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add desktop/package.json desktop/package-lock.json
+          if git diff --staged --quiet; then
+            echo "desktop/package.json already at ${NEXT} — nothing to commit."
+            exit 0
+          fi
+          git commit -m "chore(desktop): bump version to ${NEXT} after v${RELEASED} [skip ci]"
+
+          # develop moves constantly; rebase and retry rather than failing the run.
+          git push origin develop || {
+            git pull --rebase origin develop && git push origin develop
+          }
+          echo "::notice::desktop/package.json on develop is now ${NEXT}."
 
   # ── Finalize dev prerelease ──────────────────────────────────────────────────
   # Dev channel only. The release is pre-created as a prerelease in preflight, but
