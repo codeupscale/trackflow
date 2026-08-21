@@ -113,12 +113,6 @@ export const navigationConfig: NavGroup[] = [
                 icon: Megaphone,
                 requiredPermission: "job_postings.view",
             },
-            {
-                name: "Team",
-                href: "/team",
-                icon: UsersRound,
-                requiredPermission: "team.view_members",
-            },
         ],
     },
     {

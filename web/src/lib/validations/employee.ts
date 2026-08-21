@@ -75,6 +75,7 @@ export interface EmployeeListItem {
   employee_id: string | null;
   name: string;
   email: string;
+  role: string;
   avatar_url: string | null;
   job_title: string | null;
   phone: string | null;
@@ -145,10 +146,15 @@ export interface EmployeeNote {
 // ── Zod Schemas ──
 
 export const employeeProfileSchema = z.object({
+  // Basic info
+  name: z.string().min(2, 'Name is required').max(255).optional(),
+  email: z.string().email('Invalid email').max(255).optional(),
+
   // Employment (admin-only fields)
   employee_id: z.string().max(50).optional().nullable(),
   department_id: z.string().uuid().optional().nullable(),
   position_id: z.string().uuid().optional().nullable(),
+  job_title: z.string().max(255).optional().nullable(),
   reporting_manager_id: z.string().uuid().optional().nullable(),
   employment_status: z.enum(EMPLOYMENT_STATUSES).optional().nullable(),
   employment_type: z.enum(EMPLOYMENT_TYPES).optional().nullable(),

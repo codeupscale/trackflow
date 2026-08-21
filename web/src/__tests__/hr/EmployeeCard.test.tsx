@@ -25,6 +25,7 @@ const baseEmployee: EmployeeListItem = {
   employee_id: 'EMP-001',
   name: 'John Doe',
   email: 'john@example.com',
+  role: 'employee',
   avatar_url: null,
   job_title: 'Engineer',
   phone: '+61400000000',

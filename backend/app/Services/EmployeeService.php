@@ -129,6 +129,11 @@ class EmployeeService
         return DB::transaction(function () use ($userId, $orgId, $data, $updater) {
             $profile = $this->getOrCreateProfile($userId, $orgId);
 
+            $targetUser = User::where('id', $userId)->where('organization_id', $orgId)->firstOrFail();
+            if ($targetUser->hasRole('owner') && ! $updater->hasRole('owner')) {
+                abort(403, 'Only an owner can edit the owner\'s profile.');
+            }
+
             // Field-level authorization: employees can only edit personal fields
             $canEditEmploymentFields = app(PermissionService::class)->hasPermission(
                 $updater,
@@ -138,6 +143,23 @@ class EmployeeService
             if ($updater->id === $userId && ! $canEditEmploymentFields) {
                 $data = array_intersect_key($data, array_flip($this->personalFields()));
             }
+
+            // Update user-level fields (name, email, job_title) if provided
+            $userFields = array_intersect_key($data, array_flip(['name', 'email', 'job_title']));
+            if (! empty($userFields)) {
+                if (isset($userFields['email']) && $userFields['email'] !== $targetUser->email) {
+                    $exists = User::withoutGlobalScopes()
+                        ->where('organization_id', $orgId)
+                        ->where('email', $userFields['email'])
+                        ->where('id', '!=', $userId)
+                        ->exists();
+                    if ($exists) {
+                        abort(422, 'A user with this email already exists in your organization.');
+                    }
+                }
+                $targetUser->update($userFields);
+            }
+            $data = array_diff_key($data, array_flip(['name', 'email', 'job_title']));
 
             $profile->update($data);
 

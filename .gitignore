@@ -37,6 +37,13 @@ web/node_modules
 web/.next
 web/out
 
+# Marketing (Next.js)
+marketing/node_modules
+marketing/.next
+marketing/out
+marketing/.vercel
+marketing/tsconfig.tsbuildinfo
+
 docs
 temp_auto_push.bat
 temp_interactive_push.bat
@@ -44,13 +51,15 @@ temp_interactive_push.bat
 # Local scratch / testing
 testing_dump/
 
-# One-off PRODUCTION data-repair / ops scripts. Kept LOCAL on purpose: each is a
-# single-use fix against live data — hardcoded prod user ids, a specific date range,
-# a specific incident — not reusable tooling, and nothing here should ever be run a
-# second time by someone reaching for it in the repo. The permanent scripts
-# (scripts/deploy.sh, scripts/scan-for-malware.sh) are already tracked and stay so.
-scripts/prod-*.sh
-scripts/prod-*.sql
+# scripts/ is a LOCAL working area. What lands there is one-off work against live
+# data — a single incident, a date range, hardcoded prod user ids — not reusable
+# tooling, and a tracked copy reads as tooling to whoever finds it months later.
+# Ignoring the directory wholesale (rather than a `prod-*` prefix) means a new
+# script is out by default and has to be added deliberately.
+#
+# Already-tracked scripts are unaffected — an ignore rule never untracks a file.
+# To add a genuinely permanent one: `git add -f scripts/<name>`.
+scripts/*
 
 # TypeScript incremental build artifact
 *.tsbuildinfo

@@ -1,25 +1,34 @@
 'use client';
 
 import { useState, useMemo, useRef, useEffect } from 'react';
-import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import {
   Building2,
   Briefcase,
+  ChevronDown,
+  ChevronUp,
+  Copy,
   Filter,
   LayoutGrid,
   List,
+  Loader2,
   Mail,
   MapPin,
+  RefreshCw,
   Search,
+  Trash2,
   UserCheck,
+  UserPlus,
   Users,
   X,
 } from 'lucide-react';
 
+import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
 import { useEmployees, type UseEmployeesParams } from '@/hooks/hr/use-employees';
+
 import type { EmployeeListItem } from '@/lib/validations/employee';
 import {
   EMPLOYMENT_STATUSES,
@@ -30,12 +39,22 @@ import {
 
 import { EmptyState } from '@/components/common/EmptyState';
 import { DepartmentSelect } from '@/components/hr/DepartmentSelect';
+import { EmployeeDetailModal, RoleBadge } from '@/components/hr/EmployeeDetailModal';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Select,
   SelectContent,
@@ -63,6 +82,29 @@ import {
   PaginationPrevious,
 } from '@/components/ui/pagination';
 import { cn, formatDate } from '@/lib/utils';
+
+const INVITE_ROLE_LABELS: Record<string, string> = {
+  owner: 'Owner',
+  org_manager: 'Org Manager',
+  hr_manager: 'HR Manager',
+  finance_manager: 'Finance Manager',
+  employee: 'Employee',
+};
+
+function formatRoleLabel(role: string): string {
+  return INVITE_ROLE_LABELS[role] ?? role.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+interface Invitation {
+  id: string;
+  name: string | null;
+  email: string;
+  role: string;
+  token: string;
+  expires_at: string;
+  created_at: string;
+  creator?: { id: string; name: string; email: string };
+}
 
 function getInitials(name: string): string {
   return name
@@ -111,17 +153,19 @@ function EmploymentStatusDot({ status }: { status: string }) {
 }
 
 export default function EmployeesPage() {
-  const router = useRouter();
+  const queryClient = useQueryClient();
   const { user } = useAuthStore();
-  const { hasPermissionWithScope } = usePermissionStore();
+  const { hasPermission, hasPermissionWithScope } = usePermissionStore();
 
   const isManagerOrAdmin = hasPermissionWithScope('employees.view_directory', 'project');
+  const canInvite = hasPermission('team.invite');
 
   useEffect(() => {
     if (user && !isManagerOrAdmin) {
-      router.push(`/hr/employees/${user.id}`);
+      setSelectedEmployeeId(user.id);
+      setModalOpen(true);
     }
-  }, [user, isManagerOrAdmin, router]);
+  }, [user, isManagerOrAdmin]);
 
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
@@ -131,6 +175,70 @@ export default function EmployeesPage() {
   const [employmentType, setEmploymentType] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   const [showFilters, setShowFilters] = useState(false);
+
+  // Employee detail modal
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  // Invite state
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteName, setInviteName] = useState('');
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState<string>('employee');
+  const [inviteErrors, setInviteErrors] = useState<{ name?: string; email?: string; role?: string }>({});
+  const [invitesExpanded, setInvitesExpanded] = useState(false);
+
+  const { data: invitationsData, isLoading: invitesLoading } = useQuery<{ data: Invitation[] }>({
+    queryKey: ['invitations'],
+    queryFn: async () => { const res = await api.get('/invitations', { params: { per_page: 50 } }); return res.data; },
+    enabled: canInvite,
+  });
+  const invitations = invitationsData?.data ?? [];
+
+  const inviteMutation = useMutation({
+    mutationFn: async (data: { name: string; email: string; role: string }) => { await api.post('/invitations', data); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['invitations'] });
+      queryClient.invalidateQueries({ queryKey: ['employees'] });
+      setInviteOpen(false);
+      setInviteName('');
+      setInviteEmail('');
+      setInviteRole('employee');
+      setInviteErrors({});
+      toast.success('Invitation sent successfully');
+    },
+    onError: (err: unknown) => {
+      const axiosErr = err as { response?: { data?: { message?: string; errors?: Record<string, string[]> }; status?: number } };
+      if (axiosErr.response?.status === 403) { toast.error("You don't have permission to send invitations."); return; }
+      const errors = axiosErr.response?.data?.errors;
+      if (errors) setInviteErrors({ name: errors.name?.[0], email: errors.email?.[0], role: errors.role?.[0] });
+      toast.error(axiosErr.response?.data?.message || 'Failed to send invitation');
+    },
+  });
+
+  const resendMutation = useMutation({
+    mutationFn: async (id: string) => { await api.post(`/invitations/${id}/resend`); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['invitations'] }); toast.success('Invitation resent'); },
+    onError: () => { toast.error('Failed to resend invitation'); },
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: async (id: string) => { await api.delete(`/invitations/${id}`); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['invitations'] }); toast.success('Invitation revoked'); },
+    onError: () => { toast.error('Failed to revoke invitation'); },
+  });
+
+  const copyInviteLink = async (token: string) => {
+    const url = `${typeof window !== 'undefined' ? window.location.origin : ''}/invitations/accept?token=${token}`;
+    try { await navigator.clipboard.writeText(url); toast.success('Invite link copied'); } catch { toast.error('Failed to copy link'); }
+  };
+
+  const handleInvite = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inviteName.trim() || !inviteEmail.trim()) return;
+    setInviteErrors({});
+    inviteMutation.mutate({ name: inviteName.trim(), email: inviteEmail.trim(), role: inviteRole });
+  };
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -210,6 +318,16 @@ export default function EmployeesPage() {
           </p>
         </div>
         <div className="flex items-center gap-1.5">
+          {canInvite && (
+            <Button
+              size="sm"
+              className="h-8 text-xs gap-1.5"
+              onClick={() => setInviteOpen(true)}
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              Invite Employee
+            </Button>
+          )}
           <Button
             variant={viewMode === 'list' ? 'secondary' : 'ghost'}
             size="sm"
@@ -460,7 +578,7 @@ export default function EmployeesPage() {
         /* ── Grid View ── */
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {employees.map((emp) => (
-            <Link key={emp.id} href={`/hr/employees/${emp.id}`} className="block group">
+            <div key={emp.id} className="block group cursor-pointer" onClick={() => { setSelectedEmployeeId(emp.id); setModalOpen(true); }}>
               <Card className="transition-all group-hover:border-primary/30 group-hover:shadow-sm h-full">
                 <CardContent className="p-4">
                   <div className="flex items-start gap-3">
@@ -473,7 +591,10 @@ export default function EmployeesPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="text-sm font-semibold text-foreground truncate leading-tight">{emp.name}</p>
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-sm font-semibold text-foreground truncate leading-tight">{emp.name}</p>
+                            <RoleBadge role={emp.role} />
+                          </div>
                           <p className="text-[0.65rem] text-muted-foreground truncate mt-0.5">{emp.email}</p>
                         </div>
                         <EmploymentStatusDot status={emp.employment_status} />
@@ -499,7 +620,7 @@ export default function EmployeesPage() {
                   </div>
                 </CardContent>
               </Card>
-            </Link>
+            </div>
           ))}
         </div>
       ) : (
@@ -510,10 +631,11 @@ export default function EmployeesPage() {
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent border-border">
-                    <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[240px]">Employee</TableHead>
-                    <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[150px]">Department</TableHead>
-                    <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[150px]">Position</TableHead>
-                    <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[100px]">Type</TableHead>
+                    <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[220px]">Employee</TableHead>
+                    <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[100px]">Role</TableHead>
+                    <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[140px]">Department</TableHead>
+                    <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[140px]">Position</TableHead>
+                    <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[90px]">Type</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[80px]">Status</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[100px]">Joined</TableHead>
                   </TableRow>
@@ -523,7 +645,7 @@ export default function EmployeesPage() {
                     <TableRow
                       key={emp.id}
                       className="border-border/50 hover:bg-muted/30 transition-colors cursor-pointer"
-                      onClick={() => router.push(`/hr/employees/${emp.id}`)}
+                      onClick={() => { setSelectedEmployeeId(emp.id); setModalOpen(true); }}
                     >
                       <TableCell className="py-2">
                         <div className="flex items-center gap-2.5">
@@ -538,6 +660,9 @@ export default function EmployeesPage() {
                             <p className="text-[0.6rem] text-muted-foreground truncate">{emp.email}</p>
                           </div>
                         </div>
+                      </TableCell>
+                      <TableCell className="py-2">
+                        <RoleBadge role={emp.role} />
                       </TableCell>
                       <TableCell className="py-2">
                         {emp.department ? (
@@ -627,6 +752,173 @@ export default function EmployeesPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Pending Invitations */}
+      {canInvite && (
+        <Card className="border-border">
+          <button
+            className="flex items-center justify-between w-full px-4 py-3 text-left hover:bg-muted/30 transition-colors rounded-t-lg"
+            onClick={() => setInvitesExpanded(!invitesExpanded)}
+          >
+            <div className="flex items-center gap-2">
+              <Mail className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-medium">Pending Invitations</span>
+              {invitations.length > 0 && (
+                <Badge variant="secondary" className="h-5 px-1.5 text-[0.6rem]">
+                  {invitations.length}
+                </Badge>
+              )}
+            </div>
+            {invitesExpanded
+              ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
+              : <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            }
+          </button>
+          {invitesExpanded && (
+            <div className="border-t border-border/50 px-4 py-3">
+              {invitesLoading ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 2 }).map((_, i) => (
+                    <Skeleton key={i} className="h-10 w-full" />
+                  ))}
+                </div>
+              ) : invitations.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No pending invitations.</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[140px]">Name</TableHead>
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[200px]">Email</TableHead>
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[90px]">Role</TableHead>
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[110px]">Invited By</TableHead>
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[90px]">Expires</TableHead>
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[160px] text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {invitations.map((inv) => (
+                      <TableRow key={inv.id} className="border-border/50 hover:bg-muted/30">
+                        <TableCell className="text-[0.7rem] font-medium py-2">{inv.name || '--'}</TableCell>
+                        <TableCell className="text-[0.7rem] py-2">{inv.email}</TableCell>
+                        <TableCell className="py-2">
+                          <Badge variant="outline" className="text-[0.6rem] px-1.5 py-0">
+                            {formatRoleLabel(inv.role)}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-[0.7rem] text-muted-foreground py-2">
+                          {inv.creator?.name || '--'}
+                        </TableCell>
+                        <TableCell className="text-[0.7rem] text-muted-foreground py-2">
+                          {formatDate(inv.expires_at)}
+                        </TableCell>
+                        <TableCell className="text-right py-2">
+                          <div className="inline-flex items-center gap-1">
+                            <Button variant="ghost" size="sm" className="h-6 px-2 text-[0.6rem]" onClick={() => copyInviteLink(inv.token)}>
+                              <Copy className="h-3 w-3 mr-1" />
+                              Copy
+                            </Button>
+                            <Button variant="ghost" size="sm" className="h-6 px-2 text-[0.6rem]" disabled={resendMutation.isPending} onClick={() => resendMutation.mutate(inv.id)}>
+                              <RefreshCw className="h-3 w-3 mr-1" />
+                              Resend
+                            </Button>
+                            <Button variant="ghost" size="sm" className="h-6 px-2 text-[0.6rem] text-destructive hover:text-destructive" disabled={revokeMutation.isPending} onClick={() => revokeMutation.mutate(inv.id)}>
+                              <Trash2 className="h-3 w-3 mr-1" />
+                              Revoke
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* Employee Detail Modal */}
+      <EmployeeDetailModal
+        employeeId={selectedEmployeeId}
+        open={modalOpen}
+        onOpenChange={(open) => { setModalOpen(open); if (!open) setSelectedEmployeeId(null); }}
+      />
+
+      {/* Invite Dialog */}
+      <Dialog open={inviteOpen} onOpenChange={(open) => { setInviteOpen(open); if (!open) setInviteErrors({}); }}>
+        <DialogContent className="sm:max-w-md">
+          <form onSubmit={handleInvite}>
+            <DialogHeader>
+              <DialogTitle className="text-base">Invite Employee</DialogTitle>
+              <DialogDescription className="text-xs">
+                Send an invitation email to onboard a new employee.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col gap-3 py-4">
+              <div className="grid gap-1.5">
+                <Label htmlFor="invite-name" className="text-xs">Full name</Label>
+                <Input
+                  id="invite-name"
+                  type="text"
+                  placeholder="e.g. John Doe"
+                  value={inviteName}
+                  onChange={(e) => { setInviteName(e.target.value); if (inviteErrors.name) setInviteErrors((prev) => ({ ...prev, name: undefined })); }}
+                  aria-invalid={!!inviteErrors.name}
+                  className={`h-8 text-sm ${inviteErrors.name ? 'border-destructive' : ''}`}
+                  required
+                />
+                {inviteErrors.name && <p className="text-[0.65rem] text-destructive">{inviteErrors.name}</p>}
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="invite-email" className="text-xs">Email address</Label>
+                <div className="relative">
+                  <Mail className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input
+                    id="invite-email"
+                    type="email"
+                    placeholder="colleague@company.com"
+                    value={inviteEmail}
+                    onChange={(e) => { setInviteEmail(e.target.value); if (inviteErrors.email) setInviteErrors((prev) => ({ ...prev, email: undefined })); }}
+                    aria-invalid={!!inviteErrors.email}
+                    className={`h-8 pl-8 text-sm ${inviteErrors.email ? 'border-destructive' : ''}`}
+                    required
+                  />
+                </div>
+                {inviteErrors.email && <p className="text-[0.65rem] text-destructive">{inviteErrors.email}</p>}
+              </div>
+              <div className="grid gap-1.5">
+                <Label className="text-xs">Role</Label>
+                <Select
+                  value={inviteRole}
+                  onValueChange={(val) => { setInviteRole(val ?? 'employee'); if (inviteErrors.role) setInviteErrors((prev) => ({ ...prev, role: undefined })); }}
+                >
+                  <SelectTrigger className={`h-8 w-full text-sm ${inviteErrors.role ? 'border-destructive' : ''}`} aria-invalid={!!inviteErrors.role}>
+                    <span data-slot="select-value" className="flex flex-1 text-left">{formatRoleLabel(inviteRole)}</span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {user?.role === 'owner' && <SelectItem value="owner">Owner</SelectItem>}
+                    <SelectItem value="org_manager">Org Manager</SelectItem>
+                    <SelectItem value="hr_manager">HR Manager</SelectItem>
+                    <SelectItem value="finance_manager">Finance Manager</SelectItem>
+                    <SelectItem value="employee">Employee</SelectItem>
+                  </SelectContent>
+                </Select>
+                {inviteErrors.role && <p className="text-[0.65rem] text-destructive">{inviteErrors.role}</p>}
+              </div>
+            </div>
+            <DialogFooter className="gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setInviteOpen(false)} disabled={inviteMutation.isPending}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={inviteMutation.isPending}>
+                {inviteMutation.isPending && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+                Send Invitation
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

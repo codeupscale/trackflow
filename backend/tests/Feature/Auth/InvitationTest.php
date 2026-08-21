@@ -16,6 +16,7 @@ class InvitationTest extends TestCase
         $user = $this->actingAsUser('owner');
 
         $response = $this->postJson('/api/v1/invitations', [
+            'name' => 'New User',
             'email' => 'newuser@example.com',
             'role' => 'employee',
         ]);
@@ -36,6 +37,7 @@ class InvitationTest extends TestCase
         $user = $this->actingAsUser('org_manager');
 
         $response = $this->postJson('/api/v1/invitations', [
+            'name' => 'New User',
             'email' => 'newuser@example.com',
             'role' => 'org_manager',
         ]);
@@ -49,6 +51,7 @@ class InvitationTest extends TestCase
         $this->actingAsUser('org_manager');
 
         $response = $this->postJson('/api/v1/invitations', [
+            'name' => 'New User',
             'email' => 'newuser@example.com',
             'role' => 'employee',
         ]);
@@ -135,6 +138,7 @@ class InvitationTest extends TestCase
         // Create pending invite in org A
         $this->actingAs($ownerA, 'sanctum');
         $resA = $this->postJson('/api/v1/invitations', [
+            'name' => 'Duplicate User',
             'email' => 'duplicate@example.com',
             'role' => 'employee',
         ]);
@@ -143,6 +147,7 @@ class InvitationTest extends TestCase
         // Invite same email in org B should still succeed
         $this->actingAs($ownerB, 'sanctum');
         $resB = $this->postJson('/api/v1/invitations', [
+            'name' => 'Duplicate User',
             'email' => 'duplicate@example.com',
             'role' => 'employee',
         ]);
@@ -163,6 +168,7 @@ class InvitationTest extends TestCase
         $this->actingAs($owner, 'sanctum');
 
         $response = $this->postJson('/api/v1/invitations', [
+            'name' => 'Blocked User',
             'email' => 'blocked@example.com',
             'role' => 'employee',
         ]);

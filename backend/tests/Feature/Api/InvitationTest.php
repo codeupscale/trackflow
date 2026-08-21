@@ -32,6 +32,7 @@ class InvitationTest extends TestCase
 
         $email = 'new.user+' . Str::random(6) . '@example.com';
         $response = $this->postJson('/api/v1/invitations', [
+            'name' => 'New User',
             'email' => $email,
             'role' => 'employee',
         ]);
@@ -46,6 +47,7 @@ class InvitationTest extends TestCase
         $this->actingAs($this->manager, 'sanctum');
 
         $response = $this->postJson('/api/v1/invitations', [
+            'name' => 'Someone',
             'email' => 'someone@example.com',
             'role' => 'employee',
         ]);
@@ -67,6 +69,7 @@ class InvitationTest extends TestCase
         $this->actingAs($this->owner, 'sanctum');
 
         $response = $this->postJson('/api/v1/invitations', [
+            'name' => 'Over Limit',
             'email' => 'over.limit@example.com',
             'role' => 'employee',
         ]);
@@ -94,6 +97,7 @@ class InvitationTest extends TestCase
         $this->actingAs($this->owner, 'sanctum');
 
         $response = $this->postJson('/api/v1/invitations', [
+            'name' => 'Shared User',
             'email' => $email,
             'role' => 'employee',
         ]);

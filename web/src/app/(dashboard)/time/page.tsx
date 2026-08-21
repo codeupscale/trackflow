@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { format } from 'date-fns';
 import {
   CheckCircle,
@@ -16,6 +18,7 @@ import {
   Timer,
   Trash2,
   X,
+  XCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -65,12 +68,30 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import api from '@/lib/api';
 import { formatDuration, getActivityColor } from '@/lib/utils';
+import {
+  rejectTimeEntrySchema,
+  type RejectTimeEntryFormData,
+} from '@/lib/validations/time-entry';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
 import { ApprovalStatusBadge } from '@/components/time-entries/ApprovalStatusBadge';
 import { ManualTimeEntryDialog } from '@/components/time-entries/ManualTimeEntryDialog';
+import {
+  useApproveTimeEntry,
+  useRejectTimeEntry,
+} from '@/hooks/time-entries/use-pending-approvals';
 
 interface TimeEntry {
   id: string;
@@ -85,6 +106,8 @@ interface TimeEntry {
   status: 'pending' | 'approved' | 'rejected';
   approval_status?: 'pending' | 'approved' | 'rejected';
   rejection_reason?: string | null;
+  approved_at?: string | null;
+  approver?: { id: string; name: string } | null;
   project?: {
     id: string;
     name: string;
@@ -133,8 +156,8 @@ export default function TimePage() {
   const searchParams = useSearchParams();
   const { hasPermission, hasPermissionWithScope } = usePermissionStore();
   const canApprove = hasPermission('time_entries.approve');
-  const canDeleteAll = hasPermission('time_entries.delete');
-  const canDeleteOwnManual = !canDeleteAll;
+  const canDeleteAll = hasPermissionWithScope('time_entries.delete', 'project');
+  const canDeleteOwnManual = hasPermission('time_entries.delete') && !canDeleteAll;
 
   const isManagerOrAbove = hasPermissionWithScope('time_entries.view', 'project');
 
@@ -150,6 +173,7 @@ export default function TimePage() {
   const [manualEntryOpen, setManualEntryOpen] = useState(false);
   const [viewEntry, setViewEntry] = useState<TimeEntry | null>(null);
   const [showFilters, setShowFilters] = useState(false);
+  const [rejectTarget, setRejectTarget] = useState<TimeEntry | null>(null);
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ['projects-list'],
@@ -238,6 +262,32 @@ export default function TimePage() {
     return Math.max(0, Math.floor((new Date().getTime() - new Date(entry.started_at).getTime()) / 1000));
   }
 
+  const singleApproveMutation = useApproveTimeEntry();
+  const rejectMutation = useRejectTimeEntry();
+
+  const {
+    register,
+    handleSubmit,
+    reset: resetRejectForm,
+    formState: { errors: rejectErrors },
+  } = useForm<RejectTimeEntryFormData>({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    resolver: zodResolver(rejectTimeEntrySchema) as any,
+  });
+
+  const submitReject = (values: RejectTimeEntryFormData) => {
+    if (!rejectTarget) return;
+    rejectMutation.mutate(
+      { id: rejectTarget.id, rejection_reason: values.rejection_reason },
+      {
+        onSuccess: () => {
+          setRejectTarget(null);
+          resetRejectForm({ rejection_reason: '' });
+        },
+      }
+    );
+  };
+
   const approveMutation = useMutation({
     mutationFn: async (entryIds: string[]) => {
       await Promise.all(entryIds.map((id) => api.post(`/time-entries/${id}/approve`)));
@@ -273,16 +323,24 @@ export default function TimePage() {
   };
 
   const toggleAll = () => {
-    const allIds = entries.map((e) => e.id);
-    if (selectedEntries.length === allIds.length) {
+    const allSelectableIds = selectableEntries.map((e) => e.id);
+    if (allSelectableIds.length > 0 && allSelectableIds.every((id) => selectedEntries.includes(id))) {
       setSelectedEntries([]);
     } else {
-      setSelectedEntries(allIds);
+      setSelectedEntries(allSelectableIds);
     }
   };
 
   const canDelete = canDeleteAll || canDeleteOwnManual;
-  const showCheckboxes = canDelete || canApprove;
+  const showCheckboxes = canDeleteAll || canApprove;
+
+  const isEntrySelectable = (entry: TimeEntry) => {
+    if (canDeleteAll || canApprove) return true;
+    if (canDeleteOwnManual) return entry.user_id === user?.id && entry.status === 'pending';
+    return false;
+  };
+
+  const selectableEntries = entries.filter(isEntrySelectable);
   const selectedPendingCount = selectedEntries.filter((id) => entries.find((e) => e.id === id && e.status === 'pending')).length;
   const selectedDeletableCount = canDeleteAll
     ? selectedEntries.length
@@ -332,6 +390,16 @@ export default function TimePage() {
         open={!!viewEntry}
         onOpenChange={(open) => { if (!open) setViewEntry(null); }}
         canLogOnBehalf={canApprove}
+        canEdit={
+          hasPermissionWithScope('time_entries.edit', 'project') ||
+          (hasPermission('time_entries.edit') && viewEntry?.user_id === user?.id)
+        }
+        canDelete={
+          canDeleteAll ||
+          (canDeleteOwnManual && viewEntry?.user_id === user?.id && viewEntry?.status === 'pending')
+        }
+        onDelete={(id) => deleteMutation.mutate([id])}
+        isDeleting={deleteMutation.isPending}
         entry={viewEntry}
         initialMode="view"
       />
@@ -637,6 +705,65 @@ export default function TimePage() {
         </CardContent>
       </Card>
 
+      {/* Reject reason dialog */}
+      <Dialog open={!!rejectTarget} onOpenChange={(o) => !o && setRejectTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <form onSubmit={handleSubmit(submitReject)}>
+            <DialogHeader>
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-destructive/10 shrink-0">
+                  <XCircle className="h-4 w-4 text-destructive" />
+                </div>
+                <div>
+                  <DialogTitle className="text-base">Reject Time Entry</DialogTitle>
+                </div>
+              </div>
+              <DialogDescription className="text-xs">
+                Provide a reason for rejecting{' '}
+                <span className="font-medium text-foreground">{rejectTarget?.user?.name ?? 'this'}</span>&apos;s entry.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="py-4 grid gap-1.5">
+              <Label htmlFor="reject_reason_time" className="text-xs">Rejection reason</Label>
+              <Textarea
+                id="reject_reason_time"
+                rows={3}
+                placeholder="Explain why this entry is being rejected..."
+                className="text-sm resize-none"
+                {...register('rejection_reason')}
+                aria-invalid={!!rejectErrors.rejection_reason}
+              />
+              {rejectErrors.rejection_reason && (
+                <p className="text-[0.65rem] text-destructive">{rejectErrors.rejection_reason.message}</p>
+              )}
+            </div>
+            <DialogFooter className="gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => setRejectTarget(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                variant="destructive"
+                size="sm"
+                className="h-8 text-xs"
+                disabled={rejectMutation.isPending}
+              >
+                {rejectMutation.isPending && (
+                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                )}
+                Reject Entry
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
       {/* Entries Table */}
       <Card className="border-border">
         <CardContent className="p-0">
@@ -676,11 +803,12 @@ export default function TimePage() {
                         <TableHead className="w-[40px] px-3">
                           <Checkbox
                             checked={
-                              selectedEntries.length === entries.length &&
-                              entries.length > 0
+                              selectableEntries.length > 0 &&
+                              selectableEntries.every((e) => selectedEntries.includes(e.id))
                             }
                             onCheckedChange={toggleAll}
                             aria-label="Select all entries"
+                            disabled={selectableEntries.length === 0}
                           />
                         </TableHead>
                       )}
@@ -710,6 +838,9 @@ export default function TimePage() {
                         </span>
                       </TableHead>
                       <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground text-center">Status</TableHead>
+                      {canApprove && (
+                        <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground text-center">Actions</TableHead>
+                      )}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -717,11 +848,13 @@ export default function TimePage() {
                       <TableRow key={entry.id} className={`border-border/50 hover:bg-muted/30 transition-colors ${entry.type === 'manual' ? 'cursor-pointer' : ''}`} onClick={() => { if (entry.type === 'manual') setViewEntry(entry); }}>
                         {showCheckboxes && (
                           <TableCell className="px-3" onClick={(e) => e.stopPropagation()}>
-                            <Checkbox
-                              checked={selectedEntries.includes(entry.id)}
-                              onCheckedChange={() => toggleEntry(entry.id)}
-                              aria-label={`Select entry ${entry.id}`}
-                            />
+                            {isEntrySelectable(entry) ? (
+                              <Checkbox
+                                checked={selectedEntries.includes(entry.id)}
+                                onCheckedChange={() => toggleEntry(entry.id)}
+                                aria-label={`Select entry ${entry.id}`}
+                              />
+                            ) : null}
                           </TableCell>
                         )}
                         <TableCell className="py-2.5">
@@ -809,6 +942,44 @@ export default function TimePage() {
                             rejectionReason={entry.rejection_reason}
                           />
                         </TableCell>
+                        {canApprove && (
+                          <TableCell className="text-center py-2.5" onClick={(e) => e.stopPropagation()}>
+                            {entry.status === 'pending' ? (
+                              <div className="inline-flex items-center gap-1">
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-6 w-6 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-500/10"
+                                  onClick={(e) => { e.stopPropagation(); singleApproveMutation.mutate(entry.id); }}
+                                  disabled={singleApproveMutation.isPending || rejectMutation.isPending}
+                                  aria-label="Approve"
+                                >
+                                  {singleApproveMutation.isPending ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <CheckCircle className="h-3.5 w-3.5" />
+                                  )}
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-6 w-6 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    resetRejectForm({ rejection_reason: '' });
+                                    setRejectTarget(entry);
+                                  }}
+                                  disabled={singleApproveMutation.isPending || rejectMutation.isPending}
+                                  aria-label="Reject"
+                                >
+                                  <XCircle className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <span className="text-[0.6rem] text-muted-foreground">&mdash;</span>
+                            )}
+                          </TableCell>
+                        )}
                       </TableRow>
                     ))}
                   </TableBody>
