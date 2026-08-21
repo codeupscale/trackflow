@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Services\PermissionService;
 use App\Services\ReportService;
 use App\Support\ReportExportFormatter;
 use App\Support\TimezoneAwareDateRange;
@@ -25,6 +26,65 @@ class ReportController extends Controller
         );
     }
 
+
+    /**
+     * Which user(s) the actor is allowed to see, honouring the requested filter.
+     *
+     * Returns a single id, a list of ids, or null for "everyone in the organization".
+     *
+     * The decision comes from the SCOPE on the actor's `reports.view` grant, never
+     * from a role name. Two reasons the old `$user->isEmployee()` test was wrong:
+     *
+     *  - `reports.view` is granted to the `employee` role at scope `own`, so an
+     *    employee legitimately reaches these endpoints. The web client gates the
+     *    user picker on merely HOLDING the permission, so it rendered a full team
+     *    dropdown, sent `user_id`, and the controller then silently clamped every
+     *    request back to the caller. Picking any user — or "All Users" — returned
+     *    the logged-in user's own figures.
+     *  - `isEmployee()` reads the `users.role` STRING, which is only a fallback for
+     *    users with no `user_roles` row, and the role set is open (orgs define custom
+     *    roles). Deciding data visibility from it is wrong in both directions.
+     */
+    /**
+     * May the actor see anyone other than themselves? Team, projects, payroll and
+     * attendance reports are inherently about other people, so an `own`-scoped
+     * actor has nothing to see in them.
+     */
+    private function canViewOthers(Request $request): bool
+    {
+        $user = $request->user();
+
+        return ($user->getRawOriginal('role') ?? '') === 'owner'
+            || app(PermissionService::class)->hasPermission($user, 'reports.view', 'project');
+    }
+
+    private function scopedUserId(Request $request): string|array|null
+    {
+        $user = $request->user();
+        $requested = $request->input('user_id') ?: null;
+        $scope = app(PermissionService::class)->getScope($user, 'reports.view');
+
+        // Owners bypass the permission map entirely, as they do everywhere else.
+        if ($scope === 'organization' || ($user->getRawOriginal('role') ?? '') === 'owner') {
+            return $requested;
+        }
+
+        if ($scope === 'project') {
+            $visible = app(PermissionService::class)->getProjectUserIds($user);
+
+            // A requested user outside the actor's team narrows to nothing rather
+            // than widening the scope — same contract as ProjectTimeReportService.
+            if ($requested !== null) {
+                return in_array($requested, $visible, true) ? $requested : $user->id;
+            }
+
+            return $visible;
+        }
+
+        // 'own', or no grant at all.
+        return $user->id;
+    }
+
     // REPT-01: Summary
     public function summary(Request $request): JsonResponse
     {
@@ -35,11 +95,7 @@ class ReportController extends Controller
         ]);
 
         $user = $request->user();
-        $userId = $request->user_id;
-
-        if ($user->isEmployee()) {
-            $userId = $user->id;
-        }
+        $userId = $this->scopedUserId($request);
 
         [$dateFrom, $dateTo] = $this->parseDateRange($request);
 
@@ -56,7 +112,7 @@ class ReportController extends Controller
     // REPT-02: Team
     public function team(Request $request): JsonResponse
     {
-        if ($request->user()->isEmployee()) {
+        if (! $this->canViewOthers($request)) {
             return response()->json(['message' => 'Unauthorized.'], 403);
         }
 
@@ -104,10 +160,7 @@ class ReportController extends Controller
             'user_id' => 'nullable|uuid',
         ]);
 
-        $userId = $request->user_id;
-        if ($request->user()->isEmployee()) {
-            $userId = $request->user()->id;
-        }
+        $userId = $this->scopedUserId($request);
 
         [$dateFrom, $dateTo] = $this->parseDateRange($request);
 
@@ -130,10 +183,10 @@ class ReportController extends Controller
             'date' => 'required|date',
         ]);
 
-        $userId = $request->user_id;
-        if ($request->user()->isEmployee()) {
-            $userId = $request->user()->id;
-        }
+        // `user_id` is required here, so the resolver always yields a single id
+        // (it only returns a list when no specific user was asked for).
+        $scoped = $this->scopedUserId($request);
+        $userId = is_array($scoped) ? $request->user()->id : ($scoped ?? $request->user()->id);
 
         $data = $this->reportService->timeline(
             $request->user()->organization_id,
@@ -160,7 +213,7 @@ class ReportController extends Controller
         $orgId = $user->organization_id;
 
         // Employees can only ever export their own data.
-        $userId = $user->isEmployee() ? $user->id : $request->user_id;
+        $userId = $this->scopedUserId($request);
 
         [$dateFrom, $dateTo] = $this->parseDateRange($request);
 
@@ -221,7 +274,7 @@ class ReportController extends Controller
     // REPT-08: Attendance
     public function attendance(Request $request): JsonResponse
     {
-        if ($request->user()->isEmployee()) {
+        if (! $this->canViewOthers($request)) {
             return response()->json(['message' => 'Unauthorized.'], 403);
         }
 
@@ -251,11 +304,7 @@ class ReportController extends Controller
         ]);
 
         $user = $request->user();
-        $userId = $request->user_id;
-
-        if ($user->isEmployee()) {
-            $userId = $user->id;
-        }
+        $userId = $this->scopedUserId($request);
 
         [$dateFrom, $dateTo] = $this->parseDateRange($request);
 
@@ -280,11 +329,7 @@ class ReportController extends Controller
         ]);
 
         $user = $request->user();
-        $userId = $request->user_id;
-
-        if ($user->isEmployee()) {
-            $userId = $user->id;
-        }
+        $userId = $this->scopedUserId($request);
 
         [$dateFrom, $dateTo] = $this->parseDateRange($request);
 
@@ -309,11 +354,7 @@ class ReportController extends Controller
         ]);
 
         $user = $request->user();
-        $userId = $request->user_id;
-
-        if ($user->isEmployee()) {
-            $userId = $user->id;
-        }
+        $userId = $this->scopedUserId($request);
 
         [$dateFrom, $dateTo] = $this->parseDateRange($request);
 
@@ -338,11 +379,7 @@ class ReportController extends Controller
         ]);
 
         $user = $request->user();
-        $userId = $request->user_id;
-
-        if ($user->isEmployee()) {
-            $userId = $user->id;
-        }
+        $userId = $this->scopedUserId($request);
 
         [$dateFrom, $dateTo] = $this->parseDateRange($request);
 

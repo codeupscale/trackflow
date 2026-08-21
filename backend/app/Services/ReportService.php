@@ -4,7 +4,9 @@ namespace App\Services;
 
 use App\Models\TimeEntry;
 use App\Models\ActivityLog;
+use App\Models\Organization;
 use App\Models\User;
+use App\Support\WorkedTime;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
@@ -15,29 +17,54 @@ class ReportService
      * Any entry exceeding this is capped to prevent runaway timers from
      * corrupting report totals. 12 hours = 43200 seconds.
      */
-    private const MAX_ENTRY_DURATION = 43200;
+    private const MAX_ENTRY_DURATION = WorkedTime::MAX_ENTRY_DURATION;
+
+    /** @var array<string,string> memoized org timezones */
+    private array $orgTimezones = [];
 
     /**
-     * SQL expression for capped duration: compute from timestamps (more accurate
-     * than duration_seconds which can be corrupted), then cap at MAX_ENTRY_DURATION.
+     * Canonical entry duration. Delegates to {@see WorkedTime} so the dashboard,
+     * the reports tab, the report builder and the time list all measure an entry
+     * the same way.
      */
     private static function durationExpr(string $prefix = ''): string
     {
-        $cap = self::MAX_ENTRY_DURATION;
-        $startCol = $prefix ? "{$prefix}.started_at" : 'started_at';
-        $endCol = $prefix ? "{$prefix}.ended_at" : 'ended_at';
-
-        if (DB::connection()->getDriverName() === 'sqlite') {
-            // SQLite: julianday diff * 86400 = seconds; MIN/MAX are scalar in SQLite
-            return "MIN(MAX(CAST((julianday({$endCol}) - julianday({$startCol})) * 86400 AS INTEGER), 0), {$cap})";
-        }
-
-        return "LEAST(GREATEST(EXTRACT(EPOCH FROM ({$endCol} - {$startCol}))::int, 0), {$cap})";
+        return WorkedTime::durationExpr($prefix);
     }
 
-    private function cacheKey(string $orgId, string $type, string $period, ?string $userId = null): string
+    /**
+     * The organization's timezone — the zone its days are bucketed by. Daily rollups
+     * must group by this, not by the UTC date, or work done between local midnight
+     * and the UTC offset lands on the previous day's row.
+     */
+    private function orgTimezone(string $orgId): string
     {
-        $userHash = $userId ? md5($userId) : 'all';
+        return $this->orgTimezones[$orgId] ??= (
+            Organization::withoutGlobalScopes()->find($orgId)?->getSetting('timezone') ?: config('app.timezone', 'UTC')
+        );
+    }
+
+    /**
+     * Apply the actor's user filter to a query.
+     *
+     * Accepts a single id, a LIST of ids (a `project`-scoped actor may see their
+     * team, which is more than one person and fewer than the org), or null for
+     * "everyone in the organization".
+     */
+    private static function applyUserFilter($query, string $column, string|array|null $userId)
+    {
+        if ($userId === null || $userId === []) {
+            return $query;
+        }
+
+        return is_array($userId)
+            ? $query->whereIn($column, $userId)
+            : $query->where($column, $userId);
+    }
+
+    private function cacheKey(string $orgId, string $type, string $period, string|array|null $userId = null): string
+    {
+        $userHash = $userId ? md5(is_array($userId) ? implode(',', $userId) : $userId) : 'all';
         // Embed the org's cache generation so flushForOrg() can invalidate every
         // cached report for an org in one shot (store-agnostic — the default
         // database cache driver cannot flush by tag).
@@ -76,7 +103,7 @@ class ReportService
     }
 
     // REPT-01: Summary report
-    public function summary(string $orgId, ?string $userId, string $dateFrom, string $dateTo): array
+    public function summary(string $orgId, string|array|null $userId, string $dateFrom, string $dateTo): array
     {
         $cacheKey = $this->cacheKey($orgId, 'summary', "{$dateFrom}_{$dateTo}", $userId);
 
@@ -92,17 +119,20 @@ class ReportService
                 // so tracked/idle and every historical row are unaffected.
                 ->where('approval_status', 'approved');
 
-            if ($userId) {
-                $query->where('user_id', $userId);
-            }
+            self::applyUserFilter($query, 'user_id', $userId);
 
             $dur = self::durationExpr();
+            // Bucket by the ORGANIZATION's calendar day. `started_at` holds UTC, so a
+            // bare DATE() would push work done between local midnight and the UTC
+            // offset onto the previous day's row — the daily series then disagrees
+            // with the dashboard's weekly chart, which already buckets in org time.
+            $localDate = WorkedTime::localDateExpr($this->orgTimezone($orgId));
 
             // Use EXTRACT(EPOCH FROM ...) for accurate duration — duration_seconds
             // can be corrupted by idle-deduction bugs in older desktop versions.
             // Cap each entry at MAX_ENTRY_DURATION to prevent runaway timers.
             $daily = $query->selectRaw("
-                DATE(started_at) as date,
+                {$localDate} as date,
                 SUM({$dur}) as total_seconds,
                 CASE
                     WHEN SUM(CASE WHEN activity_score IS NOT NULL AND activity_score > 0
@@ -117,7 +147,7 @@ class ReportService
                 COALESCE(SUM(CASE WHEN type <> 'idle' THEN {$dur} ELSE 0 END), 0) as worked_seconds,
                 COALESCE(SUM(CASE WHEN type = 'idle' THEN {$dur} ELSE 0 END), 0) as idle_seconds
             ")
-            ->groupBy(DB::raw('DATE(started_at)'))
+            ->groupBy(DB::raw($localDate))
             ->orderBy('date')
             ->get();
 
@@ -149,7 +179,7 @@ class ReportService
                     ->where('projects.billable', true);
 
                 if ($userId) {
-                    $billableQuery->where('time_entries.user_id', $userId);
+                    self::applyUserFilter($billableQuery, 'time_entries.user_id', $userId);
                 }
 
                 $billableResult = $billableQuery
@@ -184,7 +214,7 @@ class ReportService
                 ->where('approval_status', 'approved');
 
             if ($userId) {
-                $prevQuery->where('user_id', $userId);
+                self::applyUserFilter($prevQuery, 'user_id', $userId);
             }
 
             $prevTotalSeconds = (int) ($prevQuery->selectRaw("COALESCE(SUM({$dur}), 0) as total_seconds")->value('total_seconds') ?? 0);
@@ -205,7 +235,7 @@ class ReportService
                     ->where('projects.billable', true);
 
                 if ($userId) {
-                    $prevBudgetQuery->where('time_entries.user_id', $userId);
+                    self::applyUserFilter($prevBudgetQuery, 'time_entries.user_id', $userId);
                 }
 
                 $previousBudgetUsed = (float) ($prevBudgetQuery
@@ -352,7 +382,7 @@ class ReportService
 
     // REPT-04: App usage — per-user per-app when no user filter; per-app for one user.
     // Uses app_usage_summaries (calendar dates) instead of raw activity_logs.
-    public function apps(string $orgId, ?string $userId, string $dateFrom, string $dateTo): array
+    public function apps(string $orgId, string|array|null $userId, string $dateFrom, string $dateTo): array
     {
         $cacheKey = $this->cacheKey($orgId, 'apps', "{$dateFrom}_{$dateTo}", $userId);
 
@@ -364,7 +394,7 @@ class ReportService
                 ->whereBetween('app_usage_summaries.date', [$dateFrom, $dateTo]);
 
             if ($userId) {
-                $query->where('app_usage_summaries.user_id', $userId);
+                self::applyUserFilter($query, 'app_usage_summaries.user_id', $userId);
             }
 
             $select = [
@@ -474,7 +504,7 @@ class ReportService
     }
 
     // REPT-09: Analytics (KPIs + chart data)
-    public function analytics(string $orgId, ?string $userId, string $dateFrom, string $dateTo): array
+    public function analytics(string $orgId, string|array|null $userId, string $dateFrom, string $dateTo): array
     {
         $cacheKey = $this->cacheKey($orgId, 'analytics', "{$dateFrom}_{$dateTo}", $userId);
 
@@ -489,7 +519,7 @@ class ReportService
                   ->whereNotNull('te.ended_at')
                   ->where('te.approval_status', 'approved');
                 if ($userId) {
-                    $q->where('te.user_id', $userId);
+                    self::applyUserFilter($q, 'te.user_id', $userId);
                 }
             };
 
@@ -498,10 +528,14 @@ class ReportService
             $prevFrom = date('Y-m-d H:i:s', strtotime($dateFrom) - $periodLengthSeconds);
             $prevTo = $dateFrom;
 
+            // Worked hours = every approved entry that is NOT idle. Filtering to
+            // type='tracked' here made this KPI the only headline in the product that
+            // silently dropped approved MANUAL time, so the reports tab read lower than
+            // the report builder and the dashboard over the very same range.
             $currentHoursRow = DB::table('time_entries as te')
                 ->whereNull('te.deleted_at')
                 ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
-                ->where('te.type', 'tracked')
+                ->where('te.type', '<>', 'idle')
                 ->selectRaw("COALESCE(SUM({$dur}), 0) as total_seconds")
                 ->first();
             $currentTotalSeconds = (int) ($currentHoursRow->total_seconds ?? 0);
@@ -513,9 +547,9 @@ class ReportService
                 ->where('te.started_at', '>=', $prevFrom)
                 ->where('te.started_at', '<', $prevTo)
                 ->whereNotNull('te.ended_at')
-                ->where('te.type', 'tracked')
+                ->where('te.type', '<>', 'idle')
                 ->where('te.approval_status', 'approved')
-                ->when($userId, fn ($q) => $q->where('te.user_id', $userId))
+                ->when($userId, fn ($q) => self::applyUserFilter($q, 'te.user_id', $userId))
                 ->selectRaw("COALESCE(SUM({$dur}), 0) as total_seconds")
                 ->first();
             $prevTotalSeconds = (int) ($prevHoursRow->total_seconds ?? 0);
@@ -547,6 +581,7 @@ class ReportService
                 ->whereNull('te.deleted_at')
                 ->join('projects as p', 'te.project_id', '=', 'p.id')
                 ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
+                ->where('te.type', '<>', 'idle')
                 ->where('p.billable', true)
                 ->selectRaw("COALESCE(SUM({$dur} / 3600.0 * p.hourly_rate), 0) as total_budget")
                 ->first();
@@ -560,8 +595,9 @@ class ReportService
                 ->where('te.started_at', '<', $prevTo)
                 ->whereNotNull('te.ended_at')
                 ->where('te.approval_status', 'approved')
+                ->where('te.type', '<>', 'idle')
                 ->where('p.billable', true)
-                ->when($userId, fn ($q) => $q->where('te.user_id', $userId))
+                ->when($userId, fn ($q) => self::applyUserFilter($q, 'te.user_id', $userId))
                 ->selectRaw("COALESCE(SUM({$dur} / 3600.0 * p.hourly_rate), 0) as total_budget")
                 ->first();
             $prevBudget = (float) ($prevBudgetRow->total_budget ?? 0);
@@ -587,10 +623,13 @@ class ReportService
             $billablePercent = $totalBillableSec > 0 ? (int) round($billableSec / $totalBillableSec * 100) : 0;
 
             // --- Chart 1: time_per_project (top 8) ---
+            // Excludes idle, so the bars sum to the "total hours" KPI above them.
+            // With no type filter this chart counted idle time the KPI did not.
             $timePerProject = DB::table('time_entries as te')
                 ->whereNull('te.deleted_at')
                 ->join('projects as p', 'te.project_id', '=', 'p.id')
                 ->where(function ($q) use ($baseWhere) { $baseWhere($q); })
+                ->where('te.type', '<>', 'idle')
                 ->whereNotNull('te.project_id')
                 ->selectRaw("p.name as project_name, p.color, SUM({$dur}) / 3600.0 as total_hours")
                 ->groupBy('p.id', 'p.name', 'p.color')
@@ -657,7 +696,7 @@ class ReportService
     }
 
     // REPT-10: Detailed logs (paginated time entries with joins)
-    public function detailedLogs(string $orgId, ?string $userId, string $dateFrom, string $dateTo, int $perPage = 10, int $page = 1): array
+    public function detailedLogs(string $orgId, string|array|null $userId, string $dateFrom, string $dateTo, int $perPage = 10, int $page = 1): array
     {
         $cacheKey = $this->cacheKey($orgId, 'detailed_logs', "{$dateFrom}_{$dateTo}_{$perPage}_{$page}", $userId);
 
@@ -673,10 +712,13 @@ class ReportService
                 ->where('te.started_at', '>=', $dateFrom)
                 ->where('te.started_at', '<', $dateTo)
                 ->whereNotNull('te.ended_at')
+                // Idle is not worked time; listing it here made the rows fail to
+                // reconcile with the totals rendered above the table.
+                ->where('te.type', '<>', 'idle')
                 ->where('te.approval_status', 'approved');
 
             if ($userId) {
-                $baseQuery->where('te.user_id', $userId);
+                self::applyUserFilter($baseQuery, 'te.user_id', $userId);
             }
 
             $total = (clone $baseQuery)->count();
@@ -730,7 +772,7 @@ class ReportService
     }
 
     // REPT-11: Activity by day of week (weighted average activity per weekday)
-    public function activityByDay(string $orgId, ?string $userId, string $dateFrom, string $dateTo): array
+    public function activityByDay(string $orgId, string|array|null $userId, string $dateFrom, string $dateTo): array
     {
         $cacheKey = $this->cacheKey($orgId, 'activity_by_day', "{$dateFrom}_{$dateTo}", $userId);
 
@@ -750,7 +792,7 @@ class ReportService
                 ->where('activity_score', '>', 0);
 
             if ($userId) {
-                $query->where('user_id', $userId);
+                self::applyUserFilter($query, 'user_id', $userId);
             }
 
             $rows = $query->selectRaw("
@@ -783,7 +825,7 @@ class ReportService
     }
 
     // REPT-12: Detailed time logs (paginated, with user/project/task joins)
-    public function timeLogs(string $orgId, ?string $userId, string $dateFrom, string $dateTo, int $perPage = 15): \Illuminate\Contracts\Pagination\LengthAwarePaginator
+    public function timeLogs(string $orgId, string|array|null $userId, string $dateFrom, string $dateTo, int $perPage = 15): \Illuminate\Contracts\Pagination\LengthAwarePaginator
     {
         $dur = self::durationExpr('time_entries');
 
@@ -796,10 +838,11 @@ class ReportService
             ->where('time_entries.started_at', '>=', $dateFrom)
             ->where('time_entries.started_at', '<', $dateTo)
             ->whereNotNull('time_entries.ended_at')
+            ->where('time_entries.type', '<>', 'idle')
             ->where('time_entries.approval_status', 'approved');
 
         if ($userId) {
-            $query->where('time_entries.user_id', $userId);
+            self::applyUserFilter($query, 'time_entries.user_id', $userId);
         }
 
         return $query->select([

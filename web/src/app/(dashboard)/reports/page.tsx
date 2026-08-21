@@ -49,12 +49,7 @@ import { usePermissionStore } from "@/stores/permission-store";
 type DatePreset = "today" | "7days" | "month" | "custom";
 
 type ReportType =
-    | "summary"
-    | "team"
-    | "projects"
-    | "apps"
-    | "payroll"
-    | "attendance";
+    "summary" | "team" | "projects" | "apps" | "payroll" | "attendance";
 
 interface AnalyticsData {
     total_hours: number;
@@ -200,7 +195,10 @@ function transformReportResponse(
                 rows: daily.map((d) => ({
                     date: String(d.date ?? ""),
                     tracked_seconds: Number(
-                        d.worked_seconds ?? d.tracked_seconds ?? d.total_seconds ?? 0,
+                        d.worked_seconds ??
+                            d.tracked_seconds ??
+                            d.total_seconds ??
+                            0,
                     ),
                     idle_seconds: Number(d.idle_seconds ?? 0),
                     activity_score_avg: Number(d.activity_score_avg ?? 0),
@@ -392,8 +390,14 @@ const reportTypes: { value: ReportType; label: string; description: string }[] =
 export default function ReportsPage() {
     const router = useRouter();
     const { user } = useAuthStore();
-    const { hasPermission } = usePermissionStore();
+    const { hasPermission, hasPermissionWithScope } = usePermissionStore();
     const isEmployee = !hasPermission("reports.view");
+    // `reports.view` is granted to the employee role at scope 'own', so holding the
+    // permission does NOT mean you may look at other people. Gating the user picker
+    // on the bare permission rendered a full team dropdown for own-scoped users and
+    // the API then clamped every request back to the caller — so whatever you picked,
+    // including "All Users", you saw your own figures. Same test the Time page uses.
+    const canViewOthers = hasPermissionWithScope("reports.view", "project");
 
     // Redirect employees
     useEffect(() => {
@@ -511,7 +515,7 @@ export default function ReportsPage() {
                 (Array.isArray(res.data) ? res.data : [])
             );
         },
-        enabled: !isEmployee,
+        enabled: !isEmployee && canViewOthers,
     });
 
     const {
@@ -525,14 +529,14 @@ export default function ReportsPage() {
             reportType,
             builderDateFrom,
             builderDateTo,
-            userFilter,
+            canViewOthers ? userFilter : "self",
         ],
         queryFn: async () => {
             const params: Record<string, string> = {
                 date_from: builderDateFrom,
                 date_to: builderDateTo,
             };
-            if (userFilter && userFilter !== "all") {
+            if (canViewOthers && userFilter && userFilter !== "all") {
                 params.user_id = userFilter;
             }
             const res = await api.get(`/reports/${reportType}`, { params });
@@ -555,7 +559,10 @@ export default function ReportsPage() {
                     date_from: builderDateFrom,
                     date_to: builderDateTo,
                     format: exportFormat,
-                    user_id: userFilter !== "all" ? userFilter : undefined,
+                    user_id:
+                        canViewOthers && userFilter !== "all"
+                            ? userFilter
+                            : undefined,
                 },
                 { responseType: "blob" },
             );
@@ -756,7 +763,10 @@ export default function ReportsPage() {
                 <div className="flex items-center gap-3">
                     <DatePicker
                         value={dateFrom}
-                        onChange={(val) => { setDateFrom(val); if (val > dateTo) setDateTo(val); }}
+                        onChange={(val) => {
+                            setDateFrom(val);
+                            if (val > dateTo) setDateTo(val);
+                        }}
                         placeholder="Start date"
                         maxDate={dateTo}
                     />
@@ -833,7 +843,7 @@ export default function ReportsPage() {
                                 )}
                             </div>
                             <p className="text-[0.65rem] font-medium uppercase tracking-wider text-muted-foreground mb-0.5">
-                                Total Tracked Hours
+                                Total Hours
                             </p>
                             <p className="text-base font-bold tabular-nums leading-tight text-foreground">
                                 {analytics.total_hours.toLocaleString(
@@ -951,7 +961,9 @@ export default function ReportsPage() {
                 {/* Left: Time per Project */}
                 <Card>
                     <div className="px-4 pt-3 pb-1">
-                        <h3 className="text-sm font-semibold">Time per Project</h3>
+                        <h3 className="text-sm font-semibold">
+                            Time per Project
+                        </h3>
                         <p className="text-[0.65rem] text-muted-foreground">
                             Distribution across top active projects
                         </p>
@@ -1039,7 +1051,9 @@ export default function ReportsPage() {
                 {/* Right: Team Activity Levels */}
                 <Card>
                     <div className="px-4 pt-3 pb-1">
-                        <h3 className="text-sm font-semibold">Team Activity Levels</h3>
+                        <h3 className="text-sm font-semibold">
+                            Team Activity Levels
+                        </h3>
                         <p className="text-[0.65rem] text-muted-foreground">
                             Daily average engagement percentages
                         </p>
@@ -1129,7 +1143,9 @@ export default function ReportsPage() {
             {/* ── Section 4: Detailed Time Logs Table ── */}
             <Card>
                 <div className="px-4 pt-3 pb-1">
-                    <h3 className="text-sm font-semibold">Detailed Time Logs</h3>
+                    <h3 className="text-sm font-semibold">
+                        Detailed Time Logs
+                    </h3>
                     <p className="text-[0.65rem] text-muted-foreground">
                         Individual time entries for the selected period
                     </p>
@@ -1348,10 +1364,12 @@ export default function ReportsPage() {
                     }}
                 >
                     <div>
-                        <h3 className="text-sm font-semibold">Advanced Report Builder</h3>
+                        <h3 className="text-sm font-semibold">
+                            Advanced Report Builder
+                        </h3>
                         <p className="text-[0.65rem] text-muted-foreground">
-                            Generate custom reports with specific filters
-                            and export options
+                            Generate custom reports with specific filters and
+                            export options
                         </p>
                     </div>
                     {showReportBuilder ? (
@@ -1409,7 +1427,8 @@ export default function ReportsPage() {
                                     value={builderDateFrom}
                                     onChange={(val) => {
                                         setBuilderDateFrom(val);
-                                        if (val > builderDateTo) setBuilderDateTo(val);
+                                        if (val > builderDateTo)
+                                            setBuilderDateTo(val);
                                         setShouldFetch(false);
                                     }}
                                     placeholder="Start date"
@@ -1431,39 +1450,45 @@ export default function ReportsPage() {
                                 />
                             </div>
 
-                            <div className="grid gap-1">
-                                <label className="text-xs font-medium text-foreground">
-                                    User
-                                </label>
-                                <Select
-                                    value={userFilter}
-                                    onValueChange={(val) => {
-                                        setUserFilter(val ?? "all");
-                                        setShouldFetch(false);
-                                    }}
-                                >
-                                    <SelectTrigger className="w-[200px] h-9 text-sm">
-                                        <span className="truncate">
-                                            {userFilter === "all"
-                                                ? "All Users"
-                                                : (teamUsers?.find(
-                                                      (u) =>
-                                                          u.id === userFilter,
-                                                  )?.name ?? "Select user")}
-                                        </span>
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">
-                                            All Users
-                                        </SelectItem>
-                                        {teamUsers?.map((u) => (
-                                            <SelectItem key={u.id} value={u.id}>
-                                                {u.name}
+                            {canViewOthers && (
+                                <div className="grid gap-1">
+                                    <label className="text-xs font-medium text-foreground">
+                                        User
+                                    </label>
+                                    <Select
+                                        value={userFilter}
+                                        onValueChange={(val) => {
+                                            setUserFilter(val ?? "all");
+                                            setShouldFetch(false);
+                                        }}
+                                    >
+                                        <SelectTrigger className="w-[200px] h-9 text-sm">
+                                            <span className="truncate">
+                                                {userFilter === "all"
+                                                    ? "All Users"
+                                                    : (teamUsers?.find(
+                                                          (u) =>
+                                                              u.id ===
+                                                              userFilter,
+                                                      )?.name ?? "Select user")}
+                                            </span>
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">
+                                                All Users
                                             </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
+                                            {teamUsers?.map((u) => (
+                                                <SelectItem
+                                                    key={u.id}
+                                                    value={u.id}
+                                                >
+                                                    {u.name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            )}
 
                             <Button
                                 className="h-8 text-xs"
