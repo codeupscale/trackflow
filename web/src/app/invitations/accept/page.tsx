@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { z } from 'zod/v4';
 import { useForm } from 'react-hook-form';
@@ -58,6 +58,15 @@ function AcceptInviteContent() {
     resolver: zodResolver(schema),
     defaultValues: { name: '', password: '', password_confirmation: '' },
   });
+
+  useEffect(() => {
+    if (!token) return;
+    api.post('/invitations/peek', { token })
+      .then((res) => {
+        if (res.data?.name) form.setValue('name', res.data.name);
+      })
+      .catch(() => {});
+  }, [token, form]);
 
   const onSubmit = async (values: Values) => {
     if (!token) return;

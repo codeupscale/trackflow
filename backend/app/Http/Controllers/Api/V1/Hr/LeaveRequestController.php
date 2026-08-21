@@ -51,6 +51,10 @@ class LeaveRequestController extends Controller
             $query->where('leave_type_id', $request->input('leave_type_id'));
         }
 
+        if ($request->filled('user_id')) {
+            $query->where('user_id', $request->input('user_id'));
+        }
+
         if ($request->filled('start_date')) {
             $query->where('start_date', '>=', $request->input('start_date'));
         }

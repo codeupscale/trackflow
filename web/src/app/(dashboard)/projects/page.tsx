@@ -121,7 +121,6 @@ export default function ProjectsPage() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
-  const [expandedProject, setExpandedProject] = useState<string | null>(null);
   const [membersDialogOpen, setMembersDialogOpen] = useState(false);
   const [membersProject, setMembersProject] = useState<Project | null>(null);
   const [memberIds, setMemberIds] = useState<string[]>([]);
@@ -145,6 +144,7 @@ export default function ProjectsPage() {
   const canUpdateProjects = canCreateProjects;
   const canDeleteProjects = hasPermission('projects.delete');
   const canManageMembers = hasPermission('projects.manage_members');
+  const isOwner = user?.role === 'owner';
 
   // Debounce search to avoid hammering backend
   const debounceTimer = useState<NodeJS.Timeout | null>(null);
@@ -353,12 +353,12 @@ export default function ProjectsPage() {
       </div>
 
       {/* Stats Strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className={`grid grid-cols-2 ${isOwner ? 'sm:grid-cols-4' : 'sm:grid-cols-3'} gap-3`}>
         {[
           { label: 'Total Projects', value: totalCount, icon: FolderOpen, color: 'text-blue-500', bg: 'bg-blue-500/10' },
           { label: 'Active', value: activeCount, icon: CircleDot, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
           { label: 'Archived', value: archivedCount, icon: Archive, color: 'text-red-500', bg: 'bg-red-500/10' },
-          { label: 'Billable', value: billableCount, icon: DollarSign, color: 'text-amber-500', bg: 'bg-amber-500/10' },
+          ...(isOwner ? [{ label: 'Billable', value: billableCount, icon: DollarSign, color: 'text-amber-500', bg: 'bg-amber-500/10' }] : []),
         ].map((s) => (
           <Card key={s.label} className="border-border">
             <CardContent className="p-3">
@@ -455,13 +455,14 @@ export default function ProjectsPage() {
                 <Table>
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[240px]">Name</TableHead>
-                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[90px]">Status</TableHead>
-                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[100px]">Billing</TableHead>
-                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[70px]">Tasks</TableHead>
-                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[70px]">Members</TableHead>
-                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[110px]">Manager</TableHead>
-                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-10">
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2">Name</TableHead>
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[100px]">Status</TableHead>
+                      {isOwner && (
+                        <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[120px]">Billing</TableHead>
+                      )}
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[90px] text-center">Members</TableHead>
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[140px]">Manager</TableHead>
+                      <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 w-[50px]">
                         <span className="sr-only">Actions</span>
                       </TableHead>
                     </TableRow>
@@ -470,12 +471,9 @@ export default function ProjectsPage() {
                     {projects.map((project) => (
                       <TableRow
                         key={project.id}
-                        className={`border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors cursor-pointer ${
+                        className={`border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors ${
                           project.is_archived ? 'opacity-60' : ''
                         }`}
-                        onClick={() =>
-                          setExpandedProject(expandedProject === project.id ? null : project.id)
-                        }
                       >
                         <TableCell className="px-4 py-2">
                           <div className="flex items-center gap-2.5">
@@ -501,21 +499,20 @@ export default function ProjectsPage() {
                             </span>
                           )}
                         </TableCell>
-                        <TableCell className="px-4 py-2">
-                          {project.billable ? (
-                            <span className="text-[0.75rem] text-foreground">
-                              {project.hourly_rate ? `$${project.hourly_rate}/hr` : 'Billable'}
-                            </span>
-                          ) : (
-                            <span className="text-[0.75rem] text-muted-foreground">
-                              Non-billable
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell className="px-4 py-2 text-[0.75rem] text-muted-foreground tabular-nums">
-                          {project.tasks?.length || 0}
-                        </TableCell>
-                        <TableCell className="px-4 py-2 text-[0.75rem] text-muted-foreground tabular-nums">
+                        {isOwner && (
+                          <TableCell className="px-4 py-2">
+                            {project.billable ? (
+                              <span className="text-[0.75rem] text-foreground">
+                                {project.hourly_rate ? `$${project.hourly_rate}/hr` : 'Billable'}
+                              </span>
+                            ) : (
+                              <span className="text-[0.75rem] text-muted-foreground">
+                                Non-billable
+                              </span>
+                            )}
+                          </TableCell>
+                        )}
+                        <TableCell className="px-4 py-2 text-[0.75rem] text-muted-foreground tabular-nums text-center">
                           {String((project as unknown as { members_count?: number }).members_count ?? 0)}
                         </TableCell>
                         <TableCell className="px-4 py-2 text-[0.75rem] text-muted-foreground truncate max-w-[120px]">
@@ -587,37 +584,6 @@ export default function ProjectsPage() {
             </CardContent>
           </Card>
 
-          {/* Expanded tasks (shown below table as a subtle card) */}
-          {expandedProject && (() => {
-            const project = projects.find((p) => p.id === expandedProject);
-            if (!project || !project.tasks || project.tasks.length === 0) return null;
-            return (
-              <Card className="border-border">
-                <CardContent className="p-3">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div
-                      className="h-2.5 w-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: project.color }}
-                    />
-                    <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">
-                      {project.name} &mdash; Tasks ({project.tasks.length})
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {project.tasks.map((task) => (
-                      <span
-                        key={task.id}
-                        className="inline-flex items-center gap-1.5 text-[0.7rem] text-foreground bg-muted/50 rounded-md px-2 py-1"
-                      >
-                        <span className="h-1 w-1 rounded-full bg-muted-foreground" />
-                        {task.name}
-                      </span>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })()}
         </>
       )}
 
@@ -719,30 +685,34 @@ export default function ProjectsPage() {
                   ))}
                 </div>
               </div>
-              <div className="flex items-center justify-between rounded-lg border border-border p-3">
-                <div>
-                  <Label className="text-xs">Billable</Label>
-                  <p className="text-[0.65rem] text-muted-foreground">Track billable hours for this project</p>
-                </div>
-                <Switch
-                  checked={formBillable}
-                  onCheckedChange={setFormBillable}
-                />
-              </div>
-              {formBillable && (
-                <div className="grid gap-1.5">
-                  <Label htmlFor="hourly-rate" className="text-xs">Hourly Rate ($)</Label>
-                  <Input
-                    id="hourly-rate"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={formRate}
-                    onChange={(e) => setFormRate(e.target.value)}
-                    placeholder="0.00"
-                    className="h-9 text-sm"
-                  />
-                </div>
+              {isOwner && (
+                <>
+                  <div className="flex items-center justify-between rounded-lg border border-border p-3">
+                    <div>
+                      <Label className="text-xs">Billable</Label>
+                      <p className="text-[0.65rem] text-muted-foreground">Track billable hours for this project</p>
+                    </div>
+                    <Switch
+                      checked={formBillable}
+                      onCheckedChange={setFormBillable}
+                    />
+                  </div>
+                  {formBillable && (
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="hourly-rate" className="text-xs">Hourly Rate ($)</Label>
+                      <Input
+                        id="hourly-rate"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={formRate}
+                        onChange={(e) => setFormRate(e.target.value)}
+                        placeholder="0.00"
+                        className="h-9 text-sm"
+                      />
+                    </div>
+                  )}
+                </>
               )}
 
               {/* Manager */}

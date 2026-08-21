@@ -258,7 +258,7 @@ class PermissionSeeder extends Seeder
     }
 
     // ── HR Manager (priority 65) ──────────────────────────────────────────
-    // Full HR module, time-entry viewing, payroll viewing only.
+    // Full HR module, time-entry management, payroll management.
     public function getHrManagerPermissions(): array
     {
         return [
@@ -266,12 +266,15 @@ class PermissionSeeder extends Seeder
             'dashboard.view_own_stats'  => 'none',
             'dashboard.view_team_stats' => 'none',
 
-            // time_entries — view + export only (for attendance verification)
-            'time_entries.view'   => 'organization',
-            'time_entries.export' => 'organization',
+            // time_entries — view/export org-wide, create/edit/delete own only
+            'time_entries.view'    => 'organization',
+            'time_entries.create'  => 'none',
+            'time_entries.edit'    => 'none',
+            'time_entries.delete'  => 'none',
+            'time_entries.export'  => 'organization',
 
-            // screenshots — view only
-            'screenshots.view' => 'organization',
+            // projects — read-only (context for time entries/reports)
+            'projects.view' => 'none',
 
             // reports — org-wide
             'reports.view'   => 'organization',
@@ -298,11 +301,10 @@ class PermissionSeeder extends Seeder
             'job_postings.publish'     => 'none',
             'job_postings.view_salary' => 'none',
 
-            // employees — full access including financial data and notes
+            // employees — full access except financial data (finance_manager/owner only)
             'employees.view_directory'   => 'organization',
             'employees.view_profile'     => 'organization',
             'employees.edit_profile'     => 'organization',
-            'employees.view_financial'   => 'organization',
             'employees.manage_documents' => 'organization',
             'employees.manage_notes'     => 'organization',
 
@@ -316,20 +318,25 @@ class PermissionSeeder extends Seeder
             'leave.manage_balances' => 'none',
             'leave.manage_holidays' => 'none',
 
-            // attendance — full management
+            // attendance — full management including policy
             'attendance.view'                    => 'organization',
             'attendance.generate'                => 'none',
             'attendance.regularize'              => 'none',
             'attendance.approve_regularizations' => 'organization',
             'attendance.manage_overtime_rules'   => 'none',
+            'attendance.manage_policy'           => 'none',
             'attendance.check_in'                => 'none',
             'attendance.view_all'                => 'none',
             'attendance.export'                  => 'none',
 
-            // payroll — view only (cannot run, manage structures, or approve)
-            'payroll.view_own'  => 'none',
-            'payroll.view_team' => 'none',
-            'payroll.view_all'  => 'none',
+            // payroll — full management (run, structures, components, approve)
+            'payroll.view_own'            => 'none',
+            'payroll.view_team'           => 'none',
+            'payroll.view_all'            => 'none',
+            'payroll.run'                 => 'none',
+            'payroll.manage_structures'   => 'none',
+            'payroll.manage_components'   => 'none',
+            'payroll.approve'             => 'none',
 
             // shifts — full management
             'shifts.view'               => 'none',
@@ -339,12 +346,9 @@ class PermissionSeeder extends Seeder
             'shifts.manage_assignments' => 'none',
             'shifts.manage_swaps'       => 'none',
 
-            // team — view + invite (cannot remove or change roles)
+            // team — view + invite (onboarding is an HR function)
             'team.view_members' => 'none',
             'team.invite'       => 'none',
-
-            // settings — view only
-            'settings.view_org' => 'none',
 
             // audit_logs
             'audit_logs.view' => 'none',

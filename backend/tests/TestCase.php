@@ -6,6 +6,7 @@ use App\Models\Organization;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -18,6 +19,17 @@ abstract class TestCase extends BaseTestCase
      * Reset per-test by RefreshDatabase.
      */
     private bool $permissionsSeeded = false;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // The array cache store backs the throttle middleware and lives for the
+        // whole PHPUnit process, so hit counters survive RefreshDatabase and leak
+        // between tests. Auth is limited to 10/min, which any suite that logs in
+        // more than ten times exhausts — turning later assertions into 429s.
+        Cache::flush();
+    }
 
     /**
      * Permission key -> id map, populated by seedPermissions().

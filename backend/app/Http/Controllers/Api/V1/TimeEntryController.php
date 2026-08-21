@@ -21,7 +21,7 @@ class TimeEntryController extends Controller
     {
         $query = TimeEntry::query()
             ->where('organization_id', $request->user()->organization_id)
-            ->with(['project', 'task', 'user']);
+            ->with(['project', 'task', 'user', 'approver:id,name']);
 
         // Employees see only own entries
         if ($request->user()->isEmployee()) {
@@ -62,7 +62,7 @@ class TimeEntryController extends Controller
     public function show(Request $request, string $id): JsonResponse
     {
         $entry = TimeEntry::where('organization_id', $request->user()->organization_id)
-            ->with(['project', 'task', 'user'])
+            ->with(['project', 'task', 'user', 'approver:id,name'])
             ->findOrFail($id);
 
         $this->authorize('view', $entry);

@@ -71,7 +71,8 @@ Route::prefix('v1')->group(function () {
         Route::get('metadata', [SsoController::class, 'metadata']);
     });
 
-    // Public invitation acceptance
+    // Public invitation peek & acceptance
+    Route::post('invitations/peek', [InvitationController::class, 'peek']);
     Route::post('invitations/accept', [InvitationController::class, 'accept']);
 
     // Screenshot file serving (public — access controlled via HMAC signature)
