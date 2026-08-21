@@ -126,7 +126,8 @@ export default function LeaveApprovalsPage() {
 
   const formatDays = (count: number) => {
     const n = Number(count);
-    return n % 1 === 0 ? Math.round(n) : n;
+    if (n === 0.5) return 'Half day';
+    return Math.round(n);
   };
 
   return (

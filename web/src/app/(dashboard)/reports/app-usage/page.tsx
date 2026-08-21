@@ -615,12 +615,13 @@ export default function AppUsagePage() {
                             <Label className="text-xs">Start Date</Label>
                             <DatePicker
                                 value={startDate}
-                                onChange={setStartDate}
+                                onChange={(val) => { setStartDate(val); if (val > endDate) setEndDate(val); }}
+                                maxDate={endDate}
                             />
                         </div>
                         <div className="flex flex-col gap-1">
                             <Label className="text-xs">End Date</Label>
-                            <DatePicker value={endDate} onChange={setEndDate} />
+                            <DatePicker value={endDate} onChange={setEndDate} minDate={startDate} />
                         </div>
                     </div>
                 </CardContent>

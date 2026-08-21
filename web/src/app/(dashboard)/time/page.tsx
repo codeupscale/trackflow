@@ -14,6 +14,7 @@ import {
   Plus,
   Search,
   Timer,
+  Trash2,
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -91,7 +92,7 @@ interface TimeEntry {
   };
   task?: {
     id: string;
-    title: string;
+    name: string;
   };
   user?: {
     id: string;
@@ -132,11 +133,13 @@ export default function TimePage() {
   const searchParams = useSearchParams();
   const { hasPermission, hasPermissionWithScope } = usePermissionStore();
   const canApprove = hasPermission('time_entries.approve');
+  const canDeleteAll = hasPermission('time_entries.delete');
+  const canDeleteOwnManual = !canDeleteAll;
 
   const isManagerOrAbove = hasPermissionWithScope('time_entries.view', 'project');
 
-  const [dateFrom, setDateFrom] = useState(() => searchParams.get('from') || format(new Date(), 'yyyy-MM-dd'));
-  const [dateTo, setDateTo] = useState(() => searchParams.get('to') || format(new Date(), 'yyyy-MM-dd'));
+  const [dateFrom, setDateFrom] = useState(() => searchParams.get('from') || '');
+  const [dateTo, setDateTo] = useState(() => searchParams.get('to') || '');
   const [projectFilter, setProjectFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [memberFilter, setMemberFilter] = useState<string>('all');
@@ -145,7 +148,8 @@ export default function TimePage() {
   const [projectComboboxOpen, setProjectComboboxOpen] = useState(false);
   const [memberComboboxOpen, setMemberComboboxOpen] = useState(false);
   const [manualEntryOpen, setManualEntryOpen] = useState(false);
-  const [showFilters, setShowFilters] = useState(true);
+  const [viewEntry, setViewEntry] = useState<TimeEntry | null>(null);
+  const [showFilters, setShowFilters] = useState(false);
 
   const { data: projects } = useQuery<Project[]>({
     queryKey: ['projects-list'],
@@ -168,11 +172,11 @@ export default function TimePage() {
     queryKey: ['time-entries', dateFrom, dateTo, projectFilter, typeFilter, memberFilter, page],
     queryFn: async () => {
       const params: Record<string, string | number> = {
-        date_from: dateFrom,
-        date_to: dateTo,
         page,
         per_page: 20,
       };
+      if (dateFrom) params.date_from = dateFrom;
+      if (dateTo) params.date_to = dateTo;
       if (projectFilter && projectFilter !== 'all') {
         params.project_id = projectFilter;
       }
@@ -248,6 +252,20 @@ export default function TimePage() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async (entryIds: string[]) => {
+      await Promise.all(entryIds.map((id) => api.delete(`/time-entries/${id}`)));
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['time-entries'] });
+      setSelectedEntries([]);
+      toast.success(`${variables.length} time ${variables.length === 1 ? 'entry' : 'entries'} deleted`);
+    },
+    onError: () => {
+      toast.error('Failed to delete entries');
+    },
+  });
+
   const toggleEntry = (id: string) => {
     setSelectedEntries((prev) =>
       prev.includes(id) ? prev.filter((e) => e !== id) : [...prev, id]
@@ -255,23 +273,35 @@ export default function TimePage() {
   };
 
   const toggleAll = () => {
-    const pendingIds = entries.filter((e) => e.status === 'pending').map((e) => e.id);
-    if (selectedEntries.length === pendingIds.length) {
+    const allIds = entries.map((e) => e.id);
+    if (selectedEntries.length === allIds.length) {
       setSelectedEntries([]);
     } else {
-      setSelectedEntries(pendingIds);
+      setSelectedEntries(allIds);
     }
   };
+
+  const canDelete = canDeleteAll || canDeleteOwnManual;
+  const showCheckboxes = canDelete || canApprove;
+  const selectedPendingCount = selectedEntries.filter((id) => entries.find((e) => e.id === id && e.status === 'pending')).length;
+  const selectedDeletableCount = canDeleteAll
+    ? selectedEntries.length
+    : selectedEntries.filter((id) =>
+        entries.find((e) => e.id === id && e.user_id === user?.id && e.type === 'manual' && (e.status === 'pending' || e.status === 'rejected'))
+      ).length;
 
   const totalSeconds = entries.reduce((sum, e) => sum + getDisplayDuration(e), 0);
 
   const activeFilterCount = [
+    dateFrom || dateTo,
     projectFilter !== 'all',
     typeFilter !== 'all',
     isManagerOrAbove && memberFilter !== 'all',
   ].filter(Boolean).length;
 
   const clearFilters = () => {
+    setDateFrom('');
+    setDateTo('');
     setProjectFilter('all');
     setTypeFilter('all');
     setMemberFilter('all');
@@ -296,6 +326,14 @@ export default function TimePage() {
         open={manualEntryOpen}
         onOpenChange={setManualEntryOpen}
         canLogOnBehalf={canApprove}
+      />
+
+      <ManualTimeEntryDialog
+        open={!!viewEntry}
+        onOpenChange={(open) => { if (!open) setViewEntry(null); }}
+        canLogOnBehalf={canApprove}
+        entry={viewEntry}
+        initialMode="view"
       />
 
       {/* Stats Strip */}
@@ -362,16 +400,18 @@ export default function TimePage() {
             {/* Date Range */}
             <DatePicker
               value={dateFrom}
-              onChange={(val) => { setDateFrom(val); setPage(1); }}
-              placeholder="From"
+              onChange={(val) => { setDateFrom(val); if (dateTo && val > dateTo) setDateTo(val); setPage(1); }}
+              placeholder="From date"
               className="w-[140px] h-8 text-xs"
+              maxDate={dateTo || undefined}
             />
             <span className="text-xs text-muted-foreground">to</span>
             <DatePicker
               value={dateTo}
               onChange={(val) => { setDateTo(val); setPage(1); }}
-              placeholder="To"
+              placeholder="To date"
               className="w-[140px] h-8 text-xs"
+              minDate={dateFrom || undefined}
             />
 
             <div className="h-5 w-px bg-border mx-1 hidden sm:block" />
@@ -399,21 +439,51 @@ export default function TimePage() {
               </Button>
             )}
 
-            {/* Approve Button (right side) */}
-            {canApprove && selectedEntries.length > 0 && (
-              <Button
-                onClick={() => approveMutation.mutate(selectedEntries)}
-                disabled={approveMutation.isPending}
-                size="sm"
-                className="ml-auto h-8 text-xs"
-              >
-                {approveMutation.isPending ? (
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <CheckCircle className="mr-1.5 h-3.5 w-3.5" />
+            {/* Bulk Actions (right side) */}
+            {selectedEntries.length > 0 && (
+              <div className="flex items-center gap-2 ml-auto">
+                {canApprove && selectedPendingCount > 0 && (
+                  <Button
+                    onClick={() => {
+                      const pendingIds = selectedEntries.filter((id) => entries.find((e) => e.id === id && e.status === 'pending'));
+                      approveMutation.mutate(pendingIds);
+                    }}
+                    disabled={approveMutation.isPending}
+                    size="sm"
+                    className="h-8 text-xs"
+                  >
+                    {approveMutation.isPending ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <CheckCircle className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Approve ({selectedPendingCount})
+                  </Button>
                 )}
-                Approve ({selectedEntries.length})
-              </Button>
+                {canDelete && selectedDeletableCount > 0 && (
+                  <Button
+                    onClick={() => {
+                      const deletableIds = canDeleteAll
+                        ? selectedEntries
+                        : selectedEntries.filter((id) =>
+                            entries.find((e) => e.id === id && e.user_id === user?.id && e.type === 'manual' && (e.status === 'pending' || e.status === 'rejected'))
+                          );
+                      deleteMutation.mutate(deletableIds);
+                    }}
+                    disabled={deleteMutation.isPending}
+                    variant="destructive"
+                    size="sm"
+                    className="h-8 text-xs"
+                  >
+                    {deleteMutation.isPending ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Delete ({selectedDeletableCount})
+                  </Button>
+                )}
+              </div>
             )}
           </div>
 
@@ -602,16 +672,15 @@ export default function TimePage() {
                 <Table>
                   <TableHeader>
                     <TableRow className="border-border hover:bg-transparent">
-                      {canApprove && (
+                      {showCheckboxes && (
                         <TableHead className="w-[40px] px-3">
                           <Checkbox
                             checked={
-                              selectedEntries.length ===
-                              entries.filter((e) => e.status === 'pending').length &&
-                              entries.filter((e) => e.status === 'pending').length > 0
+                              selectedEntries.length === entries.length &&
+                              entries.length > 0
                             }
                             onCheckedChange={toggleAll}
-                            aria-label="Select all pending entries"
+                            aria-label="Select all entries"
                           />
                         </TableHead>
                       )}
@@ -645,16 +714,14 @@ export default function TimePage() {
                   </TableHeader>
                   <TableBody>
                     {entries.map((entry) => (
-                      <TableRow key={entry.id} className="border-border/50 hover:bg-muted/30 transition-colors">
-                        {canApprove && (
-                          <TableCell className="px-3">
-                            {entry.status === 'pending' && (
-                              <Checkbox
-                                checked={selectedEntries.includes(entry.id)}
-                                onCheckedChange={() => toggleEntry(entry.id)}
-                                aria-label={`Select entry ${entry.id}`}
-                              />
-                            )}
+                      <TableRow key={entry.id} className={`border-border/50 hover:bg-muted/30 transition-colors ${entry.type === 'manual' ? 'cursor-pointer' : ''}`} onClick={() => { if (entry.type === 'manual') setViewEntry(entry); }}>
+                        {showCheckboxes && (
+                          <TableCell className="px-3" onClick={(e) => e.stopPropagation()}>
+                            <Checkbox
+                              checked={selectedEntries.includes(entry.id)}
+                              onCheckedChange={() => toggleEntry(entry.id)}
+                              aria-label={`Select entry ${entry.id}`}
+                            />
                           </TableCell>
                         )}
                         <TableCell className="py-2.5">
@@ -709,8 +776,12 @@ export default function TimePage() {
                             <span className="text-[0.65rem] text-muted-foreground">No project</span>
                           )}
                         </TableCell>
-                        <TableCell className="text-[0.7rem] text-foreground py-2.5">
-                          {entry.task?.title || <span className="text-muted-foreground text-[0.65rem]">No task</span>}
+                        <TableCell className="text-[0.7rem] text-foreground py-2.5 max-w-[150px]">
+                          {entry.task?.name ? (
+                            <span className="block truncate" title={entry.task.name}>{entry.task.name}</span>
+                          ) : (
+                            <span className="text-muted-foreground text-[0.65rem]">No task</span>
+                          )}
                         </TableCell>
                         <TableCell className="text-right py-2.5">
                           {entry.ended_at ? (

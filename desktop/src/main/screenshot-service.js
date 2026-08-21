@@ -128,6 +128,24 @@ class ScreenshotService {
     this._onWallpaperDetected = null;
     // Optional callback when a screenshot is captured (uploaded or queued)
     this._onScreenshotCaptured = null;
+    // Injected by index.js — returns { time_entry_id, idempotency_key } for the LIVE
+    // session, mirroring ActivityMonitor.getCurrentEntryMeta. A queued screenshot must
+    // record the SESSION's uuid (never its own per-shot idempotency_key, which matches
+    // nothing in timer_sessions) or it becomes unresolvable the moment the 05:00 purge
+    // or a sign-out deletes the row it was going to resolve through.
+    /** @type {(() => ({time_entry_id?: string, idempotency_key?: string}|null))|null} */
+    this.getCurrentEntryMeta = null;
+  }
+
+  // The live session's uuid, when index.js has wired the accessor.
+  _currentSessionUuid() {
+    if (typeof this.getCurrentEntryMeta !== 'function') return null;
+    try {
+      const meta = this.getCurrentEntryMeta();
+      return (meta && meta.idempotency_key) || null;
+    } catch {
+      return null;
+    }
   }
 
   // Set a callback that saves restart state before showing the permission dialog
@@ -1140,6 +1158,11 @@ class ScreenshotService {
         captured_at:     capturedAt || new Date().toISOString(),
         idempotency_key: idempotencyKey || crypto.randomUUID(),
       };
+      // Second, independent route back to the server entry id. `idempotency_key` above
+      // is this SHOT's dedupe key for presign; `session_uuid` is the owning session's
+      // identity, which is what timer_sessions is keyed on.
+      const sessionUuid = this._currentSessionUuid();
+      if (sessionUuid) data.session_uuid = sessionUuid;
       if (appName)           data.app_name       = appName;
       if (windowTitle)       data.window_title    = windowTitle;
       if (activityScore != null) data.activity_score = activityScore;

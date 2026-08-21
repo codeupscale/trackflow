@@ -782,6 +782,8 @@ window.trackflow.onTimerStarted((data) => {
     return;
   }
   if (data?._stateVersion != null) _lastStateVersion = data._stateVersion;
+  // Tracking is back on — the "not being tracked" warning is no longer true.
+  hideReturnBanner();
 
   setStartedAt(data?.started_at || new Date().toISOString());
   if (data?.todayTotal > 0) todayTotalBase = data.todayTotal;
@@ -813,6 +815,68 @@ if (window.trackflow.onTimerResumed) {
     startTicking();
   });
 }
+
+// ── Return-from-break alert ──────────────────────────────────────────────────
+// The user walked away, the watchdog stopped the timer while the desk was empty, and
+// every toast fired into an empty room. This is the cue they actually see and hear on
+// sitting back down. The WebAudio beep needs no external resource, so the strict CSP
+// (default-src 'none'; script-src 'self') is satisfied without change — same approach
+// as the idle alert, and for the same reason: OS notification sound is unreliable.
+let _returnAudioCtx = null;
+
+function playReturnBeep() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!_returnAudioCtx) _returnAudioCtx = new AC();
+    if (_returnAudioCtx.state === 'suspended') _returnAudioCtx.resume().catch(() => {});
+    const now = _returnAudioCtx.currentTime;
+    // Three descending tones — deliberately distinct from the idle alert's two rising
+    // ones, so "you are not being tracked" never sounds like "are you still there?".
+    [740, 620, 500].forEach((freq, i) => {
+      const osc = _returnAudioCtx.createOscillator();
+      const gain = _returnAudioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const t0 = now + i * 0.2;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.28, t0 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
+      osc.connect(gain).connect(_returnAudioCtx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 0.2);
+    });
+  } catch {
+    // Sound is one of three cues, never the only one — a failure here is not fatal.
+  }
+}
+
+function formatAwayLabel(awaySec) {
+  const mins = Math.max(1, Math.round((Number(awaySec) || 0) / 60));
+  if (mins < 60) return `${mins} min`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
+// Looked up lazily: hideReturnBanner() is called from the timer-started handler above
+// this point, and a module-scope const would sit in its temporal dead zone.
+function hideReturnBanner() {
+  const el = document.getElementById('returnBanner');
+  if (el) el.style.display = 'none';
+}
+
+window.trackflow.onReturnFromBreak((data) => {
+  const away = formatAwayLabel(data && data.awaySec);
+  const banner = document.getElementById('returnBanner');
+  const bannerText = document.getElementById('returnBannerText');
+  if (bannerText) {
+    bannerText.textContent =
+      `Welcome back — the timer stopped while you were away (${away}). ` +
+      `Time since then was NOT tracked. Start the timer to resume.`;
+  }
+  if (banner) banner.style.display = 'flex';
+  if (!data || data.playSound !== false) playReturnBeep();
+  showNotification('Timer is stopped — you are not being tracked');
+});
 
 window.trackflow.onTimerStopped((data) => {
   // RACE-FIX: Discard stale notifications that arrive out of order.

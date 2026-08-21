@@ -3,14 +3,6 @@ import { toast } from 'sonner';
 import api from '@/lib/api';
 import type { ManualTimeEntryPayload } from '@/lib/validations/time-entry';
 
-/**
- * Create a manual time entry (`POST /time-entries`).
- *
- * Employees self-submit → the entry lands `pending` and needs approval.
- * Managers (self or on-behalf) → the entry is `approved` immediately. The success
- * toast reflects whichever state the server returns. On success we invalidate the
- * time-entry lists AND the reports caches so approved entries surface everywhere.
- */
 export function useCreateManualEntry() {
   const queryClient = useQueryClient();
 
@@ -33,6 +25,32 @@ export function useCreateManualEntry() {
         (error as { data?: { message?: string } })?.data?.message ??
         (error as { message?: string })?.message ??
         'Failed to create time entry';
+      toast.error(message);
+    },
+  });
+}
+
+export function useUpdateManualEntry() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id, ...payload }: ManualTimeEntryPayload & { id: string }) => {
+      const res = await api.put(`/time-entries/${id}`, payload);
+      return res.data as {
+        entry?: { approval_status?: 'pending' | 'approved' | 'rejected' };
+        approval_reset?: boolean;
+      };
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['time-entries'] });
+      queryClient.invalidateQueries({ queryKey: ['reports'] });
+      toast.success(data.approval_reset ? 'Updated & resubmitted for approval' : 'Time entry updated');
+    },
+    onError: (error: unknown) => {
+      const message =
+        (error as { data?: { message?: string } })?.data?.message ??
+        (error as { message?: string })?.message ??
+        'Failed to update time entry';
       toast.error(message);
     },
   });

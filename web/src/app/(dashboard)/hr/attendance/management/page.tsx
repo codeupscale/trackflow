@@ -301,7 +301,8 @@ function TeamTab() {
           <Input
             type="date"
             value={dateFrom}
-            onChange={(e) => { setDateFrom(e.target.value); setCurrentPage(1); }}
+            max={dateTo}
+            onChange={(e) => { setDateFrom(e.target.value); if (e.target.value > dateTo) setDateTo(e.target.value); setCurrentPage(1); }}
             className="h-8 text-xs w-[140px]"
           />
         </div>
@@ -310,6 +311,7 @@ function TeamTab() {
           <Input
             type="date"
             value={dateTo}
+            min={dateFrom}
             onChange={(e) => { setDateTo(e.target.value); setCurrentPage(1); }}
             className="h-8 text-xs w-[140px]"
           />
@@ -982,7 +984,7 @@ function ReportTab() {
               <div className="flex flex-col gap-1">
                 <Label className="text-[0.65rem] text-muted-foreground">Month</Label>
                 <Select value={String(month)} onValueChange={(v) => { setMonth(Number(v)); setPage(1); }}>
-                  <SelectTrigger className="w-[130px] h-8 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-[130px] h-8 text-xs"><SelectValue>{MONTHS[month - 1]}</SelectValue></SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
                       {MONTHS.map((name, idx) => (
@@ -995,7 +997,7 @@ function ReportTab() {
               <div className="flex flex-col gap-1">
                 <Label className="text-[0.65rem] text-muted-foreground">Year</Label>
                 <Select value={String(year)} onValueChange={(v) => { setYear(Number(v)); setPage(1); }}>
-                  <SelectTrigger className="w-[90px] h-8 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-[90px] h-8 text-xs"><SelectValue>{year}</SelectValue></SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
                       {yearOptions.map((y) => (

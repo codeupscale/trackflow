@@ -29,6 +29,7 @@ class StoreTimeEntryRequest extends FormRequest
             ],
             'project_id' => ['nullable', 'uuid'],
             'task_id' => ['nullable', 'uuid'],
+            'task_name' => ['nullable', 'string', 'max:255'],
             'started_at' => ['required', 'date', 'before_or_equal:now'],
             'ended_at' => ['required', 'date', 'after:started_at'],
             'notes' => ['nullable', 'string', 'max:1000'],

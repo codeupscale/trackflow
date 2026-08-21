@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Task;
 use App\Models\TimeEntry;
 use App\Models\User;
 use Carbon\Carbon;
@@ -84,15 +85,25 @@ class ManualTimeEntryService
             $org->tasks()->findOrFail($data['task_id']);
         }
 
+        // Auto-create task from free-text name if no task_id provided
+        $taskId = $data['task_id'] ?? null;
+        if (! $taskId && ! empty($data['task_name']) && ! empty($data['project_id'])) {
+            $task = Task::firstOrCreate(
+                ['organization_id' => $org->id, 'project_id' => $data['project_id'], 'name' => trim($data['task_name'])],
+                ['created_by' => $actor->id]
+            );
+            $taskId = $task->id;
+        }
+
         $startedAt = Carbon::parse($data['started_at']);
         $endedAt = Carbon::parse($data['ended_at']);
 
-        return DB::transaction(function () use ($actor, $targetUser, $org, $data, $startedAt, $endedAt, $approved) {
+        return DB::transaction(function () use ($actor, $targetUser, $org, $data, $startedAt, $endedAt, $approved, $taskId) {
             $entry = TimeEntry::create([
                 'organization_id' => $org->id,
                 'user_id' => $targetUser->id,
                 'project_id' => $data['project_id'] ?? null,
-                'task_id' => $data['task_id'] ?? null,
+                'task_id' => $taskId,
                 'started_at' => $startedAt,
                 'ended_at' => $endedAt,
                 'duration_seconds' => (int) abs($endedAt->diffInSeconds($startedAt)),

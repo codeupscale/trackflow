@@ -22,7 +22,7 @@ class StoreLeaveRequestRequest extends FormRequest
                 'uuid',
                 Rule::exists('leave_types', 'id')->where('organization_id', $orgId),
             ],
-            'start_date' => ['required', 'date', 'after_or_equal:today'],
+            'start_date' => ['required', 'date', 'after_or_equal:'.now()->subDays(7)->toDateString()],
             'end_date' => ['required', 'date', 'after_or_equal:start_date'],
             'reason' => ['required', 'string', 'max:1000'],
             'half_day' => ['sometimes', 'boolean'],

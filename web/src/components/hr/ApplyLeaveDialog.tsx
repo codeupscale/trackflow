@@ -4,7 +4,7 @@ import { useEffect, useMemo } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader2, Upload } from 'lucide-react';
-import { differenceInBusinessDays, parseISO } from 'date-fns';
+import { differenceInBusinessDays, format, subDays, parseISO } from 'date-fns';
 
 import {
   Dialog,
@@ -78,6 +78,8 @@ export function ApplyLeaveDialog({ open, onOpenChange }: ApplyLeaveDialogProps) 
   const watchedEnd = form.watch('end_date');
   const watchedHalfDay = form.watch('half_day');
   const watchedReason = form.watch('reason') ?? '';
+
+  const minLeaveDate = format(subDays(new Date(), 7), 'yyyy-MM-dd');
 
   const selectedBalance = useMemo(() => {
     return balances?.find((b) => b.leave_type_id === watchedLeaveType);
@@ -173,17 +175,9 @@ export function ApplyLeaveDialog({ open, onOpenChange }: ApplyLeaveDialogProps) 
               {selectedBalance && (
                 <div className="rounded-lg bg-muted/50 border border-border/50 px-3 py-2 flex items-center justify-between">
                   <span className="text-[0.65rem] text-muted-foreground">Balance</span>
-                  <div className="flex items-center gap-3 text-[0.65rem]">
-                    <span className="tabular-nums">{selectedBalance.used_days} used</span>
-                    {selectedBalance.pending_days > 0 && (
-                      <span className="text-amber-600 dark:text-amber-400 tabular-nums">
-                        {selectedBalance.pending_days} pending
-                      </span>
-                    )}
-                    <span className="font-medium tabular-nums">
-                      {selectedBalance.total_days - selectedBalance.used_days - selectedBalance.pending_days} remaining
-                    </span>
-                  </div>
+                  <span className="text-[0.65rem] font-medium tabular-nums">
+                    {selectedBalance.total_days - selectedBalance.used_days - selectedBalance.pending_days} remaining
+                  </span>
                 </div>
               )}
 
@@ -208,9 +202,14 @@ export function ApplyLeaveDialog({ open, onOpenChange }: ApplyLeaveDialogProps) 
                           render={({ field: f }) => (
                             <DatePicker
                               value={f.value}
-                              onChange={f.onChange}
+                              onChange={(val) => {
+                                f.onChange(val);
+                                if (val > watchedEnd) form.setValue('end_date', val);
+                              }}
                               placeholder="Select date"
                               className="w-full"
+                              minDate={minLeaveDate}
+                              maxDate={watchedEnd}
                             />
                           )}
                         />
@@ -235,6 +234,7 @@ export function ApplyLeaveDialog({ open, onOpenChange }: ApplyLeaveDialogProps) 
                               onChange={f.onChange}
                               placeholder="Select date"
                               className="w-full"
+                              minDate={watchedStart || minLeaveDate}
                             />
                           )}
                         />

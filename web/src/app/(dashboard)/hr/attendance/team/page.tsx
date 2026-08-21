@@ -194,8 +194,10 @@ export default function TeamAttendancePage() {
             id="date-from"
             type="date"
             value={dateFrom}
+            max={dateTo}
             onChange={(e) => {
               setDateFrom(e.target.value);
+              if (e.target.value > dateTo) setDateTo(e.target.value);
               setCurrentPage(1);
             }}
             className="w-[140px] h-8 text-xs"
@@ -207,6 +209,7 @@ export default function TeamAttendancePage() {
             id="date-to"
             type="date"
             value={dateTo}
+            min={dateFrom}
             onChange={(e) => {
               setDateTo(e.target.value);
               setCurrentPage(1);

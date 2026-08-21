@@ -13,15 +13,16 @@ const TIME_RE = /^\d{2}:\d{2}$/;
 export const manualTimeEntrySchema = z
   .object({
     user_id: z.string().uuid('Please select a valid team member').optional().nullable(),
-    project_id: z.string().uuid('Please select a valid project').optional().nullable(),
+    project_id: z.string().min(1, 'Please select a project'),
     task_id: z.string().uuid('Please select a valid task').optional().nullable(),
+    task_name: z.string().max(255, 'Task name must be 255 characters or less').optional(),
     date: z.string().min(1, 'Date is required'),
     start_time: z.string().regex(TIME_RE, 'Enter a valid start time'),
     end_time: z.string().regex(TIME_RE, 'Enter a valid end time'),
     notes: z.string().max(1000, 'Notes must be 1000 characters or less').optional(),
   })
-  .refine((d) => combineDateTime(d.date, d.end_time) > combineDateTime(d.date, d.start_time), {
-    message: 'End time must be after the start time',
+  .refine((d) => d.start_time !== d.end_time, {
+    message: 'End time cannot be the same as start time',
     path: ['end_time'],
   })
   .refine((d) => combineDateTime(d.date, d.start_time).getTime() <= Date.now(), {
@@ -36,11 +37,22 @@ export function combineDateTime(date: string, time: string): Date {
   return new Date(`${date}T${time}:00`);
 }
 
+/** Combine date + end time, adding a day if end is before start (overnight). */
+export function combineEndDateTime(date: string, startTime: string, endTime: string): Date {
+  const start = new Date(`${date}T${startTime}:00`);
+  const end = new Date(`${date}T${endTime}:00`);
+  if (end <= start) {
+    end.setDate(end.getDate() + 1);
+  }
+  return end;
+}
+
 /** API payload for `POST /time-entries`. */
 export interface ManualTimeEntryPayload {
   user_id?: string;
   project_id?: string;
   task_id?: string;
+  task_name?: string;
   started_at: string;
   ended_at: string;
   notes?: string;
@@ -51,9 +63,9 @@ export function toManualEntryPayload(data: ManualTimeEntryFormData): ManualTimeE
   return {
     user_id: data.user_id ?? undefined,
     project_id: data.project_id ?? undefined,
-    task_id: data.task_id ?? undefined,
+    task_name: data.task_name?.trim() || '',
     started_at: combineDateTime(data.date, data.start_time).toISOString(),
-    ended_at: combineDateTime(data.date, data.end_time).toISOString(),
+    ended_at: combineEndDateTime(data.date, data.start_time, data.end_time).toISOString(),
     notes: data.notes?.trim() ? data.notes.trim() : undefined,
   };
 }
