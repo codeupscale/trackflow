@@ -138,6 +138,10 @@ interface Project {
 
 interface PaginatedResponse {
   data: TimeEntry[];
+  /** Worked seconds across the WHOLE filtered set (server-computed), not just this page. */
+  total_seconds?: number;
+  idle_seconds?: number;
+  unapproved_seconds?: number;
   current_page?: number;
   last_page?: number;
   per_page?: number;
@@ -348,7 +352,14 @@ export default function TimePage() {
         entries.find((e) => e.id === id && e.user_id === user?.id && e.type === 'manual' && (e.status === 'pending' || e.status === 'rejected'))
       ).length;
 
-  const totalSeconds = entries.reduce((sum, e) => sum + getDisplayDuration(e), 0);
+  // Worked time across every entry matching the current filters, from the server.
+  // Summing `entries` here only ever covered the page being viewed, so this card
+  // disagreed with the "Entries" count beside it and shifted as you paged.
+  // Running entries have no duration server-side, so their live elapsed is added on.
+  const liveSeconds = entries
+    .filter((e) => !e.ended_at)
+    .reduce((sum, e) => sum + getDisplayDuration(e), 0);
+  const totalSeconds = (entriesData?.total_seconds ?? 0) + liveSeconds;
 
   const activeFilterCount = [
     dateFrom || dateTo,

@@ -9,6 +9,7 @@ use App\Models\TimeEntry;
 use App\Services\ManualTimeEntryService;
 use App\Services\ReportService;
 use App\Support\TimezoneAwareDateRange;
+use App\Support\WorkedTime;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -51,11 +52,39 @@ class TimeEntryController extends Controller
             $query->where('is_approved', filter_var($request->is_approved, FILTER_VALIDATE_BOOLEAN));
         }
 
+        // Totals for the WHOLE filtered set, computed server-side.
+        //
+        // The client used to sum the entries it had been handed, which is one page —
+        // so the "Total Hours" card reported 20 entries' worth of time next to an
+        // "Entries" count covering every match, and the total changed as you paged.
+        // Measured with the canonical expression so this card agrees with the
+        // dashboard and the reports tab instead of trusting `duration_seconds`.
+        $dur = WorkedTime::durationExpr('time_entries');
+        $totals = (clone $query)
+            ->withoutEagerLoads()
+            ->reorder()
+            ->selectRaw("
+                COALESCE(SUM(CASE WHEN time_entries.type <> 'idle'
+                    AND time_entries.approval_status = 'approved'
+                    AND time_entries.ended_at IS NOT NULL THEN {$dur} ELSE 0 END), 0) as worked_seconds,
+                COALESCE(SUM(CASE WHEN time_entries.type = 'idle'
+                    AND time_entries.ended_at IS NOT NULL THEN {$dur} ELSE 0 END), 0) as idle_seconds,
+                COALESCE(SUM(CASE WHEN time_entries.type <> 'idle'
+                    AND time_entries.approval_status <> 'approved'
+                    AND time_entries.ended_at IS NOT NULL THEN {$dur} ELSE 0 END), 0) as unapproved_seconds
+            ")
+            ->first();
+
         $entries = $query->orderBy('started_at', 'desc')->paginate(
             min((int) $request->input('per_page', 25), 100)
         );
 
-        return response()->json($entries);
+        $payload = $entries->toArray();
+        $payload['total_seconds'] = (int) ($totals->worked_seconds ?? 0);
+        $payload['idle_seconds'] = (int) ($totals->idle_seconds ?? 0);
+        $payload['unapproved_seconds'] = (int) ($totals->unapproved_seconds ?? 0);
+
+        return response()->json($payload);
     }
 
     // TIME-06: Show single entry
