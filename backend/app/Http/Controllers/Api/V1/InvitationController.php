@@ -70,6 +70,7 @@ class InvitationController extends Controller
     public function store(Request $request): JsonResponse
     {
         $request->validate([
+            'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255'],
             'role' => ['required', 'string'],
         ]);
@@ -136,6 +137,7 @@ class InvitationController extends Controller
 
         $invitation = Invitation::create([
             'organization_id' => $user->organization_id,
+            'name' => trim((string) $request->name),
             'email' => $email,
             'role' => $request->role,
             'token' => Str::random(64),
@@ -185,6 +187,26 @@ class InvitationController extends Controller
         return response()->json(['message' => 'Invitation revoked.']);
     }
 
+    /** Peek at invitation details by token (public, no auth) */
+    public function peek(Request $request): JsonResponse
+    {
+        $request->validate(['token' => ['required', 'string']]);
+
+        $invitation = Invitation::withoutGlobalScopes()
+            ->where('token', $request->token)
+            ->whereNull('accepted_at')
+            ->first();
+
+        if (! $invitation || $invitation->isExpired()) {
+            return response()->json(['name' => null, 'email' => null]);
+        }
+
+        return response()->json([
+            'name' => $invitation->name,
+            'email' => $invitation->email,
+        ]);
+    }
+
     /** AUTH-10: Accept invitation */
     public function accept(Request $request): JsonResponse
     {
@@ -229,7 +251,7 @@ class InvitationController extends Controller
 
             $user = User::create([
                 'organization_id' => $invitation->organization_id,
-                'name' => $request->name,
+                'name' => $request->name ?: $invitation->name,
                 'email' => $invitation->email,
                 'password' => $request->password,
                 'role' => $invitation->role,

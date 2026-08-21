@@ -364,6 +364,11 @@ export default function DashboardPage() {
   const stats = data?.stats;
   const team = data?.team || [];
   const isEmployeeView = data?.isEmployeeView ?? isEmployee;
+  const ownTodayHours = useMemo(() => {
+    if (isEmployeeView || !user?.id) return stats?.today_hours ?? 0;
+    const me = team.find((m) => m.id === user.id);
+    return (me?.today_seconds ?? 0) / 3600;
+  }, [isEmployeeView, user?.id, team, stats?.today_hours]);
 
   // ── Timesheet (both roles see their own entries) ──
 
@@ -699,7 +704,7 @@ export default function DashboardPage() {
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {/* Total Hours */}
+          {/* My Hours */}
           <Card>
             <CardContent className="p-3">
               <div className="flex items-center gap-3">
@@ -709,14 +714,14 @@ export default function DashboardPage() {
                 <div className="min-w-0">
                   <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">
                     {filterPreset === 'today' && isSameDay(new Date(dateFrom + 'T00:00:00'), new Date())
-                      ? 'Hours Today'
-                      : 'Total Hours'}
+                      ? 'My Hours Today'
+                      : 'My Hours'}
                   </p>
                   {isLoading ? (
                     <span className="inline-block h-5 w-14 bg-muted rounded animate-pulse mt-0.5" />
                   ) : (
                     <p className="text-base font-bold tabular-nums leading-tight">
-                      {stats?.today_hours != null ? formatHoursMinutes(stats.today_hours) : '0h 0m'}
+                      {formatHoursMinutes(ownTodayHours)}
                     </p>
                   )}
                 </div>

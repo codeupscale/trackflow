@@ -26,6 +26,8 @@ class UpdateEmployeeProfileRequest extends FormRequest
             'date_of_confirmation',
             'date_of_exit',
             'probation_end_date',
+            'notice_period_days',
+            'work_location',
             'blood_group',
             'marital_status',
             'nationality',
@@ -77,6 +79,9 @@ class UpdateEmployeeProfileRequest extends FormRequest
         // Employment fields — anyone with org-scoped employees.edit_profile (owner/admin/HR)
         if ($this->canEditEmploymentFields()) {
             return array_merge($personalRules, [
+                'name' => ['sometimes', 'string', 'min:2', 'max:255'],
+                'email' => ['sometimes', 'email', 'max:255'],
+                'job_title' => ['sometimes', 'nullable', 'string', 'max:255'],
                 'employee_id' => ['sometimes', 'nullable', 'string', 'max:50'],
                 'department_id' => [
                     'sometimes', 'nullable', 'uuid',
@@ -112,6 +117,8 @@ class UpdateEmployeeProfileRequest extends FormRequest
                 'date_of_confirmation' => ['sometimes', 'nullable', 'date'],
                 'date_of_exit' => ['sometimes', 'nullable', 'date'],
                 'probation_end_date' => ['sometimes', 'nullable', 'date'],
+                'notice_period_days' => ['sometimes', 'nullable', 'integer', 'min:0', 'max:365'],
+                'work_location' => ['sometimes', 'nullable', 'string', 'max:255'],
             ]);
         }
 

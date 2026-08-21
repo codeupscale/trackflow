@@ -26,6 +26,8 @@ class EmployeeProfile extends Model
         'date_of_confirmation',
         'date_of_exit',
         'probation_end_date',
+        'notice_period_days',
+        'work_location',
         'blood_group',
         'marital_status',
         'nationality',

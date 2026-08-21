@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { format } from 'date-fns';
-import { Loader2, Pencil } from 'lucide-react';
+import { CheckCircle, Loader2, Pencil, Trash2, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -31,6 +31,11 @@ export interface TimeEntryForDialog {
   ended_at: string | null;
   notes?: string | null;
   type?: 'tracked' | 'manual' | 'idle';
+  status?: 'pending' | 'approved' | 'rejected';
+  approval_status?: 'pending' | 'approved' | 'rejected';
+  rejection_reason?: string | null;
+  approved_at?: string | null;
+  approver?: { id: string; name: string } | null;
   project?: { id: string; name: string } | null;
   task?: { id: string; title: string; name?: string } | null;
   user?: { id: string; name: string; email: string } | null;
@@ -42,6 +47,10 @@ interface ManualTimeEntryDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   canLogOnBehalf?: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
+  onDelete?: (id: string) => void;
+  isDeleting?: boolean;
   entry?: TimeEntryForDialog | null;
   initialMode?: 'create' | 'view';
 }
@@ -52,6 +61,10 @@ export function ManualTimeEntryDialog({
   open,
   onOpenChange,
   canLogOnBehalf = false,
+  canEdit = true,
+  canDelete = false,
+  onDelete,
+  isDeleting = false,
   entry = null,
   initialMode = 'create',
 }: ManualTimeEntryDialogProps) {
@@ -332,22 +345,72 @@ export function ManualTimeEntryDialog({
               />
               {errors.notes && <p className="text-xs text-destructive">{errors.notes.message}</p>}
             </div>
+
+            {/* Approval info (view mode only) */}
+            {isViewMode && entry && (entry.approval_status === 'approved' || entry.status === 'approved') && entry.approver && (
+              <div className="flex items-center gap-2 rounded-md bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-400">
+                <CheckCircle className="h-4 w-4 shrink-0" />
+                <span>
+                  Approved by <strong>{entry.approver.name}</strong>
+                  {entry.approved_at && (
+                    <> on {format(new Date(entry.approved_at), 'MMM d, yyyy \'at\' h:mm a')}</>
+                  )}
+                </span>
+              </div>
+            )}
+            {isViewMode && entry && (entry.approval_status === 'rejected' || entry.status === 'rejected') && (
+              <div className="flex flex-col gap-1 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <div className="flex items-center gap-2">
+                  <XCircle className="h-4 w-4 shrink-0" />
+                  <span>
+                    Rejected{entry.approver && <> by <strong>{entry.approver.name}</strong></>}
+                    {entry.approved_at && (
+                      <> on {format(new Date(entry.approved_at), 'MMM d, yyyy \'at\' h:mm a')}</>
+                    )}
+                  </span>
+                </div>
+                {entry.rejection_reason && (
+                  <p className="ml-6 text-xs opacity-80">Reason: {entry.rejection_reason}</p>
+                )}
+              </div>
+            )}
           </div>
 
           <DialogFooter>
             {isViewMode ? (
-              <div className="flex w-full gap-2 justify-end">
-                <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                  Close
-                </Button>
-                <Button
-                  type="button"
-                  className="gap-1.5"
-                  onClick={() => setMode('edit')}
-                >
-                  <Pencil className="h-3 w-3" />
-                  Edit
-                </Button>
+              <div className="flex w-full items-center">
+                {canDelete && onDelete && entry && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                    onClick={() => { onDelete(entry.id); onOpenChange(false); }}
+                    disabled={isDeleting}
+                    aria-label="Delete entry"
+                  >
+                    {isDeleting ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4" />
+                    )}
+                  </Button>
+                )}
+                <div className="flex gap-2 ml-auto">
+                  <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                    Close
+                  </Button>
+                  {canEdit && (
+                    <Button
+                      type="button"
+                      className="gap-1.5"
+                      onClick={() => setMode('edit')}
+                    >
+                      <Pencil className="h-3 w-3" />
+                      Edit
+                    </Button>
+                  )}
+                </div>
               </div>
             ) : (
               <>

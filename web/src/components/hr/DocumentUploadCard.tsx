@@ -21,7 +21,6 @@ import {
   SelectGroup,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from '@/components/ui/select';
 import {
   Form,
@@ -32,11 +31,10 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import {
-  employeeDocumentSchema,
-  type EmployeeDocumentInput,
   DOCUMENT_CATEGORIES,
   documentCategoryLabels,
 } from '@/lib/validations/employee';
+import { z } from 'zod/v4';
 
 function getFileIcon(mimeType: string) {
   if (mimeType === 'application/pdf') return FileText;
@@ -54,6 +52,20 @@ const ACCEPTED_TYPES =
   'application/pdf,image/jpeg,image/png,image/webp,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
+const multiUploadSchema = z.object({
+  category: z.enum(DOCUMENT_CATEGORIES, { error: 'Please select a category' }),
+  expiry_date: z.string().optional().nullable(),
+  notes: z.string().max(2000).optional().nullable(),
+});
+
+type MultiUploadInput = z.infer<typeof multiUploadSchema>;
+
+interface SelectedFile {
+  file: File;
+  title: string;
+  error?: string;
+}
+
 interface DocumentUploadCardProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -67,49 +79,50 @@ export function DocumentUploadCard({
   onUpload,
   isPending,
 }: DocumentUploadCardProps) {
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const form = useForm<EmployeeDocumentInput>({
-    resolver: zodResolver(employeeDocumentSchema) as any,
+  const form = useForm<MultiUploadInput>({
+    resolver: zodResolver(multiUploadSchema) as any,
     defaultValues: {
-      title: '',
       category: undefined,
       expiry_date: null,
       notes: null,
     },
   });
 
-  const validateFile = useCallback((file: File): boolean => {
-    setFileError(null);
-    if (file.size > MAX_FILE_SIZE) {
-      setFileError('File size must be less than 10MB');
-      return false;
-    }
+  const validateFile = useCallback((file: File): string | null => {
+    if (file.size > MAX_FILE_SIZE) return 'File too large (max 10MB)';
     const acceptedMimes = ACCEPTED_TYPES.split(',');
-    if (!acceptedMimes.includes(file.type)) {
-      setFileError('Unsupported file type. Accepted: PDF, JPEG, PNG, WebP, DOC, DOCX');
-      return false;
-    }
-    return true;
+    if (!acceptedMimes.includes(file.type)) return 'Unsupported file type';
+    return null;
   }, []);
 
-  const handleFileSelect = useCallback(
-    (file: File) => {
-      if (validateFile(file)) {
-        setSelectedFile(file);
-        // Auto-fill title from filename if empty
-        const currentTitle = form.getValues('title');
-        if (!currentTitle) {
-          const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
-          form.setValue('title', nameWithoutExt);
-        }
+  const addFiles = useCallback(
+    (files: FileList | File[]) => {
+      setFileError(null);
+      const newFiles: SelectedFile[] = [];
+      for (const file of Array.from(files)) {
+        const error = validateFile(file);
+        const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
+        newFiles.push({ file, title: nameWithoutExt, error: error ?? undefined });
       }
+      setSelectedFiles((prev) => [...prev, ...newFiles]);
     },
-    [validateFile, form]
+    [validateFile]
   );
+
+  const removeFile = useCallback((index: number) => {
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const updateTitle = useCallback((index: number, title: string) => {
+    setSelectedFiles((prev) =>
+      prev.map((f, i) => (i === index ? { ...f, title } : f))
+    );
+  }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -125,65 +138,69 @@ export function DocumentUploadCard({
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragOver(false);
-      const file = e.dataTransfer.files[0];
-      if (file) handleFileSelect(file);
+      if (e.dataTransfer.files.length > 0) addFiles(e.dataTransfer.files);
     },
-    [handleFileSelect]
+    [addFiles]
   );
 
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) handleFileSelect(file);
+      if (e.target.files && e.target.files.length > 0) {
+        addFiles(e.target.files);
+        e.target.value = '';
+      }
     },
-    [handleFileSelect]
+    [addFiles]
   );
 
-  const onSubmit = (data: EmployeeDocumentInput) => {
-    if (!selectedFile) {
-      setFileError('Please select a file');
+  const onSubmit = async (data: MultiUploadInput) => {
+    const validFiles = selectedFiles.filter((f) => !f.error);
+    if (validFiles.length === 0) {
+      setFileError('Please select at least one file');
       return;
     }
 
-    const formData = new FormData();
-    formData.append('file', selectedFile);
-    formData.append('title', data.title);
-    formData.append('category', data.category);
-    if (data.expiry_date) formData.append('expiry_date', data.expiry_date);
-    if (data.notes) formData.append('notes', data.notes);
-
-    onUpload(formData);
+    for (let i = 0; i < validFiles.length; i++) {
+      const formData = new FormData();
+      formData.append('file', validFiles[i].file);
+      formData.append('title', validFiles[i].title);
+      formData.append('category', data.category);
+      if (data.expiry_date) formData.append('expiry_date', data.expiry_date);
+      if (data.notes) formData.append('notes', data.notes);
+      onUpload(formData);
+    }
+    handleOpenChange(false);
   };
 
   const handleOpenChange = (nextOpen: boolean) => {
     if (!nextOpen) {
       form.reset();
-      setSelectedFile(null);
+      setSelectedFiles([]);
       setFileError(null);
     }
     onOpenChange(nextOpen);
   };
 
-  const FileIcon = selectedFile ? getFileIcon(selectedFile.type) : Upload;
+  const validCount = selectedFiles.filter((f) => !f.error).length;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg max-h-[80vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Upload Document</DialogTitle>
+          <DialogTitle>Upload Documents</DialogTitle>
           <DialogDescription>
-            Upload a document for this employee. Max file size: 10MB.
+            Select one or more files to upload. Max 10MB each.
           </DialogDescription>
         </DialogHeader>
 
         <Form {...form}>
           <form
             onSubmit={form.handleSubmit(onSubmit)}
-            className="flex flex-col gap-4"
+            className="flex flex-col gap-4 min-h-0 flex-1"
           >
             {/* Drop zone */}
             <div
-              className={`flex flex-col items-center gap-2 rounded-lg border-2 border-dashed p-6 cursor-pointer transition-colors ${
+              className={`flex flex-col items-center gap-2 rounded-lg border-2 border-dashed p-4 cursor-pointer transition-colors shrink-0 ${
                 isDragOver
                   ? 'border-primary bg-primary/5'
                   : fileError
@@ -204,125 +221,132 @@ export function DocumentUploadCard({
               }}
               aria-label="Drop zone for file upload"
             >
-              <FileIcon className="size-8 text-muted-foreground" />
-              {selectedFile ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-foreground">
-                    {selectedFile.name}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    ({formatFileSize(selectedFile.size)})
-                  </span>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedFile(null);
-                      setFileError(null);
-                    }}
-                    className="rounded-full p-0.5 hover:bg-muted"
-                    aria-label="Remove selected file"
-                  >
-                    <X className="size-4 text-muted-foreground" />
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <p className="text-sm text-muted-foreground">
-                    Drag and drop a file, or click to browse
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    PDF, JPEG, PNG, WebP, DOC, DOCX (max 10MB)
-                  </p>
-                </>
-              )}
+              <Upload className="size-6 text-muted-foreground" />
+              <p className="text-xs text-muted-foreground">
+                Drag and drop files, or click to browse
+              </p>
+              <p className="text-[0.6rem] text-muted-foreground">
+                PDF, JPEG, PNG, WebP, DOC, DOCX
+              </p>
               {fileError && (
-                <p className="text-sm text-destructive">{fileError}</p>
+                <p className="text-xs text-destructive">{fileError}</p>
               )}
               <input
                 ref={fileInputRef}
                 type="file"
                 accept={ACCEPTED_TYPES}
+                multiple
                 onChange={handleInputChange}
                 className="hidden"
                 aria-hidden="true"
               />
             </div>
 
-            <FormField
-              control={form.control}
-              name="title"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Title</FormLabel>
-                  <FormControl>
-                    <Input placeholder="e.g. Passport Copy" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {/* Selected files list */}
+            {selectedFiles.length > 0 && (
+              <div className="flex flex-col gap-2 overflow-y-auto max-h-[140px] [scrollbar-width:thin] [scrollbar-color:theme(colors.border)_transparent]">
+                {selectedFiles.map((sf, idx) => {
+                  const Icon = getFileIcon(sf.file.type);
+                  return (
+                    <div
+                      key={`${sf.file.name}-${idx}`}
+                      className={`flex items-center gap-2 rounded-md border p-2 ${sf.error ? 'border-destructive/50 bg-destructive/5' : 'border-border'}`}
+                    >
+                      <Icon className="size-4 text-muted-foreground shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <Input
+                          value={sf.title}
+                          onChange={(e) => updateTitle(idx, e.target.value)}
+                          className="h-7 text-xs border-0 p-0 shadow-none focus-visible:ring-0"
+                          placeholder="Document title"
+                        />
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[0.6rem] text-muted-foreground truncate">{sf.file.name}</span>
+                          <span className="text-[0.6rem] text-muted-foreground">({formatFileSize(sf.file.size)})</span>
+                        </div>
+                        {sf.error && <p className="text-[0.6rem] text-destructive mt-0.5">{sf.error}</p>}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); removeFile(idx); }}
+                        className="rounded-full p-0.5 hover:bg-muted shrink-0"
+                        aria-label="Remove file"
+                      >
+                        <X className="size-3.5 text-muted-foreground" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
-            <FormField
-              control={form.control}
-              name="category"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Category</FormLabel>
-                  <Select
-                    value={field.value ?? ''}
-                    onValueChange={field.onChange}
-                  >
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select category" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectGroup>
-                        {DOCUMENT_CATEGORIES.map((cat) => (
-                          <SelectItem key={cat} value={cat}>
-                            {documentCategoryLabels[cat]}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="expiry_date"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Expiry Date (optional)</FormLabel>
-                  <FormControl>
-                    <Input
-                      type="date"
+            {/* Shared fields */}
+            <div className="grid grid-cols-2 gap-3 shrink-0">
+              <FormField
+                control={form.control}
+                name="category"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-xs">Category</FormLabel>
+                    <Select
                       value={field.value ?? ''}
-                      onChange={(e) =>
-                        field.onChange(e.target.value || null)
-                      }
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+                      onValueChange={field.onChange}
+                    >
+                      <FormControl>
+                        <SelectTrigger className="h-9 text-xs">
+                          <span data-slot="select-value" className="flex flex-1 text-left text-xs">
+                            {field.value ? documentCategoryLabels[field.value] ?? field.value : <span className="text-muted-foreground">Select category</span>}
+                          </span>
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectGroup>
+                          {DOCUMENT_CATEGORIES.map((cat) => (
+                            <SelectItem key={cat} value={cat}>
+                              {documentCategoryLabels[cat]}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="expiry_date"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-xs">Expiry Date <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                    <FormControl>
+                      <Input
+                        type="date"
+                        className="h-9 text-xs"
+                        value={field.value ?? ''}
+                        onChange={(e) =>
+                          field.onChange(e.target.value || null)
+                        }
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
 
             <FormField
               control={form.control}
               name="notes"
               render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Notes (optional)</FormLabel>
+                <FormItem className="shrink-0">
+                  <FormLabel className="text-xs">Notes <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
                   <FormControl>
                     <Textarea
-                      placeholder="Additional notes about this document..."
+                      placeholder="Additional notes..."
                       rows={2}
+                      className="text-xs"
                       value={field.value ?? ''}
                       onChange={(e) =>
                         field.onChange(e.target.value || null)
@@ -334,20 +358,21 @@ export function DocumentUploadCard({
               )}
             />
 
-            <DialogFooter className="gap-2 sm:gap-0">
+            <DialogFooter className="gap-2 sm:gap-0 shrink-0">
               <Button
                 type="button"
                 variant="outline"
+                size="sm"
                 onClick={() => handleOpenChange(false)}
                 disabled={isPending}
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={isPending || !selectedFile}>
+              <Button type="submit" size="sm" disabled={isPending || validCount === 0}>
                 {isPending && (
                   <Loader2 data-icon="inline-start" className="animate-spin" />
                 )}
-                Upload
+                Upload {validCount > 1 ? `${validCount} Files` : validCount === 1 ? '1 File' : ''}
               </Button>
             </DialogFooter>
           </form>
