@@ -52,13 +52,19 @@ class SessionSyncWorker {
      * @param {function} deps.getTimeZone   () => IANA zone for day boundaries
      * @param {object}   [deps.offlineQueue] flushed after sessions land
      * @param {function} [deps.onPurge]     called with the number of rows purged
+     * @param {function} [deps.onSessionConfirmed] (localId, serverEntryId) => void, fired
+     *   the moment a session first earns a real server entry id. This is the ONLY signal
+     *   that can un-break the live screenshot path: capture is bound at start() time, when
+     *   no server id exists yet, so without this the whole session keeps posting its
+     *   `local-…` id. See bugs/desktop-screenshots-bound-to-local-entry-id.md
      */
-    constructor({ store, apiClient, getTimeZone, offlineQueue = null, onPurge = null } = {}) {
+    constructor({ store, apiClient, getTimeZone, offlineQueue = null, onPurge = null, onSessionConfirmed = null } = {}) {
         this.store = store;
         this.apiClient = apiClient;
         this.getTimeZone = getTimeZone || (() => DEFAULT_TIMEZONE);
         this.offlineQueue = offlineQueue;
         this.onPurge = onPurge;
+        this.onSessionConfirmed = onSessionConfirmed;
 
         this._syncTimer = null;
         this._purgeTimer = null;
@@ -220,12 +226,23 @@ class SessionSyncWorker {
                         `[SessionSync] Duration differs for ${row.idempotency_key}: local=${row.duration_seconds}s server=${result.duration_seconds}s`,
                     );
                 }
+                // Capture whether this row had a server id BEFORE the write, so the
+                // callback fires exactly once per session — on the transition from
+                // "server has never seen this" to "server entry id known".
+                const hadServerId = !!row.server_entry_id;
                 this.store.markConfirmed(
                     id,
                     revision,
                     result.time_entry_id,
                     result.duration_seconds ?? null,
                 );
+                if (!hadServerId && result.time_entry_id && this.onSessionConfirmed) {
+                    try {
+                        this.onSessionConfirmed(id, String(result.time_entry_id));
+                    } catch (e) {
+                        console.warn('[SessionSync] onSessionConfirmed threw:', e.message);
+                    }
+                }
                 confirmed++;
                 continue;
             }
@@ -284,7 +301,16 @@ class SessionSyncWorker {
             return 0;
         }
 
-        const removed = this.store.purgeConfirmed(nowMs);
+        let keepKeys = [];
+        try {
+            if (this.offlineQueue && typeof this.offlineQueue.referencedSessionKeys === 'function') {
+                keepKeys = this.offlineQueue.referencedSessionKeys();
+            }
+        } catch (e) {
+            console.warn('[SessionSync] referencedSessionKeys failed:', e.message);
+        }
+
+        const removed = this.store.purgeConfirmed(nowMs, undefined, keepKeys);
         this.store.setMeta('last_purge_at', String(nowMs));
 
         if (removed > 0) {
