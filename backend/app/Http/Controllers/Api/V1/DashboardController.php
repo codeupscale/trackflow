@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\TimeEntry;
 use App\Models\User;
 use App\Support\TimezoneAwareDateRange;
+use App\Support\WorkedTime;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -118,7 +119,7 @@ class DashboardController extends Controller
             ->whereNotNull('ended_at')
             ->where('type', '!=', 'idle')
             ->where('approval_status', 'approved')
-            ->selectRaw('user_id, SUM(duration_seconds) as total_seconds')
+            ->selectRaw('user_id, SUM(' . WorkedTime::durationExpr() . ') as total_seconds')
             ->groupBy('user_id')
             ->get()
             ->keyBy('user_id');
@@ -239,7 +240,8 @@ class DashboardController extends Controller
             ->whereNotNull('ended_at')
             ->where('type', '!=', 'idle')
             ->where('approval_status', 'approved')
-            ->sum('duration_seconds');
+            ->selectRaw('COALESCE(SUM(' . WorkedTime::durationExpr() . '), 0) as total_seconds')
+            ->value('total_seconds');
 
         $now = Carbon::now();
         if ($now >= Carbon::parse($dateFrom) && $now < Carbon::parse($dateTo) && $timer) {
@@ -282,7 +284,8 @@ class DashboardController extends Controller
             ->whereNotNull('ended_at')
             ->where('type', '!=', 'idle')
             ->where('approval_status', 'approved')
-            ->sum('duration_seconds');
+            ->selectRaw('COALESCE(SUM(' . WorkedTime::durationExpr() . '), 0) as total_seconds')
+            ->value('total_seconds');
 
         // Include current running timer in weekly total only if it started within this week.
         // Without the boundary check a timer that started in a previous week would add its
@@ -312,8 +315,9 @@ class DashboardController extends Controller
                 ->where('started_at', '<', $dayEndUtc)
                 ->whereNotNull('ended_at')
                 ->where('type', '!=', 'idle')
-            ->where('approval_status', 'approved')
-                ->sum('duration_seconds');
+                ->where('approval_status', 'approved')
+                ->selectRaw('COALESCE(SUM(' . WorkedTime::durationExpr() . '), 0) as total_seconds')
+                ->value('total_seconds');
 
             // Add running timer elapsed to today's bar
             if ($dayStr === $todayLocal && $timer) {
