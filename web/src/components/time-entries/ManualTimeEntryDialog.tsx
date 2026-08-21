@@ -37,7 +37,7 @@ export interface TimeEntryForDialog {
   approved_at?: string | null;
   approver?: { id: string; name: string } | null;
   project?: { id: string; name: string } | null;
-  task?: { id: string; title: string; name?: string } | null;
+  task?: { id: string; name: string } | null;
   user?: { id: string; name: string; email: string } | null;
 }
 
@@ -111,7 +111,7 @@ export function ManualTimeEntryDialog({
         user_id: entry.user?.id ?? null,
         project_id: entry.project?.id ?? '',
         task_id: entry.task?.id ?? null,
-        task_name: entry.task?.name ?? entry.task?.title ?? '',
+        task_name: entry.task?.name ?? '',
         date: format(started, 'yyyy-MM-dd'),
         start_time: format(started, 'HH:mm'),
         end_time: ended ? format(ended, 'HH:mm') : '',

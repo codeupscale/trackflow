@@ -92,6 +92,11 @@ const {
     buildTrackingStateNotification,
     shouldNotifyTrackingState,
 } = require("./system-notifications");
+const {
+    returnToWorkDecision,
+    trackPeakIdle,
+    buildReturnToWorkNotification,
+} = require("./return-to-work");
 const PowerManager = require("./power-manager");
 
 const WEB_DASHBOARD_URL =
@@ -1554,6 +1559,25 @@ function resolveServerEntryIdForQueue(meta) {
     return null;
 }
 
+/**
+ * The entry id the LIVE capture path must post to `POST /screenshots/presign`.
+ *
+ * presign validates `time_entry_id` as a uuid and looks it up in `time_entries`, so a
+ * `local-…` id is rejected outright. Prefer the server entry id whenever the session has
+ * already synced (restore-after-restart, project switch, any session older than one sync
+ * cycle); fall back to the local id only while the server has genuinely never seen this
+ * session — `onSessionConfirmed` rebinds the moment that changes.
+ */
+function liveCaptureEntryId() {
+    if (!currentEntry) return null;
+    const localId = currentEntry._localId || currentEntry.id;
+    const resolved = resolveServerEntryIdForQueue({
+        time_entry_id: localId,
+        idempotency_key: currentEntry.idempotency_key || null,
+    });
+    return resolved || currentEntry.id;
+}
+
 // ── Global Error Handlers ────────────────────────────────────────────────────
 
 process.on("uncaughtException", (error) => {
@@ -1781,6 +1805,7 @@ function cleanupOnExit() {
 function removeSessionListeners() {
     PowerManager.unregisterPowerHandlers();
     stopIdleWatchdog();
+    stopReturnWatch();
     app.removeAllListeners("browser-window-focus");
     // Screen-recording permission is machine state, not session state — put its
     // focus re-check back after the sweep above, or a logout would silently
@@ -1791,6 +1816,7 @@ function removeSessionListeners() {
     _lastStateNotifAt = 0;
     _lastNotifiedTracking = null;
     _lastAutoStopNotifAt = 0;
+    _lastReturnNotifAt = 0;
 }
 
 // Force logout — called when token refresh fails (password changed, tokens revoked).
@@ -2059,6 +2085,17 @@ async function initializeApp() {
         apiClient,
         offlineQueue,
         getTimeZone: () => config?.timezone || DEFAULT_CONFIG.timezone,
+        // The live capture is bound to a `local-…` id at start() time, because starting
+        // a timer makes no network call any more. `POST /screenshots/presign` validates
+        // `time_entry_id` as a uuid, so every live shot 422s until the session earns a
+        // real server id — which only happens here, on the first confirmed push.
+        // Rebinding is what keeps screenshots on the LIVE path instead of dumping the
+        // whole day into the offline queue.
+        onSessionConfirmed: (localId, serverEntryId) => {
+            if (!currentEntry) return;
+            if ((currentEntry._localId || currentEntry.id) !== localId) return;
+            screenshotService?.rebindEntryId(serverEntryId);
+        },
     });
     sessionSyncWorker.start();
 
@@ -2084,6 +2121,17 @@ async function initializeApp() {
         getIsAppVisible,
         activityMonitor,
     );
+    // Same anchor the activity monitor uses. A queued screenshot records the SESSION's
+    // uuid so it can still resolve to a server entry id after the row its `local-…` id
+    // points at has been purged.
+    screenshotService.getCurrentEntryMeta = () =>
+        currentEntry
+            ? {
+                  time_entry_id:
+                      currentEntry._localId || currentEntry.id || null,
+                  idempotency_key: currentEntry.idempotency_key || null,
+              }
+            : null;
     // Register the screenshot-captured callback ONCE at service creation so that
     // _lastScreenshotAt is updated and a live `activity-update` is pushed to the
     // popup on EVERY capture — regardless of which path called screenshotService
@@ -2513,6 +2561,9 @@ async function initializeApp() {
     // 12h phantom even when idle detection is off or the alert never showed.
     // Torn down in removeSessionListeners() (both logout paths).
     startIdleWatchdog();
+    // The other half of the same guarantee: the watchdog stops the timer when the user
+    // leaves, this tells them about it when they come back.
+    startReturnWatch();
 
     // ── Instant sync on focus / unlock ──────────────────────────────────────
     // When the user returns to the app (unlock, focus), trigger an immediate
@@ -3835,14 +3886,15 @@ function afterStartTimer(projectIdForTotal, todayTotalForPopup) {
             );
         }
         try {
+            const captureEntryId = liveCaptureEntryId();
             console.log(
-                `[afterStartTimer] Calling screenshotService.start(${currentEntry.id})`,
+                `[afterStartTimer] Calling screenshotService.start(${captureEntryId})`,
             );
             // NOTE: the screenshot-captured callback (which updates _lastScreenshotAt
             // and pushes a live `activity-update`) is registered once at service
             // creation in initializeApp(), so it applies to every start() path —
             // not just this one. Do not re-register it here.
-            screenshotService.start(currentEntry.id);
+            screenshotService.start(captureEntryId);
             console.log("[afterStartTimer] screenshotService started");
         } catch (e) {
             console.error(
@@ -4443,6 +4495,124 @@ function stopIdleWatchdog() {
         clearInterval(_idleWatchdogInterval);
         _idleWatchdogInterval = null;
     }
+}
+
+// ── Return-from-break notifier ───────────────────────────────────────────────
+//
+// The idle watchdog above self-gates on `isTimerRunning`, so the moment it stops the
+// timer it also stops looking. Nothing else watches for the user coming BACK: the
+// auto-stop toast fired into an empty room, `notifyTrackingState()` only runs on
+// wake/unlock/startup (a desktop that never slept emits none of those), and the idle
+// alert was dismissed by the stop. This interval is the missing half — it runs while
+// the timer is STOPPED and announces, with sound, the moment the user is back.
+//
+// Deliberately the mirror image of the watchdog: same cheap one-call-per-tick shape,
+// opposite gate. Decision logic is pure and unit-tested in return-to-work.js.
+const RETURN_WATCH_TICK_MS = 15_000;
+let _returnWatchInterval = null;
+let _returnPeakIdleSec = 0;
+let _lastReturnNotifAt = 0;
+
+function _returnWatchTick() {
+    try {
+        if (isTimerRunning) {
+            // Tracking again — this absence is over and must not carry into the next.
+            _returnPeakIdleSec = 0;
+            return;
+        }
+
+        let systemIdleSec;
+        try {
+            systemIdleSec = powerMonitor.getSystemIdleTime();
+        } catch {
+            return; // unreadable counter (some Wayland sessions) — say nothing
+        }
+
+        _returnPeakIdleSec = trackPeakIdle(_returnPeakIdleSec, systemIdleSec);
+
+        const now = Date.now();
+        const { notify, reason } = returnToWorkDecision({
+            isAuthenticated,
+            isTracking: isTimerRunning,
+            isIdleAlertActive: isIdleAlertActive(),
+            systemIdleSec,
+            peakIdleSec: _returnPeakIdleSec,
+            now,
+            lastNotifiedAt: _lastReturnNotifAt,
+            awayThresholdSec: getSleepGapThresholdSec(),
+        });
+
+        if (!notify) return;
+
+        const awaySec = _returnPeakIdleSec;
+        _lastReturnNotifAt = now;
+        _returnPeakIdleSec = 0; // one announcement per absence
+
+        console.log(
+            `[ReturnWatch] user back after ${awaySec}s with timer stopped (${reason})`,
+        );
+        logToFile("info", `[RETURN_FROM_BREAK] awaySec=${awaySec}`);
+        notifyReturnToWork(awaySec);
+    } catch (e) {
+        console.error("[ReturnWatch] tick failed:", e.message);
+    }
+}
+
+/**
+ * Tell the user — loudly — that they are back and NOT being tracked.
+ *
+ * Three independent cues, because each one alone is routinely swallowed: macOS Focus
+ * and Windows Action Center drop notification SOUND with no fallback (the same reason
+ * the idle alert grew an in-renderer beep), and a toast is missable on a second monitor.
+ * The window itself is the cue that cannot be suppressed by notification policy.
+ */
+function notifyReturnToWork(awaySec) {
+    const { title, body } = buildReturnToWorkNotification(awaySec);
+
+    // 1. System notification, with sound, and a unique id so Windows does not dedup it
+    //    against the auto-stop toast that fired while the user was away.
+    showSystemNotification({
+        title,
+        body,
+        silent: false,
+        durationMs: 12_000,
+        id: `trackflow-return-${Date.now()}`,
+        onClick: () => {
+            try {
+                showPopup();
+            } catch {}
+        },
+    });
+
+    // 2. In-renderer WebAudio beep — independent of OS notification policy.
+    // 3. Surface the window so the stopped state is visible, not just audible.
+    try {
+        showPopup();
+        notifyPopup("return-from-break", { awaySec, playSound: true });
+    } catch (e) {
+        console.warn("[ReturnWatch] could not surface the window:", e.message);
+    }
+
+    // This IS the state message for the return — stop the generic "not tracking"
+    // notif from firing a contradictory second toast if an unlock follows.
+    markAutoStopNotified();
+}
+
+function startReturnWatch() {
+    stopReturnWatch();
+    _returnPeakIdleSec = 0;
+    _returnWatchInterval = setInterval(() => {
+        _returnWatchTick();
+    }, RETURN_WATCH_TICK_MS);
+    if (_returnWatchInterval.unref) _returnWatchInterval.unref();
+}
+
+function stopReturnWatch() {
+    if (_returnWatchInterval) {
+        clearInterval(_returnWatchInterval);
+        _returnWatchInterval = null;
+    }
+    _returnPeakIdleSec = 0;
 }
 
 /**

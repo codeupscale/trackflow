@@ -21,7 +21,7 @@
 
     @if($type === 'summary' && isset($data['daily']))
         <div class="summary">
-            Time Utilized: <span>{{ round(($data['total_seconds_tracked'] ?? 0) / 3600, 2) }}h</span> |
+            Time Utilized: <span>{{ round(($data['total_seconds_worked'] ?? $data['total_seconds_tracked'] ?? 0) / 3600, 2) }}h</span> |
             Idle: <span>{{ round(($data['total_seconds_idle'] ?? 0) / 3600, 2) }}h</span> |
             Avg Activity: <span>{{ round($data['avg_activity'] ?? 0) }}%</span> |
             Total Entries: <span>{{ $data['total_entries'] ?? 0 }}</span> |
@@ -32,7 +32,7 @@
             @foreach($data['daily'] as $row)
             <tr>
                 <td>{{ $row->date ?? ($row['date'] ?? '') }}</td>
-                <td>{{ round(($row->tracked_seconds ?? ($row['tracked_seconds'] ?? 0)) / 3600, 2) }}</td>
+                <td>{{ round(($row->worked_seconds ?? ($row['worked_seconds'] ?? $row->tracked_seconds ?? ($row['tracked_seconds'] ?? 0))) / 3600, 2) }}</td>
                 <td>{{ round(($row->idle_seconds ?? ($row['idle_seconds'] ?? 0)) / 3600, 2) }}</td>
                 <td>{{ round($row->activity_score_avg ?? ($row['activity_score_avg'] ?? 0)) }}%</td>
                 <td>{{ $row->entry_count ?? ($row['entry_count'] ?? 0) }}</td>

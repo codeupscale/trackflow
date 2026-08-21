@@ -451,9 +451,19 @@ class WorkSessionStore {
      * unreachable by this statement. The age grace means a row is never deleted in the
      * same breath as its acknowledgement.
      */
-    purgeConfirmed(nowMs = Date.now(), minAgeMs = PURGE_MIN_AGE_MS) {
+    purgeConfirmed(nowMs = Date.now(), minAgeMs = PURGE_MIN_AGE_MS, keepKeys = []) {
         try {
             const cutoff = new Date(nowMs - minAgeMs).toISOString();
+            // A confirmed session is still LOAD-BEARING while the offline queue holds a
+            // screenshot or heartbeat that resolves its server entry id through this row.
+            // Deleting it there is unrecoverable: the queued item can never resolve, so it
+            // is held forever and then dropped by the TTL sweep. Uploaded evidence for
+            // already-uploaded time is exactly what goes missing.
+            const keep = (keepKeys || []).map(String).filter(Boolean);
+            const placeholders = keep.map(() => '?').join(',');
+            const guard = keep.length
+                ? ` AND id NOT IN (${placeholders}) AND idempotency_key NOT IN (${placeholders})`
+                : '';
             const result = this.db
                 .prepare(
                     `DELETE FROM timer_sessions
@@ -461,9 +471,9 @@ class WorkSessionStore {
                         AND server_entry_id IS NOT NULL
                         AND confirmed_at IS NOT NULL
                         AND synced_revision = revision
-                        AND confirmed_at < ?`,
+                        AND confirmed_at < ?${guard}`,
                 )
-                .run(cutoff);
+                .run(cutoff, ...keep, ...keep);
             return result.changes || 0;
         } catch (e) {
             console.error('[WorkSessionStore] purge failed:', e.message);
