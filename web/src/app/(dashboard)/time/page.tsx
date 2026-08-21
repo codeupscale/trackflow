@@ -910,8 +910,8 @@ export default function TimePage() {
                           )}
                         </TableCell>
                         <TableCell className="text-[0.7rem] text-foreground py-2.5 max-w-[150px]">
-                          {entry.task?.name || entry.task?.title ? (
-                            <span className="block truncate" title={entry.task?.name || entry.task?.title}>{entry.task?.name || entry.task?.title}</span>
+                          {entry.task?.title ? (
+                            <span className="block truncate" title={entry.task?.title}>{entry.task?.title}</span>
                           ) : (
                             <span className="text-muted-foreground text-[0.65rem]">No task</span>
                           )}
