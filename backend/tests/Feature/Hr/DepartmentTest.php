@@ -3,11 +3,110 @@
 namespace Tests\Feature\Hr;
 
 use App\Models\Department;
+use App\Models\EmployeeProfile;
 use App\Models\Position;
+use App\Models\User;
 use Tests\TestCase;
 
 class DepartmentTest extends TestCase
 {
+    // ── Employee headcount (employees_count) ─────────────
+
+    public function test_index_returns_live_employee_count_per_department(): void
+    {
+        $user = $this->actingAsUser('owner');
+        $orgId = $user->organization_id;
+
+        $engineering = Department::factory()->create([
+            'organization_id' => $orgId,
+            'name' => 'Engineering',
+        ]);
+        $empty = Department::factory()->create([
+            'organization_id' => $orgId,
+            'name' => 'Design',
+        ]);
+
+        $this->attachEmployees($orgId, $engineering->id, 3);
+
+        $response = $this->getJson('/api/v1/hr/departments')->assertOk();
+
+        $byId = collect($response->json('data'))->keyBy('id');
+        $this->assertSame(3, $byId[$engineering->id]['employees_count']);
+        $this->assertSame(0, $byId[$empty->id]['employees_count']);
+    }
+
+    public function test_employee_count_excludes_deactivated_users(): void
+    {
+        // The count must agree with EmployeeService::getDirectory(), which only
+        // lists active users. A leaver still holds an employee_profile row, so
+        // counting profiles alone would overstate the department.
+        $user = $this->actingAsUser('owner');
+        $orgId = $user->organization_id;
+
+        $dept = Department::factory()->create(['organization_id' => $orgId]);
+        $members = $this->attachEmployees($orgId, $dept->id, 3);
+
+        $members->first()->update(['is_active' => false]);
+
+        $response = $this->getJson('/api/v1/hr/departments')->assertOk();
+        $row = collect($response->json('data'))->firstWhere('id', $dept->id);
+
+        $this->assertSame(2, $row['employees_count']);
+    }
+
+    public function test_employee_count_does_not_leak_across_organizations(): void
+    {
+        $user = $this->actingAsUser('owner');
+        $dept = Department::factory()->create(['organization_id' => $user->organization_id]);
+        $this->attachEmployees($user->organization_id, $dept->id, 2);
+
+        // A department id is a uuid, so another org's profiles can never point at
+        // it — but assert the count stays scoped anyway.
+        $otherOrg = $this->createOrganization();
+        $otherDept = Department::factory()->create(['organization_id' => $otherOrg->id]);
+        $this->attachEmployees($otherOrg->id, $otherDept->id, 5);
+
+        $response = $this->getJson('/api/v1/hr/departments')->assertOk();
+        $rows = collect($response->json('data'));
+
+        $this->assertSame(2, $rows->firstWhere('id', $dept->id)['employees_count']);
+        $this->assertNull($rows->firstWhere('id', $otherDept->id));
+    }
+
+    public function test_show_returns_employee_count(): void
+    {
+        $user = $this->actingAsUser('owner');
+        $dept = Department::factory()->create(['organization_id' => $user->organization_id]);
+        $this->attachEmployees($user->organization_id, $dept->id, 2);
+
+        $this->getJson("/api/v1/hr/departments/{$dept->id}")
+            ->assertOk()
+            ->assertJsonPath('data.employees_count', 2);
+    }
+
+    /**
+     * Create $count active users in $orgId, each with an employee profile in
+     * $deptId. Returns the users so a test can deactivate one.
+     */
+    private function attachEmployees(string $orgId, string $deptId, int $count)
+    {
+        return collect(range(1, $count))->map(function () use ($orgId, $deptId) {
+            $member = User::factory()->create([
+                'organization_id' => $orgId,
+                'role' => 'employee',
+                'is_active' => true,
+            ]);
+
+            EmployeeProfile::factory()->create([
+                'organization_id' => $orgId,
+                'user_id' => $member->id,
+                'department_id' => $deptId,
+            ]);
+
+            return $member;
+        });
+    }
+
     // ── Index ────────────────────────────────────────────
 
     public function test_index_returns_paginated_departments(): void
