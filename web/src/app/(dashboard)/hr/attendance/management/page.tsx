@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { TabLoading } from '@/components/ui/loader-3d';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -355,25 +356,7 @@ function TeamTab() {
           </CardContent>
         </Card>
       ) : isLoading ? (
-        <Card>
-          <CardContent className="p-0">
-            <div className="flex items-center gap-4 px-4 py-2.5 border-b border-border/50">
-              {Array.from({ length: 8 }).map((_, i) => (
-                <Skeleton key={i} className="h-3 w-16" />
-              ))}
-            </div>
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-border/50 last:border-0">
-                <Skeleton className="h-6 w-6 rounded-full" />
-                <Skeleton className="h-3.5 w-24" />
-                <Skeleton className="h-3.5 w-16" />
-                <Skeleton className="h-3.5 w-12" />
-                <Skeleton className="h-3.5 w-12" />
-                <Skeleton className="h-3.5 w-12" />
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+        <TabLoading />
       ) : records.length === 0 ? (
         <Card>
           <CardContent className="py-12">
@@ -661,25 +644,7 @@ function RegularizationsTab() {
           </CardContent>
         </Card>
       ) : isLoading ? (
-        <Card>
-          <CardContent className="p-0">
-            <div className="flex items-center gap-4 px-4 py-2.5 border-b border-border/50">
-              {Array.from({ length: 7 }).map((_, i) => (
-                <Skeleton key={i} className="h-3 w-16" />
-              ))}
-            </div>
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-border/50 last:border-0">
-                <Skeleton className="h-6 w-6 rounded-full" />
-                <Skeleton className="h-3.5 w-24" />
-                <Skeleton className="h-3.5 w-16" />
-                <Skeleton className="h-3.5 w-20" />
-                <Skeleton className="h-3.5 w-14" />
-                <Skeleton className="h-5 w-14" />
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+        <TabLoading />
       ) : regularizations.length === 0 ? (
         <Card>
           <CardContent className="py-12">

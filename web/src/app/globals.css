@@ -173,3 +173,115 @@
   font-size: 0.875rem;
   line-height: 1.25rem;
 }
+/* ─── 3D gyroscope loader ─────────────────────────────────────────────────
+
+   Three rings rotating on independent axes in real 3D (perspective +
+   preserve-3d), not a flat spinner. Pure CSS transforms: no dependency, GPU
+   composited, and resolution-independent so it stays crisp at any DPI.
+
+   Colors come from --primary, so the loader tracks the theme in both light and
+   dark without a second palette. Size is driven by --tf-loader-size.
+
+   Used for loading states with NO layout to preview — app boot, auth/role
+   gates, route transitions, blocking jobs. Content areas keep their skeletons,
+   which read as faster because they show the shape of what is arriving. */
+.tf-scene {
+  perspective: 300px;
+  width: var(--tf-loader-size, 64px);
+  height: var(--tf-loader-size, 64px);
+  flex-shrink: 0;
+}
+
+.tf-gyro {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+}
+
+.tf-gyro > i {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.tf-gyro > i:nth-child(1) { animation: tf-gyro-1 1.9s linear infinite; }
+/* Insets are size/8 and size/4 rather than percentages so they land on whole
+   pixels — at the 8-divisible sizes we use (32/48/64/96/120) that is exactly
+   4/8, 6/12, 8/16, 12/24, 15/30px. Percentage insets gave 8.96px at 64px, and
+   a half-pixel ring edge renders soft instead of crisp. */
+.tf-gyro > i:nth-child(2) {
+  inset: calc(var(--tf-loader-size, 64px) / 8);
+  opacity: 0.75;
+  animation: tf-gyro-2 2.4s linear infinite;
+}
+.tf-gyro > i:nth-child(3) {
+  inset: calc(var(--tf-loader-size, 64px) / 4);
+  opacity: 0.5;
+  animation: tf-gyro-3 1.5s linear infinite;
+}
+
+@keyframes tf-gyro-1 {
+  from { transform: rotateX(62deg) rotateZ(0deg); }
+  to   { transform: rotateX(62deg) rotateZ(360deg); }
+}
+@keyframes tf-gyro-2 {
+  from { transform: rotateY(66deg) rotateZ(0deg); }
+  to   { transform: rotateY(66deg) rotateZ(-360deg); }
+}
+@keyframes tf-gyro-3 {
+  from { transform: rotateX(58deg) rotateY(52deg) rotateZ(0deg); }
+  to   { transform: rotateX(58deg) rotateY(52deg) rotateZ(360deg); }
+}
+
+/* Motion is decorative here — hold a static frame rather than spin. */
+@media (prefers-reduced-motion: reduce) {
+  .tf-gyro > i {
+    animation: none;
+  }
+  .tf-gyro > i:nth-child(1) { transform: rotateX(62deg); }
+  .tf-gyro > i:nth-child(2) { transform: rotateY(66deg); }
+  .tf-gyro > i:nth-child(3) { transform: rotateX(58deg) rotateY(52deg); }
+}
+
+/* ─── News-style ticker (holiday announcement banner) ────────────────────
+
+   The headline ENTERS from the right corner, crosses the bar, exits left,
+   then re-enters from the right again — the classic TV-ticker path. The
+   trick: percentage padding on an inline-block resolves against the
+   CONTAINER's width, so padding-left:100% parks the text just past the right
+   edge at keyframe 0, and translateX(-100%) (the element's own width =
+   container + text) carries it fully off the left. Both endpoints are
+   invisible, so the loop restart cannot be seen. Normal news-ticker pace,
+   pauses on hover, holds still under prefers-reduced-motion. */
+.tf-ticker {
+  overflow: hidden;
+  white-space: nowrap;
+  /* Soft fade at both edges so text enters/exits gently instead of clipping */
+  mask-image: linear-gradient(to right, transparent, black 3%, black 97%, transparent);
+}
+
+.tf-ticker-track {
+  display: inline-block;
+  padding-left: 100%; /* parks the headline just past the right edge */
+  animation: tf-ticker-scroll 22s linear infinite;
+  will-change: transform;
+}
+
+.tf-ticker:hover .tf-ticker-track {
+  animation-play-state: paused;
+}
+
+@keyframes tf-ticker-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tf-ticker-track {
+    animation: none;
+  }
+}

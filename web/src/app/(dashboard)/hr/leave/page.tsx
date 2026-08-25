@@ -43,11 +43,13 @@ import {
 } from "@/components/ui/table";
 
 import { ApplyLeaveDialog } from "@/components/hr/ApplyLeaveDialog";
+import { LeaveRequestModal } from "@/components/hr/LeaveRequestModal";
 import { LeaveBalanceCard } from "@/components/hr/LeaveBalanceCard";
 import { useCancelLeave } from "@/hooks/hr/use-leave-actions";
 import { useLeaveBalance } from "@/hooks/hr/use-leave-balance";
 import { useLeaveRequests } from "@/hooks/hr/use-leave-requests";
-import { formatDate } from "@/lib/utils";
+import { formatDate, assignLeaveTypeColors } from "@/lib/utils";
+import { useAuthStore } from "@/stores/auth-store";
 import type { LeaveRequest } from "@/lib/validations/leave";
 
 const statusDot: Record<string, { dot: string; text: string; label: string }> = {
@@ -58,8 +60,10 @@ const statusDot: Record<string, { dot: string; text: string; label: string }> = 
 };
 
 export default function MyLeavePage() {
+    const { user } = useAuthStore();
     const [currentPage, setCurrentPage] = useState(1);
     const [cancelTarget, setCancelTarget] = useState<LeaveRequest | null>(null);
+    const [viewTarget, setViewTarget] = useState<LeaveRequest | null>(null);
     const [applyOpen, setApplyOpen] = useState(false);
 
     const {
@@ -67,11 +71,25 @@ export default function MyLeavePage() {
         isLoading: balancesLoading,
         isError: balancesError,
     } = useLeaveBalance();
+
+    // One distinct colour per leave type, resolved across the whole set so no
+    // two cards share a swatch.
+    const balanceColors = useMemo(
+        () => assignLeaveTypeColors((balances ?? []).map((b) => b.leave_type?.code ?? '')),
+        [balances],
+    );
+
     const {
         data: requestsData,
         isLoading: requestsLoading,
         isError: requestsError,
-    } = useLeaveRequests({ page: currentPage });
+    } = useLeaveRequests(
+        // "My Leave" means MY leave for every role. Without user_id the API
+        // falls back to role scoping, so an owner/HR/admin saw the whole org's
+        // requests here — that list belongs on Leave Management, not this page.
+        { page: currentPage, user_id: user?.id },
+        { enabled: !!user?.id },
+    );
     const cancelMutation = useCancelLeave();
 
     const requests = requestsData?.data ?? [];
@@ -180,6 +198,7 @@ export default function MyLeavePage() {
                             <LeaveBalanceCard
                                 key={balance.leave_type_id}
                                 balance={balance}
+                                color={balanceColors[(balance.leave_type?.code ?? '').toLowerCase()]}
                             />
                         ))}
                     </div>
@@ -254,7 +273,11 @@ export default function MyLeavePage() {
                                             {requests.map((req) => {
                                                 const sd = statusDot[req.status] ?? statusDot.pending;
                                                 return (
-                                                    <tr key={req.id} className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors">
+                                                    <tr
+                                                        key={req.id}
+                                                        onClick={() => setViewTarget(req)}
+                                                        className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
+                                                    >
                                                         <td className="px-4 py-2.5 whitespace-nowrap">
                                                             <span className="text-[0.75rem] font-medium">{req.leave_type.name}</span>
                                                         </td>
@@ -278,7 +301,8 @@ export default function MyLeavePage() {
                                                         <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] text-muted-foreground">
                                                             {formatDate(req.created_at)}
                                                         </td>
-                                                        <td className="px-4 py-2.5 whitespace-nowrap text-right">
+                                                        {/* stopPropagation so Cancel doesn't also open the view modal */}
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
                                                             {req.status === "pending" ? (
                                                                 <Button
                                                                     variant="ghost"
@@ -392,6 +416,14 @@ export default function MyLeavePage() {
 
             {/* Apply Leave Dialog */}
             <ApplyLeaveDialog open={applyOpen} onOpenChange={setApplyOpen} />
+
+            {/* Row view/edit modal — resolved from the refetched list so a
+                save shows saved values, not the click-time snapshot. */}
+            <LeaveRequestModal
+                request={viewTarget ? (requests.find((r) => r.id === viewTarget.id) ?? viewTarget) : null}
+                open={!!viewTarget}
+                onOpenChange={(o) => { if (!o) setViewTarget(null); }}
+            />
         </div>
     );
 }

@@ -167,7 +167,7 @@ describe('DashboardPage', () => {
       expect(screen.getByText('Dashboard')).toBeInTheDocument();
     });
 
-    it('renders admin stat cards (Team Online, Hours, Active Projects, Team Members)', async () => {
+    it('renders admin stat cards (Team Online, My Hours Today, Projects, Members)', async () => {
       mockApiGet.mockImplementation((url: string) => {
         if (url === '/dashboard') return Promise.resolve({ data: adminDashboardResponse });
         if (url === '/time-entries') return Promise.resolve({ data: timeEntriesResponse });
@@ -180,8 +180,9 @@ describe('DashboardPage', () => {
         expect(screen.getByText('Team Online')).toBeInTheDocument();
       });
 
-      expect(screen.getByText('Active Projects')).toBeInTheDocument();
-      expect(screen.getByText('Team Members')).toBeInTheDocument();
+      expect(screen.getByText('Projects')).toBeInTheDocument();
+      expect(screen.getByText('My Hours Today')).toBeInTheDocument();
+      expect(screen.getByText('Members')).toBeInTheDocument();
     });
 
     it('renders team activity table with member data', async () => {
@@ -198,7 +199,8 @@ describe('DashboardPage', () => {
       });
 
       expect(screen.getByText('Bob Smith')).toBeInTheDocument();
-      expect(screen.getByText('alice@example.com')).toBeInTheDocument();
+      // The compact list shows names + an online-count badge, not emails
+      expect(screen.getByText('1/2 online')).toBeInTheDocument();
     });
 
     it('shows online/offline status badges for team members', async () => {
@@ -251,7 +253,7 @@ describe('DashboardPage', () => {
       });
     });
 
-    it('renders employee stat cards (Status, Hours, This Week)', async () => {
+    it("renders employee stat cards (Today's Hours, This Week, Activity)", async () => {
       mockApiGet.mockImplementation((url: string) => {
         if (url === '/dashboard') return Promise.resolve({ data: employeeDashboardResponse });
         if (url === '/time-entries') return Promise.resolve({ data: { data: [] } });
@@ -261,13 +263,14 @@ describe('DashboardPage', () => {
       renderDashboard();
 
       await waitFor(() => {
-        expect(screen.getByText('Status')).toBeInTheDocument();
+        expect(screen.getByText("Today's Hours")).toBeInTheDocument();
       });
 
       expect(screen.getByText('This Week')).toBeInTheDocument();
+      expect(screen.getByText('Activity')).toBeInTheDocument();
     });
 
-    it('shows "Idle" status when no timer running', async () => {
+    it('shows "Not tracking" status when no timer running', async () => {
       mockApiGet.mockImplementation((url: string) => {
         if (url === '/dashboard') return Promise.resolve({ data: { ...employeeDashboardResponse, timer: null } });
         if (url === '/time-entries') return Promise.resolve({ data: { data: [] } });
@@ -277,7 +280,7 @@ describe('DashboardPage', () => {
       renderDashboard();
 
       await waitFor(() => {
-        expect(screen.getByText('Idle')).toBeInTheDocument();
+        expect(screen.getByText('Not tracking')).toBeInTheDocument();
       });
     });
 
@@ -308,7 +311,7 @@ describe('DashboardPage', () => {
       renderDashboard();
 
       await waitFor(() => {
-        expect(screen.getByText('Status')).toBeInTheDocument();
+        expect(screen.getByText("Today's Hours")).toBeInTheDocument();
       });
 
       expect(screen.queryByText('Team Activity')).not.toBeInTheDocument();
@@ -324,10 +327,11 @@ describe('DashboardPage', () => {
       renderDashboard();
 
       await waitFor(() => {
-        expect(screen.getByText('Weekly Target')).toBeInTheDocument();
+        expect(screen.getByText('Weekly Progress')).toBeInTheDocument();
       });
 
-      expect(screen.getByText(/40h required/)).toBeInTheDocument();
+      // Appears on both the This Week stat card and the Weekly Progress panel
+      expect(screen.getAllByText(/40h target/).length).toBeGreaterThan(0);
     });
 
     it('renders employee hours chart', async () => {
@@ -444,7 +448,7 @@ describe('DashboardPage', () => {
 
       await waitFor(() => {
         // Running entry should have the green dot indicator
-        const runningIndicators = document.querySelectorAll('.text-green-400');
+        const runningIndicators = document.querySelectorAll('.bg-emerald-500.animate-pulse');
         expect(runningIndicators.length).toBeGreaterThan(0);
       });
     });

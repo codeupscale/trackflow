@@ -23,10 +23,16 @@ import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { DatePicker } from '@/components/ui/date-picker';
-import { cn } from '@/lib/utils';
-import { formatDate } from '@/lib/utils';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { cn, formatDate, formatLeaveDays, assignLeaveTypeColors, codeBadgeColor } from '@/lib/utils';
 
-import { LeaveBalanceCard } from '@/components/hr/LeaveBalanceCard';
 import { useLeaveTypes } from '@/hooks/hr/use-leave-types';
 import { useLeaveBalance } from '@/hooks/hr/use-leave-balance';
 import { useApplyLeave } from '@/hooks/hr/use-apply-leave';
@@ -45,6 +51,13 @@ export default function ApplyLeavePage() {
 
   const { data: leaveTypes, isLoading: typesLoading, isError: typesError } = useLeaveTypes();
   const { balances, isLoading: balancesLoading } = useLeaveBalance();
+
+  // Same distinct-colour assignment as the My Leave page, so a leave type keeps
+  // the same colour on both screens.
+  const balanceColors = useMemo(
+    () => assignLeaveTypeColors((balances ?? []).map((b) => b.leave_type?.code ?? '')),
+    [balances],
+  );
   const applyMutation = useApplyLeave();
 
   const form = useForm<LeaveRequestFormData>({
@@ -59,7 +72,7 @@ export default function ApplyLeavePage() {
     },
   });
 
-  const { watch, setValue, trigger, formState: { errors } } = form;
+  const { watch, setValue, trigger, control, formState: { errors } } = form;
   const watchedValues = watch();
 
   const selectedType = useMemo(() => {
@@ -204,11 +217,7 @@ export default function ApplyLeavePage() {
                   <p className="text-sm text-muted-foreground">Failed to load leave types</p>
                 </div>
               ) : typesLoading || balancesLoading ? (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {Array.from({ length: 4 }).map((_, i) => (
-                    <Skeleton key={i} className="h-24" />
-                  ))}
-                </div>
+                <Skeleton className="h-9 w-full" />
               ) : !leaveTypes || leaveTypes.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 py-6">
                   <Calendar className="h-8 w-8 text-muted-foreground/40" />
@@ -216,46 +225,88 @@ export default function ApplyLeavePage() {
                   <p className="text-xs text-muted-foreground">Please contact your administrator</p>
                 </div>
               ) : (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {leaveTypes.map((type) => {
-                    const balance = balances?.find((b) => b.leave_type_id === type.id);
-                    if (!balance) {
-                      return (
-                        <Card
-                          key={type.id}
-                          className={cn(
-                            'cursor-pointer transition-all hover:border-primary/50',
-                            watchedValues.leave_type_id === type.id && 'border-primary ring-2 ring-primary/20'
-                          )}
-                          onClick={() => setValue('leave_type_id', type.id)}
-                          role="button"
-                          tabIndex={0}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault();
-                              setValue('leave_type_id', type.id);
-                            }
-                          }}
-                          aria-pressed={watchedValues.leave_type_id === type.id}
+                <div className="flex flex-col gap-3">
+                  <Controller
+                    control={control}
+                    name="leave_type_id"
+                    render={({ field }) => (
+                      <Select value={field.value || undefined} onValueChange={field.onChange}>
+                        <SelectTrigger className="w-full h-9 text-sm" aria-label="Leave type">
+                          {/* Base UI renders the RAW VALUE (the uuid) unless
+                              given a mapping function — resolve to the name. */}
+                          <SelectValue placeholder="Select leave type">
+                            {(value: string | null) => {
+                              if (!value) return 'Select leave type';
+                              return leaveTypes?.find((t) => t.id === value)?.name ?? 'Select leave type';
+                            }}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {/* Deliberately no day counts here — the dropdown
+                                stays a clean list of names. The balance for the
+                                chosen type is summarised below it instead. */}
+                            {leaveTypes.map((type) => {
+                              const swatch = balanceColors[(type.code ?? '').toLowerCase()];
+                              return (
+                                <SelectItem key={type.id} value={type.id}>
+                                  <span className="flex items-center gap-2">
+                                    <span
+                                      className={cn(
+                                        'inline-block h-2 w-2 rounded-full shrink-0',
+                                        swatch?.bar ?? 'bg-primary',
+                                      )}
+                                    />
+                                    <span>{type.name}</span>
+                                    {type.code && (
+                                      <span
+                                        className={cn(
+                                          'inline-flex items-center rounded px-1.5 py-0.5 text-[0.55rem] font-semibold font-mono',
+                                          codeBadgeColor(type.code),
+                                        )}
+                                      >
+                                        {type.code}
+                                      </span>
+                                    )}
+                                  </span>
+                                </SelectItem>
+                              );
+                            })}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+
+                  {/* Balance summary for the selected type — keeps the number
+                      the old cards showed without putting it in the dropdown. */}
+                  {selectedType && (
+                    <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-3 py-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Badge
+                          variant={selectedType.type === 'paid' ? 'default' : 'secondary'}
+                          className="text-[0.6rem] capitalize shrink-0"
                         >
-                          <CardContent className="p-3">
-                            <p className="text-xs font-medium">{type.name}</p>
-                            <p className="text-[0.65rem] text-muted-foreground mt-0.5">
-                              {type.days_per_year} days/year
-                            </p>
-                          </CardContent>
-                        </Card>
-                      );
-                    }
-                    return (
-                      <LeaveBalanceCard
-                        key={type.id}
-                        balance={balance}
-                        selected={watchedValues.leave_type_id === type.id}
-                        onClick={() => setValue('leave_type_id', type.id)}
-                      />
-                    );
-                  })}
+                          {selectedType.type}
+                        </Badge>
+                        <span className="text-[0.7rem] text-muted-foreground truncate">
+                          {formatLeaveDays(selectedType.days_per_year)} days per year
+                        </span>
+                      </div>
+                      {selectedBalance && (
+                        <span className="text-[0.7rem] shrink-0 ml-3">
+                          <span className="font-semibold tabular-nums text-foreground">
+                            {formatLeaveDays(
+                              selectedBalance.total_days -
+                                selectedBalance.used_days -
+                                selectedBalance.pending_days,
+                            )}
+                          </span>
+                          <span className="text-muted-foreground"> available</span>
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
               {errors.leave_type_id && (

@@ -50,6 +50,7 @@ import {
   useUpdateDepartment,
 } from '@/hooks/hr/use-departments';
 import { useEmployees } from '@/hooks/hr/use-employees';
+import { useCodeFromName, abbreviateCode } from '@/hooks/use-code-from-name';
 import type { EmployeeListItem } from '@/lib/validations/employee';
 
 const MANAGER_ROLES = ['owner', 'org_manager', 'hr_manager', 'finance_manager', 'admin', 'manager'];
@@ -130,6 +131,16 @@ export function DepartmentFormSheet({
       });
     }
   }, [open, department, form]);
+
+  // New departments get a code suggested from the name (Engineering -> ENG);
+  // it stays editable and is never regenerated for an existing department.
+  useCodeFromName({
+    form,
+    sourceField: 'name',
+    codeField: 'code',
+    generate: abbreviateCode,
+    enabled: !isEditing,
+  });
 
   const createMutation = useCreateDepartment();
   const updateMutation = useUpdateDepartment();

@@ -15,6 +15,7 @@ import {
   Hourglass,
   ListChecks,
   Loader2,
+  Megaphone,
   Pencil,
   Plus,
   Repeat,
@@ -30,9 +31,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
+import { useCodeFromName, slugCode } from '@/hooks/use-code-from-name';
+import { TabLoading } from '@/components/ui/loader-3d';
 import { Textarea } from '@/components/ui/textarea';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { cn } from '@/lib/utils';
+import { cn, codeBadgeColor } from '@/lib/utils';
 import {
   Dialog,
   DialogContent,
@@ -41,14 +44,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-  SheetFooter,
-} from '@/components/ui/sheet';
 import {
   Select,
   SelectContent,
@@ -68,6 +63,9 @@ import {
 } from '@/components/ui/pagination';
 
 import { LeaveCalendar } from '@/components/hr/LeaveCalendar';
+import { LeaveRequestModal } from '@/components/hr/LeaveRequestModal';
+import { EmployeeSelect } from '@/components/hr/EmployeeSelect';
+import { PeriodFilter, periodToRange, type Period } from '@/components/common/PeriodFilter';
 import { useLeaveRequests } from '@/hooks/hr/use-leave-requests';
 import { useLeaveTypes } from '@/hooks/hr/use-leave-types';
 import { useApproveLeave, useRejectLeave } from '@/hooks/hr/use-leave-actions';
@@ -110,7 +108,7 @@ function formatDays(count: number) {
   return Math.round(n);
 }
 
-type Tab = 'approvals' | 'calendar' | 'types';
+type Tab = 'approvals' | 'calendar' | 'types' | 'holidays';
 
 // ─── Main page ───────────────────────────────────────────────────────────────
 
@@ -133,6 +131,10 @@ export default function LeaveManagementPage() {
 
   const defaultTab: Tab = canApprove ? 'approvals' : canViewCalendar ? 'calendar' : 'types';
   const [activeTab, setActiveTab] = useState<Tab>(defaultTab);
+  // Holiday period filter — the SAME control as the Approvals tab (presets +
+  // any-month grid). Lives here so it sits on the tab-bar row, right-aligned,
+  // while only the Holidays tab consumes it.
+  const [holidayPeriod, setHolidayPeriod] = useState<Period>({ kind: 'all' });
 
   if (!user || !hasAccess) {
     return (
@@ -146,6 +148,7 @@ export default function LeaveManagementPage() {
     { key: 'approvals', label: 'Approvals', icon: ClipboardCheck, show: canApprove },
     { key: 'calendar', label: 'Calendar', icon: CalendarDays, show: canViewCalendar },
     { key: 'types', label: 'Leave Types', icon: ListChecks, show: canManageTypes },
+    { key: 'holidays', label: 'Holidays', icon: Calendar, show: canManageHolidays },
   ];
 
   return (
@@ -158,32 +161,37 @@ export default function LeaveManagementPage() {
         </p>
       </div>
 
-      {/* Tab bar */}
-      <div className="flex items-center gap-1 rounded-lg bg-muted p-1 w-fit">
-        {tabs.filter((t) => t.show).map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => setActiveTab(t.key)}
-            className={cn(
-              'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[0.7rem] font-medium transition-colors',
-              activeTab === t.key
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <t.icon className="h-3.5 w-3.5" />
-            {t.label}
-          </button>
-        ))}
+      {/* Tab bar — the holiday period filter sits IMMEDIATELY beside the tab
+          pills (not at the far edge) while the Holidays tab is active */}
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1 rounded-lg bg-muted p-1 w-fit">
+          {tabs.filter((t) => t.show).map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setActiveTab(t.key)}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[0.7rem] font-medium transition-colors',
+                activeTab === t.key
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <t.icon className="h-3.5 w-3.5" />
+              {t.label}
+            </button>
+          ))}
+        </div>
+        {activeTab === 'holidays' && canManageHolidays && (
+          <PeriodFilter value={holidayPeriod} onChange={setHolidayPeriod} />
+        )}
       </div>
 
       {/* Tab content */}
       {activeTab === 'approvals' && canApprove && <ApprovalsTab />}
-      {activeTab === 'calendar' && canViewCalendar && (
-        <CalendarTab isAdmin={canManageHolidays} />
-      )}
+      {activeTab === 'calendar' && canViewCalendar && <CalendarTab />}
       {activeTab === 'types' && canManageTypes && <LeaveTypesTab />}
+      {activeTab === 'holidays' && canManageHolidays && <HolidaysTab period={holidayPeriod} />}
     </div>
   );
 }
@@ -191,13 +199,40 @@ export default function LeaveManagementPage() {
 // ─── Approvals Tab ───────────────────────────────────────────────────────────
 
 function ApprovalsTab() {
+  const { user } = useAuthStore();
   const [statusFilter, setStatusFilter] = useState('pending');
   const [currentPage, setCurrentPage] = useState(1);
   const [rejectTarget, setRejectTarget] = useState<LeaveRequest | null>(null);
+  const [viewTarget, setViewTarget] = useState<LeaveRequest | null>(null);
+
+  // Mirrors LeaveRequestPolicy::approve — nobody may act on their OWN request
+  // except the owner, who has no one above them to decide it. Without this the
+  // buttons render on an approver's own row and every click 403s.
+  const canActOn = (req: LeaveRequest) =>
+    req.user?.id !== user?.id || user?.role === 'owner';
+
+  // Which ROW is currently in flight. `approveMutation.isPending` is a single
+  // flag on one mutation object shared by every row, so gating buttons on it
+  // made one click appear to press every button in the table. TanStack exposes
+  // the in-flight `variables`, so the acting row can be identified without
+  // adding separate state.
+  const isApproving = (id: string) =>
+    approveMutation.isPending && approveMutation.variables === id;
+  const isRejecting = (id: string) =>
+    rejectMutation.isPending && rejectMutation.variables?.id === id;
+  const isActing = (id: string) => isApproving(id) || isRejecting(id);
+
+  // ── Filters: employee (approver roles only), period, custom date range ──
+  const [employeeFilter, setEmployeeFilter] = useState<string | null>(null);
+  const [period, setPeriod] = useState<Period>({ kind: 'all' });
+
+  const dateRange = useMemo(() => periodToRange(period), [period]);
 
   const { data, isLoading, isError } = useLeaveRequests({
     status: statusFilter,
     page: currentPage,
+    user_id: employeeFilter ?? undefined,
+    ...dateRange,
   });
   const approveMutation = useApproveLeave();
   const rejectMutation = useRejectLeave();
@@ -218,7 +253,8 @@ function ApprovalsTab() {
   };
 
   const handleBulkApprove = async () => {
-    const pendingRequests = requests.filter((r) => r.status === 'pending');
+    // Skip the approver's own request — the server would 403 it anyway.
+    const pendingRequests = requests.filter((r) => r.status === 'pending' && canActOn(r));
     for (const req of pendingRequests) {
       await approveMutation.mutateAsync(req.id);
     }
@@ -252,8 +288,25 @@ function ApprovalsTab() {
         ))}
       </div>
 
-      {/* Approve All + Filter */}
-      <div className="flex items-center justify-between">
+      {/* Filters (employee · month/range · status) + Approve All */}
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Employee filter — approver roles only, never the employee role */}
+        {user?.role !== 'employee' && (
+          <div className="w-52">
+            <EmployeeSelect
+              value={employeeFilter}
+              onChange={(v) => { setEmployeeFilter(v); setCurrentPage(1); }}
+              placeholder="All employees"
+            />
+          </div>
+        )}
+
+        {/* Period — presets + any-month grid */}
+        <PeriodFilter
+          value={period}
+          onChange={(p) => { setPeriod(p); setCurrentPage(1); }}
+        />
+
         <div className="flex items-center gap-1 rounded-lg bg-muted p-1 w-fit">
           {['pending', 'approved', 'rejected', 'all'].map((status) => (
             <button
@@ -275,7 +328,7 @@ function ApprovalsTab() {
         {statusFilter === 'pending' && requests.length > 1 && (
           <Button
             size="sm"
-            className="h-7 text-[0.65rem]"
+            className="h-7 text-[0.65rem] ml-auto"
             onClick={handleBulkApprove}
             disabled={approveMutation.isPending}
           >
@@ -284,7 +337,7 @@ function ApprovalsTab() {
             ) : (
               <CheckCheck className="h-3 w-3 mr-1" />
             )}
-            Approve All ({requests.filter((r) => r.status === 'pending').length})
+            Approve All ({requests.filter((r) => r.status === 'pending' && canActOn(r)).length})
           </Button>
         )}
       </div>
@@ -301,27 +354,7 @@ function ApprovalsTab() {
           </CardContent>
         </Card>
       ) : isLoading ? (
-        <Card>
-          <CardContent className="p-0">
-            <div className="flex flex-col">
-              <div className="flex items-center gap-4 px-4 py-2.5 border-b border-border/50">
-                {Array.from({ length: 7 }).map((_, i) => (
-                  <Skeleton key={i} className="h-3 w-16" />
-                ))}
-              </div>
-              {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-border/50 last:border-0">
-                  <Skeleton className="h-7 w-7 rounded-full" />
-                  <Skeleton className="h-3.5 w-24" />
-                  <Skeleton className="h-3.5 w-16" />
-                  <Skeleton className="h-3.5 w-20" />
-                  <Skeleton className="h-3.5 w-20" />
-                  <Skeleton className="h-5 w-14" />
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+        <TabLoading />
       ) : requests.length === 0 ? (
         <Card>
           <CardContent className="py-12">
@@ -366,7 +399,11 @@ function ApprovalsTab() {
                         .slice(0, 2);
 
                       return (
-                        <tr key={req.id} className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors">
+                        <tr
+                          key={req.id}
+                          onClick={() => setViewTarget(req)}
+                          className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
+                        >
                           <td className="px-4 py-2.5 whitespace-nowrap">
                             <div className="flex items-center gap-2">
                               <Avatar className="h-6 w-6">
@@ -393,15 +430,24 @@ function ApprovalsTab() {
                               {sd.label}
                             </span>
                           </td>
-                          <td className="px-4 py-2.5 whitespace-nowrap text-right">
-                            {req.status === 'pending' ? (
+                          {/* stopPropagation so Approve/Reject don't also open
+                              the row's view modal. */}
+                          <td className="px-4 py-2.5 whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
+                            {req.status === 'pending' && canActOn(req) ? (
                               <div className="inline-flex items-center gap-1.5">
                                 <Button
                                   size="sm"
                                   className="h-6 px-2.5 text-[0.6rem] bg-emerald-600 hover:bg-emerald-700 text-white"
                                   onClick={() => approveMutation.mutate(req.id)}
-                                  disabled={approveMutation.isPending}
+                                  // Gate on THIS row's id, not the shared
+                                  // isPending — that flag belongs to the one
+                                  // mutation object behind the whole table, so
+                                  // using it lit up every row's button at once.
+                                  disabled={isActing(req.id)}
                                 >
+                                  {isApproving(req.id) && (
+                                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                  )}
                                   Approve
                                 </Button>
                                 <Button
@@ -409,11 +455,13 @@ function ApprovalsTab() {
                                   size="sm"
                                   className="h-6 px-2.5 text-[0.6rem] text-destructive hover:text-destructive"
                                   onClick={() => { setRejectTarget(req); rejectForm.reset(); }}
-                                  disabled={rejectMutation.isPending}
+                                  disabled={isActing(req.id)}
                                 >
                                   Reject
                                 </Button>
                               </div>
+                            ) : req.status === 'pending' ? (
+                              <span className="text-[0.65rem] text-muted-foreground/60 italic">Your request</span>
                             ) : (
                               <span className="text-[0.65rem] text-muted-foreground/50">&mdash;</span>
                             )}
@@ -471,6 +519,14 @@ function ApprovalsTab() {
         </>
       )}
 
+      {/* Row view/edit modal — re-resolved from the refetched list by id so a
+          save shows saved values, not the click-time snapshot. */}
+      <LeaveRequestModal
+        request={viewTarget ? (requests.find((r) => r.id === viewTarget.id) ?? viewTarget) : null}
+        open={!!viewTarget}
+        onOpenChange={(o) => { if (!o) setViewTarget(null); }}
+      />
+
       {/* Reject Dialog */}
       <Dialog open={!!rejectTarget} onOpenChange={(open) => { if (!open) { setRejectTarget(null); rejectForm.reset(); } }}>
         <DialogContent className="sm:max-w-md">
@@ -517,18 +573,48 @@ interface PublicHoliday {
   name: string;
   date: string;
   is_recurring: boolean;
+  is_pinned?: boolean;
 }
 
-function CalendarTab({ isAdmin }: { isAdmin: boolean }) {
+function CalendarTab() {
   const now = new Date();
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [year, setYear] = useState(now.getFullYear());
+
+  return (
+    <LeaveCalendar month={month} year={year} onMonthChange={(m, y) => { setMonth(m); setYear(y); }} />
+  );
+}
+
+// ─── Holidays Tab — announce public holidays org-wide ────────────────────────
+
+function HolidaysTab({ period }: { period: Period }) {
+  const now = new Date();
   const queryClient = useQueryClient();
 
   const [showAddDialog, setShowAddDialog] = useState(false);
+  // Non-null while editing an existing holiday; null means "announce new".
+  // The same dialog serves both so the fields can never drift apart.
+  const [editingHoliday, setEditingHoliday] = useState<PublicHoliday | null>(null);
   const [holidayName, setHolidayName] = useState('');
   const [holidayDate, setHolidayDate] = useState('');
   const [holidayRecurring, setHolidayRecurring] = useState(false);
+
+  const openAddHoliday = () => {
+    setEditingHoliday(null);
+    setHolidayName('');
+    setHolidayDate('');
+    setHolidayRecurring(false);
+    setShowAddDialog(true);
+  };
+
+  const openEditHoliday = (h: PublicHoliday) => {
+    setEditingHoliday(h);
+    setHolidayName(h.name);
+    setHolidayDate(h.date.slice(0, 10));
+    setHolidayRecurring(!!h.is_recurring);
+    setShowAddDialog(true);
+  };
   const [deleteTarget, setDeleteTarget] = useState<PublicHoliday | null>(null);
 
   const { data: holidays, isLoading: holidaysLoading } = useQuery<PublicHoliday[]>({
@@ -538,7 +624,6 @@ function CalendarTab({ isAdmin }: { isAdmin: boolean }) {
       const raw = res.data;
       return raw.data ?? raw.holidays ?? (Array.isArray(raw) ? raw : []);
     },
-    enabled: isAdmin,
   });
 
   const addHolidayMutation = useMutation({
@@ -552,7 +637,35 @@ function CalendarTab({ isAdmin }: { isAdmin: boolean }) {
       setHolidayDate('');
       setHolidayRecurring(false);
     },
-    onError: () => toast.error('Failed to add holiday'),
+    onError: (e: unknown) =>
+      toast.error((e as { data?: { message?: string } })?.data?.message ?? 'Failed to add holiday'),
+  });
+
+  const editHolidayMutation = useMutation({
+    mutationFn: async (data: { id: string; name: string; date: string; is_recurring: boolean }) =>
+      api.put(`/hr/public-holidays/${data.id}`, {
+        name: data.name,
+        date: data.date,
+        is_recurring: data.is_recurring,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['public-holidays'] });
+      queryClient.invalidateQueries({ queryKey: ['leave-calendar'] });
+      toast.success('Holiday updated');
+      setShowAddDialog(false);
+      setEditingHoliday(null);
+    },
+    onError: (e: unknown) =>
+      toast.error((e as { data?: { message?: string } })?.data?.message ?? 'Failed to update holiday'),
+  });
+
+  const pinHolidayMutation = useMutation({
+    mutationFn: async (h: PublicHoliday) => api.put(`/hr/public-holidays/${h.id}/pin`),
+    onSuccess: (_res, h) => {
+      queryClient.invalidateQueries({ queryKey: ['public-holidays'] });
+      toast.success(h.is_pinned ? 'Removed from headline' : 'Posted to headline');
+    },
+    onError: () => toast.error('Failed to update headline'),
   });
 
   const deleteHolidayMutation = useMutation({
@@ -566,31 +679,74 @@ function CalendarTab({ isAdmin }: { isAdmin: boolean }) {
     onError: () => toast.error('Failed to remove holiday'),
   });
 
-  const handleAddHoliday = () => {
+  const handleSaveHoliday = () => {
     if (!holidayName.trim() || !holidayDate) return;
-    addHolidayMutation.mutate({ name: holidayName.trim(), date: holidayDate, is_recurring: holidayRecurring });
+    const payload = { name: holidayName.trim(), date: holidayDate, is_recurring: holidayRecurring };
+    if (editingHoliday) {
+      editHolidayMutation.mutate({ id: editingHoliday.id, ...payload });
+    } else {
+      addHolidayMutation.mutate(payload);
+    }
+  };
+  const holidaySaving = addHolidayMutation.isPending || editHolidayMutation.isPending;
+
+  // Period filter (parent-owned, on the tab-bar row) — applied client-side:
+  // the list is small and fully loaded. One-time holidays must lie inside the
+  // range. Recurring ones happen yearly FROM THEIR FIRST YEAR ONWARD, so they
+  // match when their month/day lands in the range in any year the range spans
+  // that is >= their first year — "March 2025" must not list a yearly holiday
+  // first dated 2026, but "March 2027" must.
+  const range = periodToRange(period);
+  const inPeriod = (h: PublicHoliday): boolean => {
+    const { start_date, end_date } = range;
+    if (!start_date && !end_date) return true;
+    const start = start_date ?? '0000-01-01';
+    const end = end_date ?? '9999-12-31';
+    const d = h.date.slice(0, 10);
+    if (!h.is_recurring) return d >= start && d <= end;
+    const firstYear = Number(d.slice(0, 4));
+    const md = d.slice(5); // MM-DD
+    for (let y = Math.max(firstYear, Number(start.slice(0, 4))); y <= Number(end.slice(0, 4)); y++) {
+      const occ = `${y}-${md}`;
+      if (occ >= start && occ <= end) return true;
+    }
+    return false;
   };
 
-  const sortedHolidays = (holidays ?? []).slice().sort((a, b) => a.date.localeCompare(b.date));
-  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  // Upcoming first (soonest on top); passed one-time holidays sink to the
+  // bottom as disabled rows, most recent first. Recurring holidays never
+  // count as passed — they roll to next year.
+  const todayIso = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
+  const hasPassed = (h: PublicHoliday) => h.date.slice(0, 10) < todayIso && !h.is_recurring;
+
+  // While an ACTIVE (not passed) holiday is the headline, posting is closed:
+  // no other row offers the icon. A pinned holiday whose date passes frees the
+  // slot automatically — otherwise one stale pin would lock the feature.
+  // Checked against the UNfiltered list so a pin outside the current period
+  // filter still counts as occupying the slot.
+  const anyActivePinned = (holidays ?? []).some((h) => h.is_pinned && !hasPassed(h));
+
+  const sortedHolidays = (holidays ?? []).filter(inPeriod).sort((a, b) => {
+    const pa = hasPassed(a), pb = hasPassed(b);
+    if (pa !== pb) return pa ? 1 : -1;
+    return pa ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date);
+  });
 
   return (
     <>
-      {/* Add Holiday button */}
-      {isAdmin && (
-        <div className="flex justify-end">
-          <Button size="sm" className="h-8 text-xs" onClick={() => setShowAddDialog(true)}>
-            <Plus className="h-3.5 w-3.5 mr-1" />
-            Add Public Holiday
-          </Button>
-        </div>
-      )}
+      {/* Header: announcement framing + add action */}
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="text-xs text-muted-foreground min-w-0 flex-1">
+          Holidays announced here appear on every employee&apos;s My Leave page and
+          the team calendar, and are excluded from leave day counts.
+        </p>
+        <Button size="sm" className="h-8 text-xs shrink-0" onClick={openAddHoliday}>
+          <Plus className="h-3.5 w-3.5 mr-1" />
+          Announce Holiday
+        </Button>
+      </div>
 
-      {/* Calendar */}
-      <LeaveCalendar month={month} year={year} onMonthChange={(m, y) => { setMonth(m); setYear(y); }} />
-
-      {/* Public Holidays List */}
-      {isAdmin && (
+      {(
         <Card>
           <CardContent className="p-0">
             <div className="px-4 py-2.5 border-b border-border/50">
@@ -607,8 +763,17 @@ function CalendarTab({ isAdmin }: { isAdmin: boolean }) {
             ) : sortedHolidays.length === 0 ? (
               <div className="py-10 text-center">
                 <CalendarDays className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
-                <p className="text-sm text-muted-foreground font-medium">No public holidays configured</p>
-                <p className="text-xs text-muted-foreground mt-0.5">Add holidays to exclude them from working day counts</p>
+                {period.kind !== 'all' && (holidays?.length ?? 0) > 0 ? (
+                  <>
+                    <p className="text-sm text-muted-foreground font-medium">No holidays in this period</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Clear the period filter to see all holidays</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm text-muted-foreground font-medium">No public holidays configured</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Add holidays to exclude them from working day counts</p>
+                  </>
+                )}
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -617,17 +782,42 @@ function CalendarTab({ isAdmin }: { isAdmin: boolean }) {
                     <tr className="border-b border-border/50">
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 whitespace-nowrap">Holiday</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 whitespace-nowrap">Date</th>
+                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 whitespace-nowrap">Day</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 whitespace-nowrap">Type</th>
-                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2 whitespace-nowrap text-right">Actions</th>
+                      {/* w-px collapses the column to its content so the slack
+                          goes to Type instead — header and buttons then sit
+                          together, tight against the right edge. */}
+                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground pl-4 pr-4 py-2 whitespace-nowrap text-right w-px">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {sortedHolidays.map((holiday) => {
-                      const isPast = holiday.date < todayStr && !holiday.is_recurring;
+                      const isPast = hasPassed(holiday);
                       return (
-                        <tr key={holiday.id} className={cn('border-b border-border/30 last:border-0', isPast && 'opacity-50')}>
-                          <td className="px-4 py-2 whitespace-nowrap text-[0.75rem] font-medium">{holiday.name}</td>
+                        <tr
+                          key={holiday.id}
+                          aria-disabled={isPast || undefined}
+                          // Passed rows read as disabled: dimmed, muted ground,
+                          // struck-through name, no hover response. The Delete
+                          // button stays live — it is the only way to clean old
+                          // rows out.
+                          className={cn(
+                            'border-b border-border/30 last:border-0',
+                            isPast && 'opacity-45 bg-muted/40 select-none',
+                          )}
+                        >
+                          <td className={cn('px-4 py-2 whitespace-nowrap text-[0.75rem] font-medium', isPast && 'line-through text-muted-foreground')}>
+                            {holiday.name}
+                            {isPast && (
+                              <span className="ml-2 inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-[0.55rem] font-medium text-muted-foreground no-underline align-middle">
+                                Passed
+                              </span>
+                            )}
+                          </td>
                           <td className="px-4 py-2 whitespace-nowrap text-[0.75rem] text-muted-foreground">{formatDate(holiday.date)}</td>
+                          <td className="px-4 py-2 whitespace-nowrap text-[0.75rem] text-muted-foreground">
+                            {new Date(holiday.date).toLocaleDateString('en-US', { weekday: 'long' })}
+                          </td>
                           <td className="px-4 py-2 whitespace-nowrap">
                             {holiday.is_recurring ? (
                               <span className="inline-flex items-center gap-1 text-[0.65rem] text-muted-foreground">
@@ -637,7 +827,43 @@ function CalendarTab({ isAdmin }: { isAdmin: boolean }) {
                               <span className="text-[0.65rem] text-muted-foreground">One-time</span>
                             )}
                           </td>
-                          <td className="px-4 py-2 whitespace-nowrap text-right">
+                          <td className="pl-4 pr-4 py-2 whitespace-nowrap text-right w-px">
+                            {/* Post to headline. Every FUTURE holiday that is
+                                the headline shows a STATIC chip — posting is
+                                closed while one headline is live, so no other
+                                row offers the icon either. Passed rows show
+                                neither: a finished holiday cannot be news. */}
+                            {holiday.is_pinned && !isPast ? (
+                              <span className="mr-1 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[0.6rem] font-medium text-primary align-middle">
+                                <Megaphone className="h-3 w-3" />
+                                Headline
+                              </span>
+                            ) : !isPast && !anyActivePinned ? (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-2 text-muted-foreground hover:text-foreground"
+                                title="Post as headline"
+                                aria-label={`Post ${holiday.name} as headline`}
+                                onClick={() => pinHolidayMutation.mutate(holiday)}
+                                disabled={pinHolidayMutation.isPending}
+                              >
+                                <Megaphone className="h-3 w-3" />
+                              </Button>
+                            ) : null}
+                            {/* Edit stays available on PASSED holidays too —
+                                fixing a wrong date is exactly how a mistake
+                                gets corrected after the fact. */}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 px-2 text-muted-foreground hover:text-foreground"
+                              title="Edit holiday"
+                              aria-label={`Edit ${holiday.name}`}
+                              onClick={() => openEditHoliday(holiday)}
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </Button>
                             <Button
                               variant="ghost"
                               size="sm"
@@ -658,13 +884,18 @@ function CalendarTab({ isAdmin }: { isAdmin: boolean }) {
         </Card>
       )}
 
-      {/* Add Holiday Dialog */}
-      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+      {/* Announce / Edit Holiday Dialog — one dialog for both so the fields
+          can never drift apart. */}
+      <Dialog open={showAddDialog} onOpenChange={(o) => { setShowAddDialog(o); if (!o) setEditingHoliday(null); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-base">Add Public Holiday</DialogTitle>
+            <DialogTitle className="text-base">
+              {editingHoliday ? 'Edit Public Holiday' : 'Announce Public Holiday'}
+            </DialogTitle>
             <DialogDescription className="text-xs">
-              This holiday will be excluded from working day counts when employees apply for leave.
+              {editingHoliday
+                ? 'Changes apply everywhere this holiday appears — the headline, employee pages and leave day counts.'
+                : 'This holiday will be excluded from working day counts when employees apply for leave.'}
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3 py-3">
@@ -682,10 +913,10 @@ function CalendarTab({ isAdmin }: { isAdmin: boolean }) {
             </div>
           </div>
           <DialogFooter className="gap-2">
-            <Button variant="outline" size="sm" onClick={() => setShowAddDialog(false)}>Cancel</Button>
-            <Button size="sm" onClick={handleAddHoliday} disabled={!holidayName.trim() || !holidayDate || addHolidayMutation.isPending}>
-              {addHolidayMutation.isPending && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
-              Add Holiday
+            <Button variant="outline" size="sm" onClick={() => { setShowAddDialog(false); setEditingHoliday(null); }}>Cancel</Button>
+            <Button size="sm" onClick={handleSaveHoliday} disabled={!holidayName.trim() || !holidayDate || holidaySaving}>
+              {holidaySaving && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+              {editingHoliday ? 'Save Changes' : 'Announce Holiday'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -720,12 +951,24 @@ function LeaveTypesTab() {
   const queryClient = useQueryClient();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingType, setEditingType] = useState<LeaveType | null>(null);
+  const [mode, setMode] = useState<'view' | 'edit'>('edit');
 
   const { data: leaveTypes, isLoading, isError } = useLeaveTypes();
 
   const form = useForm<LeaveTypeFormData>({
     resolver: zodResolver(leaveTypeFormSchema) as any,
     defaultValues: { name: '', code: '', type: 'paid', days_per_year: 0, accrual_method: 'annual', max_carry_over: 0, is_active: true },
+  });
+
+  // Leave types use the lowercase slug format (Annual Leave -> annual), unlike
+  // departments/positions which use uppercase abbreviations. Suggested for new
+  // types only — an existing code may already be referenced by leave requests.
+  useCodeFromName({
+    form,
+    sourceField: 'name',
+    codeField: 'code',
+    generate: slugCode,
+    enabled: !editingType,
   });
 
   const createMutation = useMutation({
@@ -747,7 +990,9 @@ function LeaveTypesTab() {
       queryClient.invalidateQueries({ queryKey: ['leave-types'] });
       queryClient.invalidateQueries({ queryKey: ['leave-balance'] });
       toast.success('Leave type updated');
-      closeSheet();
+      // Return to the view pane rather than closing, so the user sees the saved
+      // result and dismisses the modal themselves via the cross icon.
+      setMode('view');
     },
     onError: (error: unknown) => {
       toast.error((error as { data?: { message?: string } })?.data?.message ?? 'Failed to update leave type');
@@ -756,17 +1001,31 @@ function LeaveTypesTab() {
 
   const openCreate = () => {
     setEditingType(null);
+    setMode('edit');
     form.reset({ name: '', code: '', type: 'paid', days_per_year: 0, accrual_method: 'annual', max_carry_over: 0, is_active: true });
     setSheetOpen(true);
   };
 
+  const fillForm = (lt: LeaveType) => {
+    form.reset({ name: lt.name, code: lt.code, type: lt.type, days_per_year: lt.days_per_year, accrual_method: lt.accrual_method, max_carry_over: lt.max_carry_over, is_active: lt.is_active });
+  };
+
   const openEdit = (lt: LeaveType) => {
     setEditingType(lt);
-    form.reset({ name: lt.name, code: lt.code, type: lt.type, days_per_year: lt.days_per_year, accrual_method: lt.accrual_method, max_carry_over: lt.max_carry_over, is_active: lt.is_active });
+    setMode('edit');
+    fillForm(lt);
     setSheetOpen(true);
   };
 
-  const closeSheet = () => { setSheetOpen(false); setEditingType(null); form.reset(); };
+  /** Row click — read-only pane first, Edit switches to the form. */
+  const openView = (lt: LeaveType) => {
+    setEditingType(lt);
+    setMode('view');
+    fillForm(lt);
+    setSheetOpen(true);
+  };
+
+  const closeSheet = () => { setSheetOpen(false); setEditingType(null); setMode('edit'); form.reset(); };
 
   const handleSubmit = form.handleSubmit((data: LeaveTypeFormData) => {
     if (editingType) updateMutation.mutate({ ...data, id: editingType.id });
@@ -774,6 +1033,13 @@ function LeaveTypesTab() {
   });
 
   const isPending = createMutation.isPending || updateMutation.isPending;
+
+  // `editingType` is the snapshot taken when the row was clicked. After a save
+  // the view pane must show the SAVED values, so re-resolve it from the
+  // refetched list by id; fall back to the snapshot if it is not there.
+  const activeType = editingType
+    ? ((leaveTypes ?? []).find((lt) => lt.id === editingType.id) ?? editingType)
+    : null;
 
   return (
     <>
@@ -796,13 +1062,7 @@ function LeaveTypesTab() {
           </CardContent>
         </Card>
       ) : isLoading ? (
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex flex-col gap-2">
-              {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-12" />)}
-            </div>
-          </CardContent>
-        </Card>
+        <TabLoading />
       ) : !leaveTypes || leaveTypes.length === 0 ? (
         <Card>
           <CardContent className="py-12">
@@ -831,7 +1091,11 @@ function LeaveTypesTab() {
                 </thead>
                 <tbody>
                   {leaveTypes.map((lt) => (
-                    <tr key={lt.id} className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors">
+                    <tr
+                      key={lt.id}
+                      onClick={() => openView(lt)}
+                      className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
+                    >
                       <td className="px-4 py-2.5 whitespace-nowrap">
                         <div className="flex items-center gap-2">
                           <span className="text-[0.75rem] font-medium">{lt.name}</span>
@@ -844,7 +1108,9 @@ function LeaveTypesTab() {
                         </div>
                       </td>
                       <td className="px-4 py-2.5 whitespace-nowrap">
-                        <code className="rounded bg-muted px-1.5 py-0.5 text-[0.65rem]">{lt.code}</code>
+                        <span className={cn('inline-flex items-center rounded-md px-1.5 py-0.5 text-[0.6rem] font-semibold font-mono', codeBadgeColor(lt.code))}>
+                          {lt.code}
+                        </span>
                       </td>
                       <td className="px-4 py-2.5 whitespace-nowrap">
                         <span className={cn(
@@ -858,7 +1124,9 @@ function LeaveTypesTab() {
                       <td className="px-4 py-2.5 whitespace-nowrap text-center text-[0.75rem] font-semibold tabular-nums">{lt.days_per_year}</td>
                       <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] text-muted-foreground capitalize">{lt.accrual_method}</td>
                       <td className="px-4 py-2.5 whitespace-nowrap text-center text-[0.75rem] tabular-nums">{lt.max_carry_over}</td>
-                      <td className="px-4 py-2.5 whitespace-nowrap text-right">
+                      {/* stopPropagation so the Edit button does not also fire
+                          the row's view-modal click. */}
+                      <td className="px-4 py-2.5 whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
                         <Button variant="ghost" size="sm" className="h-6 px-2.5 text-[0.6rem]" onClick={() => openEdit(lt)}>
                           <Pencil className="h-3 w-3 mr-1" /> Edit
                         </Button>
@@ -872,77 +1140,98 @@ function LeaveTypesTab() {
         </Card>
       )}
 
-      {/* Create/Edit Sheet */}
-      <Sheet open={sheetOpen} onOpenChange={(open) => { if (!open) closeSheet(); }}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>{editingType ? 'Edit Leave Type' : 'New Leave Type'}</SheetTitle>
-            <SheetDescription>
-              {editingType ? 'Update the details for this leave type.' : 'Configure a new leave type for your organization.'}
-            </SheetDescription>
-          </SheetHeader>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4 p-6 flex-1 overflow-y-auto">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="lt-name" className="text-xs">Name</Label>
-              <Input id="lt-name" placeholder="e.g., Annual Leave" {...form.register('name')} aria-invalid={!!form.formState.errors.name} className="h-8 text-sm" />
-              {form.formState.errors.name && <p className="text-[0.65rem] text-destructive">{form.formState.errors.name.message}</p>}
+      {/* Create/Edit Dialog — compact centred dialog matching the department
+          form, not a full-height side sheet. Fields pair two-up so the form
+          reads at a glance instead of stretching down a tall panel. */}
+      <Dialog open={sheetOpen} onOpenChange={(open) => { if (!open) closeSheet(); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {mode === 'view' && activeType
+                ? activeType.name
+                : editingType ? 'Edit Leave Type' : 'New Leave Type'}
+            </DialogTitle>
+            <DialogDescription>
+              {mode === 'view'
+                ? 'Leave type details'
+                : editingType ? 'Update the details for this leave type.' : 'Configure a new leave type for your organization.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {mode === 'view' && activeType ? (
+            <LeaveTypeView type={activeType} onEdit={() => setMode('edit')} />
+          ) : (
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="lt-name" className="text-xs">Name</Label>
+                <Input id="lt-name" placeholder="e.g. Annual Leave" {...form.register('name')} aria-invalid={!!form.formState.errors.name} className="h-8 text-sm" />
+                {form.formState.errors.name && <p className="text-[0.65rem] text-destructive">{form.formState.errors.name.message}</p>}
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="lt-code" className="text-xs">Code</Label>
+                <Input id="lt-code" placeholder="e.g. annual" {...form.register('code')} aria-invalid={!!form.formState.errors.code} className="h-8 text-sm" />
+                {form.formState.errors.code && <p className="text-[0.65rem] text-destructive">{form.formState.errors.code.message}</p>}
+              </div>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="lt-code" className="text-xs">Code</Label>
-              <Input id="lt-code" placeholder="e.g., annual" {...form.register('code')} aria-invalid={!!form.formState.errors.code} className="h-8 text-sm" />
-              {form.formState.errors.code && <p className="text-[0.65rem] text-destructive">{form.formState.errors.code.message}</p>}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs">Type</Label>
+                <Controller
+                  control={form.control}
+                  name="type"
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger className="w-full h-8 text-sm"><SelectValue placeholder="Select type" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="paid">Paid</SelectItem>
+                          <SelectItem value="unpaid">Unpaid</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="lt-days" className="text-xs">Days Per Year</Label>
+                <Input id="lt-days" type="number" min="0" max="365" {...form.register('days_per_year')} className="h-8 text-sm" />
+                {form.formState.errors.days_per_year && <p className="text-[0.65rem] text-destructive">{form.formState.errors.days_per_year.message}</p>}
+              </div>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label className="text-xs">Type</Label>
-              <Controller
-                control={form.control}
-                name="type"
-                render={({ field }) => (
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <SelectTrigger className="w-full h-8 text-sm"><SelectValue placeholder="Select type" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="paid">Paid</SelectItem>
-                        <SelectItem value="unpaid">Unpaid</SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                )}
-              />
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs">Accrual Method</Label>
+                <Controller
+                  control={form.control}
+                  name="accrual_method"
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger className="w-full h-8 text-sm"><SelectValue placeholder="Select method" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="annual">Annual (all at once)</SelectItem>
+                          <SelectItem value="monthly">Monthly (accrue each month)</SelectItem>
+                          <SelectItem value="none">None</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="lt-carryover" className="text-xs">Max Carry Over (days)</Label>
+                <Input id="lt-carryover" type="number" min="0" max="365" {...form.register('max_carry_over')} className="h-8 text-sm" />
+                {form.formState.errors.max_carry_over && <p className="text-[0.65rem] text-destructive">{form.formState.errors.max_carry_over.message}</p>}
+              </div>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="lt-days" className="text-xs">Days Per Year</Label>
-              <Input id="lt-days" type="number" min="0" max="365" {...form.register('days_per_year')} className="h-8 text-sm" />
-              {form.formState.errors.days_per_year && <p className="text-[0.65rem] text-destructive">{form.formState.errors.days_per_year.message}</p>}
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label className="text-xs">Accrual Method</Label>
-              <Controller
-                control={form.control}
-                name="accrual_method"
-                render={({ field }) => (
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <SelectTrigger className="w-full h-8 text-sm"><SelectValue placeholder="Select accrual method" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="annual">Annual (all at once)</SelectItem>
-                        <SelectItem value="monthly">Monthly (accrue each month)</SelectItem>
-                        <SelectItem value="none">None</SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                )}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="lt-carryover" className="text-xs">Max Carry Over (days)</Label>
-              <Input id="lt-carryover" type="number" min="0" max="365" {...form.register('max_carry_over')} className="h-8 text-sm" />
-              {form.formState.errors.max_carry_over && <p className="text-[0.65rem] text-destructive">{form.formState.errors.max_carry_over.message}</p>}
-            </div>
+
             <div className="flex items-center justify-between rounded-lg border border-border p-3">
               <div>
                 <Label htmlFor="lt-active" className="text-xs">Active</Label>
-                <p className="text-[0.6rem] text-muted-foreground">Inactive types cannot be used for new requests</p>
+                <p className="text-[0.65rem] text-muted-foreground">Inactive types cannot be used for new requests</p>
               </div>
               <Controller
                 control={form.control}
@@ -950,16 +1239,100 @@ function LeaveTypesTab() {
                 render={({ field }) => <Switch id="lt-active" checked={field.value} onCheckedChange={field.onChange} />}
               />
             </div>
+
+            <DialogFooter className="gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                // Cancelling an edit on an existing type returns to the view
+                // pane; cancelling a create closes outright.
+                onClick={() => (editingType ? setMode('view') : closeSheet())}
+                disabled={isPending}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={isPending}>
+                {isPending && <Loader2 className="animate-spin mr-1.5 h-3.5 w-3.5" />}
+                {editingType ? 'Save Changes' : 'Create Type'}
+              </Button>
+            </DialogFooter>
           </form>
-          <SheetFooter>
-            <Button variant="outline" onClick={closeSheet}>Cancel</Button>
-            <Button onClick={handleSubmit} disabled={isPending}>
-              {isPending && <Loader2 className="animate-spin mr-1.5 h-3.5 w-3.5" />}
-              {editingType ? 'Save Changes' : 'Create Type'}
-            </Button>
-          </SheetFooter>
-        </SheetContent>
-      </Sheet>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
+  );
+}
+
+// ─── Leave type view pane (read-only detail + Edit button) ───────────────────
+
+function LeaveTypeDetailRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-3 py-2 border-b border-border/50 last:border-0">
+      <span className="text-[0.65rem] uppercase tracking-wider text-muted-foreground shrink-0 pt-0.5">
+        {label}
+      </span>
+      <div className="text-xs text-foreground text-right min-w-0">{children}</div>
+    </div>
+  );
+}
+
+const ACCRUAL_LABELS: Record<string, string> = {
+  annual: 'Annual (all at once)',
+  monthly: 'Monthly (accrue each month)',
+  none: 'None',
+};
+
+function LeaveTypeView({ type, onEdit }: { type: LeaveType; onEdit: () => void }) {
+  return (
+    <div className="flex flex-col">
+      <div className="flex flex-col">
+        <LeaveTypeDetailRow label="Code">
+          {/* Same helper the listing uses, so a code keeps its colour when the
+              row is opened. */}
+          <span className={cn('inline-flex items-center rounded-md px-1.5 py-0.5 text-[0.6rem] font-semibold font-mono', codeBadgeColor(type.code))}>
+            {type.code}
+          </span>
+        </LeaveTypeDetailRow>
+
+        <LeaveTypeDetailRow label="Type">
+          <span className="capitalize">{type.type}</span>
+        </LeaveTypeDetailRow>
+
+        <LeaveTypeDetailRow label="Days Per Year">
+          <span className="tabular-nums font-medium">{type.days_per_year}</span>
+        </LeaveTypeDetailRow>
+
+        <LeaveTypeDetailRow label="Accrual">
+          {ACCRUAL_LABELS[type.accrual_method] ?? type.accrual_method}
+        </LeaveTypeDetailRow>
+
+        <LeaveTypeDetailRow label="Max Carry Over">
+          <span className="tabular-nums">{type.max_carry_over} days</span>
+        </LeaveTypeDetailRow>
+
+        <LeaveTypeDetailRow label="Status">
+          {type.is_active ? (
+            <span className="inline-flex items-center gap-1 text-[0.65rem] text-emerald-600 dark:text-emerald-400">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              Active
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-[0.65rem] text-muted-foreground">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
+              Inactive
+            </span>
+          )}
+        </LeaveTypeDetailRow>
+      </div>
+
+      <DialogFooter className="pt-4">
+        <Button type="button" size="sm" onClick={onEdit}>
+          <Pencil className="h-3.5 w-3.5 mr-1.5" />
+          Edit
+        </Button>
+      </DialogFooter>
+    </div>
   );
 }

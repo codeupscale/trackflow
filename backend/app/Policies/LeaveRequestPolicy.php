@@ -53,7 +53,11 @@ class LeaveRequestPolicy
     }
 
     /**
-     * Only users with leave.approve at org scope can edit a submitted request.
+     * ONLY the requester may edit their own leave request. Approvers — HR,
+     * admin, manager, even the owner — can VIEW everyone's requests but never
+     * edit someone else's: changing another person's dates or reason would
+     * falsify what they actually asked for. Approvers act via approve/reject.
+     * (The pending-only restriction lives in the controller as a 422.)
      */
     public function update(User $user, LeaveRequest $leaveRequest): bool
     {
@@ -61,12 +65,16 @@ class LeaveRequestPolicy
             return false;
         }
 
-        return app(PermissionService::class)->hasPermission($user, 'leave.approve', 'organization');
+        return $user->id === $leaveRequest->user_id;
     }
 
     /**
-     * Users with leave.approve can approve, but NOT their own request.
-     * Self-approval would bypass oversight.
+     * Users with leave.approve can approve/reject, but NOT their own request —
+     * self-approval would bypass oversight. The ONE exception is the owner:
+     * there is nobody above them in the org to decide their leave, so blocking
+     * them would strand their requests in pending forever. Every other approver
+     * (org_manager, hr_manager, project manager) must have someone else act:
+     * an admin/manager's request goes to HR or the owner, HR's to the owner.
      */
     public function approve(User $user, LeaveRequest $leaveRequest): bool
     {
@@ -74,8 +82,8 @@ class LeaveRequestPolicy
             return false;
         }
 
-        // Prevent self-approval
-        if ($user->id === $leaveRequest->user_id) {
+        // Prevent self-approval for everyone except the owner
+        if ($user->id === $leaveRequest->user_id && ! $user->hasRole('owner')) {
             return false;
         }
 
