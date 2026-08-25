@@ -61,9 +61,13 @@ function SelectContent({
   children,
   side = "bottom",
   sideOffset = 4,
-  align = "center",
+  align = "start",
   alignOffset = 0,
-  alignItemWithTrigger = true,
+  // Base UI defaults this to true, which is macOS-native behaviour: the popup
+  // is positioned so the SELECTED item sits on top of the trigger, covering the
+  // field. On the web the expected behaviour is a panel that drops BELOW the
+  // field with a small gap, so the field stays visible while choosing.
+  alignItemWithTrigger = false,
   ...props
 }: SelectPrimitive.Popup.Props &
   Pick<

@@ -8,25 +8,26 @@ import {
   Pencil,
   Archive,
   Search,
-  SlidersHorizontal,
-  X,
   Layers,
   CheckCircle2,
   XCircle,
-  Network,
+  Users,
 } from 'lucide-react';
 import { usePermissionStore } from '@/stores/permission-store';
 import {
   useDepartments,
   useArchiveDepartment,
 } from '@/hooks/hr/use-departments';
-import type { Department } from '@/lib/validations/department';
+import { codeBadgeColor, type Department } from '@/lib/validations/department';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
-import { DepartmentFormSheet } from '@/components/hr/DepartmentFormSheet';
+import {
+  DepartmentFormSheet,
+  type DepartmentModalMode,
+} from '@/components/hr/DepartmentFormSheet';
 
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent } from '@/components/ui/card';
@@ -45,13 +46,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
   Pagination,
   PaginationContent,
   PaginationEllipsis,
@@ -68,11 +62,11 @@ export default function DepartmentsPage() {
   const [page, setPage] = useState(1);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingDept, setEditingDept] = useState<Department | null>(null);
+  const [dialogMode, setDialogMode] = useState<DepartmentModalMode>('edit');
   const [archiveTarget, setArchiveTarget] = useState<Department | null>(null);
 
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [showFilters, setShowFilters] = useState(false);
+  const [viewTab, setViewTab] = useState<'active' | 'archived'>('active');
 
   const { data, isLoading, isError } = useDepartments({ page });
   const archiveMutation = useArchiveDepartment();
@@ -82,7 +76,9 @@ export default function DepartmentsPage() {
   const totalPages = meta?.last_page ?? 1;
 
   const departments = useMemo(() => {
-    let filtered = allDepartments;
+    let filtered = allDepartments.filter((d) =>
+      viewTab === 'active' ? d.is_active : !d.is_active
+    );
     if (search) {
       const q = search.toLowerCase();
       filtered = filtered.filter(
@@ -91,37 +87,45 @@ export default function DepartmentsPage() {
           d.code.toLowerCase().includes(q)
       );
     }
-    if (statusFilter !== 'all') {
-      filtered = filtered.filter((d) =>
-        statusFilter === 'active' ? d.is_active : !d.is_active
-      );
-    }
     return filtered;
-  }, [allDepartments, search, statusFilter]);
+  }, [allDepartments, search, viewTab]);
 
   const stats = useMemo(() => {
     const total = allDepartments.length;
     const active = allDepartments.filter((d) => d.is_active).length;
     const inactive = total - active;
-    const withParent = allDepartments.filter((d) => d.parent_department_id).length;
-    return { total, active, inactive, withParent };
+    const archived = allDepartments.filter((d) => !d.is_active).length;
+    return { total, active, inactive, archived };
   }, [allDepartments]);
 
-  const activeFilterCount =
-    (statusFilter !== 'all' ? 1 : 0);
+  // `editingDept` is a SNAPSHOT taken when the row was clicked. After an edit
+  // saves and the modal returns to its view pane, that snapshot still holds the
+  // pre-edit values — the user would see their own change missing. Re-resolve it
+  // against the freshly refetched list by id so the view pane shows saved state,
+  // falling back to the snapshot if the row is not on the current page.
+  const activeDept = editingDept
+    ? (allDepartments.find((d) => d.id === editingDept.id) ?? editingDept)
+    : null;
 
   const clearFilters = () => {
-    setStatusFilter('all');
     setSearch('');
   };
 
   const openCreate = () => {
     setEditingDept(null);
+    setDialogMode('edit');
     setDialogOpen(true);
   };
 
   const openEdit = (dept: Department) => {
     setEditingDept(dept);
+    setDialogMode('edit');
+    setDialogOpen(true);
+  };
+
+  const openView = (dept: Department) => {
+    setEditingDept(dept);
+    setDialogMode('view');
     setDialogOpen(true);
   };
 
@@ -156,7 +160,7 @@ export default function DepartmentsPage() {
           { label: 'Total', value: stats.total, icon: Building2, color: 'text-blue-500', bg: 'bg-blue-500/10' },
           { label: 'Active', value: stats.active, icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
           { label: 'Inactive', value: stats.inactive, icon: XCircle, color: 'text-red-500', bg: 'bg-red-500/10' },
-          { label: 'Sub-departments', value: stats.withParent, icon: Network, color: 'text-violet-500', bg: 'bg-violet-500/10' },
+          { label: 'Archived', value: stats.archived, icon: Archive, color: 'text-amber-500', bg: 'bg-amber-500/10' },
         ].map((s) => (
           <Card key={s.label} className="border-border">
             <CardContent className="p-3">
@@ -174,9 +178,9 @@ export default function DepartmentsPage() {
         ))}
       </div>
 
-      {/* Filter Bar */}
+      {/* Search + Tabs */}
       <div className="flex items-center gap-2">
-        <div className="relative flex-1 max-w-xs">
+        <div className="relative w-full max-w-xs">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             placeholder="Search departments..."
@@ -186,49 +190,26 @@ export default function DepartmentsPage() {
           />
         </div>
 
-        <Button
-          variant={showFilters ? 'secondary' : 'outline'}
-          size="sm"
-          className="h-8 text-xs gap-1.5"
-          onClick={() => setShowFilters(!showFilters)}
-        >
-          <SlidersHorizontal className="h-3.5 w-3.5" />
-          Filters
-          {activeFilterCount > 0 && (
-            <Badge variant="secondary" className="h-4 px-1 text-[0.6rem] rounded-full ml-0.5">
-              {activeFilterCount}
-            </Badge>
-          )}
-        </Button>
-
-        {activeFilterCount > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 text-xs gap-1 text-muted-foreground"
-            onClick={clearFilters}
+        <div className="flex items-center rounded-lg border border-border p-0.5 gap-0.5">
+          <button
+            onClick={() => setViewTab('active')}
+            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${viewTab === 'active' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
           >
-            <X className="h-3 w-3" />
-            Clear
-          </Button>
-        )}
-      </div>
-
-      {/* Collapsible Filters */}
-      {showFilters && (
-        <div className="flex items-center gap-3">
-          <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v ?? 'all')}>
-            <SelectTrigger className="h-8 w-[140px] text-xs">
-              <SelectValue placeholder="Status" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="inactive">Inactive</SelectItem>
-            </SelectContent>
-          </Select>
+            Active
+          </button>
+          <button
+            onClick={() => setViewTab('archived')}
+            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5 ${viewTab === 'archived' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
+          >
+            Archived
+            {stats.archived > 0 && (
+              <span className={`text-[0.6rem] rounded-full px-1.5 py-0 leading-tight ${viewTab === 'archived' ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400'}`}>
+                {stats.archived}
+              </span>
+            )}
+          </button>
         </div>
-      )}
+      </div>
 
       {/* Content */}
       {isError ? (
@@ -269,7 +250,7 @@ export default function DepartmentsPage() {
             </div>
           </CardContent>
         </Card>
-      ) : departments.length === 0 && !search && statusFilter === 'all' ? (
+      ) : departments.length === 0 && !search && viewTab === 'active' ? (
         <EmptyState
           icon={Building2}
           title="No departments yet"
@@ -283,6 +264,18 @@ export default function DepartmentsPage() {
             ) : undefined
           }
         />
+      ) : departments.length === 0 && viewTab === 'archived' ? (
+        <Card>
+          <CardContent className="py-8">
+            <div className="flex flex-col items-center text-center gap-2">
+              <Archive className="h-8 w-8 text-muted-foreground/40" />
+              <p className="text-sm text-muted-foreground font-medium">No archived departments</p>
+              <p className="text-xs text-muted-foreground">
+                Archived departments will appear here
+              </p>
+            </div>
+          </CardContent>
+        </Card>
       ) : departments.length === 0 ? (
         <Card>
           <CardContent className="py-8">
@@ -290,10 +283,10 @@ export default function DepartmentsPage() {
               <Search className="h-8 w-8 text-muted-foreground/40" />
               <p className="text-sm text-muted-foreground font-medium">No results found</p>
               <p className="text-xs text-muted-foreground">
-                Try adjusting your search or filters
+                Try adjusting your search
               </p>
               <Button variant="ghost" size="sm" className="mt-1 text-xs" onClick={clearFilters}>
-                Clear filters
+                Clear search
               </Button>
             </div>
           </CardContent>
@@ -308,7 +301,7 @@ export default function DepartmentsPage() {
                     <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[240px]">Name</TableHead>
                     <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[100px]">Code</TableHead>
                     <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[180px]">Parent</TableHead>
-                    <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[80px]">Positions</TableHead>
+                    <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[90px]">Employees</TableHead>
                     <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-[80px]">Status</TableHead>
                     {canManage && (
                       <TableHead className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground w-10">
@@ -319,7 +312,11 @@ export default function DepartmentsPage() {
                 </TableHeader>
                 <TableBody>
                   {departments.map((dept) => (
-                    <TableRow key={dept.id} className="border-border/50 hover:bg-muted/30">
+                    <TableRow
+                      key={dept.id}
+                      onClick={() => openView(dept)}
+                      className="border-border/50 hover:bg-muted/30 cursor-pointer"
+                    >
                       <TableCell className="text-[0.7rem] font-medium py-2">
                         <div className="flex items-center gap-2">
                           <div className="flex items-center justify-center h-6 w-6 rounded bg-primary/10 text-primary shrink-0">
@@ -329,22 +326,25 @@ export default function DepartmentsPage() {
                         </div>
                       </TableCell>
                       <TableCell className="text-[0.7rem] text-muted-foreground py-2">
-                        <Badge variant="outline" className="text-[0.6rem] font-mono px-1.5 py-0">
+                        <span className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[0.6rem] font-semibold font-mono ${codeBadgeColor(dept.code)}`}>
                           {dept.code}
-                        </Badge>
+                        </span>
                       </TableCell>
                       <TableCell className="text-[0.7rem] text-muted-foreground py-2">
-                        {dept.parent_department?.name ? (
+                        {dept.parent?.name ? (
                           <div className="flex items-center gap-1.5">
                             <Layers className="h-3 w-3 text-muted-foreground/60" />
-                            {dept.parent_department.name}
+                            {dept.parent.name}
                           </div>
                         ) : (
                           <span className="text-muted-foreground/40">--</span>
                         )}
                       </TableCell>
-                      <TableCell className="text-[0.7rem] text-muted-foreground py-2">
-                        {dept.positions_count ?? 0}
+                      <TableCell className="py-2">
+                        <span className="inline-flex items-center gap-1.5 text-[0.7rem] text-foreground">
+                          <Users className="h-3 w-3 text-muted-foreground/60" />
+                          <span className="tabular-nums font-medium">{dept.employees_count ?? 0}</span>
+                        </span>
                       </TableCell>
                       <TableCell className="py-2">
                         {dept.is_active ? (
@@ -353,14 +353,16 @@ export default function DepartmentsPage() {
                             Active
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 text-[0.6rem] text-muted-foreground">
-                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
-                            Inactive
+                          <span className="inline-flex items-center gap-1 text-[0.6rem] text-amber-600 dark:text-amber-400">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
+                            Archived
                           </span>
                         )}
                       </TableCell>
                       {canManage && (
-                        <TableCell className="py-2">
+                        // stopPropagation so opening the actions menu doesn't
+                        // also fire the row's view-modal click.
+                        <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
                           <DropdownMenu>
                             <DropdownMenuTrigger
                               className="inline-flex items-center justify-center rounded-md size-7 hover:bg-muted text-muted-foreground"
@@ -466,7 +468,8 @@ export default function DepartmentsPage() {
           setDialogOpen(open);
           if (!open) setEditingDept(null);
         }}
-        department={editingDept}
+        department={activeDept}
+        initialMode={dialogMode}
       />
 
       {/* Archive Confirmation */}

@@ -2,50 +2,52 @@
 
 import { Calendar } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
-import { cn } from '@/lib/utils';
+import { cn, formatLeaveDays, type LeaveTypeColor } from '@/lib/utils';
 import type { LeaveBalance } from '@/lib/validations/leave';
 
 interface LeaveBalanceCardProps {
   balance: LeaveBalance;
   selected?: boolean;
   onClick?: () => void;
+  /**
+   * Identity colour for this leave type, assigned by the parent via
+   * `assignLeaveTypeColors()` so every card in the list is visually distinct.
+   * Omitted, the card falls back to a neutral primary bar.
+   */
+  color?: LeaveTypeColor;
 }
 
-export function LeaveBalanceCard({ balance, selected, onClick }: LeaveBalanceCardProps) {
-  const { total_days, used_days, pending_days, leave_type } = balance;
+const FALLBACK: LeaveTypeColor = {
+  icon: 'bg-primary/10 text-primary',
+  bar: 'bg-primary',
+  value: 'text-foreground',
+};
+
+export function LeaveBalanceCard({ balance, selected, onClick, color }: LeaveBalanceCardProps) {
+  const { leave_type } = balance;
+  // The API sends decimal(5,1) as strings ("20.0"), so coerce before any maths
+  // or the subtraction below silently concatenates.
+  const total_days = Number(balance.total_days);
+  const used_days = Number(balance.used_days);
+  const pending_days = Number(balance.pending_days);
   const remaining = total_days - used_days - pending_days;
-  const usedPercent = total_days > 0 ? (used_days / total_days) * 100 : 0;
-  const pendingPercent = total_days > 0 ? (pending_days / total_days) * 100 : 0;
 
-  const accentColor =
-    remaining / (total_days || 1) > 0.5
-      ? 'emerald'
-      : remaining / (total_days || 1) > 0.25
-        ? 'amber'
-        : 'red';
+  // The BAR carries the leave type's identity, so the cards read as different
+  // charts rather than four identical green ones. Colouring the bar by
+  // remaining-percentage (the old rule) made every full balance look the same,
+  // which is exactly what hid one type from another.
+  const colors = color ?? FALLBACK;
 
-  const colorMap = {
-    emerald: {
-      icon: 'bg-emerald-500/10 text-emerald-500',
-      bar: 'bg-emerald-500',
-      pending: 'bg-amber-500',
-      value: 'text-emerald-600 dark:text-emerald-400',
-    },
-    amber: {
-      icon: 'bg-amber-500/10 text-amber-500',
-      bar: 'bg-amber-500',
-      pending: 'bg-amber-400',
-      value: 'text-amber-600 dark:text-amber-400',
-    },
-    red: {
-      icon: 'bg-red-500/10 text-red-500',
-      bar: 'bg-red-500',
-      pending: 'bg-amber-500',
-      value: 'text-red-600 dark:text-red-400',
-    },
-  };
-
-  const colors = colorMap[accentColor];
+  // The "running low" signal survives on the remaining figure, keeping the
+  // original thresholds. Identity swatches never use red or amber, so the two
+  // readings — which type this is, and how little is left — can't be confused.
+  const ratio = total_days > 0 ? remaining / total_days : 1;
+  const lowClass =
+    ratio <= 0.25
+      ? 'text-red-600 dark:text-red-400'
+      : ratio <= 0.5
+        ? 'text-amber-600 dark:text-amber-400'
+        : null;
 
   return (
     <Card
@@ -78,12 +80,12 @@ export function LeaveBalanceCard({ balance, selected, onClick }: LeaveBalanceCar
             </div>
             <div className="min-w-0">
               <p className="text-xs font-medium truncate">{leave_type.name}</p>
-              <p className="text-[0.6rem] text-muted-foreground">{total_days} days/year</p>
+              <p className="text-[0.6rem] text-muted-foreground">{formatLeaveDays(total_days)} days/year</p>
             </div>
           </div>
           <div className="text-right shrink-0 ml-2">
-            <p className={cn('text-lg font-bold tabular-nums leading-tight', colors.value)}>
-              {remaining}
+            <p className={cn('text-lg font-bold tabular-nums leading-tight', lowClass ?? colors.value)}>
+              {formatLeaveDays(remaining)}
             </p>
             <p className="text-[0.55rem] text-muted-foreground uppercase tracking-wider">left</p>
           </div>
@@ -100,11 +102,11 @@ export function LeaveBalanceCard({ balance, selected, onClick }: LeaveBalanceCar
         {/* Stats row */}
         <div className="flex items-center justify-between text-[0.6rem] text-muted-foreground">
           {used_days > 0 ? (
-            <span className="tabular-nums">{used_days} used</span>
+            <span className="tabular-nums">{formatLeaveDays(used_days)} used</span>
           ) : (
             <span />
           )}
-          <span className="tabular-nums font-medium">{remaining} remaining</span>
+          <span className="tabular-nums font-medium">{formatLeaveDays(remaining)} remaining</span>
         </div>
       </CardContent>
     </Card>

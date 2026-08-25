@@ -47,6 +47,7 @@ import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
 import { navigationConfig } from '@/config/navigation';
 import { useAuthGuard } from '@/hooks/use-auth-guard';
+import { HolidayAnnouncementBanner } from '@/components/hr/HolidayAnnouncementBanner';
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const { isAuthenticated } = useAuthGuard();
@@ -280,6 +281,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
         {/* Offline Banner */}
         <OfflineBanner />
+
+        {/* Holiday announcement — every role sees the nearest upcoming holiday */}
+        <HolidayAnnouncementBanner />
 
         {/* Page Content */}
         <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-background">

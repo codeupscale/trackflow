@@ -96,6 +96,99 @@ class LeaveService
     }
 
     /**
+     * Update a PENDING leave request (dates, type, reason, half-day).
+     *
+     * Only the requester may edit their own request (LeaveRequestPolicy), and
+     * only while pending — an approved request has already moved days into
+     * used_days, so editing it would corrupt the balance.
+     *
+     * Balance handling: the old reservation is released and the new one taken
+     * inside one transaction, so the type or even the year can change safely.
+     * A failed availability check throws and rolls the release back too.
+     */
+    public function updateLeave(LeaveRequest $request, array $data): LeaveRequest
+    {
+        $orgId = $request->organization_id;
+        $startDate = Carbon::parse($data['start_date']);
+        $endDate = Carbon::parse($data['end_date']);
+        $halfDay = (bool) ($data['half_day'] ?? false);
+
+        // Overlap check against the user's OTHER requests — this one must not
+        // collide with itself.
+        $overlap = LeaveRequest::where('user_id', $request->user_id)
+            ->where('id', '!=', $request->id)
+            ->whereIn('status', ['pending', 'approved'])
+            ->where('start_date', '<=', $endDate)
+            ->where('end_date', '>=', $startDate)
+            ->exists();
+
+        if ($overlap) {
+            throw new LeaveOverlapException();
+        }
+
+        $workingDays = $this->calculateWorkingDays($startDate, $endDate, $orgId, $halfDay);
+
+        return DB::transaction(function () use ($request, $data, $orgId, $startDate, $workingDays) {
+            $user = $request->user;
+
+            // Release the reservation this request currently holds.
+            $oldBalance = LeaveBalance::where('user_id', $request->user_id)
+                ->where('leave_type_id', $request->leave_type_id)
+                ->where('year', $request->start_date->year)
+                ->lockForUpdate()
+                ->first();
+
+            if ($oldBalance) {
+                $oldBalance->decrement('pending_days', $request->days_count);
+            }
+
+            // Reserve on the target balance (same row when type+year unchanged —
+            // the release above already freed the old days, so the availability
+            // check below is against the true remainder).
+            $year = $startDate->year;
+            $balance = LeaveBalance::where('user_id', $request->user_id)
+                ->where('leave_type_id', $data['leave_type_id'])
+                ->where('year', $year)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $balance) {
+                $this->initializeBalances($user, $orgId, $year);
+                $balance = LeaveBalance::where('user_id', $request->user_id)
+                    ->where('leave_type_id', $data['leave_type_id'])
+                    ->where('year', $year)
+                    ->lockForUpdate()
+                    ->first();
+            }
+
+            if (! $balance) {
+                throw new InsufficientLeaveBalanceException('No leave balance found for this leave type.');
+            }
+
+            $balance->refresh();
+            $available = $balance->total_days + $balance->carried_over_days - $balance->used_days - $balance->pending_days;
+
+            if ($available < $workingDays) {
+                throw new InsufficientLeaveBalanceException(
+                    "Insufficient leave balance. Available: {$available} days, Requested: {$workingDays} days."
+                );
+            }
+
+            $balance->increment('pending_days', $workingDays);
+
+            $request->update([
+                'leave_type_id' => $data['leave_type_id'],
+                'start_date' => $data['start_date'],
+                'end_date' => $data['end_date'],
+                'days_count' => $workingDays,
+                'reason' => $data['reason'],
+            ]);
+
+            return $request->fresh()->load('leaveType', 'user');
+        });
+    }
+
+    /**
      * Approve a leave request. Moves pending_days to used_days on the balance.
      */
     public function approveLeave(LeaveRequest $request, User $approver): LeaveRequest

@@ -16,9 +16,37 @@ class DepartmentController extends Controller
         private readonly OrganizationStructureService $service,
     ) {}
 
+    /**
+     * withCount() definition for a department's live headcount, exposed as
+     * `employees_count` on the JSON payload.
+     *
+     * Deliberately counts only profiles whose user is still ACTIVE, matching
+     * `EmployeeService::getDirectory()` (`users.is_active = true`). Without
+     * that filter a department's count would include deactivated leavers and
+     * disagree with the employee list the same user can open — the count has
+     * to mean the same thing everywhere it is shown.
+     *
+     * The `head_count` COLUMN is dead (never written) and must not be used.
+     */
+    private function headcountAggregate(): array
+    {
+        return [
+            'employeeProfiles as employees_count' => fn ($q) => $q->whereHas(
+                'user',
+                fn ($u) => $u->where('is_active', true)
+            ),
+        ];
+    }
+
     public function index(Request $request): JsonResponse
     {
-        $query = Department::where('organization_id', $request->user()->organization_id);
+        // `manager` and `parent` are eager-loaded because the UI shows their NAMES.
+        // Without this the payload carries only manager_id / parent_department_id and
+        // every consumer silently renders a blank — which is exactly why the listing's
+        // Parent column showed "--" for every row regardless of its real parent.
+        $query = Department::where('organization_id', $request->user()->organization_id)
+            ->with(['manager:id,name,email', 'parent:id,name,code'])
+            ->withCount($this->headcountAggregate());
 
         if ($request->user()->isEmployee()) {
             $deptId = $request->user()->employeeProfile?->department_id;
@@ -57,7 +85,8 @@ class DepartmentController extends Controller
     public function show(Request $request, string $id): JsonResponse
     {
         $department = Department::where('organization_id', $request->user()->organization_id)
-            ->with('positions')
+            ->with(['positions', 'manager:id,name,email', 'parent:id,name,code'])
+            ->withCount($this->headcountAggregate())
             ->findOrFail($id);
 
         $this->authorize('view', $department);
@@ -96,6 +125,7 @@ class DepartmentController extends Controller
             if ($deptId) {
                 $dept = Department::where('organization_id', $request->user()->organization_id)
                     ->with('positions')
+                    ->withCount($this->headcountAggregate())
                     ->find($deptId);
                 $tree = $dept ? [$dept->toArray()] : [];
             } else {

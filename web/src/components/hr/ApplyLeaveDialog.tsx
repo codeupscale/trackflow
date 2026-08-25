@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo } from 'react';
+import { cn, codeBadgeColor, assignLeaveTypeColors, formatLeaveDays } from '@/lib/utils';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader2, Upload } from 'lucide-react';
@@ -61,6 +62,13 @@ const EMPTY: LeaveRequestFormData = {
 export function ApplyLeaveDialog({ open, onOpenChange }: ApplyLeaveDialogProps) {
   const { data: leaveTypes } = useLeaveTypes();
   const { balances } = useLeaveBalance();
+
+  // Same identity swatches as the balance cards, so a leave type looks the same
+  // wherever it appears.
+  const typeColors = useMemo(
+    () => assignLeaveTypeColors((balances ?? []).map((b) => b.leave_type?.code ?? '')),
+    [balances],
+  );
   const applyMutation = useApplyLeave();
 
   const form = useForm<LeaveRequestFormData>({
@@ -147,21 +155,32 @@ export function ApplyLeaveDialog({ open, onOpenChange }: ApplyLeaveDialogProps) 
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
+                        {/* Deliberately no day counts here — the list stays a
+                            clean set of names. The balance for the chosen type
+                            is shown in the summary strip below the field. */}
                         {leaveTypes?.filter((t) => t.is_active).map((type) => {
-                          const bal = balances?.find((b) => b.leave_type_id === type.id);
-                          const remaining = bal
-                            ? bal.total_days - bal.used_days - bal.pending_days
-                            : null;
+                          const swatch = typeColors[(type.code ?? '').toLowerCase()];
                           return (
                             <SelectItem key={type.id} value={type.id}>
-                              <div className="flex items-center justify-between w-full gap-3">
+                              <span className="flex items-center gap-2">
+                                <span
+                                  className={cn(
+                                    'inline-block h-2 w-2 rounded-full shrink-0',
+                                    swatch?.bar ?? 'bg-primary',
+                                  )}
+                                />
                                 <span>{type.name}</span>
-                                {remaining !== null && (
-                                  <span className="text-[0.6rem] text-muted-foreground ml-auto">
-                                    {remaining}d left
+                                {type.code && (
+                                  <span
+                                    className={cn(
+                                      'inline-flex items-center rounded px-1.5 py-0.5 text-[0.55rem] font-semibold font-mono',
+                                      codeBadgeColor(type.code),
+                                    )}
+                                  >
+                                    {type.code}
                                   </span>
                                 )}
-                              </div>
+                              </span>
                             </SelectItem>
                           );
                         })}
@@ -176,7 +195,12 @@ export function ApplyLeaveDialog({ open, onOpenChange }: ApplyLeaveDialogProps) 
                 <div className="rounded-lg bg-muted/50 border border-border/50 px-3 py-2 flex items-center justify-between">
                   <span className="text-[0.65rem] text-muted-foreground">Balance</span>
                   <span className="text-[0.65rem] font-medium tabular-nums">
-                    {selectedBalance.total_days - selectedBalance.used_days - selectedBalance.pending_days} remaining
+                    {formatLeaveDays(
+                      Number(selectedBalance.total_days) -
+                        Number(selectedBalance.used_days) -
+                        Number(selectedBalance.pending_days),
+                    )}{' '}
+                    remaining
                   </span>
                 </div>
               )}

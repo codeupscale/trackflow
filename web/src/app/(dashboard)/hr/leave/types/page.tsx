@@ -13,6 +13,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { useCodeFromName, slugCode } from '@/hooks/use-code-from-name';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Select,
@@ -63,6 +64,17 @@ export default function LeaveTypesPage() {
       max_carry_over: 0,
       is_active: true,
     },
+  });
+
+  // Same slug rule as the Leave Types tab in hr/leave/management. Kept in sync
+  // deliberately: this page duplicates that form and is still reachable by
+  // direct URL even though nothing links to it.
+  useCodeFromName({
+    form,
+    sourceField: 'name',
+    codeField: 'code',
+    generate: slugCode,
+    enabled: !editingType,
   });
 
   const createMutation = useMutation({

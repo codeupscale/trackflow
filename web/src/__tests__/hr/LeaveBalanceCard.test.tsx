@@ -28,18 +28,32 @@ describe('LeaveBalanceCard', () => {
     expect(screen.getByText('Annual Leave')).toBeInTheDocument();
     // remaining = 20 - 5 - 0 = 15
     expect(screen.getByText('15')).toBeInTheDocument();
-    expect(screen.getByText('of 20 days')).toBeInTheDocument();
+    expect(screen.getByText('20 days/year')).toBeInTheDocument();
     expect(screen.getByText('5 used')).toBeInTheDocument();
     expect(screen.getByText('15 remaining')).toBeInTheDocument();
   });
 
-  it('shows green color when remaining > 50%', () => {
-    // remaining = 20 - 5 = 15, remainingPercent = 75%
+  it('keeps the identity colour (no warning) when remaining > 50%', () => {
+    // remaining = 20 - 5 = 15, remainingPercent = 75%. The bar/figure carry the
+    // leave type's IDENTITY colour now — amber/red are reserved for low balance.
     const balance = makeBalance({ total_days: 20, used_days: 5, pending_days: 0 });
     render(<LeaveBalanceCard balance={balance} />);
 
     const remainingNumber = screen.getByText('15');
-    expect(remainingNumber.className).toContain('text-green-');
+    expect(remainingNumber.className).not.toContain('text-amber-');
+    expect(remainingNumber.className).not.toContain('text-red-');
+  });
+
+  it('applies the identity colour passed via the color prop', () => {
+    const balance = makeBalance({ total_days: 20, used_days: 5, pending_days: 0 });
+    render(
+      <LeaveBalanceCard
+        balance={balance}
+        color={{ icon: 'bg-violet-500/10 text-violet-500', bar: 'bg-violet-500', value: 'text-violet-600 dark:text-violet-400' }}
+      />
+    );
+
+    expect(screen.getByText('15').className).toContain('text-violet-600');
   });
 
   it('shows amber color when remaining is 25-50%', () => {
@@ -60,13 +74,14 @@ describe('LeaveBalanceCard', () => {
     expect(remainingNumber.className).toContain('text-red-');
   });
 
-  it('displays pending days when present', () => {
+  it('deducts pending days from the remaining figure', () => {
+    // Pending is not itemised in the footer, but it must reduce remaining:
+    // 20 - 5 used - 3 pending = 12.
     const balance = makeBalance({ total_days: 20, used_days: 5, pending_days: 3 });
     render(<LeaveBalanceCard balance={balance} />);
 
-    expect(screen.getByText('3 pending')).toBeInTheDocument();
-    // remaining = 20 - 5 - 3 = 12
     expect(screen.getByText('12 remaining')).toBeInTheDocument();
+    expect(screen.getByLabelText('Annual Leave: 12 days remaining')).toBeInTheDocument();
   });
 
   it('does not display pending text when pending_days is zero', () => {
@@ -81,8 +96,9 @@ describe('LeaveBalanceCard', () => {
     render(<LeaveBalanceCard balance={balance} />);
 
     expect(screen.getByText('0')).toBeInTheDocument();
-    expect(screen.getByText('of 0 days')).toBeInTheDocument();
-    expect(screen.getByText('0 used')).toBeInTheDocument();
+    expect(screen.getByText('0 days/year')).toBeInTheDocument();
+    // used_days of 0 renders no "used" label at all
+    expect(screen.queryByText(/used/)).not.toBeInTheDocument();
     expect(screen.getByText('0 remaining')).toBeInTheDocument();
   });
 

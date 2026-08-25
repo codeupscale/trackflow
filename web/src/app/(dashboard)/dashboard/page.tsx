@@ -794,10 +794,14 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Chart + Team Activity — side by side on desktop (admin view) */}
-      {!isEmployeeView && team.length > 0 && (
+      {/* Chart + Team Activity — side by side on desktop (admin view).
+          Gated on the VIEW only: gating the whole section on team.length made
+          the "No team members yet" empty state inside it unreachable dead code,
+          so an admin with no team silently got nothing at all. */}
+      {!isEmployeeView && (
         <div className="grid gap-4 grid-cols-1 lg:grid-cols-5">
-          {/* Chart — left column (3/5 width) */}
+          {/* Chart — left column (3/5 width); pointless with no members */}
+          {team.length > 0 && (
           <Card className="lg:col-span-3">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <div className="flex items-center gap-3">
@@ -885,9 +889,11 @@ export default function DashboardPage() {
               </ChartContainer>
             </CardContent>
           </Card>
+          )}
 
-          {/* Team Activity — right column (2/5 width), compact list */}
-          <Card className="lg:col-span-2">
+          {/* Team Activity — right column (2/5 width) beside the chart, full
+              width when the chart is hidden because the team is empty */}
+          <Card className={team.length > 0 ? 'lg:col-span-2' : 'lg:col-span-5'}>
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
