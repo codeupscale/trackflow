@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { TabLoading } from '@/components/ui/loader-3d';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -279,23 +280,7 @@ function RosterTab() {
           </CardContent>
         </Card>
       ) : isLoading ? (
-        <Card>
-          <CardContent className="p-3">
-            <div className="grid grid-cols-7 gap-1.5">
-              {Array.from({ length: 7 }).map((_, i) => (
-                <div key={i} className="flex flex-col items-center gap-1 pb-2 border-b border-border/50">
-                  <Skeleton className="h-2.5 w-6" />
-                  <Skeleton className="h-4 w-5" />
-                </div>
-              ))}
-              {Array.from({ length: 7 }).map((_, i) => (
-                <div key={`cell-${i}`} className="min-h-[100px] pt-1">
-                  <Skeleton className="h-14 rounded-md" />
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+        <TabLoading />
       ) : !hasData ? (
         <Card>
           <CardContent className="py-12">
@@ -412,23 +397,7 @@ function AssignmentsTab() {
           </CardContent>
         </Card>
       ) : isLoading ? (
-        <Card>
-          <CardContent className="p-0">
-            <div className="flex items-center gap-4 px-4 py-2.5 border-b border-border/50">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Skeleton key={i} className="h-3 w-16" />
-              ))}
-            </div>
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-border/50 last:border-0">
-                <Skeleton className="h-6 w-6 rounded-full" />
-                <Skeleton className="h-3.5 w-24" />
-                <Skeleton className="h-3.5 w-20" />
-                <Skeleton className="h-3.5 w-20" />
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+        <TabLoading />
       ) : assignments.length === 0 ? (
         <Card>
           <CardContent className="py-12">
@@ -672,24 +641,7 @@ function SwapsTab() {
           </CardContent>
         </Card>
       ) : isLoading ? (
-        <Card>
-          <CardContent className="p-0">
-            <div className="flex items-center gap-4 px-4 py-2.5 border-b border-border/50">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <Skeleton key={i} className="h-3 w-16" />
-              ))}
-            </div>
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-border/50 last:border-0">
-                <Skeleton className="h-6 w-6 rounded-full" />
-                <Skeleton className="h-3.5 w-24" />
-                <Skeleton className="h-3.5 w-24" />
-                <Skeleton className="h-3.5 w-16" />
-                <Skeleton className="h-3.5 w-14" />
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+        <TabLoading />
       ) : swaps.length === 0 ? (
         <Card>
           <CardContent className="py-12">
@@ -895,7 +847,15 @@ function SwapsTab() {
               <Label className="text-xs">Swap With</Label>
               <Select value={targetUserId} onValueChange={(val) => { if (val) setTargetUserId(val); }}>
                 <SelectTrigger className="h-9 text-sm" aria-label="Select employee">
-                  <SelectValue placeholder="Select employee" />
+                  {/* Items carry the user id as their value, and Base UI renders
+                      the RAW value unless given a mapping function — without
+                      this the trigger shows a uuid instead of the name. */}
+                  <SelectValue placeholder="Select employee">
+                    {(value: string | null) => {
+                      if (!value) return 'Select employee';
+                      return employees.find((e) => e.id === value)?.name ?? 'Select employee';
+                    }}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <div className="p-2">

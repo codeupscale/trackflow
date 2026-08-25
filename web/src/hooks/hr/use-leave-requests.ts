@@ -20,9 +20,16 @@ interface PaginatedResponse {
   to: number | null;
 }
 
-export function useLeaveRequests(filters?: LeaveRequestFilters) {
+export function useLeaveRequests(
+  filters?: LeaveRequestFilters,
+  options?: { enabled?: boolean },
+) {
   return useQuery<PaginatedResponse>({
     queryKey: ['leave-requests', filters],
+    // Callers that scope by user_id pass enabled:false until the id is known —
+    // fetching without it would briefly return the ROLE-scoped set, flashing
+    // other people's requests on a privileged user's "My Leave".
+    enabled: options?.enabled ?? true,
     queryFn: async () => {
       const params: Record<string, string | number> = {};
       if (filters?.status && filters.status !== 'all') params.status = filters.status;

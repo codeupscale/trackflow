@@ -7,6 +7,7 @@ use App\Exceptions\LeaveOverlapException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Hr\ApproveLeaveRequest;
 use App\Http\Requests\Hr\StoreLeaveRequestRequest;
+use App\Http\Requests\Hr\UpdateLeaveRequestRequest;
 use App\Models\LeaveRequest;
 use App\Services\LeaveService;
 use Illuminate\Http\JsonResponse;
@@ -55,12 +56,16 @@ class LeaveRequestController extends Controller
             $query->where('user_id', $request->input('user_id'));
         }
 
+        // Date window uses OVERLAP semantics, not containment: a request that
+        // TOUCHES the window belongs in it. Containment (start >= from AND
+        // end <= to) silently dropped any leave spanning a boundary — an
+        // Aug 31 → Sep 1 request appeared in neither August nor September.
         if ($request->filled('start_date')) {
-            $query->where('start_date', '>=', $request->input('start_date'));
+            $query->where('end_date', '>=', $request->input('start_date'));
         }
 
         if ($request->filled('end_date')) {
-            $query->where('end_date', '<=', $request->input('end_date'));
+            $query->where('start_date', '<=', $request->input('end_date'));
         }
 
         $leaveRequests = $query->orderByDesc('created_at')->paginate(25);
@@ -97,6 +102,30 @@ class LeaveRequestController extends Controller
         $this->authorize('view', $leaveRequest);
 
         return response()->json(['data' => $leaveRequest]);
+    }
+
+    public function update(UpdateLeaveRequestRequest $request, string $leaveRequest): JsonResponse
+    {
+        $lr = LeaveRequest::where('organization_id', $request->user()->organization_id)
+            ->findOrFail($leaveRequest);
+
+        // Policy: ONLY the requester may edit their own request — approvers and
+        // even the owner can view but never edit someone else's leave.
+        $this->authorize('update', $lr);
+
+        if ($lr->status !== 'pending') {
+            return response()->json(['message' => 'Only pending requests can be edited.'], 422);
+        }
+
+        try {
+            $result = $this->leaveService->updateLeave($lr, $request->validated());
+        } catch (InsufficientLeaveBalanceException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (LeaveOverlapException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json(['message' => 'Leave request updated.', 'data' => $result]);
     }
 
     public function approve(Request $request, string $leaveRequest): JsonResponse

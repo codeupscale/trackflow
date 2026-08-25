@@ -15,6 +15,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
+import { useCodeFromName, abbreviateCode } from '@/hooks/use-code-from-name';
 import {
   Select,
   SelectContent,
@@ -69,6 +70,17 @@ export function PositionFormSheet({
       employment_type: 'full_time',
       is_active: true,
     },
+  });
+
+  // Positions read from `title`, not `name` (Senior Engineer -> SSE). The
+  // numeric suffix in the "SSE-001" placeholder is a sequence the client
+  // cannot know, so only the letter part is suggested — the user appends it.
+  useCodeFromName({
+    form,
+    sourceField: 'title',
+    codeField: 'code',
+    generate: abbreviateCode,
+    enabled: !isEditing,
   });
 
   useEffect(() => {

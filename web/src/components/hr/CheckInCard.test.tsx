@@ -82,7 +82,7 @@ describe('CheckInCard — state machine', () => {
   it('renders the error card on isError', () => {
     mockUseTodayStatus.mockReturnValue({ isLoading: false, isError: true, data: undefined });
     renderCard();
-    expect(screen.getByText(/failed to load your check-in status/i)).toBeInTheDocument();
+    expect(screen.getByText(/failed to load check-in status/i)).toBeInTheDocument();
   });
 
   it('not_checked_in: prompts to check in with a "Check In" button', () => {
@@ -92,7 +92,7 @@ describe('CheckInCard — state machine', () => {
       data: makeStatus({ sessions_count: 0, can_check_in: true }),
     });
     renderCard();
-    expect(screen.getByText(/you haven't checked in today/i)).toBeInTheDocument();
+    expect(screen.getByText(/not checked in today/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Check In$/i })).toBeInTheDocument();
   });
 

@@ -309,7 +309,6 @@ Route::prefix('v1')->group(function () {
             Route::put('leave-types/{leave_type}', [LeaveTypeController::class, 'update'])
                 ->middleware('permission:leave.manage_types');
             Route::apiResource('leave-requests', LeaveRequestController::class)
-                ->except(['update'])
                 ->middleware('permission:leave.apply');
             Route::put('leave-requests/{leaveRequest}/approve', [LeaveRequestController::class, 'approve'])
                 ->middleware('permission:leave.approve');
@@ -320,6 +319,10 @@ Route::prefix('v1')->group(function () {
             Route::post('public-holidays', [PublicHolidayController::class, 'store'])
                 ->middleware('permission:leave.manage_holidays');
             Route::delete('public-holidays/{public_holiday}', [PublicHolidayController::class, 'destroy'])
+                ->middleware('permission:leave.manage_holidays');
+            Route::put('public-holidays/{public_holiday}/pin', [PublicHolidayController::class, 'pin'])
+                ->middleware('permission:leave.manage_holidays');
+            Route::put('public-holidays/{public_holiday}', [PublicHolidayController::class, 'update'])
                 ->middleware('permission:leave.manage_holidays');
 
             // Attendance

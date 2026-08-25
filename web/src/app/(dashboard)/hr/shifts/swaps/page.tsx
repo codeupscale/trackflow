@@ -668,7 +668,15 @@ export default function ShiftSwapsPage() {
                   className="mt-1.5 h-9 text-sm"
                   aria-label="Select employee"
                 >
-                  <SelectValue placeholder="Select employee" />
+                  {/* Items carry the user id as their value, and Base UI renders
+                      the RAW value unless given a mapping function — without
+                      this the trigger shows a uuid instead of the name. */}
+                  <SelectValue placeholder="Select employee">
+                    {(value: string | null) => {
+                      if (!value) return 'Select employee';
+                      return employees.find((e) => e.id === value)?.name ?? 'Select employee';
+                    }}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <div className="p-2">

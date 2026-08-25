@@ -1,32 +1,10 @@
 import { z } from 'zod/v4';
 
 /**
- * Palette for department code badges. Shared so the listing table and the
- * detail modal colour the SAME code identically — a code that is amber in the
- * list must not turn grey when the row is opened.
+ * Re-exported for existing callers. The implementation moved to lib/utils once
+ * leave types started using it too — it is not department-specific.
  */
-const CODE_BADGE_COLORS = [
-  'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400',
-  'bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-400',
-  'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400',
-  'bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-400',
-  'bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-400',
-  'bg-cyan-100 text-cyan-700 dark:bg-cyan-500/20 dark:text-cyan-400',
-  'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400',
-  'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-400',
-];
-
-/**
- * Deterministic colour for a department code — the same code always maps to the
- * same swatch, so colours stay stable across renders, pages and reloads.
- */
-export function codeBadgeColor(code: string): string {
-  let hash = 0;
-  for (let i = 0; i < code.length; i++) {
-    hash = code.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return CODE_BADGE_COLORS[Math.abs(hash) % CODE_BADGE_COLORS.length];
-}
+export { codeBadgeColor } from '@/lib/utils';
 
 export const departmentSchema = z.object({
   name: z.string().min(1, 'Name is required').max(255),
