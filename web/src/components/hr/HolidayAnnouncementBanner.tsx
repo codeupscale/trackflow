@@ -72,7 +72,14 @@ export function HolidayAnnouncementBanner() {
       // holiday is noticeable without ever reading as a warning.
       className="flex items-center gap-2.5 px-4 md:px-6 py-1.5 border-b border-indigo-500/25 bg-indigo-50 dark:bg-indigo-500/10 text-[0.7rem] text-indigo-900 dark:text-indigo-200"
     >
-      <CalendarDays className="h-3.5 w-3.5 shrink-0 text-indigo-600 dark:text-indigo-400" />
+      {/* Fixed label on the left so the bar is identifiable even mid-scroll,
+          while only the headline text after it moves. */}
+      <span className="flex items-center gap-1.5 shrink-0 pr-3 mr-0.5 border-r border-indigo-500/25">
+        <CalendarDays className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
+        <span className="font-semibold uppercase tracking-wide text-[0.65rem] text-indigo-700 dark:text-indigo-300">
+          Holiday
+        </span>
+      </span>
 
       {/* News-style ticker: the headline enters from the RIGHT corner, crosses
           the bar, exits left, and re-enters from the right — never restarting
