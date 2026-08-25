@@ -52,4 +52,18 @@ class Department extends Model
     {
         return $this->hasMany(Position::class);
     }
+
+    /**
+     * Employee profiles assigned to this department.
+     *
+     * This is the ONLY source of truth for a department's headcount. The
+     * `head_count` column is dead: nothing in the codebase ever writes it, so
+     * it is permanently 0 in real data (the factory fills it with a random
+     * number, which makes it look alive in tests). Count through this
+     * relationship instead — never read `head_count`.
+     */
+    public function employeeProfiles(): HasMany
+    {
+        return $this->hasMany(EmployeeProfile::class);
+    }
 }

@@ -35,8 +35,8 @@ function createWrapper() {
 
 const mockPaginatedDepartments = {
   data: [
-    { id: 'dept-1', name: 'Engineering', code: 'ENG', description: null, parent_department_id: null, manager_id: null, is_active: true, positions_count: 5, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
-    { id: 'dept-2', name: 'Marketing', code: 'MKT', description: null, parent_department_id: null, manager_id: null, is_active: true, positions_count: 3, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+    { id: 'dept-1', name: 'Engineering', code: 'ENG', description: null, parent_department_id: null, manager_id: null, is_active: true, employees_count: 12, positions_count: 5, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
+    { id: 'dept-2', name: 'Marketing', code: 'MKT', description: null, parent_department_id: null, manager_id: null, is_active: true, employees_count: 7, positions_count: 3, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
   ],
   meta: { current_page: 1, last_page: 1, total: 2, from: 1, to: 2 },
 };

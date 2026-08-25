@@ -87,8 +87,14 @@ class OrganizationStructureService
      */
     public function getOrgTree(Organization $org): array
     {
+        // employees_count mirrors DepartmentController::headcountAggregate() —
+        // active users only, so the tree agrees with the department listing.
         $departments = Department::where('organization_id', $org->id)
             ->with('positions')
+            ->withCount(['employeeProfiles as employees_count' => fn ($q) => $q->whereHas(
+                'user',
+                fn ($u) => $u->where('is_active', true)
+            )])
             ->orderBy('name')
             ->get();
 
