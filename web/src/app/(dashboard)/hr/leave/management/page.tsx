@@ -737,8 +737,8 @@ function HolidaysTab({ period }: { period: Period }) {
       {/* Header: announcement framing + add action */}
       <div className="flex flex-wrap items-center gap-3">
         <p className="text-xs text-muted-foreground min-w-0 flex-1">
-          Holidays announced here appear on every employee&apos;s My Leave page and
-          the team calendar, and are excluded from leave day counts.
+          Company-wide days off announced to the whole organisation. Post one to
+          show it as the headline everyone sees.
         </p>
         <Button size="sm" className="h-8 text-xs shrink-0" onClick={openAddHoliday}>
           <Plus className="h-3.5 w-3.5 mr-1" />
