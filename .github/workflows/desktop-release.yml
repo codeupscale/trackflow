@@ -66,6 +66,34 @@ jobs:
             BASE=$(node -p 'require("./desktop/package.json").version')
           fi
 
+          # The true floor for any AUTO-resolved version (not an explicit dispatch
+          # input) is the highest version EVER actually published to production —
+          # not "whatever desktop/package.json happens to say". The while-loops
+          # below only ever check one exact tag at a time and bump by a single
+          # patch, so they are blind to package.json being more than one patch
+          # behind, or to a version having shipped out-of-band (an explicit
+          # workflow_dispatch input, or a release published from a stale
+          # unpublished draft) without ever being recorded back into
+          # package.json. That gap is exactly how package.json sat at 1.0.46
+          # while v1.0.47 was already live: a later push to main "resolved" 1.0.46
+          # as unreleased and republished it as a BRAND-NEW release, which GitHub
+          # flags "Latest" by PUBLISH DATE, not semver — shadowing the real latest
+          # release for every new download while staying permanently unreachable
+          # via auto-update for everyone already on 1.0.47. See
+          # bugs/desktop-release-version-drift-shadows-latest.md.
+          if [ -z "${{ inputs.version }}" ]; then
+            HIGHEST_PROD=$(gh api "repos/${{ github.repository }}/releases" --paginate \
+              --jq '.[] | select(.prerelease==false and .draft==false) | .tag_name' \
+              | sed 's/^v//' | sort -V | tail -1)
+            if [ -n "$HIGHEST_PROD" ]; then
+              TOP=$(printf '%s\n%s\n' "$HIGHEST_PROD" "$BASE" | sort -V | tail -1)
+              if [ "$TOP" != "$BASE" ]; then
+                echo "desktop/package.json version (${BASE}) is behind the highest released production version (${HIGHEST_PROD}) — resolving from ${HIGHEST_PROD} instead."
+                BASE="$HIGHEST_PROD"
+              fi
+            fi
+          fi
+
           if [ "${{ github.ref_name }}" = "main" ]; then
             CHANNEL="production"
 
