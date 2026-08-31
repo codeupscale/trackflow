@@ -611,6 +611,15 @@ export default function EmployeesPage() {
                       <Briefcase className="h-3 w-3 shrink-0" />
                       <span className="truncate">{emp.position?.title ?? emp.job_title ?? 'No position'}</span>
                     </div>
+                    {emp.shift && (
+                      <div className="flex items-center gap-1.5 text-[0.65rem] text-muted-foreground">
+                        <span
+                          className="size-2 rounded-full shrink-0"
+                          style={{ backgroundColor: emp.shift.color ?? '#6366f1' }}
+                        />
+                        <span className="truncate">{emp.shift.name}</span>
+                      </div>
+                    )}
                     {emp.work_location && (
                       <div className="flex items-center gap-1.5 text-[0.65rem] text-muted-foreground">
                         <MapPin className="h-3 w-3 shrink-0" />
@@ -635,6 +644,7 @@ export default function EmployeesPage() {
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[100px]">Role</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[140px]">Department</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[140px]">Position</TableHead>
+                    <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[130px]">Shift</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[90px]">Type</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[80px]">Status</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[100px]">Joined</TableHead>
@@ -674,6 +684,19 @@ export default function EmployeesPage() {
                       <TableCell className="py-2">
                         {emp.position?.title || emp.job_title ? (
                           <span className="text-[0.7rem] text-foreground">{emp.position?.title ?? emp.job_title}</span>
+                        ) : (
+                          <span className="text-[0.65rem] text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="py-2">
+                        {emp.shift ? (
+                          <span className="inline-flex items-center gap-1.5 min-w-0">
+                            <span
+                              className="size-2 rounded-full shrink-0"
+                              style={{ backgroundColor: emp.shift.color ?? '#6366f1' }}
+                            />
+                            <span className="text-[0.7rem] text-foreground truncate">{emp.shift.name}</span>
+                          </span>
                         ) : (
                           <span className="text-[0.65rem] text-muted-foreground">—</span>
                         )}

@@ -81,6 +81,8 @@ export interface EmployeeListItem {
   phone: string | null;
   department: { id: string; name: string; code: string } | null;
   position: { id: string; title: string; level: string } | null;
+  /** Active shift assignment for today (from user_shifts), null when unassigned. */
+  shift: { id: string; name: string; color: string | null; start_time: string; end_time: string } | null;
   reporting_manager: { id: string; name: string } | null;
   employment_status: EmploymentStatus;
   employment_type: EmploymentType;
@@ -154,6 +156,8 @@ export const employeeProfileSchema = z.object({
   employee_id: z.string().max(50).optional().nullable(),
   department_id: z.string().uuid().optional().nullable(),
   position_id: z.string().uuid().optional().nullable(),
+  // Shift assignment — only sent when the actor holds shifts.manage_assignments
+  shift_id: z.string().uuid().optional().nullable(),
   job_title: z.string().max(255).optional().nullable(),
   reporting_manager_id: z.string().uuid().optional().nullable(),
   employment_status: z.enum(EMPLOYMENT_STATUSES).optional().nullable(),

@@ -13,6 +13,7 @@ import { useEmployeeDocuments, useUploadDocument, useVerifyDocument, useDeleteDo
 import { useEmployeeNotes, useCreateNote, useDeleteNote } from "@/hooks/hr/use-employee-notes";
 import { useLeaveRequests } from "@/hooks/hr/use-leave-requests";
 import { DepartmentSelect } from "@/components/hr/DepartmentSelect";
+import { ShiftSelect } from "@/components/hr/ShiftSelect";
 
 import { MANAGER_ROLES, UserCombobox } from "@/components/time-entries/UserCombobox";
 
@@ -159,6 +160,7 @@ function getDefaults(employee: EmployeeDetail | null): EmployeeProfileInput {
     employee_id: employee?.employee_id ?? null,
     department_id: employee?.department?.id ?? null,
     position_id: employee?.position?.id ?? null,
+    shift_id: employee?.shift?.id ?? null,
     job_title: employee?.job_title ?? employee?.position?.title ?? null,
     reporting_manager_id: employee?.reporting_manager?.id ?? null,
     employment_status: employee?.employment_status ?? null,
@@ -198,6 +200,10 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
   const { hasPermission, hasPermissionWithScope } = usePermissionStore();
 
   const canEditAllFields = hasPermissionWithScope("employees.edit_profile", "organization");
+  // Shift assignment is a separate right from profile editing — the field only
+  // renders (and shift_id is only sent) for holders, so an org that grants
+  // employees.edit_profile without shift rights never trips the backend's 403.
+  const canManageShifts = hasPermission("shifts.manage_assignments");
   const canManageDocumentsOrg = hasPermissionWithScope("employees.manage_documents", "organization");
   const canViewFinancial = hasPermission("employees.view_financial");
   const canManageNotes = hasPermission("employees.manage_notes");
@@ -259,6 +265,11 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
 
   const onSubmit = (data: EmployeeProfileInput) => {
     if (!employee) return;
+    // Never send shift_id without the assignment right — the backend 403s the
+    // whole update, which would block an otherwise-valid profile edit.
+    if (!canManageShifts) {
+      delete data.shift_id;
+    }
     const payload = canEditAllFields
       ? data
       : {
@@ -423,6 +434,23 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
                                     <FormMessage />
                                   </FormItem>
                                 )} />
+                                {canManageShifts && (
+                                  <FormField control={form.control} name="shift_id" render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel className="text-xs">Shift</FormLabel>
+                                      <FormControl>
+                                        <ShiftSelect
+                                          value={field.value ?? null}
+                                          onChange={field.onChange}
+                                          allowNone
+                                          onClear={() => field.onChange(null)}
+                                          placeholder="No shift"
+                                        />
+                                      </FormControl>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )} />
+                                )}
                                 <FormField control={form.control} name="reporting_manager_id" render={({ field }) => (
                                   <FormItem>
                                     <FormLabel className="text-xs">Reporting Manager</FormLabel>
@@ -555,6 +583,10 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
                               <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-0.5">
                                 <InfoRow label="Department" value={employee.department?.name} />
                                 <InfoRow label="Position" value={employee.position?.title ?? employee.job_title} />
+                                <InfoRow
+                                  label="Shift"
+                                  value={employee.shift ? `${employee.shift.name} (${employee.shift.start_time.slice(0, 5)}–${employee.shift.end_time.slice(0, 5)})` : null}
+                                />
                                 <InfoRow label="Reporting Manager" value={employee.reporting_manager?.name} />
                                 <InfoRow label="Status" value={employee.employment_status ? employmentStatusLabels[employee.employment_status] : null} />
                                 <InfoRow label="Type" value={employee.employment_type ? employmentTypeLabels[employee.employment_type] : null} />
