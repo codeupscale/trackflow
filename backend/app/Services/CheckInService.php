@@ -489,6 +489,32 @@ class CheckInService
      * MUST NOT touch check_in_status / check_in_late_minutes / check_in_flags / status —
      * those are first-check-in-owned and set once in checkIn().
      */
+    /**
+     * How much presence a day must contain to count as complete: the scheduled
+     * span (off time − start), MINUS the grace window.
+     *
+     * Subtracting grace is the point. Grace is time the policy grants: on an
+     * 11:30 shift with 15 minutes of grace, arriving 11:45 and leaving at the
+     * 20:30 off time is 8h45m — a complete day. Measuring against the raw 9-hour
+     * span would penalise the employee for using the allowance they were given.
+     *
+     * Built with the same per-date Carbon rebuild the rest of this service uses,
+     * so DST transitions and overnight shifts are handled rather than assumed.
+     */
+    private function requiredDaySeconds(CheckInSchedule $schedule, string $date, string $tz): int
+    {
+        $start = Carbon::parse("{$date} {$schedule->check_in_time}", $tz);
+        $off = $this->offTimeFor($date, $schedule, $tz);
+
+        $span = (int) $start->diffInSeconds($off);
+
+        // late_threshold is start + grace; recover the grace as a duration.
+        $threshold = Carbon::parse("{$date} {$schedule->late_threshold}", $tz);
+        $grace = $threshold->gt($start) ? (int) $start->diffInSeconds($threshold) : 0;
+
+        return max(0, $span - $grace);
+    }
+
     private function recomputeRecordRollups(AttendanceRecord $record): void
     {
         // Off time of the record's own day (rebuilt per-date so DST is handled).
@@ -530,6 +556,18 @@ class CheckInService
             }
         }
 
+        // Day-completion snapshot. Presence is the SPAN from the first check-in to
+        // the last checkout — the break counts toward the requirement, so someone
+        // in at 09:00 and out at 18:00 with an hour for lunch has completed a
+        // 9-hour day. Summing session durations instead would demand a 10-hour
+        // presence for the same day.
+        $requiredSeconds = $this->requiredDaySeconds($schedule, $recordDate, $tz);
+        $metRequired = null;
+        if ($first !== null && $lastClosedOut !== null) {
+            $presence = (int) $first->check_in_at->diffInSeconds($lastClosedOut);
+            $metRequired = $presence >= $requiredSeconds;
+        }
+
         $payload = [
             'check_in_at' => $first?->check_in_at,
             'check_out_at' => $lastClosedOut,
@@ -538,6 +576,10 @@ class CheckInService
             'is_early_checkout' => $isEarly,
             'check_out_early_minutes' => $earlyMinutes,
             'check_out_overtime_minutes' => $overtimeMinutes,
+            'required_day_seconds' => $requiredSeconds,
+            // Null while the day is still open — distinct from "failed", so an
+            // in-progress day is never reported as a missed target.
+            'met_required_hours' => $metRequired,
         ];
 
         // When every session is closed, the day is complete — clear any stale
@@ -667,7 +709,7 @@ class CheckInService
         $query = AttendanceRecord::withoutGlobalScopes()
             ->where('organization_id', $user->organization_id)
             ->whereNotNull('check_in_at')
-            ->with(['user:id,name,email,avatar_url', 'shift:id,name,start_time,end_time']);
+            ->with(['user:id,name,email,avatar_url', 'shift:id,name,start_time,end_time,grace_period_minutes']);
 
         // Role-scoping resolved once, from the attendance.view_all permission (held by
         // admin/owner + hr_manager) down to managed-team members, down to self.
@@ -1007,10 +1049,14 @@ class CheckInService
         $query = AttendanceRecord::withoutGlobalScopes()
             ->where('organization_id', $user->organization_id)
             ->whereNotNull('check_in_at')
-            ->whereBetween('date', [$start, $end])
             ->with('user:id,name,email')
             ->orderBy('date')
             ->orderBy('check_in_at');
+
+        // Null bounds = period=all; leave the query undated.
+        if ($start !== null && $end !== null) {
+            $query->whereBetween('date', [$start, $end]);
+        }
 
         if ($scopedUserIds !== null) {
             $query->whereIn('user_id', $scopedUserIds);
@@ -1057,29 +1103,54 @@ class CheckInService
         [$start, $end] = $this->resolvePeriod($filters);
         $scopedUserIds = $this->scopedUserIds($user);
 
-        $query = DB::table('attendance_records as ar')
-            ->join('users as u', 'ar.user_id', '=', 'u.id')
-            ->where('ar.organization_id', $user->organization_id)
-            ->whereNull('ar.deleted_at')
-            ->whereNotNull('ar.check_in_at')
-            ->whereBetween('ar.date', [$start, $end]);
+        // Driven from USERS with a LEFT JOIN, so every employee in scope appears —
+        // including those who never checked in, as a zero row. Starting from
+        // attendance_records (an inner join) hid them entirely: an org of 8 with
+        // one check-in reported "1 employee", which reads as missing data rather
+        // than as nobody having checked in.
+        //
+        // The date window and the check_in_at test MUST live in the JOIN
+        // condition. Moved to WHERE they would discard the null side and silently
+        // turn this back into an inner join.
+        $query = DB::table('users as u')
+            ->leftJoin('attendance_records as ar', function ($join) use ($start, $end) {
+                $join->on('ar.user_id', '=', 'u.id')
+                    ->whereNull('ar.deleted_at')
+                    ->whereNotNull('ar.check_in_at');
+
+                // Null bounds = period=all; leave the join undated.
+                if ($start !== null && $end !== null) {
+                    $join->whereBetween('ar.date', [$start, $end]);
+                }
+            })
+            ->where('u.organization_id', $user->organization_id)
+            ->where('u.is_active', true)
+            ->whereNull('u.deleted_at');
 
         if ($scopedUserIds !== null) {
-            $query->whereIn('ar.user_id', $scopedUserIds);
+            $query->whereIn('u.id', $scopedUserIds);
         }
 
         if (! empty($filters['user_id'])) {
-            $query->where('ar.user_id', $filters['user_id']);
+            $query->where('u.id', $filters['user_id']);
         }
 
         return $query
-            ->groupBy('ar.user_id', 'u.name', 'u.email')
-            ->select('ar.user_id', 'u.name', 'u.email')
+            ->groupBy('u.id', 'u.name', 'u.email')
+            ->select('u.id as user_id', 'u.name', 'u.email')
             ->selectRaw('COALESCE(SUM(ar.worked_seconds), 0) as total_worked_seconds')
-            ->selectRaw('COUNT(*) as days_present')
-            ->selectRaw("SUM(CASE WHEN ar.check_in_status = 'late' THEN 1 ELSE 0 END) as late_count")
-            ->selectRaw('SUM(CASE WHEN ar.is_early_checkout THEN 1 ELSE 0 END) as early_checkout_count')
-            ->selectRaw('SUM(CASE WHEN ar.missing_checkout THEN 1 ELSE 0 END) as missing_checkout_count')
+            // COUNT(ar.id), never COUNT(*) — the latter counts the null right side
+            // of the join and would credit a no-show with one day present.
+            ->selectRaw('COUNT(ar.id) as days_present')
+            ->selectRaw("COALESCE(SUM(CASE WHEN ar.check_in_status = 'late' THEN 1 ELSE 0 END), 0) as late_count")
+            // Days that reached the requirement, and its complement. Both read the
+            // SNAPSHOT, not is_early_checkout — that column encodes the older
+            // "clocked out before the shift end" rule, which disagrees with the
+            // Early Checkout badge (it flags a full day that merely started and
+            // finished early, and misses a short day that happens to end on time).
+            ->selectRaw('COALESCE(SUM(CASE WHEN ar.met_required_hours THEN 1 ELSE 0 END), 0) as full_days_count')
+            ->selectRaw('COALESCE(SUM(CASE WHEN ar.met_required_hours = false THEN 1 ELSE 0 END), 0) as early_checkout_count')
+            ->selectRaw('COALESCE(SUM(CASE WHEN ar.missing_checkout THEN 1 ELSE 0 END), 0) as missing_checkout_count')
             ->orderBy('u.name');
     }
 
@@ -1102,18 +1173,43 @@ class CheckInService
             'late_count' => (int) $row->late_count,
             'early_checkout_count' => (int) $row->early_checkout_count,
             'missing_checkout_count' => (int) $row->missing_checkout_count,
+            'full_days_count' => (int) $row->full_days_count,
+            // Percentage of PRESENT days that met the target. Days present is the
+            // denominator, never calendar days — counting approved leave against
+            // someone would make taking leave look like non-compliance.
+            'completion_rate' => (int) $row->days_present > 0
+                ? (int) round(((int) $row->full_days_count / (int) $row->days_present) * 100)
+                : null,
         ];
     }
 
     /**
      * Resolve the inclusive [startDate, endDate] for a filter set.
-     * period=day → single date; period=month → whole calendar month.
+     * period=day → single date; period=month → whole calendar month;
+     * period=all → [null, null], i.e. no date filter at all.
      */
     private function resolvePeriod(array $filters): array
     {
         $period = $filters['period'] ?? 'day';
 
-        if ($period === 'month') {
+        // The report opens unfiltered, so 'all' must mean genuinely no date
+        // bound — callers skip the whereBetween when either side is null.
+        if ($period === 'all') {
+            return [null, null];
+        }
+
+        // 'range' covers the period filter's presets (quarter, year, any month)
+        // which a single 'month' string cannot express. It falls back to the
+        // month branch when either bound is missing, so a malformed request
+        // still returns a sane window instead of an unbounded scan.
+        if ($period === 'range' && ! empty($filters['start_date']) && ! empty($filters['end_date'])) {
+            return [
+                Carbon::parse($filters['start_date'])->toDateString(),
+                Carbon::parse($filters['end_date'])->toDateString(),
+            ];
+        }
+
+        if ($period === 'month' || $period === 'range') {
             $month = $filters['month'] ?? now()->format('Y-m');
             $start = Carbon::parse("{$month}-01")->startOfMonth();
 

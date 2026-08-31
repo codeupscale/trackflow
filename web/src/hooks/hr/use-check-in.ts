@@ -20,18 +20,22 @@ export interface CheckInsListFilters {
 }
 
 export interface CheckInSummaryFilters {
-  period?: 'day' | 'month';
+  period?: 'day' | 'month' | 'range' | 'all';
   date?: string; // YYYY-MM-DD when period=day
   month?: string; // YYYY-MM when period=month
+  start_date?: string; // YYYY-MM-DD when period=range
+  end_date?: string; // YYYY-MM-DD when period=range
   user_id?: string | null;
   per_page?: number;
   page?: number;
 }
 
 export interface CheckInExportFilters {
-  period?: 'day' | 'month';
+  period?: 'day' | 'month' | 'range' | 'all';
   date?: string;
   month?: string;
+  start_date?: string;
+  end_date?: string;
   user_id?: string | null;
   view?: 'detail' | 'summary';
 }
@@ -157,13 +161,18 @@ export function useCheckInsSummary(filters?: CheckInSummaryFilters) {
     queryKey: ['check-ins', 'summary', filters],
     queryFn: async () => {
       const params = buildParams({
-        period: filters?.period,
         date: filters?.date,
         month: filters?.month,
+        start_date: filters?.start_date,
+        end_date: filters?.end_date,
         user_id: filters?.user_id,
         per_page: filters?.per_page,
         page: filters?.page,
       });
+      // `period` is set OUTSIDE buildParams: it drops the literal 'all' (the
+      // convention for an unset status/department filter), but here 'all' is a
+      // real period meaning "no date bound" and must reach the server.
+      if (filters?.period) params.period = filters.period;
       const res = await api.get('/hr/attendance/check-ins/summary', { params });
       return res.data;
     },
@@ -185,18 +194,25 @@ export async function exportCheckIns(filters: CheckInExportFilters): Promise<voi
   const view = filters.view ?? 'detail';
   const period = filters.period ?? 'day';
   const range =
-    period === 'month'
-      ? filters.month ?? ''
-      : filters.date ?? '';
+    period === 'all'
+      ? 'all-time'
+      : period === 'range'
+        ? `${filters.start_date ?? ''}_to_${filters.end_date ?? ''}`
+        : period === 'month'
+          ? filters.month ?? ''
+          : filters.date ?? '';
 
   const params = buildParams({
-    period,
     date: filters.date,
     month: filters.month,
+    start_date: filters.start_date,
+    end_date: filters.end_date,
     user_id: filters.user_id,
     view,
     format: 'csv',
   });
+  // See useCheckInsSummary — buildParams would swallow the literal 'all'.
+  params.period = period;
 
   try {
     const res = await api.get('/hr/attendance/check-ins/export', {

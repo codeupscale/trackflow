@@ -32,6 +32,23 @@ class EmployeeService
             })
             ->leftJoin('departments', 'employee_profiles.department_id', '=', 'departments.id')
             ->leftJoin('positions', 'employee_profiles.position_id', '=', 'positions.id')
+            // Active shift assignment for today. The one-active-shift-per-user rule
+            // (enforced by ShiftService::assignUser) guarantees at most one matching
+            // row, so this join cannot fan out.
+            ->leftJoin('user_shifts', function ($join) use ($orgId) {
+                $join->on('users.id', '=', 'user_shifts.user_id')
+                    ->where('user_shifts.organization_id', $orgId)
+                    ->whereNull('user_shifts.deleted_at')
+                    ->where('user_shifts.effective_from', '<=', now()->toDateString())
+                    ->where(function ($q) {
+                        $q->whereNull('user_shifts.effective_to')
+                            ->orWhere('user_shifts.effective_to', '>=', now()->toDateString());
+                    });
+            })
+            ->leftJoin('shifts', function ($join) {
+                $join->on('user_shifts.shift_id', '=', 'shifts.id')
+                    ->whereNull('shifts.deleted_at');
+            })
             ->select([
                 'users.id',
                 'users.name',
@@ -49,6 +66,11 @@ class EmployeeService
                 'departments.name as department_name',
                 'positions.id as position_id',
                 'positions.title as position_title',
+                'shifts.id as shift_id',
+                'shifts.name as shift_name',
+                'shifts.color as shift_color',
+                'shifts.start_time as shift_start_time',
+                'shifts.end_time as shift_end_time',
             ]);
 
         // Role-based scoping
@@ -142,6 +164,25 @@ class EmployeeService
             );
             if ($updater->id === $userId && ! $canEditEmploymentFields) {
                 $data = array_intersect_key($data, array_flip($this->personalFields()));
+            }
+
+            // Shift assignment rides the employee form but is NOT a profile
+            // column — it lives in user_shifts and is delegated to ShiftService
+            // so both entry points (this form and the Shift Assignment screen)
+            // share one set of rules. Distinguish "field absent" from "cleared":
+            // only act when the key was actually sent.
+            if (array_key_exists('shift_id', $data)) {
+                $canManageShifts = app(PermissionService::class)->hasPermission(
+                    $updater,
+                    'shifts.manage_assignments'
+                );
+                if (! $canManageShifts) {
+                    abort(403, 'You do not have permission to change shift assignments.');
+                }
+                // Passing the actor activates the team-scope audience check — a
+                // team manager can only reshift their own reports.
+                app(ShiftService::class)->changeUserShift($orgId, $userId, $data['shift_id'], $updater);
+                unset($data['shift_id']);
             }
 
             // Update user-level fields (name, email, job_title) if provided

@@ -23,6 +23,12 @@ interface User {
   bio?: string | null;
   is_active: boolean;
   permissions?: Record<string, string>;
+  /**
+   * True when this user manages at least one team. Team-scoped shift management
+   * needs BOTH a shifts.* grant and a real managed team, and the permission map
+   * alone cannot express the second half.
+   */
+  manages_teams?: boolean;
   organization: {
     id: string;
     name: string;

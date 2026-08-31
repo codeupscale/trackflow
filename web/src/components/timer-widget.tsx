@@ -55,7 +55,9 @@ export function TimerWidget() {
             ? 'bg-emerald-500/10 border border-emerald-500/20'
             : isPaused
               ? 'bg-amber-500/10 border border-amber-500/20'
-              : 'bg-muted/50 border border-border'
+              // Idle: a quiet, receded chip — dashed border + faded gradient reads
+              // as "dormant", the visual opposite of the solid live states.
+              : 'border border-dashed border-muted-foreground/25 bg-gradient-to-r from-muted/60 to-muted/10'
         )}
       >
         {isRunning ? (
@@ -86,7 +88,11 @@ export function TimerWidget() {
             <Monitor className="h-3.5 w-3.5 text-amber-500" />
           </div>
         ) : (
-          <MonitorOff className="h-3.5 w-3.5 text-muted-foreground" />
+          <div className="flex items-center gap-2">
+            {/* Hollow ring — the idle counterpart of the live states' filled dot. */}
+            <span className="inline-flex h-2 w-2 rounded-full border border-muted-foreground/50" />
+            <MonitorOff className="h-3.5 w-3.5 text-muted-foreground/70" />
+          </div>
         )}
 
         {(isRunning || isPaused) && projectName && (
@@ -125,7 +131,11 @@ export function TimerWidget() {
                 : formatDuration(projectTodayTotalSeconds)
               : todayTotalSeconds > 0
                 ? formatDuration(todayTotalSeconds)
-                : 'Not tracking'}
+                : (
+                    <span className="text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                      Not tracking
+                    </span>
+                  )}
         </span>
       </div>
     </div>

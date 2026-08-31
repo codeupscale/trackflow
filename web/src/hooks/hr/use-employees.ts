@@ -97,6 +97,10 @@ export function useUpdateEmployeeProfile() {
             queryClient.invalidateQueries({
                 queryKey: ["employees", variables.id],
             });
+            // The form can also reassign the employee's shift, which the Shift
+            // Assignment screen and the check-in schedule both read.
+            queryClient.invalidateQueries({ queryKey: ["shift-assignments"] });
+            queryClient.invalidateQueries({ queryKey: ["attendance", "today"] });
             toast.success("Profile updated successfully");
         },
         onError: (err: Error) => {

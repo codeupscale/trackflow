@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Pencil } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -37,14 +37,30 @@ const DAYS_OF_WEEK: { value: DayOfWeek; label: string; short: string }[] = [
   { value: 'sunday', label: 'Sunday', short: 'Sun' },
 ];
 
+export type ShiftModalMode = 'view' | 'edit';
+
 interface ShiftFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   shift?: Shift | null;
+  /** 'view' opens read-only with an Edit button; 'edit' opens the form directly. */
+  initialMode?: ShiftModalMode;
+  /** Whether the viewer may edit — hides the Edit button for view-only roles. */
+  canEdit?: boolean;
 }
 
-export function ShiftFormSheet({ open, onOpenChange, shift }: ShiftFormDialogProps) {
+export function ShiftFormSheet({
+  open,
+  onOpenChange,
+  shift,
+  initialMode = 'edit',
+  canEdit = true,
+}: ShiftFormDialogProps) {
   const isEditing = !!shift;
+  // Creating has no view pane; an existing shift honors initialMode. After a
+  // save the modal returns to view (set in onSubmit), matching the department
+  // modal's flow — the user closes it manually with the X.
+  const [mode, setMode] = useState<ShiftModalMode>(isEditing ? initialMode : 'edit');
 
   const {
     register,
@@ -72,6 +88,7 @@ export function ShiftFormSheet({ open, onOpenChange, shift }: ShiftFormDialogPro
 
   useEffect(() => {
     if (!open) return;
+    setMode(shift ? initialMode : 'edit');
     if (shift) {
       reset({
         name: shift.name,
@@ -101,7 +118,7 @@ export function ShiftFormSheet({ open, onOpenChange, shift }: ShiftFormDialogPro
         is_active: true,
       });
     }
-  }, [open, shift, reset]);
+  }, [open, shift, initialMode, reset]);
 
   const createMutation = useCreateShift();
   const updateMutation = useUpdateShift();
@@ -123,9 +140,11 @@ export function ShiftFormSheet({ open, onOpenChange, shift }: ShiftFormDialogPro
 
   const onSubmit = (data: ShiftFormData) => {
     if (isEditing && shift) {
+      // Return to the view pane rather than closing — the user reviews the
+      // saved values and dismisses with the X themselves.
       updateMutation.mutate(
         { id: shift.id, ...data },
-        { onSuccess: () => onOpenChange(false) },
+        { onSuccess: () => setMode('view') },
       );
     } else {
       createMutation.mutate(data, {
@@ -137,6 +156,112 @@ export function ShiftFormSheet({ open, onOpenChange, shift }: ShiftFormDialogPro
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
+        {mode === 'view' && shift ? (
+          <>
+            <DialogHeader>
+              <DialogTitle className="text-base flex items-center gap-2">
+                <span
+                  className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
+                  style={{ backgroundColor: shift.color }}
+                />
+                {shift.name}
+              </DialogTitle>
+              <DialogDescription className="text-xs">
+                {shift.description || 'Shift details'}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="flex flex-col gap-3 py-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg border border-border px-3 py-2.5">
+                  <p className="text-[0.6rem] uppercase tracking-wider text-muted-foreground font-medium">Schedule</p>
+                  <p className="text-sm font-medium tabular-nums mt-0.5">
+                    {shift.start_time.slice(0, 5)} – {shift.end_time.slice(0, 5)}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border px-3 py-2.5">
+                  <p className="text-[0.6rem] uppercase tracking-wider text-muted-foreground font-medium">Status</p>
+                  <p className={cn(
+                    'text-sm font-medium mt-0.5 inline-flex items-center gap-1.5',
+                    shift.is_active ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground',
+                  )}>
+                    <span className={cn(
+                      'inline-block w-1.5 h-1.5 rounded-full',
+                      shift.is_active ? 'bg-emerald-500' : 'bg-muted-foreground/40',
+                    )} />
+                    {shift.is_active ? 'Active' : 'Inactive'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-border px-3 py-2.5">
+                <p className="text-[0.6rem] uppercase tracking-wider text-muted-foreground font-medium mb-1.5">Working Days</p>
+                <div className="flex items-center gap-1">
+                  {DAYS_OF_WEEK.map((day) => {
+                    const selected = shift.days_of_week.includes(day.value);
+                    return (
+                      <span
+                        key={day.value}
+                        className={cn(
+                          'flex items-center justify-center rounded-md h-7 w-9 text-[0.6rem] font-semibold',
+                          selected
+                            ? 'bg-primary/10 text-primary'
+                            : 'bg-muted text-muted-foreground/40',
+                        )}
+                        title={day.label}
+                      >
+                        {day.short}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-lg border border-border px-3 py-2.5">
+                  <p className="text-[0.6rem] uppercase tracking-wider text-muted-foreground font-medium">Break</p>
+                  <p className="text-sm font-medium tabular-nums mt-0.5">
+                    {shift.break_minutes > 0 ? `${shift.break_minutes} min` : '—'}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border px-3 py-2.5">
+                  <p className="text-[0.6rem] uppercase tracking-wider text-muted-foreground font-medium">Grace</p>
+                  <p className="text-sm font-medium tabular-nums mt-0.5">
+                    {shift.grace_period_minutes > 0 ? `${shift.grace_period_minutes} min` : '—'}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border px-3 py-2.5">
+                  <p className="text-[0.6rem] uppercase tracking-wider text-muted-foreground font-medium">Early In</p>
+                  <p className="text-sm font-medium mt-0.5">
+                    {shift.allow_early_check_in ? 'Allowed' : 'Blocked'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg border border-border px-3 py-2.5">
+                  <p className="text-[0.6rem] uppercase tracking-wider text-muted-foreground font-medium">Timezone</p>
+                  <p className="text-sm font-medium mt-0.5">{shift.timezone}</p>
+                </div>
+                <div className="rounded-lg border border-border px-3 py-2.5">
+                  <p className="text-[0.6rem] uppercase tracking-wider text-muted-foreground font-medium">Owner</p>
+                  <p className="text-sm font-medium mt-0.5 truncate">
+                    {shift.creator?.name ?? 'Organization'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {canEdit && (
+              <DialogFooter>
+                <Button type="button" size="sm" onClick={() => setMode('edit')}>
+                  <Pencil className="h-3.5 w-3.5 mr-1.5" />
+                  Edit
+                </Button>
+              </DialogFooter>
+            )}
+          </>
+        ) : (
         <form onSubmit={handleSubmit(onSubmit)}>
           <DialogHeader>
             <DialogTitle className="text-base">
@@ -308,7 +433,9 @@ export function ShiftFormSheet({ open, onOpenChange, shift }: ShiftFormDialogPro
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => onOpenChange(false)}
+              // Cancelling an edit of an existing shift steps back to the view
+              // pane; cancelling a create closes the dialog.
+              onClick={() => (isEditing ? setMode('view') : onOpenChange(false))}
               disabled={isPending}
             >
               Cancel
@@ -319,6 +446,7 @@ export function ShiftFormSheet({ open, onOpenChange, shift }: ShiftFormDialogPro
             </Button>
           </DialogFooter>
         </form>
+        )}
       </DialogContent>
     </Dialog>
   );

@@ -31,12 +31,14 @@ import {
   formatDuration,
   formatMinutes,
   checkInBadgeTooltip,
+  dayPresenceSeconds,
+  requiredDaySeconds,
 } from '@/lib/check-in-time';
 import { useTeamAttendance } from '@/hooks/hr/use-attendance';
 import { useTodayStatus } from '@/hooks/hr/use-check-in';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
-import { formatDate } from '@/lib/utils';
+import { formatDate, formatDecimal } from '@/lib/utils';
 
 const statusDot: Record<string, { dot: string; text: string; label: string }> = {
   present: { dot: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-400', label: 'Present' },
@@ -232,7 +234,7 @@ export default function TeamAttendancePage() {
             { label: 'Present', value: stats.present, icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
             { label: 'Absent', value: stats.absent, icon: XCircle, color: 'text-red-500', bg: 'bg-red-500/10' },
             { label: 'Late', value: stats.late, icon: Clock, color: 'text-amber-500', bg: 'bg-amber-500/10' },
-            { label: 'Overtime', value: `${stats.overtimeTotal.toFixed(1)}h`, icon: Timer, color: 'text-violet-500', bg: 'bg-violet-500/10' },
+            { label: 'Overtime', value: `${formatDecimal(stats.overtimeTotal)}h`, icon: Timer, color: 'text-violet-500', bg: 'bg-violet-500/10' },
           ].map((s) => (
             <Card key={s.label} className="border-border">
               <CardContent className="p-3">
@@ -364,6 +366,8 @@ export default function TeamAttendancePage() {
                                     tooltip={checkInBadgeTooltip(s, {
                                       lateMinutes: record.check_in_late_minutes,
                                       checkInTime: policyCheckInTime,
+                                      presenceSeconds: dayPresenceSeconds(record),
+                                      requiredSeconds: requiredDaySeconds(record.shift),
                                     })}
                                   />
                                 ))}
@@ -402,7 +406,7 @@ export default function TeamAttendancePage() {
                             <td className="px-4 py-2.5 whitespace-nowrap text-right">
                               {Number(record.overtime_hours) > 0 ? (
                                 <span className="text-[0.75rem] tabular-nums text-purple-600 dark:text-purple-400 font-medium">
-                                  {Number(record.overtime_hours).toFixed(1)}h
+                                  {formatDecimal(record.overtime_hours)}h
                                 </span>
                               ) : (
                                 <span className="text-[0.75rem] text-muted-foreground/40">&mdash;</span>

@@ -46,14 +46,6 @@ export const shiftSchema = z.object({
 
 export type ShiftFormData = z.infer<typeof shiftSchema>;
 
-export const shiftSwapSchema = z.object({
-  target_user_id: z.string().min(1, 'Target user is required'),
-  swap_date: z.string().min(1, 'Date is required'),
-  reason: z.string().max(1000).nullable().optional(),
-});
-
-export type ShiftSwapFormData = z.infer<typeof shiftSwapSchema>;
-
 export const shiftAssignmentSchema = z.object({
   user_id: z.string().min(1, 'User is required'),
   effective_from: z.string().min(1, 'Start date is required'),
@@ -88,6 +80,15 @@ export interface Shift {
   description: string | null;
   is_active: boolean;
   created_at: string;
+  /** Who created it. Null on org-owned shifts that predate ownership. */
+  creator?: { id: string; name: string } | null;
+  created_by?: string | null;
+  /**
+   * Per-row rights resolved server-side, so the UI never re-derives the
+   * ownership rule (a team manager may only edit shifts they created).
+   */
+  can_edit?: boolean;
+  can_delete?: boolean;
 }
 
 export interface PaginatedShifts {
@@ -121,55 +122,3 @@ export interface PaginatedAssignments {
   to: number | null;
 }
 
-export type SwapStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
-
-export interface ShiftSwapRequest {
-  id: string;
-  requester_id: string;
-  target_user_id: string;
-  requester_shift_id: string;
-  target_shift_id: string;
-  swap_date: string;
-  reason: string | null;
-  status: SwapStatus;
-  reviewed_by: string | null;
-  reviewed_at: string | null;
-  reviewer_note: string | null;
-  requester?: {
-    id: string;
-    name: string;
-    email: string;
-  };
-  target_user?: {
-    id: string;
-    name: string;
-    email: string;
-  };
-  requester_shift?: Shift;
-  target_shift?: Shift;
-  reviewer?: {
-    id: string;
-    name: string;
-  };
-  created_at: string;
-}
-
-export interface PaginatedSwaps {
-  data: ShiftSwapRequest[];
-  current_page: number;
-  last_page: number;
-  total: number;
-  from: number | null;
-  to: number | null;
-}
-
-export interface ShiftRosterDay {
-  shift: Shift;
-  users: {
-    id: string;
-    name: string;
-    email: string;
-  }[];
-}
-
-export type ShiftRoster = Record<string, ShiftRosterDay[]>;

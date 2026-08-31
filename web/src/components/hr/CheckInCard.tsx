@@ -19,6 +19,8 @@ import {
   formatElapsed,
   formatDuration,
   checkInBadgeTooltip,
+  dayPresenceSeconds,
+  requiredDayFromPolicy,
 } from '@/lib/check-in-time';
 import type { CheckInSessionRow } from '@/lib/validations/attendance';
 
@@ -138,6 +140,24 @@ export function CheckInCard({ className }: { className?: string }) {
   const liveTotal = mounted && isLive ? formatElapsed(tickerSeconds) : '00:00:00';
   const frozenTotal = formatDuration(data.worked_seconds);
 
+  // Presence for the day (first in → last out, break included), non-null only
+  // when it falls short of the required 9 hours. Sessions carry the day's
+  // boundaries; an open day is never judged (the badge is gated on !isLive too).
+  const firstIn = sessions[0]?.check_in_at ?? data.check_in_at ?? null;
+  const lastOut = sessions.length
+    ? sessions[sessions.length - 1]?.check_out_at ?? null
+    : data.check_out_at ?? null;
+  const presence = dayPresenceSeconds({
+    check_in_at: firstIn,
+    check_out_at: lastOut,
+    worked_seconds: data.worked_seconds,
+  });
+  // Requirement comes from the user's own schedule (shift end − start, minus the
+  // grace window), so using the grace the policy grants never reads as short.
+  const requiredSeconds = requiredDayFromPolicy(data.policy);
+  const shortDaySeconds =
+    presence !== null && presence < requiredSeconds ? presence : null;
+
   return (
     <Card className={cn('overflow-hidden', className)}>
       {/* Tracker warning */}
@@ -188,21 +208,15 @@ export function CheckInCard({ className }: { className?: string }) {
                     </span>
                   </>
                 )}
-                {data.check_in_status === 'late' && (
-                  <CheckInStatusBadge
-                    status="late"
-                    tooltip={checkInBadgeTooltip('late', {
-                      lateMinutes: data.check_in_late_minutes,
-                      checkInTime: data.policy?.check_in_time,
-                    })}
-                  />
-                )}
-                {!isLive && data.is_early_checkout && (
+                {/* No Late badge — retired. Short-day is judged on presence
+                    against the 9-hour requirement, and only once the day is
+                    closed, so someone still working is never flagged. */}
+                {!isLive && shortDaySeconds !== null && (
                   <CheckInStatusBadge
                     status="early_checkout"
                     tooltip={checkInBadgeTooltip('early_checkout', {
-                      earlyMinutes: data.check_out_early_minutes,
-                      checkoutTime: data.policy?.checkout_time,
+                      presenceSeconds: shortDaySeconds,
+                      requiredSeconds,
                     })}
                   />
                 )}

@@ -6,6 +6,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod/v4';
 import {
+  AlertTriangle,
   ArrowRight,
   CalendarDays,
   CheckCheck,
@@ -35,14 +36,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { DatePicker } from '@/components/ui/date-picker';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import {
@@ -80,9 +73,10 @@ import {
   useRejectRegularization,
 } from '@/hooks/hr/use-regularizations';
 import { useTodayStatus, useCheckInsSummary, exportCheckIns } from '@/hooks/hr/use-check-in';
+import { PeriodFilter, periodToRange, type Period } from '@/components/common/PeriodFilter';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
-import { cn, formatDate } from '@/lib/utils';
+import { cn, formatDate, formatDecimal } from '@/lib/utils';
 import type { AttendanceRegularization } from '@/lib/validations/attendance';
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
@@ -115,11 +109,6 @@ function getInitials(name: string) {
 }
 
 type Tab = 'team' | 'regularizations' | 'report';
-
-const MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
 
 const rejectReviewSchema = z.object({
   review_note: z.string().min(1, 'Review note is required').max(500, 'Must be 500 characters or less'),
@@ -209,14 +198,10 @@ function TeamTab() {
   const policyCheckInTime = todayStatus?.policy?.check_in_time;
 
   const [departmentId, setDepartmentId] = useState<string | null>(null);
-  const [dateFrom, setDateFrom] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
-  });
-  const [dateTo, setDateTo] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()).padStart(2, '0')}`;
-  });
+  // Empty by default — no date is pre-selected, so the list opens unfiltered
+  // rather than silently pinned to the current month.
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
 
   const [search, setSearch] = useState('');
@@ -248,8 +233,8 @@ function TeamTab() {
   const { data, isLoading, isError } = useTeamAttendance({
     department_id: departmentId,
     search: debouncedSearch || undefined,
-    start_date: dateFrom,
-    end_date: dateTo,
+    start_date: dateFrom || undefined,
+    end_date: dateTo || undefined,
     page: currentPage,
   });
 
@@ -257,9 +242,13 @@ function TeamTab() {
   const totalPages = data?.last_page ?? 1;
   const total = data?.total ?? 0;
 
-  const presentCount = records.filter((r) => r.status === 'present').length;
-  const absentCount = records.filter((r) => r.status === 'absent').length;
-  const lateCount = records.filter((r) => (r.check_in_late_minutes ?? 0) > 0).length;
+  // Server-side counts spanning the whole filtered set. Counting `records`
+  // instead would describe only the current page while `Total` describes all of
+  // them — "Total 200 / Present 0 / Absent 9" on page 1 of 8. Falls back to the
+  // page counts so the strip still renders against an older API build.
+  const presentCount = data?.stats?.present ?? records.filter((r) => r.status === 'present').length;
+  const absentCount = data?.stats?.absent ?? records.filter((r) => r.status === 'absent').length;
+  const lateCount = data?.stats?.late ?? records.filter((r) => (r.check_in_late_minutes ?? 0) > 0).length;
 
   return (
     <>
@@ -302,8 +291,8 @@ function TeamTab() {
           <Input
             type="date"
             value={dateFrom}
-            max={dateTo}
-            onChange={(e) => { setDateFrom(e.target.value); if (e.target.value > dateTo) setDateTo(e.target.value); setCurrentPage(1); }}
+            max={dateTo || undefined}
+            onChange={(e) => { setDateFrom(e.target.value); if (dateTo && e.target.value > dateTo) setDateTo(e.target.value); setCurrentPage(1); }}
             className="h-8 text-xs w-[140px]"
           />
         </div>
@@ -312,7 +301,7 @@ function TeamTab() {
           <Input
             type="date"
             value={dateTo}
-            min={dateFrom}
+            min={dateFrom || undefined}
             onChange={(e) => { setDateTo(e.target.value); setCurrentPage(1); }}
             className="h-8 text-xs w-[140px]"
           />
@@ -461,7 +450,7 @@ function TeamTab() {
                           <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] tabular-nums text-right">
                             {Number(record.overtime_hours) > 0 ? (
                               <span className="text-violet-600 dark:text-violet-400">
-                                {Number(record.overtime_hours).toFixed(1)}h
+                                {formatDecimal(record.overtime_hours)}h
                               </span>
                             ) : '—'}
                           </td>
@@ -859,54 +848,83 @@ function RegularizationsTab() {
 
 // ─── Report Tab ─────────────────────────────────────────────────────────────
 
-type Period = 'day' | 'month';
+/** Which control drives the report window: a single day, or a period range. */
+type ViewMode = 'day' | 'range';
 
 function ReportTab() {
   const { hasPermission } = usePermissionStore();
   const canExport = hasPermission('attendance.export');
 
-  const now = new Date();
-  const [period, setPeriod] = useState<Period>('day');
-  const [day, setDay] = useState(
-    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-  );
-  const [month, setMonth] = useState(now.getMonth() + 1);
-  const [year, setYear] = useState(now.getFullYear());
+  // Nothing is pre-filtered: neither the day picker nor the period filter
+  // carries a default, so the report opens on every record.
+  const [mode, setMode] = useState<ViewMode>('range');
+  const [day, setDay] = useState('');
+  // Same period control as Leave Management, replacing the old month + year
+  // Selects. The API's period=range branch backs the presets a single 'month'
+  // string could not express (quarter, year).
+  const [period, setPeriod] = useState<Period>({ kind: 'all' });
   const [page, setPage] = useState(1);
   const [userId, setUserId] = useState<string | null>(null);
   const [exportingView, setExportingView] = useState<'detail' | 'summary' | null>(null);
+  const [showBelowTargetOnly, setShowBelowTargetOnly] = useState(false);
 
-  const monthString = `${year}-${String(month).padStart(2, '0')}`;
+  const range = useMemo(() => periodToRange(period), [period]);
+  // Unfiltered when no day is picked, or when the period is "All time" (no
+  // bounds) — send period=all so the server drops the date filter entirely
+  // rather than falling back to a default window.
+  const isAllTime = mode === 'day' ? !day : (!range.start_date || !range.end_date);
 
   const summaryFilters = useMemo(
     () =>
-      period === 'day'
-        ? { period: 'day' as const, date: day, user_id: userId, page }
-        : { period: 'month' as const, month: monthString, user_id: userId, page },
-    [period, day, monthString, userId, page],
+      isAllTime
+        ? { period: 'all' as const, user_id: userId, page }
+        : mode === 'day'
+          ? { period: 'day' as const, date: day, user_id: userId, page }
+          : {
+              period: 'range' as const,
+              start_date: range.start_date,
+              end_date: range.end_date,
+              user_id: userId,
+              page,
+            },
+    [mode, day, isAllTime, range.start_date, range.end_date, userId, page],
   );
 
   const { data, isLoading, isError } = useCheckInsSummary(summaryFilters);
-  const rows = data?.data ?? [];
+  const allRows = data?.data ?? [];
+  // "Below target" narrows to employees who missed the requirement on at least
+  // one present day — the question management actually opens this report to ask.
+  // Filtered client-side over the current page: the API paginates, so a
+  // server-side flag would be the honest fix if orgs outgrow one page.
+  const rows = showBelowTargetOnly
+    ? allRows.filter((r) => r.completion_rate !== null && r.completion_rate < 100)
+    : allRows;
   const totalPages = data?.last_page ?? 1;
+
+  const belowTargetCount = allRows.filter(
+    (r) => r.completion_rate !== null && r.completion_rate < 100,
+  ).length;
 
   const totalEmployees = rows.length;
   const totalLate = rows.reduce((sum, r) => sum + (r.late_count || 0), 0);
   const totalMissing = rows.reduce((sum, r) => sum + (r.missing_checkout_count || 0), 0);
   const totalWorkedSecs = rows.reduce((sum, r) => sum + (r.total_worked_seconds || 0), 0);
 
-  const yearOptions = useMemo(() => {
-    const current = new Date().getFullYear();
-    return [current, current - 1, current - 2];
-  }, []);
-
   const handleExport = async (view: 'detail' | 'summary') => {
     setExportingView(view);
     try {
       await exportCheckIns(
-        period === 'day'
-          ? { period: 'day', date: day, user_id: userId, view }
-          : { period: 'month', month: monthString, user_id: userId, view },
+        isAllTime
+          ? { period: 'all', user_id: userId, view }
+          : mode === 'day'
+            ? { period: 'day', date: day, user_id: userId, view }
+            : {
+                period: 'range',
+                start_date: range.start_date,
+                end_date: range.end_date,
+                user_id: userId,
+                view,
+              },
       );
     } catch {
       // toast already surfaced by exportCheckIns
@@ -921,57 +939,38 @@ function ReportTab() {
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
           <div className="flex flex-col gap-1">
-            <Label className="text-[0.65rem] text-muted-foreground">Period</Label>
+            <Label className="text-[0.65rem] text-muted-foreground">View</Label>
             <ToggleGroup
-              value={[period]}
+              value={[mode]}
               onValueChange={(val) => {
                 const v = val[0];
-                if (v === 'day' || v === 'month') { setPeriod(v); setPage(1); }
+                if (v === 'day' || v === 'range') { setMode(v); setPage(1); }
               }}
               variant="outline"
               className="h-8"
             >
               <ToggleGroupItem value="day" className="text-xs h-8 px-3">Day</ToggleGroupItem>
-              <ToggleGroupItem value="month" className="text-xs h-8 px-3">Month</ToggleGroupItem>
+              <ToggleGroupItem value="range" className="text-xs h-8 px-3">Range</ToggleGroupItem>
             </ToggleGroup>
           </div>
 
-          {period === 'day' ? (
+          {mode === 'day' ? (
             <div className="flex flex-col gap-1">
               <Label className="text-[0.65rem] text-muted-foreground">Date</Label>
               <DatePicker
                 value={day}
+                placeholder="All dates"
+                clearable
                 onChange={(v) => { setDay(v); setPage(1); }}
               />
             </div>
           ) : (
-            <div className="flex items-end gap-2">
-              <div className="flex flex-col gap-1">
-                <Label className="text-[0.65rem] text-muted-foreground">Month</Label>
-                <Select value={String(month)} onValueChange={(v) => { setMonth(Number(v)); setPage(1); }}>
-                  <SelectTrigger className="w-[130px] h-8 text-xs"><SelectValue>{MONTHS[month - 1]}</SelectValue></SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {MONTHS.map((name, idx) => (
-                        <SelectItem key={idx} value={String(idx + 1)}>{name}</SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <Label className="text-[0.65rem] text-muted-foreground">Year</Label>
-                <Select value={String(year)} onValueChange={(v) => { setYear(Number(v)); setPage(1); }}>
-                  <SelectTrigger className="w-[90px] h-8 text-xs"><SelectValue>{year}</SelectValue></SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {yearOptions.map((y) => (
-                        <SelectItem key={y} value={String(y)}>{y}</SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="flex flex-col gap-1">
+              <Label className="text-[0.65rem] text-muted-foreground">Period</Label>
+              <PeriodFilter
+                value={period}
+                onChange={(next) => { setPeriod(next); setPage(1); }}
+              />
             </div>
           )}
 
@@ -981,6 +980,29 @@ function ReportTab() {
               value={userId}
               onChange={(val) => { setUserId(val); setPage(1); }}
             />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <Label className="text-[0.65rem] text-muted-foreground">Completion</Label>
+            <Button
+              type="button"
+              variant={showBelowTargetOnly ? 'default' : 'outline'}
+              size="sm"
+              className="h-8 text-xs"
+              aria-pressed={showBelowTargetOnly}
+              onClick={() => setShowBelowTargetOnly((v) => !v)}
+            >
+              <AlertTriangle className="h-3.5 w-3.5 mr-1.5" />
+              Below target
+              {belowTargetCount > 0 && (
+                <span className={cn(
+                  'ml-1.5 rounded-full px-1.5 py-0.5 text-[0.6rem] font-semibold tabular-nums',
+                  showBelowTargetOnly ? 'bg-primary-foreground/20' : 'bg-muted-foreground/15',
+                )}>
+                  {belowTargetCount}
+                </span>
+              )}
+            </Button>
           </div>
         </div>
 
@@ -1080,7 +1102,7 @@ function ReportTab() {
               <CalendarDays className="h-8 w-8 text-muted-foreground/40" />
               <p className="text-sm text-muted-foreground font-medium">No check-ins in this period</p>
               <p className="text-xs text-muted-foreground">
-                No employees checked in for the selected {period}.
+                No employees checked in for the selected {mode === 'day' ? 'day' : 'period'}.
               </p>
             </div>
           </CardContent>
@@ -1096,6 +1118,7 @@ function ReportTab() {
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Employee</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Total</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Days</th>
+                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Full Days</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Late</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Early</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Missing</th>
@@ -1122,6 +1145,29 @@ function ReportTab() {
                         </td>
                         <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] tabular-nums text-right">
                           {row.days_present}
+                        </td>
+                        <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] tabular-nums text-right">
+                          {row.completion_rate === null ? (
+                            <span className="text-muted-foreground">—</span>
+                          ) : (
+                            <span className="inline-flex items-baseline gap-1.5">
+                              <span className="font-medium">
+                                {row.full_days_count}/{row.days_present}
+                              </span>
+                              <span
+                                className={cn(
+                                  'text-[0.65rem] font-semibold',
+                                  row.completion_rate === 100
+                                    ? 'text-emerald-600 dark:text-emerald-400'
+                                    : row.completion_rate >= 80
+                                      ? 'text-amber-600 dark:text-amber-400'
+                                      : 'text-red-600 dark:text-red-400',
+                                )}
+                              >
+                                {row.completion_rate}%
+                              </span>
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] tabular-nums text-right">
                           {row.late_count > 0 ? (

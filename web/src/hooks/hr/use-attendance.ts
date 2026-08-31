@@ -67,12 +67,23 @@ export function useTeamAttendance(filters?: TeamAttendanceFilters) {
   });
 }
 
-export function useAttendanceSummary(month: number, year: number) {
+/**
+ * Attendance summary. month/year are still required by the API; passing a
+ * range overrides them server-side so the stat cards follow the selected
+ * period (quarter, year, any month) instead of one fixed month.
+ */
+export function useAttendanceSummary(
+  month: number,
+  year: number,
+  range?: { start_date?: string; end_date?: string },
+) {
+  const start = range?.start_date;
+  const end = range?.end_date;
   return useQuery<AttendanceSummary>({
-    queryKey: ['attendance-summary', month, year],
+    queryKey: ['attendance-summary', month, year, start, end],
     queryFn: async () => {
       const res = await api.get('/hr/attendance/summary', {
-        params: { month, year },
+        params: { month, year, ...(start ? { start_date: start } : {}), ...(end ? { end_date: end } : {}) },
       });
       return res.data.data ?? res.data;
     },

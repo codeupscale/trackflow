@@ -9,6 +9,10 @@ import {
   formatPolicyTime,
   checkInBadgeTooltip,
   deriveCheckInBadges,
+  dayPresenceSeconds,
+  requiredDaySeconds,
+  requiredDayFromPolicy,
+  REQUIRED_DAY_SECONDS,
 } from '@/lib/check-in-time';
 
 describe('computeClockOffset', () => {
@@ -246,18 +250,17 @@ describe('checkInBadgeTooltip — plain-language, policy-anchored', () => {
     );
   });
 
-  it('early_checkout: names the "Xh Ym" and the concrete checkout time', () => {
+  it('early_checkout: names the completed time and the shortfall against 9h', () => {
+    // Anchored on the 9-hour day requirement, not on the checkout clock time —
+    // the badge now means "short day", so the tooltip must quantify the gap.
     expect(
-      checkInBadgeTooltip('early_checkout', {
-        earlyMinutes: 168,
-        checkoutTime: '20:30:00',
-      })
-    ).toBe('Checked out 2h 48m before the 8:30 PM checkout time.');
+      checkInBadgeTooltip('early_checkout', { presenceSeconds: 6 * 3600 + 12 * 60 })
+    ).toBe('Completed 6h 12m of the required 9h day — 2h 48m short.');
   });
 
-  it('early_checkout: generic phrasing when minutes and policy are unavailable', () => {
+  it('early_checkout: generic phrasing when presence is unavailable', () => {
     expect(checkInBadgeTooltip('early_checkout', {})).toBe(
-      "Checked out before the organization's checkout time."
+      'Did not complete the required 9h day (break included).'
     );
   });
 
@@ -287,51 +290,186 @@ describe('deriveCheckInBadges', () => {
     expect(deriveCheckInBadges({})).toEqual([]);
   });
 
-  it('renders BOTH late and early_checkout when both are true (regression)', () => {
-    // The owner-reported bug: a day that is both late AND an early checkout must
-    // show both badges — the earlier single-badge collapse dropped "Late".
+  it('NEVER emits a late badge, however late the check-in was', () => {
+    // The Late badge was retired (owner decision). Lateness is still reported
+    // numerically in the "Late (min)" column, never as a status badge — so a
+    // late arrival that completed a full day is indistinguishable from any
+    // other complete day here.
     expect(
       deriveCheckInBadges({
-        check_in_at: '2026-07-03T11:30:00Z',
+        check_in_at: '2026-07-03T04:00:00Z',
         check_in_status: 'late',
-        is_early_checkout: true,
+        check_out_at: '2026-07-03T13:00:00Z', // 9h — a full day
       })
-    ).toEqual(['late', 'early_checkout']);
-  });
+    ).toEqual([]);
 
-  it('keeps a deterministic order: late → early_checkout → missing_checkout', () => {
     expect(
       deriveCheckInBadges({
-        check_in_at: '2026-07-03T11:30:00Z',
+        check_in_at: '2026-07-03T04:00:00Z',
         check_in_status: 'late',
-        is_early_checkout: true,
+        check_out_at: '2026-07-03T13:00:00Z',
         missing_checkout: true,
       })
-    ).toEqual(['late', 'early_checkout', 'missing_checkout']);
+    ).toEqual(['missing_checkout']);
   });
 
-  it('coexists late with missing_checkout', () => {
+  it('flags a short day as early_checkout, measured on PRESENCE not clock-out time', () => {
+    // 8h present — under the 9h requirement.
     expect(
       deriveCheckInBadges({
-        check_in_at: '2026-07-03T11:30:00Z',
-        check_in_status: 'late',
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T12:00:00Z',
+      })
+    ).toEqual(['early_checkout']);
+
+    // Exactly 9h is complete, not short (boundary).
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T13:00:00Z',
+      })
+    ).toEqual([]);
+
+    // Over 9h is likewise complete.
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T14:30:00Z',
+      })
+    ).toEqual([]);
+  });
+
+  it('counts the break toward the 9 hours (span, not summed sessions)', () => {
+    // In 09:00, out 18:00 with an hour of break in between: worked_seconds is
+    // only 8h but the DAY is 9h, so this must NOT be flagged. Measuring summed
+    // sessions instead would wrongly demand a 10-hour presence.
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T13:00:00Z',
+        worked_seconds: 8 * 3600,
+      })
+    ).toEqual([]);
+  });
+
+  it('does not flag a day that used the grace window (owner-reported case)', () => {
+    // 11:30 shift with 15 minutes of grace: checking in at 11:45 and out at
+    // 20:30 is 8h45m — under the 9h shift length, but the grace is exactly what
+    // the policy grants, so this is a COMPLETE day. Judging against a flat 9h
+    // would punish the employee for using the allowance they were given.
+    const shift = {
+      start_time: '11:30:00',
+      end_time: '20:30:00',
+      grace_period_minutes: 15,
+    };
+
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T06:45:00Z', // 11:45 local
+        check_out_at: '2026-07-03T15:30:00Z', // 20:30 local → 8h45m
+        shift,
+      })
+    ).toEqual([]);
+
+    // One minute past the grace allowance IS short.
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T06:46:00Z',
+        check_out_at: '2026-07-03T15:30:00Z', // 8h44m
+        shift,
+      })
+    ).toEqual(['early_checkout']);
+  });
+
+  it('derives the requirement from the shift, not a flat 9 hours', () => {
+    // A 6-hour shift is complete at 6 hours — a flat 9h rule would flag every
+    // part-time day forever.
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T10:00:00Z',
+        shift: { start_time: '09:00:00', end_time: '15:00:00', grace_period_minutes: 0 },
+      })
+    ).toEqual([]);
+  });
+
+  it('trusts the server snapshot over the local computation', () => {
+    // The snapshot was taken against the schedule in force THAT day. If the
+    // employee later moved to a shorter shift, recomputing locally would
+    // retroactively "pass" a day that genuinely fell short — history must not
+    // be re-judged by today's rule.
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T13:00:00Z', // 9h — locally this looks complete
+        met_required_hours: false, // …but that day required more
+      })
+    ).toEqual(['early_checkout']);
+
+    // And the converse: a locally-short day the server passed stays passed.
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T09:00:00Z', // 5h
+        met_required_hours: true,
+      })
+    ).toEqual([]);
+  });
+
+  it('falls back to the local rule only when the snapshot is absent', () => {
+    // Rows predating the snapshot carry null and must still be judged.
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T09:00:00Z',
+        met_required_hours: null,
+      })
+    ).toEqual(['early_checkout']);
+  });
+
+  it('never judges an open day short (no checkout yet)', () => {
+    // Someone still working must not be flagged mid-day. With no checkout and
+    // no recorded work there is nothing to measure.
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: null,
+      })
+    ).toEqual([]);
+  });
+
+  it('falls back to worked_seconds when the timestamp pair is unusable', () => {
+    // Legacy row with no checkout timestamp but a recorded total.
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        worked_seconds: 5 * 3600,
+      })
+    ).toEqual(['early_checkout']);
+
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        worked_seconds: 9 * 3600,
+      })
+    ).toEqual([]);
+  });
+
+  it('keeps a deterministic order: early_checkout → missing_checkout', () => {
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T10:00:00Z', // 6h — short
         missing_checkout: true,
       })
-    ).toEqual(['late', 'missing_checkout']);
+    ).toEqual(['early_checkout', 'missing_checkout']);
   });
 
   it('renders single exception badges alone', () => {
     expect(
       deriveCheckInBadges({
-        check_in_at: '2026-07-03T11:30:00Z',
-        check_in_status: 'late',
-      })
-    ).toEqual(['late']);
-
-    expect(
-      deriveCheckInBadges({
-        check_in_at: '2026-07-03T11:30:00Z',
-        is_early_checkout: true,
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T09:00:00Z',
       })
     ).toEqual(['early_checkout']);
 
@@ -346,18 +484,93 @@ describe('deriveCheckInBadges', () => {
   it('surfaces on_time only when nothing else is worth flagging', () => {
     expect(
       deriveCheckInBadges({
-        check_in_at: '2026-07-03T11:30:00Z',
+        check_in_at: '2026-07-03T04:00:00Z',
         check_in_status: 'on_time',
+        check_out_at: '2026-07-03T13:00:00Z',
       })
     ).toEqual(['on_time']);
 
-    // on_time never competes with an exception badge (e.g. an early checkout).
+    // on_time never competes with an exception badge (e.g. a short day).
     expect(
       deriveCheckInBadges({
-        check_in_at: '2026-07-03T11:30:00Z',
+        check_in_at: '2026-07-03T04:00:00Z',
         check_in_status: 'on_time',
-        is_early_checkout: true,
+        check_out_at: '2026-07-03T09:00:00Z',
       })
     ).toEqual(['early_checkout']);
+  });
+});
+
+describe('requiredDaySeconds', () => {
+  it('subtracts the grace period from the shift length', () => {
+    expect(
+      requiredDaySeconds({ start_time: '11:30:00', end_time: '20:30:00', grace_period_minutes: 15 })
+    ).toBe(8 * 3600 + 45 * 60);
+  });
+
+  it('handles an overnight shift', () => {
+    // 16:00 → 01:00 is 9 hours across midnight, not a negative span.
+    expect(
+      requiredDaySeconds({ start_time: '16:00:00', end_time: '01:00:00', grace_period_minutes: 0 })
+    ).toBe(9 * 3600);
+  });
+
+  it('falls back to 9h with no usable shift', () => {
+    expect(requiredDaySeconds(null)).toBe(REQUIRED_DAY_SECONDS);
+    expect(requiredDaySeconds({ start_time: null, end_time: null })).toBe(REQUIRED_DAY_SECONDS);
+  });
+
+  it('never lets grace erase the whole day', () => {
+    expect(
+      requiredDaySeconds({ start_time: '09:00:00', end_time: '10:00:00', grace_period_minutes: 999 })
+    ).toBe(0);
+  });
+});
+
+describe('requiredDayFromPolicy', () => {
+  it('converts late_threshold back into a grace allowance', () => {
+    // check_in 11:30, threshold 11:45 → 15 minutes of grace on a 9h day.
+    expect(
+      requiredDayFromPolicy({
+        check_in_time: '11:30:00',
+        late_threshold: '11:45:00',
+        checkout_time: '20:30:00',
+      })
+    ).toBe(8 * 3600 + 45 * 60);
+  });
+});
+
+describe('dayPresenceSeconds', () => {
+  it('measures first check-in to last checkout, break included', () => {
+    expect(
+      dayPresenceSeconds({
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T13:00:00Z',
+        worked_seconds: 8 * 3600,
+      })
+    ).toBe(9 * 3600);
+  });
+
+  it('returns null for an open day with no recorded work', () => {
+    expect(
+      dayPresenceSeconds({ check_in_at: '2026-07-03T04:00:00Z', check_out_at: null })
+    ).toBeNull();
+  });
+
+  it('falls back to worked_seconds without a usable timestamp pair', () => {
+    expect(
+      dayPresenceSeconds({ check_in_at: '2026-07-03T04:00:00Z', worked_seconds: 7200 })
+    ).toBe(7200);
+  });
+
+  it('ignores an inverted timestamp pair and falls back', () => {
+    // Checkout before check-in is corrupt data; never report negative presence.
+    expect(
+      dayPresenceSeconds({
+        check_in_at: '2026-07-03T13:00:00Z',
+        check_out_at: '2026-07-03T04:00:00Z',
+        worked_seconds: 3600,
+      })
+    ).toBe(3600);
   });
 });
