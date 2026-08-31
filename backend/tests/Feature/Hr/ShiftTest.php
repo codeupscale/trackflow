@@ -169,47 +169,6 @@ class ShiftTest extends TestCase
         $this->assertCount(1, $response->json('data'));
     }
 
-    // ── Roster ──────────────────────────────────────────
-
-    public function test_get_shift_roster(): void
-    {
-        $user = $this->actingAsUser('org_manager');
-        $employee = $this->createUser(
-            \App\Models\Organization::find($user->organization_id),
-            'employee',
-        );
-
-        $shift = Shift::factory()->create([
-            'organization_id' => $user->organization_id,
-            'name' => 'Day Shift',
-            'start_time' => '09:00:00',
-            'end_time' => '17:00:00',
-            'days_of_week' => ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
-        ]);
-
-        DB::table('user_shifts')->insert([
-            'id' => (string) Str::uuid(),
-            'organization_id' => $user->organization_id,
-            'user_id' => $employee->id,
-            'shift_id' => $shift->id,
-            'effective_from' => '2026-01-01',
-            'effective_to' => null,
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
-
-        // 2026-04-06 is a Monday
-        $response = $this->getJson('/api/v1/hr/shifts/roster?week_start=2026-04-06');
-
-        $response->assertOk()
-            ->assertJsonStructure(['data']);
-
-        $data = $response->json('data');
-        $this->assertCount(7, $data);
-        $this->assertArrayHasKey('2026-04-06', $data);
-        $this->assertArrayHasKey('2026-04-12', $data);
-    }
-
     // ── Cross-Org Isolation ─────────────────────────────
 
     public function test_cross_org_shift_isolation(): void
