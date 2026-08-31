@@ -317,8 +317,12 @@ class AttendanceService
             ]);
         }
 
-        // Cap span to avoid runaway synthesis (matches getTeamAttendance).
-        $maxDays = 92;
+        // Cap span to avoid runaway synthesis. This path synthesises for ONE user, so a
+        // full year is ~366 rows — cheap, and it must cover a year because the period
+        // filter offers a "This year" preset. (getTeamAttendance keeps the tighter 92-day
+        // cap: it synthesises days × employees.) At 92 days a year selection silently
+        // dropped 8 months from the table while the summary cards still counted all 12.
+        $maxDays = 366;
         $start = Carbon::parse($startStr);
         $end = Carbon::parse($endStr);
         if ($start->diffInDays($end) > $maxDays) {
@@ -333,7 +337,7 @@ class AttendanceService
         $existing = AttendanceRecord::where('organization_id', $orgId)
             ->where('user_id', $userId)
             ->whereBetween('date', [$startDate, $endDate])
-            ->with('shift:id,name,start_time,end_time')
+            ->with('shift:id,name,start_time,end_time,grace_period_minutes')
             ->withCount(['sessions as open_sessions_count' => fn ($q) => $q->whereNull('check_out_at')])
             ->get()
             ->keyBy(fn ($r) => Carbon::parse($r->date)->toDateString());
@@ -429,8 +433,19 @@ class AttendanceService
      * GenerateDailyAttendanceJob has run for the date yet (e.g. the current day, or
      * environments where the scheduler is disabled).
      */
-    public function getTeamAttendance(string $orgId, array $filters): LengthAwarePaginator
+    /**
+     * @param  array|null  $stats  Out-param: present/absent/late counts over the WHOLE
+     *                             filtered set, not just the returned page. The caller
+     *                             needs these because the stat strip sits above a
+     *                             paginated table — counting the page instead makes
+     *                             "Total 200 / Present 0 / Absent 9" impossible to
+     *                             reconcile. Free to compute: every row is already
+     *                             materialised here before slicing.
+     */
+    public function getTeamAttendance(string $orgId, array $filters, ?array &$stats = null): LengthAwarePaginator
     {
+        $stats = ['total' => 0, 'present' => 0, 'absent' => 0, 'late' => 0];
+
         $perPage = (int) ($filters['per_page'] ?? 25);
         $page = \Illuminate\Pagination\LengthAwarePaginator::resolveCurrentPage();
 
@@ -492,7 +507,7 @@ class AttendanceService
         $existing = AttendanceRecord::where('organization_id', $orgId)
             ->whereIn('user_id', $userIds)
             ->whereBetween('date', [$startDate, $endDate])
-            ->with(['user:id,name,email,avatar_url', 'shift:id,name,start_time,end_time'])
+            ->with(['user:id,name,email,avatar_url', 'shift:id,name,start_time,end_time,grace_period_minutes'])
             ->withCount(['sessions as open_sessions_count' => fn ($q) => $q->whereNull('check_out_at')])
             ->get()
             ->keyBy(fn ($r) => $r->user_id . '|' . Carbon::parse($r->date)->toDateString());
@@ -589,6 +604,26 @@ class AttendanceService
         });
 
         $total = count($rows);
+
+        // Counted over every filtered row, so the stat strip and the paginated
+        // table describe the same set.
+        $stats = [
+            'total' => $total,
+            'present' => 0,
+            'absent' => 0,
+            'late' => 0,
+        ];
+        foreach ($rows as $r) {
+            if ($r['status'] === 'present') {
+                $stats['present']++;
+            } elseif ($r['status'] === 'absent') {
+                $stats['absent']++;
+            }
+            if (($r['check_in_late_minutes'] ?? 0) > 0) {
+                $stats['late']++;
+            }
+        }
+
         $items = array_slice($rows, ($page - 1) * $perPage, $perPage);
 
         return new \Illuminate\Pagination\LengthAwarePaginator($items, $total, $perPage, $page, [
@@ -716,6 +751,10 @@ class AttendanceService
             'check_in_status' => $record->check_in_status,
             'check_in_late_minutes' => (int) ($record->check_in_late_minutes ?? 0),
             'is_early_checkout' => (bool) $record->is_early_checkout,
+            // Day-completion snapshot — the authoritative short-day signal, taken
+            // against the rule in force on that day.
+            'required_day_seconds' => $record->required_day_seconds,
+            'met_required_hours' => $record->met_required_hours,
             'missing_checkout' => (bool) $record->missing_checkout && $hasOpenSession,
             'check_in_flags' => $record->check_in_flags,
             'shift' => $record->shift ? [
@@ -723,6 +762,10 @@ class AttendanceService
                 'name' => $record->shift->name,
                 'start_time' => $record->shift->start_time,
                 'end_time' => $record->shift->end_time,
+                // Needed client-side: the short-day badge must tolerate a
+                // check-in inside the grace window, otherwise arriving at
+                // 11:45 on an 11:30 shift and leaving on time reads as short.
+                'grace_period_minutes' => (int) ($record->shift->grace_period_minutes ?? 0),
             ] : null,
         ];
 
@@ -801,10 +844,30 @@ class AttendanceService
     /**
      * Monthly attendance summary for a user.
      */
-    public function getAttendanceSummary(string $userId, string $orgId, int $month, int $year): array
-    {
-        $startOfMonth = Carbon::create($year, $month, 1)->startOfMonth();
-        $endOfMonth = $startOfMonth->copy()->endOfMonth();
+    /**
+     * Attendance summary for a period.
+     *
+     * $month/$year select a single month (the original contract). Passing
+     * $startDate/$endDate overrides them with an arbitrary range, so the stat
+     * cards can follow a quarter/year period filter instead of being pinned to
+     * one month — otherwise a "this quarter" listing would sit above a single
+     * month's totals.
+     */
+    public function getAttendanceSummary(
+        string $userId,
+        string $orgId,
+        int $month,
+        int $year,
+        ?string $startDate = null,
+        ?string $endDate = null,
+    ): array {
+        if ($startDate !== null && $endDate !== null) {
+            $startOfMonth = Carbon::parse($startDate)->startOfDay();
+            $endOfMonth = Carbon::parse($endDate)->endOfDay();
+        } else {
+            $startOfMonth = Carbon::create($year, $month, 1)->startOfMonth();
+            $endOfMonth = $startOfMonth->copy()->endOfMonth();
+        }
 
         $tz = $this->orgTimezone($orgId);
 

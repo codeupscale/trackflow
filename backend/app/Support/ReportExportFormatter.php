@@ -278,6 +278,7 @@ class ReportExportFormatter
 
         fputcsv($out, [
             'Employee', 'Email', 'Total (HH:MM)', 'Days Present',
+            'Full Days', 'Completion %',
             'Late Count', 'Early Checkout Count', 'Missing Checkout Count',
         ]);
 
@@ -289,6 +290,10 @@ class ReportExportFormatter
                 self::neutralizeCsv(is_array($user) ? ($user['email'] ?? '') : ''),
                 self::neutralizeCsv(self::val($row, 'worked_hhmm')),
                 self::val($row, 'days_present', 0),
+                self::val($row, 'full_days_count', 0),
+                // Blank rather than 0 when nobody was present — a 0% completion
+                // rate for a day someone did not work is a false accusation.
+                self::val($row, 'completion_rate') === null ? '' : self::val($row, 'completion_rate'),
                 self::val($row, 'late_count', 0),
                 self::val($row, 'early_checkout_count', 0),
                 self::val($row, 'missing_checkout_count', 0),

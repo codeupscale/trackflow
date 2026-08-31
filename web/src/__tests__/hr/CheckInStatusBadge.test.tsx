@@ -10,13 +10,6 @@ describe('CheckInStatusBadge', () => {
     expect(badge.className).toContain('green');
   });
 
-  it('renders the late label with amber styling', () => {
-    render(<CheckInStatusBadge status="late" />);
-    const badge = screen.getByText('Late');
-    expect(badge).toBeInTheDocument();
-    expect(badge.className).toContain('amber');
-  });
-
   it('renders early_checkout with orange styling', () => {
     render(<CheckInStatusBadge status="early_checkout" />);
     const badge = screen.getByText('Early Checkout');
@@ -36,7 +29,7 @@ describe('CheckInStatusBadge', () => {
   });
 
   it('merges a custom className', () => {
-    render(<CheckInStatusBadge status="late" className="ml-2" />);
-    expect(screen.getByText('Late').className).toContain('ml-2');
+    render(<CheckInStatusBadge status="early_checkout" className="ml-2" />);
+    expect(screen.getByText('Early Checkout').className).toContain('ml-2');
   });
 });

@@ -8,9 +8,10 @@ import {
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
+// 'late' is intentionally absent — the Late badge was retired (owner decision).
+// Lateness is still reported numerically in the "Late (min)" column.
 export type CheckInBadgeStatus =
   | 'on_time'
-  | 'late'
   | 'early_checkout'
   | 'missing_checkout'
   | 'on_approved_leave'
@@ -21,11 +22,6 @@ const statusConfig: Record<CheckInBadgeStatus, { label: string; className: strin
     label: 'On Time',
     className:
       'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800',
-  },
-  late: {
-    label: 'Late',
-    className:
-      'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800',
   },
   early_checkout: {
     label: 'Early Checkout',

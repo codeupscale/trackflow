@@ -4,6 +4,7 @@ namespace Tests\Feature\Hr;
 
 use App\Models\AttendanceRecord;
 use App\Models\Team;
+use App\Models\User;
 use Carbon\Carbon;
 use Tests\TestCase;
 
@@ -39,6 +40,10 @@ class CheckInReportTest extends TestCase
             'check_out_overtime_minutes' => 0,
             'is_early_checkout' => false,
             'missing_checkout' => false,
+            // Day-completion snapshot. Written by recomputeRecordRollups in the
+            // real flow; set explicitly here because the factory bypasses it.
+            'required_day_seconds' => 9 * 3600,
+            'met_required_hours' => true,
         ], $overrides));
     }
 
@@ -150,8 +155,12 @@ class CheckInReportTest extends TestCase
         // Four days in March: 1 late, 1 early-checkout, 1 missing-checkout, 1 clean.
         $this->checkInRecord($org->id, $emp->id, ['date' => '2026-03-02', 'worked_seconds' => 3600]);
         $this->checkInRecord($org->id, $emp->id, ['date' => '2026-03-03', 'worked_seconds' => 3600, 'check_in_status' => 'late', 'check_in_late_minutes' => 20]);
-        $this->checkInRecord($org->id, $emp->id, ['date' => '2026-03-04', 'worked_seconds' => 1800, 'is_early_checkout' => true, 'check_out_early_minutes' => 30]);
-        $this->checkInRecord($org->id, $emp->id, ['date' => '2026-03-05', 'worked_seconds' => null, 'check_out_at' => null, 'missing_checkout' => true]);
+        // Short day: the SNAPSHOT is what early_checkout_count reads now, not the
+        // legacy is_early_checkout flag (which encoded "clocked out before the
+        // shift end" — a different question).
+        $this->checkInRecord($org->id, $emp->id, ['date' => '2026-03-04', 'worked_seconds' => 1800, 'is_early_checkout' => true, 'check_out_early_minutes' => 30, 'met_required_hours' => false]);
+        // No checkout → nothing to judge; the snapshot stays null.
+        $this->checkInRecord($org->id, $emp->id, ['date' => '2026-03-05', 'worked_seconds' => null, 'check_out_at' => null, 'missing_checkout' => true, 'met_required_hours' => null]);
 
         $this->actingAs($hr, 'sanctum');
         $response = $this->getJson('/api/v1/hr/attendance/check-ins/summary?period=month&month=' . self::MONTH . '&user_id=' . $emp->id);
@@ -164,6 +173,10 @@ class CheckInReportTest extends TestCase
         $this->assertSame(1, $row['late_count']);
         $this->assertSame(1, $row['early_checkout_count']);
         $this->assertSame(1, $row['missing_checkout_count']);
+        // Two of the four days met the target (03-02 and 03-03); 03-04 fell
+        // short and 03-05 was never judged, so it counts toward neither.
+        $this->assertSame(2, $row['full_days_count']);
+        $this->assertSame(50, $row['completion_rate']); // 2 of 4 days present
         $this->assertSame(9000, $row['total_worked_seconds']); // 3600+3600+1800+0
         $this->assertSame('02:30', $row['worked_hhmm']);
     }
@@ -287,7 +300,10 @@ class CheckInReportTest extends TestCase
         );
 
         $body = $response->getContent();
-        $this->assertStringContainsString('Employee,Email,"Total (HH:MM)","Days Present","Late Count"', $body);
+        $this->assertStringContainsString(
+            'Employee,Email,"Total (HH:MM)","Days Present","Full Days","Completion %","Late Count"',
+            $body
+        );
         $this->assertStringContainsString('alice@example.test', $body);
     }
 
@@ -318,8 +334,18 @@ class CheckInReportTest extends TestCase
         $response->assertOk();
 
         $userIds = collect($response->json('data'))->pluck('user.id')->all();
+
+        // The isolation guarantee: org A's employee is never visible to org B.
         $this->assertNotContains($empA->id, $userIds);
-        $this->assertCount(0, $response->json('data'));
+
+        // The summary is driven from the USER roster (so employees with no
+        // check-ins still appear as zero rows), which means org B's viewer sees
+        // their own org's people — themselves here — rather than an empty list.
+        // Every returned row must belong to org B.
+        $orgBUserIds = User::where('organization_id', $orgB->id)->pluck('id')->all();
+        foreach ($userIds as $id) {
+            $this->assertContains($id, $orgBUserIds);
+        }
     }
 
     // ── CSV formula-injection neutralization (OWASP) ───────────────────────
