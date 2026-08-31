@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { format, parse } from 'date-fns'
-import { CalendarIcon } from 'lucide-react'
+import { CalendarIcon, X } from 'lucide-react'
 import type { Matcher } from 'react-day-picker'
 
 import { cn } from '@/lib/utils'
@@ -21,6 +21,8 @@ interface DatePickerProps {
   className?: string
   minDate?: string // YYYY-MM-DD — dates before this are disabled
   maxDate?: string // YYYY-MM-DD — dates after this are disabled
+  /** Show an X to clear back to the empty (unfiltered) state. */
+  clearable?: boolean
 }
 
 function DatePicker({
@@ -30,6 +32,7 @@ function DatePicker({
   className,
   minDate,
   maxDate,
+  clearable = false,
 }: DatePickerProps) {
   const [open, setOpen] = React.useState(false)
 
@@ -65,7 +68,34 @@ function DatePicker({
         }
       >
         <CalendarIcon className="mr-2 h-3.5 w-3.5" />
-        {displayText}
+        <span className="truncate">{displayText}</span>
+        {clearable && value && (
+          // stopPropagation so clearing doesn't also open the calendar. A span,
+          // not a button — this sits inside the trigger button.
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label="Clear date"
+            className="ml-auto inline-flex items-center rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+            // The popover trigger opens on pointerdown, not click, so guarding
+            // click alone clears the date AND opens the calendar.
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation()
+              onChange('')
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.stopPropagation()
+                e.preventDefault()
+                onChange('')
+              }
+            }}
+          >
+            <X className="h-3.5 w-3.5" />
+          </span>
+        )}
       </PopoverTrigger>
       <PopoverContent className="w-auto p-0" align="start">
         <Calendar
