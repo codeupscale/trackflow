@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Models\Shift;
-use App\Models\ShiftSwapRequest;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
@@ -14,12 +13,79 @@ class ShiftService
 {
     // ─── Shift CRUD ──────────────────────────────────────────────
 
+    // ─── Team-scoped management ──────────────────────────────────
+    //
+    // Two tiers, decided by the granted SCOPE of a shifts.* permission:
+    //
+    //   organization (or 'none', which ranks equal) → owner / org_manager /
+    //       hr_manager. Manage every shift, assign anyone in the org.
+    //   project ("team" in this codebase)          → a team manager. Create
+    //       shifts they OWN, edit/delete only those, and assign only members of
+    //       teams they manage.
+    //
+    // The team tier requires BOTH the permission and an actual managed team, so
+    // granting it role-wide cannot hand shift powers to someone who manages
+    // nobody — they resolve to an empty audience and are refused.
+
+    /** Does the actor manage every shift in the org (vs. only their own)? */
+    public function actorHasOrgScope(User $actor, string $permissionKey): bool
+    {
+        return app(PermissionService::class)->hasPermission($actor, $permissionKey, 'organization');
+    }
+
+    /** Users a team manager may act on: themselves + members of teams they manage. */
+    public function managedUserIds(User $actor): array
+    {
+        return $actor->managedTeams()
+            ->with('members:id')
+            ->get()
+            ->flatMap(fn ($team) => $team->members->pluck('id'))
+            ->push($actor->id)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Can this actor edit/delete this shift?
+     * Org scope → any shift. Team scope → only shifts they created.
+     */
+    public function canModifyShift(User $actor, Shift $shift, string $permissionKey): bool
+    {
+        if ($this->actorHasOrgScope($actor, $permissionKey)) {
+            return true;
+        }
+
+        if (! app(PermissionService::class)->hasPermission($actor, $permissionKey)) {
+            return false;
+        }
+
+        // A team manager owns only what they created. Shifts with no creator
+        // predate ownership and stay org-managed.
+        return $shift->created_by !== null && $shift->created_by === $actor->id;
+    }
+
+    /**
+     * Guard an assignment target against the actor's audience.
+     * Org scope → anyone in the org. Team scope → their managed team only.
+     */
+    public function assertCanAssignUser(User $actor, string $targetUserId): void
+    {
+        if ($this->actorHasOrgScope($actor, 'shifts.manage_assignments')) {
+            return;
+        }
+
+        if (! in_array($targetUserId, $this->managedUserIds($actor), true)) {
+            abort(403, 'You can only manage shifts for members of your own team.');
+        }
+    }
+
     /**
      * List shifts for an organization, filterable by is_active, searchable by name.
      */
     public function listShifts(string $orgId, array $filters): LengthAwarePaginator
     {
-        $query = Shift::where('organization_id', $orgId);
+        $query = Shift::with('creator:id,name')->where('organization_id', $orgId);
 
         if (isset($filters['is_active'])) {
             $query->where('is_active', filter_var($filters['is_active'], FILTER_VALIDATE_BOOLEAN));
@@ -36,10 +102,12 @@ class ShiftService
     /**
      * Create a new shift.
      */
-    public function createShift(string $orgId, array $data): Shift
+    public function createShift(string $orgId, array $data, ?User $creator = null): Shift
     {
         return Shift::create(array_merge($data, [
             'organization_id' => $orgId,
+            // Stamped so a team manager can later edit/delete their own shift.
+            'created_by' => $creator?->id,
         ]));
     }
 
@@ -89,8 +157,15 @@ class ShiftService
     /**
      * Assign a user to a shift. Validates no overlapping active assignment.
      */
-    public function assignUser(string $orgId, string $userId, string $shiftId, string $effectiveFrom, ?string $effectiveTo): void
+    public function assignUser(string $orgId, string $userId, string $shiftId, string $effectiveFrom, ?string $effectiveTo, ?User $actor = null): void
     {
+        // A team manager may only place their own team members. Passing the
+        // actor is what activates the check — internal callers that have already
+        // authorised (e.g. the employee form) pass it too.
+        if ($actor !== null) {
+            $this->assertCanAssignUser($actor, $userId);
+        }
+
         // Validate user belongs to org
         $userExists = DB::table('users')
             ->where('id', $userId)
@@ -133,8 +208,12 @@ class ShiftService
     /**
      * Unassign a user from a shift by ending the active pivot row.
      */
-    public function unassignUser(string $orgId, string $userId, string $shiftId): void
+    public function unassignUser(string $orgId, string $userId, string $shiftId, ?User $actor = null): void
     {
+        if ($actor !== null) {
+            $this->assertCanAssignUser($actor, $userId);
+        }
+
         $updated = DB::table('user_shifts')
             ->where('organization_id', $orgId)
             ->where('user_id', $userId)
@@ -154,12 +233,12 @@ class ShiftService
     /**
      * Bulk-assign multiple users to a shift. Returns count of successful assignments.
      */
-    public function bulkAssign(string $orgId, string $shiftId, array $userIds, string $effectiveFrom, ?string $effectiveTo): int
+    public function bulkAssign(string $orgId, string $shiftId, array $userIds, string $effectiveFrom, ?string $effectiveTo, ?User $actor = null): int
     {
-        return DB::transaction(function () use ($orgId, $shiftId, $userIds, $effectiveFrom, $effectiveTo) {
+        return DB::transaction(function () use ($orgId, $shiftId, $userIds, $effectiveFrom, $effectiveTo, $actor) {
             $count = 0;
             foreach ($userIds as $userId) {
-                $this->assignUser($orgId, $userId, $shiftId, $effectiveFrom, $effectiveTo);
+                $this->assignUser($orgId, $userId, $shiftId, $effectiveFrom, $effectiveTo, $actor);
                 $count++;
             }
 
@@ -177,6 +256,68 @@ class ShiftService
         return $shift->activeUsers()
             ->select('users.id', 'users.name', 'users.email', 'users.avatar_url')
             ->paginate(25);
+    }
+
+    /**
+     * Point a user at a (possibly different) shift, as one operation — the
+     * employee-form entry point. Assignment history is preserved: the current
+     * row is ENDED, never rewritten, so past attendance keeps being judged
+     * against the shift that was active then.
+     *
+     *   - same shift as today → no-op
+     *   - null / different    → the current row is ended at YESTERDAY so the
+     *                           change takes effect TODAY (a clear that still
+     *                           shows the old shift until tomorrow reads as a
+     *                           failed clear). A row that only started today is
+     *                           retracted (soft-deleted) instead — ending it
+     *                           before it began would leave a negative window.
+     */
+    public function changeUserShift(string $orgId, string $userId, ?string $newShiftId, ?User $actor = null): void
+    {
+        if ($actor !== null) {
+            $this->assertCanAssignUser($actor, $userId);
+        }
+
+        DB::transaction(function () use ($orgId, $userId, $newShiftId) {
+            $today = now()->toDateString();
+
+            $current = DB::table('user_shifts')
+                ->where('organization_id', $orgId)
+                ->where('user_id', $userId)
+                ->whereNull('deleted_at')
+                ->where('effective_from', '<=', $today)
+                ->where(function ($q) use ($today) {
+                    $q->whereNull('effective_to')
+                        ->orWhere('effective_to', '>=', $today);
+                })
+                ->orderByDesc('effective_from')
+                ->first();
+
+            if ($current && $current->shift_id === $newShiftId) {
+                return;
+            }
+
+            if ($current) {
+                $startedToday = Carbon::parse($current->effective_from)->toDateString() === $today;
+
+                if ($startedToday) {
+                    DB::table('user_shifts')->where('id', $current->id)
+                        ->update(['deleted_at' => now(), 'updated_at' => now()]);
+                } else {
+                    DB::table('user_shifts')->where('id', $current->id)
+                        ->update([
+                            'effective_to' => Carbon::parse($today)->subDay()->toDateString(),
+                            'updated_at' => now(),
+                        ]);
+                }
+            }
+
+            if ($newShiftId !== null) {
+                // assignUser re-validates org membership and overlap (e.g. a
+                // future-dated assignment someone scheduled) — a clash 422s here.
+                $this->assignUser($orgId, $userId, $newShiftId, $today, null);
+            }
+        });
     }
 
     /**
@@ -198,306 +339,4 @@ class ShiftService
             ->first();
     }
 
-    // ─── Roster ──────────────────────────────────────────────────
-
-    /**
-     * Get a 7-day shift roster starting from the given week start date.
-     * Returns an array keyed by date, each containing shifts with their assigned users.
-     */
-    public function getShiftRoster(string $orgId, string $weekStart): array
-    {
-        $startDate = Carbon::parse($weekStart);
-        $endDate = $startDate->copy()->addDays(6);
-
-        // Get all shift assignments that overlap with this week
-        $assignments = DB::table('user_shifts')
-            ->join('shifts', 'shifts.id', '=', 'user_shifts.shift_id')
-            ->join('users', 'users.id', '=', 'user_shifts.user_id')
-            ->where('user_shifts.organization_id', $orgId)
-            ->whereNull('user_shifts.deleted_at')
-            ->whereNull('shifts.deleted_at')
-            ->where('user_shifts.effective_from', '<=', $endDate->toDateString())
-            ->where(function ($q) use ($startDate) {
-                $q->whereNull('user_shifts.effective_to')
-                    ->orWhere('user_shifts.effective_to', '>=', $startDate->toDateString());
-            })
-            ->select(
-                'shifts.id as shift_id',
-                'shifts.name as shift_name',
-                'shifts.start_time',
-                'shifts.end_time',
-                'shifts.days_of_week',
-                'shifts.color',
-                'users.id as user_id',
-                'users.name as user_name',
-                'users.email as user_email',
-                'users.avatar_url',
-                'user_shifts.effective_from',
-                'user_shifts.effective_to',
-            )
-            ->get();
-
-        $roster = [];
-        $current = $startDate->copy();
-
-        while ($current->lte($endDate)) {
-            $dateStr = $current->toDateString();
-            $dayOfWeek = strtolower($current->format('l'));
-            $roster[$dateStr] = [];
-
-            // Group assignments by shift for this date
-            $shiftGroups = [];
-
-            foreach ($assignments as $assignment) {
-                $daysOfWeek = json_decode($assignment->days_of_week, true) ?? [];
-
-                // Check if this shift operates on this day of the week
-                if (! in_array($dayOfWeek, $daysOfWeek)) {
-                    continue;
-                }
-
-                // Check if assignment covers this specific date
-                if ($assignment->effective_from > $dateStr) {
-                    continue;
-                }
-                if ($assignment->effective_to && $assignment->effective_to < $dateStr) {
-                    continue;
-                }
-
-                $shiftId = $assignment->shift_id;
-
-                if (! isset($shiftGroups[$shiftId])) {
-                    $shiftGroups[$shiftId] = [
-                        'shift' => [
-                            'id' => $assignment->shift_id,
-                            'name' => $assignment->shift_name,
-                            'start_time' => $assignment->start_time,
-                            'end_time' => $assignment->end_time,
-                            'color' => $assignment->color,
-                        ],
-                        'users' => [],
-                    ];
-                }
-
-                $shiftGroups[$shiftId]['users'][] = [
-                    'id' => $assignment->user_id,
-                    'name' => $assignment->user_name,
-                    'email' => $assignment->user_email,
-                    'avatar_url' => $assignment->avatar_url,
-                ];
-            }
-
-            $roster[$dateStr] = array_values($shiftGroups);
-            $current->addDay();
-        }
-
-        return $roster;
-    }
-
-    // ─── Swap Requests ───────────────────────────────────────────
-
-    /**
-     * Create a shift swap request.
-     * Validates: requester has shift, target has shift, not self-swap,
-     * no duplicate pending, swap_date is future.
-     */
-    public function createSwapRequest(User $requester, array $data): ShiftSwapRequest
-    {
-        $orgId = $requester->organization_id;
-        $swapDate = $data['swap_date'];
-
-        // Validate not self-swap
-        if ($requester->id === $data['target_user_id']) {
-            abort(422, 'You cannot create a swap request with yourself.');
-        }
-
-        // Validate swap_date is in the future
-        if (Carbon::parse($swapDate)->lte(Carbon::today())) {
-            abort(422, 'Swap date must be in the future.');
-        }
-
-        // Get requester's active shift for swap date
-        $requesterShift = $this->getUserCurrentShift($orgId, $requester->id, $swapDate);
-        if (! $requesterShift) {
-            abort(422, 'You do not have an active shift assignment for the requested date.');
-        }
-
-        // Validate target user belongs to same org
-        $targetUser = User::where('organization_id', $orgId)->find($data['target_user_id']);
-        if (! $targetUser) {
-            abort(422, 'Target user does not belong to your organization.');
-        }
-
-        // Get target user's active shift for swap date
-        $targetShift = $this->getUserCurrentShift($orgId, $data['target_user_id'], $swapDate);
-        if (! $targetShift) {
-            abort(422, 'Target user does not have an active shift assignment for the requested date.');
-        }
-
-        // Check for duplicate pending swap between same users on same date
-        $duplicatePending = ShiftSwapRequest::where('organization_id', $orgId)
-            ->where('status', 'pending')
-            ->whereDate('swap_date', $swapDate)
-            ->where(function ($q) use ($requester, $data) {
-                $q->where(function ($sq) use ($requester, $data) {
-                    $sq->where('requester_id', $requester->id)
-                        ->where('target_user_id', $data['target_user_id']);
-                })->orWhere(function ($sq) use ($requester, $data) {
-                    $sq->where('requester_id', $data['target_user_id'])
-                        ->where('target_user_id', $requester->id);
-                });
-            })
-            ->exists();
-
-        if ($duplicatePending) {
-            abort(422, 'A pending swap request already exists between these users for this date.');
-        }
-
-        return ShiftSwapRequest::create([
-            'organization_id' => $orgId,
-            'requester_id' => $requester->id,
-            'target_user_id' => $data['target_user_id'],
-            'requester_shift_id' => $requesterShift->id,
-            'target_shift_id' => $targetShift->id,
-            'swap_date' => $swapDate,
-            'reason' => $data['reason'] ?? null,
-            'status' => 'pending',
-        ]);
-    }
-
-    /**
-     * Approve a swap request. Creates single-day pivot overrides in a transaction.
-     * Self-approval is prevented: reviewer cannot be the requester.
-     */
-    public function approveSwap(ShiftSwapRequest $swap, User $reviewer): ShiftSwapRequest
-    {
-        if ($reviewer->id === $swap->requester_id) {
-            abort(403, 'You cannot approve your own swap request.');
-        }
-
-        return DB::transaction(function () use ($swap, $reviewer) {
-            $swapDate = $swap->swap_date->toDateString();
-
-            // Create single-day pivot override: requester gets target's shift
-            DB::table('user_shifts')->insert([
-                'id' => (string) Str::uuid(),
-                'organization_id' => $swap->organization_id,
-                'user_id' => $swap->requester_id,
-                'shift_id' => $swap->target_shift_id,
-                'effective_from' => $swapDate,
-                'effective_to' => $swapDate,
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
-
-            // Create single-day pivot override: target user gets requester's shift
-            DB::table('user_shifts')->insert([
-                'id' => (string) Str::uuid(),
-                'organization_id' => $swap->organization_id,
-                'user_id' => $swap->target_user_id,
-                'shift_id' => $swap->requester_shift_id,
-                'effective_from' => $swapDate,
-                'effective_to' => $swapDate,
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
-
-            $swap->update([
-                'status' => 'approved',
-                'reviewed_by' => $reviewer->id,
-                'reviewed_at' => now(),
-            ]);
-
-            return $swap->fresh()->load([
-                'requester:id,name,email',
-                'targetUser:id,name,email',
-                'requesterShift:id,name,start_time,end_time',
-                'targetShift:id,name,start_time,end_time',
-                'reviewer:id,name,email',
-            ]);
-        });
-    }
-
-    /**
-     * Reject a swap request.
-     */
-    public function rejectSwap(ShiftSwapRequest $swap, User $reviewer, ?string $note): ShiftSwapRequest
-    {
-        $swap->update([
-            'status' => 'rejected',
-            'reviewed_by' => $reviewer->id,
-            'reviewed_at' => now(),
-            'reviewer_note' => $note,
-        ]);
-
-        return $swap->fresh()->load([
-            'requester:id,name,email',
-            'targetUser:id,name,email',
-            'requesterShift:id,name,start_time,end_time',
-            'targetShift:id,name,start_time,end_time',
-            'reviewer:id,name,email',
-        ]);
-    }
-
-    /**
-     * Cancel a swap request. Only allowed if pending.
-     */
-    public function cancelSwap(ShiftSwapRequest $swap): ShiftSwapRequest
-    {
-        if ($swap->status !== 'pending') {
-            abort(422, 'Only pending swap requests can be cancelled.');
-        }
-
-        $swap->update(['status' => 'cancelled']);
-
-        return $swap->fresh();
-    }
-
-    /**
-     * List swap requests with role-based scoping.
-     * Employees see own requests, managers see team, admins see all.
-     */
-    public function listSwapRequests(string $orgId, User $user, array $filters): LengthAwarePaginator
-    {
-        $query = ShiftSwapRequest::where('organization_id', $orgId)
-            ->with([
-                'requester:id,name,email,avatar_url',
-                'targetUser:id,name,email,avatar_url',
-                'requesterShift:id,name,start_time,end_time,color',
-                'targetShift:id,name,start_time,end_time,color',
-                'reviewer:id,name,email',
-            ]);
-
-        // Role-based scoping
-        if ($user->hasRole('owner', 'org_manager', 'hr_manager')) {
-            // Owner/admin see all org swap requests
-        } elseif ($user->isManager()) {
-            // Managers see their own + team members' requests
-            $teamMemberIds = $user->managedTeams()
-                ->with('members:id')
-                ->get()
-                ->flatMap(fn ($team) => $team->members->pluck('id'))
-                ->push($user->id)
-                ->unique()
-                ->values();
-
-            $query->where(function ($q) use ($teamMemberIds) {
-                $q->whereIn('requester_id', $teamMemberIds)
-                    ->orWhereIn('target_user_id', $teamMemberIds);
-            });
-        } else {
-            // Employees see only their own requests (as requester or target)
-            $query->where(function ($q) use ($user) {
-                $q->where('requester_id', $user->id)
-                    ->orWhere('target_user_id', $user->id);
-            });
-        }
-
-        // Filter by status
-        if (! empty($filters['status'])) {
-            $query->where('status', $filters['status']);
-        }
-
-        return $query->orderByDesc('created_at')->paginate($filters['per_page'] ?? 25);
-    }
 }

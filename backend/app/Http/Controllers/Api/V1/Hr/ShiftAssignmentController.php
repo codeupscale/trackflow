@@ -46,6 +46,7 @@ class ShiftAssignmentController extends Controller
             $shiftId,
             $data['effective_from'],
             $data['effective_to'] ?? null,
+            $request->user(),
         );
 
         return response()->json(['message' => 'User assigned to shift.'], 201);
@@ -66,6 +67,7 @@ class ShiftAssignmentController extends Controller
             $request->user()->organization_id,
             $request->input('user_id'),
             $shiftId,
+            $request->user(),
         );
 
         return response()->json(['message' => 'User unassigned from shift.']);
@@ -86,6 +88,7 @@ class ShiftAssignmentController extends Controller
             $data['user_ids'],
             $data['effective_from'],
             $data['effective_to'] ?? null,
+            $request->user(),
         );
 
         return response()->json(['data' => ['assigned_count' => $count]]);

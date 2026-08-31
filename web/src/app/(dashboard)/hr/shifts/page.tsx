@@ -2,14 +2,17 @@
 
 import { useState, useRef, useEffect } from 'react';
 import {
+  Building2,
   Clock,
   Clock4,
   Loader2,
+  Lock,
   MoreHorizontal,
   Pencil,
   Plus,
   Search,
   Trash2,
+  Users,
   X,
 } from 'lucide-react';
 
@@ -18,7 +21,7 @@ import { usePermissionStore } from '@/stores/permission-store';
 import { useShifts, useDeleteShift } from '@/hooks/hr/use-shifts';
 import type { Shift } from '@/lib/validations/shift';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
-import { ShiftFormSheet } from '@/components/hr/ShiftFormSheet';
+import { ShiftFormSheet, type ShiftModalMode } from '@/components/hr/ShiftFormSheet';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -58,14 +61,30 @@ const DAY_ABBREV: Record<string, string> = {
 };
 
 export default function ShiftsPage() {
-  const { hasPermission } = usePermissionStore();
-  const canManage = hasPermission('shifts.create');
+  const { getScope } = usePermissionStore();
+  const { user } = useAuthStore();
+
+  // Two tiers. Org scope manages every shift; team scope ("project") manages
+  // only shifts you created — and only counts if you actually manage a team,
+  // which the permission map alone cannot tell us.
+  //
+  // Read the raw scope rather than hasPermissionWithScope: this store treats a
+  // 'none' grant as NON-hierarchical (it fails an 'organization' requirement),
+  // while the backend ranks the two equal. Every org-wide role holds these at
+  // 'none', so the helper would have hidden the button from HR entirely.
+  const shiftCreateScope = getScope('shifts.create');
+  const hasOrgScope = shiftCreateScope === 'none' || shiftCreateScope === 'organization';
+  const managesTeams = Boolean(user?.manages_teams);
+  const canCreate = hasOrgScope || (shiftCreateScope === 'project' && managesTeams);
+  const isTeamScoped = canCreate && !hasOrgScope;
+  const canManage = canCreate;
 
   const [page, setPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusTab, setStatusTab] = useState<string>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogMode, setDialogMode] = useState<ShiftModalMode>('edit');
   const [editingShift, setEditingShift] = useState<Shift | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Shift | null>(null);
 
@@ -107,13 +126,28 @@ export default function ShiftsPage() {
   const activeCount = shifts.filter((s) => s.is_active).length;
   const inactiveCount = shifts.filter((s) => !s.is_active).length;
 
+  // `editingShift` is a snapshot from when the row was clicked; after a save
+  // the view pane would show pre-edit values. Re-resolve against the freshly
+  // refetched list by id (same trap as the department modal).
+  const activeShift = editingShift
+    ? (shifts.find((s) => s.id === editingShift.id) ?? editingShift)
+    : null;
+
   const openCreate = () => {
     setEditingShift(null);
+    setDialogMode('edit');
     setDialogOpen(true);
   };
 
   const openEdit = (shift: Shift) => {
     setEditingShift(shift);
+    setDialogMode('edit');
+    setDialogOpen(true);
+  };
+
+  const openView = (shift: Shift) => {
+    setEditingShift(shift);
+    setDialogMode('view');
     setDialogOpen(true);
   };
 
@@ -131,7 +165,9 @@ export default function ShiftsPage() {
         <div>
           <h1 className="text-lg font-semibold tracking-tight">Shifts</h1>
           <p className="text-xs text-muted-foreground">
-            Manage shift schedules for your organization
+            {isTeamScoped
+              ? 'Create and manage shift schedules for your team'
+              : 'Manage shift schedules for your organization'}
           </p>
         </div>
         {canManage && (
@@ -141,6 +177,23 @@ export default function ShiftsPage() {
           </Button>
         )}
       </div>
+
+      {/* Team-scope notice — states the boundary up front so a manager isn't
+          surprised by a disabled Edit on an HR-owned shift. */}
+      {isTeamScoped && (
+        <div className="flex items-start gap-2.5 rounded-lg border border-dashed border-indigo-500/30 bg-indigo-50/60 dark:bg-indigo-500/5 px-3.5 py-2.5">
+          <Users className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <p className="text-[0.7rem] font-medium text-indigo-900 dark:text-indigo-200">
+              Team shift management
+            </p>
+            <p className="text-[0.65rem] text-indigo-700/80 dark:text-indigo-300/70 leading-relaxed">
+              You can create shifts and edit the ones you own. Organization shifts are read-only,
+              and you can assign only members of your team.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -281,6 +334,7 @@ export default function ShiftsPage() {
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Days</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Break</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Grace</th>
+                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Owner</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Status</th>
                       {canManage && (
                         <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Actions</th>
@@ -289,7 +343,11 @@ export default function ShiftsPage() {
                   </thead>
                   <tbody>
                     {shifts.map((shift) => (
-                      <tr key={shift.id} className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors">
+                      <tr
+                        key={shift.id}
+                        className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
+                        onClick={() => openView(shift)}
+                      >
                         <td className="px-4 py-2.5 whitespace-nowrap">
                           <div className="flex items-center gap-2">
                             <span
@@ -331,6 +389,24 @@ export default function ShiftsPage() {
                           {shift.grace_period_minutes > 0 ? `${shift.grace_period_minutes}m` : '—'}
                         </td>
                         <td className="px-4 py-2.5 whitespace-nowrap">
+                          {shift.creator ? (
+                            <span className={cn(
+                              'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.6rem] font-medium',
+                              shift.creator.id === user?.id
+                                ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300'
+                                : 'bg-muted text-muted-foreground',
+                            )}>
+                              <Users className="h-2.5 w-2.5" />
+                              {shift.creator.id === user?.id ? 'You' : shift.creator.name}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[0.6rem] font-medium text-muted-foreground">
+                              <Building2 className="h-2.5 w-2.5" />
+                              Organization
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 whitespace-nowrap">
                           <span className={cn(
                             'inline-flex items-center gap-1.5 text-[0.7rem] font-medium',
                             shift.is_active
@@ -345,7 +421,8 @@ export default function ShiftsPage() {
                           </span>
                         </td>
                         {canManage && (
-                          <td className="px-4 py-2.5 whitespace-nowrap text-right">
+                          // Keep menu clicks from also opening the view modal.
+                          <td className="px-4 py-2.5 whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
                             <DropdownMenu>
                               <DropdownMenuTrigger
                                 className="inline-flex items-center justify-center rounded-md h-6 w-6 hover:bg-muted text-muted-foreground"
@@ -353,18 +430,30 @@ export default function ShiftsPage() {
                               >
                                 <MoreHorizontal className="h-3.5 w-3.5" />
                               </DropdownMenuTrigger>
+                              {/* can_edit/can_delete come from the server, which
+                                  already applied the ownership rule. */}
                               <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => openEdit(shift)}>
-                                  <Pencil className="h-3.5 w-3.5 mr-2" />
-                                  Edit
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  variant="destructive"
-                                  onClick={() => setDeleteTarget(shift)}
-                                >
-                                  <Trash2 className="h-3.5 w-3.5 mr-2" />
-                                  Delete
-                                </DropdownMenuItem>
+                                {shift.can_edit !== false && (
+                                  <DropdownMenuItem onClick={() => openEdit(shift)}>
+                                    <Pencil className="h-3.5 w-3.5 mr-2" />
+                                    Edit
+                                  </DropdownMenuItem>
+                                )}
+                                {shift.can_delete !== false && (
+                                  <DropdownMenuItem
+                                    variant="destructive"
+                                    onClick={() => setDeleteTarget(shift)}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5 mr-2" />
+                                    Delete
+                                  </DropdownMenuItem>
+                                )}
+                                {shift.can_edit === false && shift.can_delete === false && (
+                                  <DropdownMenuItem disabled>
+                                    <Lock className="h-3.5 w-3.5 mr-2" />
+                                    Organization shift
+                                  </DropdownMenuItem>
+                                )}
                               </DropdownMenuContent>
                             </DropdownMenu>
                           </td>
@@ -428,7 +517,11 @@ export default function ShiftsPage() {
           setDialogOpen(open);
           if (!open) setEditingShift(null);
         }}
-        shift={editingShift}
+        shift={activeShift}
+        initialMode={dialogMode}
+        // Server-resolved per-row right, so a team manager sees no Edit button
+        // on an organization shift they cannot change.
+        canEdit={canManage && activeShift?.can_edit !== false}
       />
 
       {/* Delete Confirmation */}
