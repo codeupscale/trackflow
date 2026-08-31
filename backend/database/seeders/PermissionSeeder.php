@@ -107,7 +107,6 @@ class PermissionSeeder extends Seeder
             ['shifts.edit',                'shifts', 'edit',                'Edit shift details',                      false],
             ['shifts.delete',              'shifts', 'delete',              'Delete shifts',                           false],
             ['shifts.manage_assignments',  'shifts', 'manage_assignments',  'Assign and unassign users to shifts',    false],
-            ['shifts.manage_swaps',        'shifts', 'manage_swaps',        'Approve or reject shift swap requests',  false],
 
             // --- team (4) ---
             ['team.view_members', 'team', 'view_members', 'View org member list',          false],
@@ -236,7 +235,6 @@ class PermissionSeeder extends Seeder
             'shifts.edit'               => 'none',
             'shifts.delete'             => 'none',
             'shifts.manage_assignments' => 'none',
-            'shifts.manage_swaps'       => 'none',
 
             // team
             'team.view_members' => 'none',
@@ -344,7 +342,6 @@ class PermissionSeeder extends Seeder
             'shifts.edit'               => 'none',
             'shifts.delete'             => 'none',
             'shifts.manage_assignments' => 'none',
-            'shifts.manage_swaps'       => 'none',
 
             // team — view + invite (onboarding is an HR function)
             'team.view_members' => 'none',
@@ -490,7 +487,6 @@ class PermissionSeeder extends Seeder
             // shifts — view, manage assignments, manage swaps
             'shifts.view'               => 'none',
             'shifts.manage_assignments' => 'none',
-            'shifts.manage_swaps'       => 'none',
 
             // team — view + invite
             'team.view_members' => 'none',
@@ -546,8 +542,16 @@ class PermissionSeeder extends Seeder
             // payroll — employee: view own payslips only
             'payroll.view_own' => 'none',
 
-            // shifts — view only
-            'shifts.view' => 'none',
+            // shifts — view any, plus TEAM-scoped management ('project' is this
+            // codebase's team scope). Safe to grant role-wide: ShiftService also
+            // requires the actor to actually manage a team, so an employee who
+            // manages nobody can neither create nor assign, and the UI hides the
+            // controls for them. See 2026_08_27_000002.
+            'shifts.view'               => 'none',
+            'shifts.create'             => 'project',
+            'shifts.edit'               => 'project',
+            'shifts.delete'             => 'project',
+            'shifts.manage_assignments' => 'project',
         ];
     }
 
