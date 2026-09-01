@@ -35,6 +35,8 @@ import {
   CardHeader,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { CheckInStatusBadge } from '@/components/hr/CheckInStatusBadge';
+import { deriveCheckInBadges } from '@/lib/check-in-time';
 import {
   Table,
   TableBody,
@@ -426,9 +428,18 @@ export default function DashboardPage() {
           status: string;
           check_in_at: string | null;
           check_out_at: string | null;
-          check_in_status: string | null;
+          check_in_status: 'on_time' | 'late' | null;
           is_early_checkout: boolean;
+          missing_checkout?: boolean;
           late_minutes: number;
+          // Feeds deriveCheckInBadges, which judges a short day on presence
+          // against the shift length minus its grace window.
+          worked_seconds?: number | null;
+          shift?: {
+            start_time?: string | null;
+            end_time?: string | null;
+            grace_period_minutes?: number | null;
+          } | null;
           user?: { id: string; name: string; email: string; avatar_url: string | null };
         }>;
       } catch {
@@ -1280,18 +1291,28 @@ export default function DashboardPage() {
                               </span>
                             </TableCell>
                             <TableCell className="py-2 px-2">
+                              {/* Badges come from the SHARED deriveCheckInBadges, the
+                                  same rule the attendance screens use, so one day can
+                                  never read differently on two screens. No late marker:
+                                  the Late badge is retired, and lateness is owner-only
+                                  on My Attendance — an asterisk here leaked it to every
+                                  manager. Early Checkout now means a short day
+                                  (presence under the shift length minus grace), not the
+                                  stale is_early_checkout flag, which fired whenever
+                                  someone merely finished before the shift end. */}
                               <div className="flex flex-wrap gap-0.5">
                                 <Badge variant="outline" className={`text-[0.55rem] px-1.5 py-0 h-4 font-medium ${statusStyle.className}`}>
                                   {statusStyle.label}
-                                  {record.check_in_status === 'late' && record.status === 'present' && (
-                                    <span className="ml-0.5 text-amber-500">*</span>
-                                  )}
                                 </Badge>
-                                {record.is_early_checkout && (
-                                  <Badge variant="outline" className="text-[0.55rem] px-1.5 py-0 h-4 font-medium bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/20">
-                                    Early Checkout
-                                  </Badge>
-                                )}
+                                {deriveCheckInBadges(record)
+                                  .filter((b) => b !== 'on_time')
+                                  .map((b) => (
+                                    <CheckInStatusBadge
+                                      key={b}
+                                      status={b}
+                                      className="text-[0.55rem] px-1.5 py-0 h-4 font-medium"
+                                    />
+                                  ))}
                               </div>
                             </TableCell>
                             <TableCell className="text-[0.7rem] font-mono tabular-nums py-2 px-2 text-muted-foreground">{checkInTime}</TableCell>
