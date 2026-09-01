@@ -33,6 +33,7 @@ import {
 } from '@/hooks/hr/use-payroll';
 import { formatDate } from '@/lib/utils';
 import type { PayrollPeriod } from '@/lib/validations/payroll';
+import { PayrollRunCard } from '@/components/hr/PayrollRunCard';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
 import { cn } from '@/lib/utils';
@@ -88,7 +89,7 @@ export default function PayrollPage() {
         <div>
           <h1 className="text-lg font-semibold tracking-tight">Payroll</h1>
           <p className="text-xs text-muted-foreground">
-            Manage payroll periods, run payroll, and approve payslips
+            Run this month&apos;s payroll and review past periods
           </p>
         </div>
         {canRun && (
@@ -102,6 +103,16 @@ export default function PayrollPage() {
             Manage Periods
           </Button>
         )}
+      </div>
+
+      {/* This month's run — the whole monthly task in one card, with the single
+          next action. The table below is history. */}
+      <PayrollRunCard canRun={canRun} canApprove={canApprove} />
+
+      <div>
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+          All periods
+        </h2>
       </div>
 
       {/* Stats Strip */}

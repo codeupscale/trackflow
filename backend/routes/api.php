@@ -453,6 +453,8 @@ Route::prefix('v1')->group(function () {
                 ->middleware('permission:payroll.run');
             Route::post('payroll-periods/{id}/approve', [PayrollPeriodController::class, 'approve'])
                 ->middleware('permission:payroll.approve');
+            Route::post('payroll-periods/{id}/mark-paid', [PayrollPeriodController::class, 'markPaid'])
+                ->middleware('permission:payroll.approve');
 
             // Payroll — Payslips
             Route::get('payslips', [PayslipController::class, 'index'])
@@ -460,7 +462,10 @@ Route::prefix('v1')->group(function () {
             Route::get('payslips/{id}', [PayslipController::class, 'show'])
                 ->middleware('permission:payroll.view_own');
 
-            // Payroll — Employee Salary
+            // Payroll — Employee Salary. The roster is registered BEFORE the
+            // {employee} routes so "salary-roster" is never captured as an id.
+            Route::get('salary-roster', [EmployeeSalaryController::class, 'index'])
+                ->middleware('permission:payroll.view_all');
             Route::get('employees/{employee}/salary', [EmployeeSalaryController::class, 'show'])
                 ->middleware('permission:payroll.view_all');
             Route::post('employees/{employee}/salary', [EmployeeSalaryController::class, 'store'])

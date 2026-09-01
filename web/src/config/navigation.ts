@@ -16,6 +16,7 @@ import {
     LayoutDashboard,
     Megaphone,
     Puzzle,
+    Wallet,
     Receipt,
     Settings,
     Shield,
@@ -187,6 +188,12 @@ export const navigationConfig: NavGroup[] = [
                 href: "/hr/payroll/my-payslips",
                 icon: Receipt,
                 requiredPermission: "payroll.view_own",
+            },
+            {
+                name: "Employee Salaries",
+                href: "/hr/payroll/salaries",
+                icon: Wallet,
+                requiredPermission: "payroll.view_all",
             },
             {
                 name: "Structures",

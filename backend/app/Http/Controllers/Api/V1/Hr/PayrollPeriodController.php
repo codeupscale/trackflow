@@ -79,6 +79,23 @@ class PayrollPeriodController extends Controller
         ]);
     }
 
+    /**
+     * Close the period once the money has gone out. Gated on the same
+     * permission as approval — it is the final step of the same sign-off.
+     */
+    public function markPaid(Request $request, string $id): JsonResponse
+    {
+        $period = PayrollPeriod::findOrFail($id);
+        $this->authorize('approve', $period);
+
+        $paid = $this->payrollService->markPayrollPaid($id);
+
+        return response()->json([
+            'message' => 'Payroll period marked as paid.',
+            'data' => $paid,
+        ]);
+    }
+
     public function approve(Request $request, string $id): JsonResponse
     {
         $period = PayrollPeriod::findOrFail($id);

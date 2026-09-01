@@ -22,6 +22,7 @@ class PayrollPeriod extends Model
         'end_date',
         'status',
         'processed_at',
+        'paid_at',
         'approved_by',
     ];
 
@@ -31,6 +32,7 @@ class PayrollPeriod extends Model
             'start_date' => 'date',
             'end_date' => 'date',
             'processed_at' => 'datetime',
+            'paid_at' => 'datetime',
         ];
     }
 

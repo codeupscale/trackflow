@@ -121,6 +121,34 @@ export function useRunPayroll() {
   });
 }
 
+/**
+ * Close a period once the money has gone out — the final step of the pipeline.
+ * The server rejects this with a 422 unless the period is approved, so the
+ * message is surfaced rather than a generic failure.
+ */
+export function useMarkPayrollPaid() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (periodId: string) => {
+      const res = await api.post(`/hr/payroll-periods/${periodId}/mark-paid`);
+      return res.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['payroll-periods'] });
+      queryClient.invalidateQueries({ queryKey: ['payslips'] });
+      toast.success('Payroll marked as paid');
+    },
+    onError: (err: unknown) => {
+      const message =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ??
+        (err as { data?: { error?: { message?: string } } })?.data?.error?.message ??
+        (err as Error)?.message;
+      toast.error(message || 'Failed to mark payroll as paid');
+    },
+  });
+}
+
 export function useApprovePayroll() {
   const queryClient = useQueryClient();
 

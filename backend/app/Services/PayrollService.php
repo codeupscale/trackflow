@@ -9,6 +9,7 @@ use App\Models\PayslipLineItem;
 use App\Models\PayrollPeriod;
 use App\Models\SalaryStructure;
 use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 
@@ -90,6 +91,72 @@ class PayrollService
 
     // ─── Employee Salary Assignments ───────────────────────────────
 
+    /**
+     * Every active employee with their current salary assignment, if any.
+     *
+     * Driven from USERS with a left join so people WITHOUT a salary appear —
+     * they are the ones that matter. runPayroll() iterates assignments, so an
+     * unassigned employee is silently skipped and the run reports success while
+     * producing no payslip for them. A list of only-assigned employees cannot
+     * surface that; this one can.
+     */
+    public function getSalaryRoster(string $orgId, array $filters): LengthAwarePaginator
+    {
+        $today = Carbon::now()->toDateString();
+
+        $query = User::where('users.organization_id', $orgId)
+            ->where('users.is_active', true)
+            ->whereNull('users.deleted_at')
+            // The active assignment for today. Overlaps are prevented on write
+            // (see assignSalaryToEmployee), so this cannot fan out.
+            ->leftJoin('employee_salary_assignments as esa', function ($join) use ($orgId, $today) {
+                $join->on('esa.user_id', '=', 'users.id')
+                    ->where('esa.organization_id', $orgId)
+                    ->whereNull('esa.deleted_at')
+                    ->where('esa.effective_from', '<=', $today)
+                    ->where(function ($q) use ($today) {
+                        $q->whereNull('esa.effective_to')
+                            ->orWhere('esa.effective_to', '>=', $today);
+                    });
+            })
+            ->leftJoin('salary_structures as ss', 'esa.salary_structure_id', '=', 'ss.id')
+            ->select([
+                'users.id',
+                'users.name',
+                'users.email',
+                'users.avatar_url',
+                'users.role',
+                'esa.id as assignment_id',
+                'esa.effective_from',
+                'esa.effective_to',
+                // custom_base_salary is deliberately NOT selected here: it is
+                // encrypted, and a raw join hands back the cipher with no cast
+                // to decrypt it. The controller resolves it through the model,
+                // which owns that cast.
+                'ss.id as structure_id',
+                'ss.name as structure_name',
+                'ss.type as structure_type',
+                'ss.base_salary as structure_base_salary',
+            ]);
+
+        if (! empty($filters['search'])) {
+            $search = str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $filters['search']);
+            $query->where(function ($q) use ($search) {
+                $q->where('users.name', 'ilike', "%{$search}%")
+                    ->orWhere('users.email', 'ilike', "%{$search}%");
+            });
+        }
+
+        // 'assigned' / 'unassigned' — the whole point of the screen.
+        if (($filters['status'] ?? null) === 'assigned') {
+            $query->whereNotNull('esa.id');
+        } elseif (($filters['status'] ?? null) === 'unassigned') {
+            $query->whereNull('esa.id');
+        }
+
+        return $query->orderBy('users.name')->paginate($filters['per_page'] ?? 25);
+    }
+
     public function getEmployeeSalary(string $userId): ?EmployeeSalaryAssignment
     {
         return EmployeeSalaryAssignment::where('user_id', $userId)
@@ -103,18 +170,56 @@ class PayrollService
             ->first();
     }
 
+    /**
+     * Assign a salary, closing any assignment it supersedes.
+     *
+     * Overlapping assignments must not coexist: runPayroll() processes EVERY
+     * assignment overlapping the period and force-deletes the prior payslip
+     * before writing, so two active rows do not error — the last one processed
+     * silently wins, and the employee is paid a non-deterministic amount.
+     *
+     * Any assignment still open on the day before the new one starts is ended
+     * there, which preserves history: a payroll re-run for an earlier period
+     * still resolves the salary that actually applied then. An assignment that
+     * begins on or after the new start date is fully superseded and is
+     * soft-deleted, since ending it would leave a negative-length window.
+     */
     public function assignSalaryToEmployee(string $userId, array $data): EmployeeSalaryAssignment
     {
-        return EmployeeSalaryAssignment::create(array_merge($data, [
-            'user_id' => $userId,
-        ]));
+        return DB::transaction(function () use ($userId, $data) {
+            $from = Carbon::parse($data['effective_from'])->toDateString();
+            $dayBefore = Carbon::parse($from)->subDay()->toDateString();
+
+            $existing = EmployeeSalaryAssignment::where('user_id', $userId)
+                ->where(function ($q) use ($from) {
+                    $q->whereNull('effective_to')
+                        ->orWhere('effective_to', '>=', $from);
+                })
+                ->get();
+
+            foreach ($existing as $row) {
+                if ($row->effective_from->toDateString() >= $from) {
+                    $row->delete();
+                    continue;
+                }
+
+                $row->update(['effective_to' => $dayBefore]);
+            }
+
+            return EmployeeSalaryAssignment::create(array_merge($data, [
+                'user_id' => $userId,
+            ]));
+        });
     }
 
     // ─── Payroll Periods ───────────────────────────────────────────
 
     public function getPayrollPeriods(array $filters): LengthAwarePaginator
     {
-        $query = PayrollPeriod::with('approver:id,name,email');
+        // withCount is required, not cosmetic: a period sits in 'draft' both
+        // before and after a run, so the payslip count is the only thing that
+        // distinguishes "not run yet" from "ready to approve".
+        $query = PayrollPeriod::with('approver:id,name,email')->withCount('payslips');
 
         if (! empty($filters['status'])) {
             $query->where('status', $filters['status']);
@@ -309,6 +414,39 @@ class PayrollService
 
             // Mark all draft payslips as approved
             $period->payslips()->where('status', 'draft')->update(['status' => 'approved']);
+
+            return $period->fresh()->load('approver:id,name,email')->loadCount('payslips');
+        });
+    }
+
+    /**
+     * Close out a period once the money has actually gone out.
+     *
+     * 'paid' was previously a dead status — the UI filtered by it but nothing
+     * ever set it, so an approved period stayed approved forever and "have we
+     * paid this?" had no answer in the product. Approved is the only legal
+     * predecessor: paying a period that was never approved would skip the
+     * review step entirely.
+     */
+    public function markPayrollPaid(string $periodId): PayrollPeriod
+    {
+        return DB::transaction(function () use ($periodId) {
+            $period = PayrollPeriod::lockForUpdate()->findOrFail($periodId);
+
+            if ($period->status === 'paid') {
+                // Idempotent: a double-click must not error.
+                return $period->load('approver:id,name,email')->loadCount('payslips');
+            }
+
+            if ($period->status !== 'approved') {
+                // abort(422) rather than a RuntimeException: the latter surfaces
+                // as a 500 "unexpected error", so the UI cannot tell the user
+                // what to do. This is a precondition, not a crash.
+                abort(422, 'This payroll period must be approved before it can be marked as paid.');
+            }
+
+            $period->update(['status' => 'paid', 'paid_at' => now()]);
+            $period->payslips()->where('status', 'approved')->update(['status' => 'paid']);
 
             return $period->fresh()->load('approver:id,name,email')->loadCount('payslips');
         });
