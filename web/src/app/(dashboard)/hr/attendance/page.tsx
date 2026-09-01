@@ -328,11 +328,11 @@ export default function MyAttendancePage() {
                   <tbody>
                     {records.map((record) => {
                       const sd = statusDot[record.status] ?? statusDot.absent;
-                      // The late badge carries the same signal as the Late column, so it
-                      // rides the same gate — hiding the column alone would leak it here.
-                      const checkInBadges = deriveCheckInBadges(record).filter(
-                        (badge) => canSeeLate || badge !== 'late'
-                      );
+                      // No late filter here: the Late BADGE was retired, so
+                      // deriveCheckInBadges can no longer emit one. The canSeeLate
+                      // gate still applies to the Late column and the Late Days
+                      // tile, which do still expose the number.
+                      const checkInBadges = deriveCheckInBadges(record);
                       const secs =
                         record.worked_seconds != null
                           ? record.worked_seconds
