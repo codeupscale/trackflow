@@ -86,7 +86,18 @@ export interface AttendanceRecord {
   check_in_late_minutes?: number;
   is_early_checkout?: boolean;
   missing_checkout?: boolean;
+  /** Day-completion snapshot, judged against the schedule in force that day. */
+  required_day_seconds?: number | null;
+  met_required_hours?: boolean | null;
   check_in_flags?: CheckInFlags | null;
+  /** Assigned shift for the day — drives the short-day requirement and its grace. */
+  shift?: {
+    id: string;
+    name: string;
+    start_time: string;
+    end_time: string;
+    grace_period_minutes?: number;
+  } | null;
   user?: {
     id: string;
     name: string;
@@ -163,6 +174,10 @@ export interface CheckInSummaryRow {
   late_count: number;
   early_checkout_count: number;
   missing_checkout_count: number;
+  /** Days that reached the required hours for that day. */
+  full_days_count: number;
+  /** full_days_count / days_present as a percentage; null when never present. */
+  completion_rate: number | null;
 }
 
 export interface PaginatedCheckInSummary {
@@ -234,6 +249,17 @@ export interface PaginatedAttendance {
   total: number;
   from: number | null;
   to: number | null;
+  /**
+   * Counts over the WHOLE filtered set, not the returned page. Only the team
+   * endpoint sends this; the stat strip must not count `data` itself, which is
+   * one page and cannot be reconciled with `total`.
+   */
+  stats?: {
+    total: number;
+    present: number;
+    absent: number;
+    late: number;
+  };
 }
 
 export interface PaginatedRegularizations {

@@ -723,6 +723,10 @@ class AuthController extends Controller
             'last_active_at' => $user->last_active_at,
             'email_verified_at' => $user->email_verified_at,
             'permissions' => $user->getPermissionMap(),
+            // Team-scoped shift management needs BOTH a shifts.* grant and an
+            // actual managed team. The UI can't derive the second half from the
+            // permission map alone, so it ships explicitly.
+            'manages_teams' => $user->managedTeams()->exists(),
             'organization' => [
                 'id' => $user->organization->id,
                 'name' => $user->organization->name,

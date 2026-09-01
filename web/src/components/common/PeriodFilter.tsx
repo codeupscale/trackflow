@@ -82,12 +82,18 @@ export function periodToRange(p: Period): { start_date?: string; end_date?: stri
   }
 }
 
-/** Human label for the trigger — reads as the ACTIVE filter, not the menu name. */
-export function periodLabel(p: Period): string {
+/**
+ * Human label for the trigger — reads as the ACTIVE filter, not the menu name.
+ *
+ * `allLabel` exists because "all time" is not always literally true. The
+ * attendance screens synthesise a row per calendar day, so their unbounded
+ * state is really a trailing window and must say so.
+ */
+export function periodLabel(p: Period, allLabel = 'All time'): string {
   const now = new Date();
   switch (p.kind) {
     case 'all':
-      return 'All time';
+      return allLabel;
     case 'preset':
       switch (p.preset) {
         case 'this_month': return 'This month';
@@ -109,9 +115,11 @@ interface PeriodFilterProps {
   value: Period;
   onChange: (p: Period) => void;
   className?: string;
+  /** Override the unbounded option's wording (see periodLabel). */
+  allLabel?: string;
 }
 
-export function PeriodFilter({ value, onChange, className }: PeriodFilterProps) {
+export function PeriodFilter({ value, onChange, className, allLabel = 'All time' }: PeriodFilterProps) {
   const [open, setOpen] = useState(false);
   // Year shown in the month grid — starts at the selection's year so reopening
   // lands where the user left off.
@@ -140,18 +148,21 @@ export function PeriodFilter({ value, onChange, className }: PeriodFilterProps) 
       >
         <span className="inline-flex items-center gap-1.5 truncate">
           <CalendarRange className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-          {periodLabel(value)}
+          {periodLabel(value, allLabel)}
         </span>
         <span className="flex items-center gap-1 shrink-0">
-          {/* Clear back to All time — same affordance as the employee filter
-              beside it. stopPropagation so clearing doesn't also open the
-              panel. */}
+          {/* Clear back to the unbounded state — same affordance as the employee
+              filter beside it. The propagation guard must cover pointerdown and
+              mousedown, NOT just click: the popover trigger opens on pointerdown,
+              so a click-only guard cleared the filter and left the panel open. */}
           {value.kind !== 'all' && (
             <span
               role="button"
               tabIndex={0}
               aria-label="Clear period filter"
               className="rounded-sm opacity-70 hover:opacity-100"
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => { e.stopPropagation(); onChange({ kind: 'all' }); }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
@@ -180,7 +191,7 @@ export function PeriodFilter({ value, onChange, className }: PeriodFilterProps) 
                 value.kind === 'all' && 'bg-primary/10 text-primary font-medium',
               )}
             >
-              All time
+              {allLabel}
             </button>
             {PRESETS.map((p) => (
               <button

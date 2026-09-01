@@ -91,17 +91,21 @@ class AttendanceController extends Controller
     {
         $this->authorize('viewCheckIns', AttendanceRecord::class);
 
+        // period=range + start_date/end_date backs the period filter's presets
+        // (quarter, year, any month), which a single 'month' string cannot express.
         $request->validate([
-            'period' => ['sometimes', 'in:day,month'],
+            'period' => ['sometimes', 'in:day,month,range,all'],
             'date' => ['sometimes', 'date_format:Y-m-d'],
             'month' => ['sometimes', 'date_format:Y-m'],
+            'start_date' => ['sometimes', 'date_format:Y-m-d'],
+            'end_date' => ['sometimes', 'date_format:Y-m-d', 'after_or_equal:start_date'],
             'user_id' => ['sometimes', 'uuid'],
             'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
         ]);
 
         $summary = $this->checkInService->summarize(
             $request->user(),
-            $request->only(['period', 'date', 'month', 'user_id', 'per_page'])
+            $request->only(['period', 'date', 'month', 'start_date', 'end_date', 'user_id', 'per_page'])
         );
 
         return response()->json($summary);
@@ -116,16 +120,18 @@ class AttendanceController extends Controller
         $this->authorize('export', AttendanceRecord::class);
 
         $request->validate([
-            'period' => ['sometimes', 'in:day,month'],
+            'period' => ['sometimes', 'in:day,month,range,all'],
             'date' => ['sometimes', 'date_format:Y-m-d'],
             'month' => ['sometimes', 'date_format:Y-m'],
+            'start_date' => ['sometimes', 'date_format:Y-m-d'],
+            'end_date' => ['sometimes', 'date_format:Y-m-d', 'after_or_equal:start_date'],
             'user_id' => ['sometimes', 'uuid'],
             'view' => ['sometimes', 'in:detail,summary'],
             'format' => ['sometimes', 'in:csv'],
         ]);
 
         $user = $request->user();
-        $filters = $request->only(['period', 'date', 'month', 'user_id']);
+        $filters = $request->only(['period', 'date', 'month', 'start_date', 'end_date', 'user_id']);
         $view = $request->input('view', 'detail');
 
         $csv = $view === 'summary'
@@ -133,9 +139,12 @@ class AttendanceController extends Controller
             : ReportExportFormatter::checkInDetail($this->checkInService->detailRowGenerator($user, $filters));
 
         $period = $request->input('period', 'day');
-        $range = $period === 'month'
-            ? $request->input('month', now()->format('Y-m'))
-            : $request->input('date', now()->toDateString());
+        $range = match ($period) {
+            'all' => 'all-time',
+            'range' => $request->input('start_date', '').'_to_'.$request->input('end_date', ''),
+            'month' => $request->input('month', now()->format('Y-m')),
+            default => $request->input('date', now()->toDateString()),
+        };
         $filename = "check-ins-{$view}-{$period}-{$range}";
 
         return response($csv, 200, [
@@ -184,12 +193,15 @@ class AttendanceController extends Controller
             'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
         ]);
 
+        $stats = null;
         $records = $this->attendanceService->getTeamAttendance(
             $request->user()->organization_id,
-            $request->only(['start_date', 'end_date', 'status', 'user_id', 'department_id', 'search', 'per_page'])
+            $request->only(['start_date', 'end_date', 'status', 'user_id', 'department_id', 'search', 'per_page']),
+            $stats
         );
 
-        return response()->json($records);
+        // `stats` spans the whole filtered set; the paginated `data` is one page of it.
+        return response()->json($records->toArray() + ['stats' => $stats]);
     }
 
     /**
@@ -197,9 +209,14 @@ class AttendanceController extends Controller
      */
     public function summary(Request $request): JsonResponse
     {
+        // month/year remain the default contract; start_date+end_date override
+        // them so the summary can follow an arbitrary period (quarter, year,
+        // any month) rather than being pinned to a single month.
         $request->validate([
             'month' => ['required', 'integer', 'min:1', 'max:12'],
             'year' => ['required', 'integer', 'min:2020', 'max:2100'],
+            'start_date' => ['sometimes', 'nullable', 'date'],
+            'end_date' => ['sometimes', 'nullable', 'date', 'after_or_equal:start_date'],
         ]);
 
         $user = $request->user();
@@ -208,7 +225,9 @@ class AttendanceController extends Controller
             $user->id,
             $user->organization_id,
             (int) $request->input('month'),
-            (int) $request->input('year')
+            (int) $request->input('year'),
+            $request->input('start_date'),
+            $request->input('end_date'),
         );
 
         return response()->json(['data' => $summary]);

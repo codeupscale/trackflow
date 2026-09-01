@@ -35,6 +35,7 @@ const mockRows: EmployeeListItem[] = [
     employment_type: 'full_time',
     date_of_joining: null,
     work_location: null,
+    shift: null,
   },
   {
     // Same display name, different account/email and — critically — a different id.
@@ -53,6 +54,7 @@ const mockRows: EmployeeListItem[] = [
     employment_type: 'full_time',
     date_of_joining: null,
     work_location: null,
+    shift: null,
   },
 ];
 

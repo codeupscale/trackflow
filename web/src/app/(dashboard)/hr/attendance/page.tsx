@@ -50,6 +50,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 
+import { PeriodFilter, periodToRange, type Period } from '@/components/common/PeriodFilter';
 import { CheckInCard } from '@/components/hr/CheckInCard';
 import { CheckInStatusBadge, type CheckInBadgeStatus } from '@/components/hr/CheckInStatusBadge';
 import { useAttendance, useAttendanceSummary, useRequestRegularization } from '@/hooks/hr/use-attendance';
@@ -57,18 +58,15 @@ import { useTodayStatus } from '@/hooks/hr/use-check-in';
 import { usePermissionStore } from '@/stores/permission-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { regularizationSchema, type RegularizationFormData, type AttendanceRecord } from '@/lib/validations/attendance';
-import { cn, formatDate } from '@/lib/utils';
+import { cn, formatDate, formatDecimal } from '@/lib/utils';
 import {
   deriveCheckInBadges,
   formatDuration,
   formatMinutes,
   checkInBadgeTooltip,
+  dayPresenceSeconds,
+  requiredDaySeconds,
 } from '@/lib/check-in-time';
-
-const MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
 
 const STATUS_FILTERS = ['all', 'present', 'absent', 'on_leave'] as const;
 
@@ -83,15 +81,30 @@ const statusDot: Record<string, { dot: string; text: string; label: string }> = 
 
 export default function MyAttendancePage() {
   const now = new Date();
-  const [selectedMonth, setSelectedMonth] = useState(now.getMonth() + 1);
-  const [selectedYear, setSelectedYear] = useState(now.getFullYear());
+  // Same period control as Leave Management, replacing the old month + year
+  // Selects. Defaults to This month so the screen still opens on the current
+  // month as before.
+  const [period, setPeriod] = useState<Period>({ kind: 'preset', preset: 'this_month' });
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [regularizeTarget, setRegularizeTarget] = useState<AttendanceRecord | null>(null);
 
-  const dateFrom = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`;
-  const lastDay = new Date(selectedYear, selectedMonth, 0).getDate();
-  const dateTo = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+  // The unbounded option is resolved to an EXPLICIT trailing 12 months rather
+  // than being sent as "no dates". Left unbounded the API falls back to
+  // month-to-date, so the chip claimed "All time" over a single month of rows —
+  // and the server caps this view at 366 days anyway. Sending the window makes
+  // the label honest and keeps the table and the summary cards on one range.
+  const range = useMemo(() => {
+    if (period.kind !== 'all') return periodToRange(period);
+    const end = new Date();
+    const start = new Date(end);
+    start.setDate(start.getDate() - 364);
+    const iso = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return { start_date: iso(start), end_date: iso(end) };
+  }, [period]);
+  const dateFrom = range.start_date;
+  const dateTo = range.end_date;
 
   const { data: attendanceData, isLoading, isError } = useAttendance({
     start_date: dateFrom,
@@ -100,7 +113,14 @@ export default function MyAttendancePage() {
     page: currentPage,
   });
 
-  const { data: summary, isLoading: summaryLoading } = useAttendanceSummary(selectedMonth, selectedYear);
+  // month/year are still sent (the API requires them) but the range overrides
+  // them server-side, so the stat cards match whatever period is selected.
+  const summaryAnchor = dateFrom ? new Date(dateFrom + 'T00:00:00') : now;
+  const { data: summary, isLoading: summaryLoading } = useAttendanceSummary(
+    summaryAnchor.getMonth() + 1,
+    summaryAnchor.getFullYear(),
+    range,
+  );
   const regularizeMutation = useRequestRegularization();
   const { hasPermission } = usePermissionStore();
   const { user } = useAuthStore();
@@ -154,11 +174,6 @@ export default function MyAttendancePage() {
     });
   };
 
-  const yearOptions = useMemo(() => {
-    const current = new Date().getFullYear();
-    return [current, current - 1, current - 2];
-  }, []);
-
   const canRegularize = (record: AttendanceRecord) => {
     return (
       !record.is_synthetic &&
@@ -179,41 +194,11 @@ export default function MyAttendancePage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Select
-            value={String(selectedMonth)}
-            onValueChange={(v) => { setSelectedMonth(Number(v)); setCurrentPage(1); }}
-          >
-            <SelectTrigger className="w-[130px] h-8 text-xs" aria-label="Select month">
-              <CalendarDays className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-              <SelectValue>
-                {MONTHS[selectedMonth - 1]}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {MONTHS.map((name, idx) => (
-                  <SelectItem key={idx} value={String(idx + 1)}>{name}</SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-          <Select
-            value={String(selectedYear)}
-            onValueChange={(v) => { setSelectedYear(Number(v)); setCurrentPage(1); }}
-          >
-            <SelectTrigger className="w-[85px] h-8 text-xs" aria-label="Select year">
-              <SelectValue>
-                {selectedYear}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {yearOptions.map((year) => (
-                  <SelectItem key={year} value={String(year)}>{year}</SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+          <PeriodFilter
+            value={period}
+            allLabel="Last 12 months"
+            onChange={(next) => { setPeriod(next); setCurrentPage(1); }}
+          />
         </div>
       </div>
 
@@ -236,7 +221,7 @@ export default function MyAttendancePage() {
               ? [{ label: 'Late Days', value: summary.late_days, icon: Clock, color: 'text-amber-500', bg: 'bg-amber-500/10' }]
               : []),
             { label: 'On Leave', value: summary.on_leave_days, icon: Palmtree, color: 'text-blue-500', bg: 'bg-blue-500/10' },
-            { label: 'Overtime', value: `${Number(summary.overtime_hours).toFixed(1)}h`, icon: Timer, color: 'text-violet-500', bg: 'bg-violet-500/10' },
+            { label: 'Overtime', value: `${formatDecimal(summary.overtime_hours)}h`, icon: Timer, color: 'text-violet-500', bg: 'bg-violet-500/10' },
           ].map((s) => (
             <Card key={s.label} className="border-border">
               <CardContent className="p-3">
@@ -343,11 +328,11 @@ export default function MyAttendancePage() {
                   <tbody>
                     {records.map((record) => {
                       const sd = statusDot[record.status] ?? statusDot.absent;
-                      // The late badge carries the same signal as the Late column, so it
-                      // rides the same gate — hiding the column alone would leak it here.
-                      const checkInBadges = deriveCheckInBadges(record).filter(
-                        (badge) => canSeeLate || badge !== 'late'
-                      );
+                      // No late filter here: the Late BADGE was retired, so
+                      // deriveCheckInBadges can no longer emit one. The canSeeLate
+                      // gate still applies to the Late column and the Late Days
+                      // tile, which do still expose the number.
+                      const checkInBadges = deriveCheckInBadges(record);
                       const secs =
                         record.worked_seconds != null
                           ? record.worked_seconds
@@ -371,6 +356,8 @@ export default function MyAttendancePage() {
                                     lateMinutes: record.late_minutes,
                                     checkInTime: policyCheckInTime,
                                     checkoutTime: policyCheckoutTime,
+                                    presenceSeconds: dayPresenceSeconds(record),
+                                    requiredSeconds: requiredDaySeconds(record.shift),
                                   })}
                                 />
                               ))}

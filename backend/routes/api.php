@@ -23,7 +23,6 @@ use App\Http\Controllers\Api\V1\Hr\SalaryStructureController;
 use App\Http\Controllers\Api\V1\Hr\EmployeeSalaryController;
 use App\Http\Controllers\Api\V1\Hr\ShiftAssignmentController;
 use App\Http\Controllers\Api\V1\Hr\ShiftController;
-use App\Http\Controllers\Api\V1\Hr\ShiftSwapController;
 use App\Http\Controllers\Api\V1\Hr\JobPostingController;
 use App\Http\Controllers\Api\V1\InvitationController;
 use App\Http\Controllers\Api\V1\JobMonitorController;
@@ -398,8 +397,6 @@ Route::prefix('v1')->group(function () {
                 ->middleware('permission:shifts.view');
             Route::post('shifts', [ShiftController::class, 'store'])
                 ->middleware('permission:shifts.create');
-            Route::get('shifts/roster', [ShiftController::class, 'roster'])
-                ->middleware('permission:shifts.view');
             Route::get('shifts/{shift}', [ShiftController::class, 'show'])
                 ->middleware('permission:shifts.view');
             Route::put('shifts/{shift}', [ShiftController::class, 'update'])
@@ -416,18 +413,6 @@ Route::prefix('v1')->group(function () {
                 ->middleware('permission:shifts.manage_assignments');
             Route::post('shifts/{shift}/bulk-assign', [ShiftAssignmentController::class, 'bulkAssign'])
                 ->middleware('permission:shifts.manage_assignments');
-
-            // Shift Swaps
-            Route::get('shift-swaps', [ShiftSwapController::class, 'index'])
-                ->middleware('permission:shifts.view');
-            Route::post('shift-swaps', [ShiftSwapController::class, 'store'])
-                ->middleware('permission:shifts.view');
-            Route::put('shift-swaps/{shiftSwapRequest}/approve', [ShiftSwapController::class, 'approve'])
-                ->middleware('permission:shifts.manage_swaps');
-            Route::put('shift-swaps/{shiftSwapRequest}/reject', [ShiftSwapController::class, 'reject'])
-                ->middleware('permission:shifts.manage_swaps');
-            Route::delete('shift-swaps/{shiftSwapRequest}', [ShiftSwapController::class, 'destroy'])
-                ->middleware('permission:shifts.view');
 
             // Payroll — Salary Structures
             Route::get('salary-structures', [SalaryStructureController::class, 'index'])

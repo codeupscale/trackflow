@@ -19,6 +19,7 @@ class UpdateEmployeeProfileRequest extends FormRequest
             'employee_id',
             'department_id',
             'position_id',
+            'shift_id',
             'reporting_manager_id',
             'employment_status',
             'employment_type',
@@ -90,6 +91,16 @@ class UpdateEmployeeProfileRequest extends FormRequest
                 'position_id' => [
                     'sometimes', 'nullable', 'uuid',
                     Rule::exists('positions', 'id')->where('organization_id', $orgId),
+                ],
+                // Shift assignment via the employee form. Validated here; the
+                // actor must additionally hold shifts.manage_assignments —
+                // enforced in EmployeeService, not by this rule.
+                'shift_id' => [
+                    'sometimes', 'nullable', 'uuid',
+                    Rule::exists('shifts', 'id')
+                        ->where('organization_id', $orgId)
+                        ->where('is_active', true)
+                        ->whereNull('deleted_at'),
                 ],
                 'reporting_manager_id' => [
                     'sometimes', 'nullable', 'uuid',

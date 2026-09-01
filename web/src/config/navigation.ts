@@ -160,7 +160,7 @@ export const navigationConfig: NavGroup[] = [
                 requiredPermission: "shifts.create",
             },
             {
-                name: "Shift Management",
+                name: "Shift Assignment",
                 href: "/hr/shifts/management",
                 icon: CalendarClock,
                 requiredPermission: "shifts.view",

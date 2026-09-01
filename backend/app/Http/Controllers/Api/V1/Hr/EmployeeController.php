@@ -39,7 +39,17 @@ class EmployeeController extends Controller
                 'id' => $emp->position_id,
                 'title' => $emp->position_title,
             ] : null;
-            unset($emp->department_id, $emp->department_name, $emp->position_id, $emp->position_title);
+            $emp->shift = $emp->shift_id ? [
+                'id' => $emp->shift_id,
+                'name' => $emp->shift_name,
+                'color' => $emp->shift_color,
+                'start_time' => $emp->shift_start_time,
+                'end_time' => $emp->shift_end_time,
+            ] : null;
+            unset(
+                $emp->department_id, $emp->department_name, $emp->position_id, $emp->position_title,
+                $emp->shift_id, $emp->shift_name, $emp->shift_color, $emp->shift_start_time, $emp->shift_end_time,
+            );
             return $emp;
         });
 
@@ -71,6 +81,20 @@ class EmployeeController extends Controller
         $data['job_title'] = $employee->job_title;
         $data['phone'] = $employee->phone;
         $data['is_active'] = $employee->is_active;
+
+        // Current shift assignment (user_shifts, not a profile column) so the
+        // detail modal can display it and pre-fill the edit form.
+        $currentShift = app(\App\Services\ShiftService::class)
+            ->getUserCurrentShift($orgId, $employee->id);
+        $data['shift'] = $currentShift
+            ? [
+                'id' => $currentShift->id,
+                'name' => $currentShift->name,
+                'color' => $currentShift->color,
+                'start_time' => $currentShift->start_time,
+                'end_time' => $currentShift->end_time,
+            ]
+            : null;
 
         // Expose financial fields: masked for non-admin, full for admin/owner
         $canViewFinancial = $request->user()->hasRole('owner', 'org_manager', 'hr_manager', 'finance_manager');
@@ -112,6 +136,21 @@ class EmployeeController extends Controller
         );
 
         $data = $updated->toArray();
+
+        // Include the (possibly just-changed) shift. The frontend merges this
+        // response into its cached detail — omitting the key would leave a
+        // stale shift in the cache until the follow-up refetch lands.
+        $currentShift = app(\App\Services\ShiftService::class)
+            ->getUserCurrentShift($orgId, $employee->id);
+        $data['shift'] = $currentShift
+            ? [
+                'id' => $currentShift->id,
+                'name' => $currentShift->name,
+                'color' => $currentShift->color,
+                'start_time' => $currentShift->start_time,
+                'end_time' => $currentShift->end_time,
+            ]
+            : null;
 
         // Expose financial fields in response
         $canViewFinancial = $request->user()->hasRole('owner', 'org_manager', 'hr_manager', 'finance_manager');

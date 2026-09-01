@@ -6,8 +6,8 @@ use App\Models\Traits\BelongsToOrganization;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Shift extends Model
@@ -16,6 +16,7 @@ class Shift extends Model
 
     protected $fillable = [
         'organization_id',
+        'created_by',
         'name',
         'start_time',
         'end_time',
@@ -40,6 +41,15 @@ class Shift extends Model
         ];
     }
 
+    /**
+     * Who created this shift. Null on shifts that predate ownership — those are
+     * org-owned and only org-scoped roles may edit them.
+     */
+    public function creator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
     public function users(): BelongsToMany
     {
         return $this->belongsToMany(User::class, 'user_shifts')
@@ -60,13 +70,5 @@ class Shift extends Model
                 $query->whereNull('user_shifts.effective_to')
                     ->orWhere('user_shifts.effective_to', '>=', now()->toDateString());
             });
-    }
-
-    /**
-     * Swap requests where this shift is the requester's shift.
-     */
-    public function swapRequests(): HasMany
-    {
-        return $this->hasMany(ShiftSwapRequest::class, 'requester_shift_id');
     }
 }

@@ -25,6 +25,21 @@ class ShiftController extends Controller
             $request->only(['is_active', 'search', 'per_page']),
         );
 
+        // Per-row rights, so the UI never has to re-derive ownership rules (a
+        // team manager may edit only shifts they created).
+        $actor = $request->user();
+        $shifts->getCollection()->transform(function (Shift $shift) use ($actor) {
+            $data = $shift->toArray();
+            $data['creator'] = $shift->creator ? [
+                'id' => $shift->creator->id,
+                'name' => $shift->creator->name,
+            ] : null;
+            $data['can_edit'] = $actor->can('update', $shift);
+            $data['can_delete'] = $actor->can('delete', $shift);
+
+            return $data;
+        });
+
         return response()->json($shifts);
     }
 
@@ -35,6 +50,7 @@ class ShiftController extends Controller
         $shift = $this->shiftService->createShift(
             $request->user()->organization_id,
             $request->validated(),
+            $request->user(),
         );
 
         return response()->json(['data' => $shift], 201);
@@ -74,19 +90,5 @@ class ShiftController extends Controller
         $this->shiftService->deleteShift($shift);
 
         return response()->json(null, 204);
-    }
-
-    public function roster(Request $request): JsonResponse
-    {
-        $request->validate([
-            'week_start' => ['required', 'date'],
-        ]);
-
-        $roster = $this->shiftService->getShiftRoster(
-            $request->user()->organization_id,
-            $request->input('week_start'),
-        );
-
-        return response()->json(['data' => $roster]);
     }
 }

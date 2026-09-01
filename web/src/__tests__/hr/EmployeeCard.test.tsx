@@ -36,6 +36,7 @@ const baseEmployee: EmployeeListItem = {
   employment_type: 'full_time',
   date_of_joining: '2024-01-15',
   work_location: 'Remote',
+  shift: null,
 };
 
 describe('EmployeeCard', () => {

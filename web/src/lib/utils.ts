@@ -136,10 +136,17 @@ export function assignLeaveTypeColors(codes: string[]): Record<string, LeaveType
  *   "7.5"  -> "7.5"      every whole number as "N.0")
  *   "0.0"  -> "0"
  */
-export function formatLeaveDays(value: number | string | null | undefined): string {
+export function formatDecimal(value: number | string | null | undefined): string {
   const n = Number(value ?? 0);
   if (!Number.isFinite(n)) return '0';
-  // Number() already drops the trailing zero ("20.0" -> 20) while preserving
-  // a real fraction ("7.5" -> 7.5), so String() is all the formatting needed.
+  // Number() already drops the trailing zero ("20.0" -> 20, "0.0" -> 0) while
+  // preserving a real fraction ("7.5" -> 7.5), so String() is all that is
+  // needed. Unlike toFixed(1), which forces a decimal onto whole numbers and
+  // renders "0.0h" where "0h" is meant.
   return String(n);
+}
+
+/** Leave-day counts — same rule as formatDecimal; kept for call-site clarity. */
+export function formatLeaveDays(value: number | string | null | undefined): string {
+  return formatDecimal(value);
 }
