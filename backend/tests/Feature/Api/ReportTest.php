@@ -57,6 +57,10 @@ class ReportTest extends TestCase
             'duration_seconds' => 3600,
         ]);
 
+        // The employee ROLE no longer carries reports at all; this case is about
+        // what an 'own' scope does when someone holds it, so grant it explicitly.
+        $this->grantPermission($this->employee, 'reports.view', 'own');
+
         $this->actingAs($this->employee, 'sanctum');
 
         $response = $this->getJson('/api/v1/reports/summary?' . http_build_query([
@@ -67,6 +71,24 @@ class ReportTest extends TestCase
 
         // Should be forced to own data regardless of user_id param
         $response->assertOk();
+    }
+
+    /**
+     * Reports were removed from the employee role: their own-scope view only
+     * repeated the dashboard, Time Entries and My Attendance. The guard is the
+     * permission, not the hidden menu item.
+     */
+    public function test_employee_role_has_no_access_to_reports(): void
+    {
+        $this->actingAs($this->employee, 'sanctum');
+
+        $this->getJson('/api/v1/reports/summary?' . http_build_query([
+            'date_from' => now()->subDays(7)->toDateString(),
+            'date_to' => now()->addDay()->toDateString(),
+        ]))->assertStatus(403);
+
+        $this->getJson('/api/v1/reports/project-time')->assertStatus(403);
+        $this->getJson('/api/v1/app-usage/daily?date=' . now()->toDateString())->assertStatus(403);
     }
 
     public function test_employee_cannot_access_team_report(): void

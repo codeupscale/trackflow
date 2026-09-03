@@ -79,6 +79,11 @@ export default function ShiftsPage() {
   const isTeamScoped = canCreate && !hasOrgScope;
   const canManage = canCreate;
 
+  // Someone with no shift-management rights at all sees ONLY the shift they are
+  // on: no other shifts, no Add, no Actions, no Owner. They are here to answer
+  // "what are my hours?", not to browse the org's shift catalogue.
+  const isViewerOnly = !canCreate;
+
   const [page, setPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -115,6 +120,8 @@ export default function ShiftsPage() {
     is_active: isActiveFilter,
     search: debouncedSearch || undefined,
     page,
+    // A viewer only ever receives their own shift.
+    mine: isViewerOnly,
   });
 
   const deleteMutation = useDeleteShift();
@@ -163,11 +170,15 @@ export default function ShiftsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight">Shifts</h1>
+          <h1 className="text-lg font-semibold tracking-tight">
+            {isViewerOnly ? 'My Shift' : 'Shifts'}
+          </h1>
           <p className="text-xs text-muted-foreground">
-            {isTeamScoped
-              ? 'Create and manage shift schedules for your team'
-              : 'Manage shift schedules for your organization'}
+            {isViewerOnly
+              ? 'The shift schedule you are currently assigned to'
+              : isTeamScoped
+                ? 'Create and manage shift schedules for your team'
+                : 'Manage shift schedules for your organization'}
           </p>
         </div>
         {canManage && (
@@ -195,7 +206,9 @@ export default function ShiftsPage() {
         </div>
       )}
 
-      {/* Filters */}
+      {/* Filters — a viewer only ever has one row, so searching and filtering
+          it would be theatre. */}
+      {!isViewerOnly && (
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative w-full sm:w-[220px]">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
@@ -238,8 +251,10 @@ export default function ShiftsPage() {
           ))}
         </div>
       </div>
+      )}
 
       {/* Stats Strip */}
+      {!isViewerOnly && (
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {[
           { label: 'Total', value: total, icon: Clock4, color: 'text-blue-500', bg: 'bg-blue-500/10' },
@@ -263,6 +278,7 @@ export default function ShiftsPage() {
           </Card>
         ))}
       </div>
+      )}
 
       {/* Table */}
       {isError ? (
@@ -300,12 +316,18 @@ export default function ShiftsPage() {
             <div className="flex flex-col items-center text-center gap-2">
               <Clock4 className="h-8 w-8 text-muted-foreground/40" />
               <p className="text-sm text-muted-foreground font-medium">
-                {debouncedSearch ? `No shifts match "${debouncedSearch}"` : 'No shifts found'}
+                {isViewerOnly
+                  ? 'No shift assigned'
+                  : debouncedSearch
+                    ? `No shifts match "${debouncedSearch}"`
+                    : 'No shifts found'}
               </p>
               <p className="text-xs text-muted-foreground">
-                {debouncedSearch
-                  ? 'Try adjusting your search.'
-                  : 'Create your first shift to start scheduling your team.'}
+                {isViewerOnly
+                  ? "You are not on a shift schedule yet. Your manager or HR will assign one."
+                  : debouncedSearch
+                    ? 'Try adjusting your search.'
+                    : 'Create your first shift to start scheduling your team.'}
               </p>
               {canManage && !debouncedSearch && (
                 <Button size="sm" className="mt-2 h-7 text-xs" onClick={openCreate}>
@@ -334,7 +356,9 @@ export default function ShiftsPage() {
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Days</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Break</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Grace</th>
-                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Owner</th>
+                      {!isViewerOnly && (
+                        <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Owner</th>
+                      )}
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Status</th>
                       {canManage && (
                         <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Actions</th>
@@ -388,6 +412,7 @@ export default function ShiftsPage() {
                         <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] tabular-nums text-muted-foreground text-right">
                           {shift.grace_period_minutes > 0 ? `${shift.grace_period_minutes}m` : '—'}
                         </td>
+                        {!isViewerOnly && (
                         <td className="px-4 py-2.5 whitespace-nowrap">
                           {shift.creator ? (
                             <span className={cn(
@@ -406,6 +431,7 @@ export default function ShiftsPage() {
                             </span>
                           )}
                         </td>
+                        )}
                         <td className="px-4 py-2.5 whitespace-nowrap">
                           <span className={cn(
                             'inline-flex items-center gap-1.5 text-[0.7rem] font-medium',

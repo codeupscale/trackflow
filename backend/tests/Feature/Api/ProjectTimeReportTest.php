@@ -261,6 +261,9 @@ class ProjectTimeReportTest extends TestCase
         $this->trackedEntry($other, $project);
 
         // An employee asking for a colleague's rows still only sees their own.
+        // The employee ROLE no longer carries reports; this asserts what an
+        // 'own' scope does for whoever holds it, so grant it explicitly.
+        $this->grantPermission($this->employee, 'reports.view', 'own');
         $this->actingAs($this->employee, 'sanctum');
         $response = $this->getJson($this->url([
             'user_id' => [$this->employee->id, $other->id],
@@ -305,11 +308,22 @@ class ProjectTimeReportTest extends TestCase
         $mine = $this->trackedEntry($this->employee, $project);
         $this->trackedEntry($this->owner, $project);
 
-        $this->actingAs($this->employee, 'sanctum'); // reports.view = own
+        // Granted explicitly: the employee role itself no longer holds reports.
+        $this->grantPermission($this->employee, 'reports.view', 'own');
+        $this->actingAs($this->employee, 'sanctum');
         $response = $this->getJson($this->url());
 
         $ids = collect($response->json('data'))->pluck('id')->all();
         $this->assertEquals([$mine->id], $ids);
+    }
+
+    public function test_employee_role_cannot_reach_the_project_time_report(): void
+    {
+        $this->trackedEntry($this->employee, $this->project());
+
+        $this->actingAs($this->employee, 'sanctum');
+
+        $this->getJson($this->url())->assertStatus(403);
     }
 
     public function test_project_scoped_manager_sees_team_not_outsiders(): void
