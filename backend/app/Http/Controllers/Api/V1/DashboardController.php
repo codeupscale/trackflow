@@ -348,6 +348,83 @@ class DashboardController extends Controller
     }
 
     /**
+     * Per-day team hours and activity for the admin "Team Trend" chart.
+     *
+     * The chart previously synthesised its series client-side: the sum of every
+     * member's today_seconds placed on today, zero on the other six days, and a
+     * period toggle wired to nothing. This is the real thing — one row per
+     * calendar day (org timezone) over the requested window, days with no work
+     * included as zero so the axis never has holes.
+     *
+     * Hours use the documented worked-time rule via WorkedTime. Activity is the
+     * same formula the team list uses — active_seconds over 30-second windows —
+     * grouped by the day the OWNING ENTRY started, so a heartbeat is credited to
+     * the same day its hours are.
+     */
+    public function teamTrend(Request $request): JsonResponse
+    {
+        $request->validate(['period' => ['sometimes', 'in:7d,30d,90d']]);
+
+        $user = $request->user();
+        $orgId = $user->organization_id;
+        $tz = $user->getTimezoneForDates();
+
+        $days = match ($request->input('period', '7d')) {
+            '90d' => 90,
+            '30d' => 30,
+            default => 7,
+        };
+
+        $end = Carbon::now($tz)->startOfDay();
+        $start = $end->copy()->subDays($days - 1);
+        [$fromUtc, $toUtc] = TimezoneAwareDateRange::toUtcBounds($start->toDateString(), $end->toDateString(), $tz);
+
+        $dateExpr = WorkedTime::localDateExpr($tz, 'time_entries');
+        $duration = WorkedTime::durationExpr('time_entries');
+
+        $hoursByDay = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+            ->where('time_entries.organization_id', $orgId)
+            ->where('time_entries.started_at', '>=', $fromUtc)
+            ->where('time_entries.started_at', '<', $toUtc)
+            ->whereNotNull('time_entries.ended_at')
+            ->where('time_entries.type', '!=', 'idle')
+            ->where('time_entries.approval_status', 'approved')
+            ->groupByRaw($dateExpr)
+            ->selectRaw("{$dateExpr} as d, COALESCE(SUM({$duration}), 0) as secs")
+            ->pluck('secs', 'd');
+
+        $activityByDay = DB::table('activity_logs')
+            ->join('time_entries', 'activity_logs.time_entry_id', '=', 'time_entries.id')
+            ->where('activity_logs.organization_id', $orgId)
+            ->where('time_entries.started_at', '>=', $fromUtc)
+            ->where('time_entries.started_at', '<', $toUtc)
+            ->where('time_entries.type', 'tracked')
+            ->whereNotNull('time_entries.ended_at')
+            ->groupByRaw($dateExpr)
+            ->selectRaw("{$dateExpr} as d, SUM(activity_logs.active_seconds) as active_secs, COUNT(*) as log_count")
+            ->get()
+            ->keyBy('d');
+
+        $series = [];
+        for ($i = 0; $i < $days; $i++) {
+            $day = $start->copy()->addDays($i);
+            $key = $day->toDateString();
+            $act = $activityByDay->get($key);
+            $series[] = [
+                'date' => $key,
+                // Weekday names only read on a 7-day axis; longer windows label by date.
+                'day' => $days === 7 ? $day->format('D') : $day->format('M j'),
+                'hours' => round(((int) ($hoursByDay[$key] ?? 0)) / self::SECONDS_PER_HOUR, 1),
+                'activity' => $act && $act->log_count > 0
+                    ? (int) round(min(100, ($act->active_secs / ($act->log_count * 30)) * 100))
+                    : 0,
+            ];
+        }
+
+        return response()->json(['period' => "{$days}d", 'data' => $series]);
+    }
+
+    /**
      * "What did I spend my time on?" — the caller's OWN hours for one month,
      * grouped by project.
      *
