@@ -23,6 +23,8 @@ import {
 import {
   AreaChart,
   Area,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -68,6 +70,7 @@ import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
 import { useTimerStore } from '@/stores/timer-store';
 import { DateFilter } from '@/components/date-filter';
+import { ProjectHoursCard } from '@/components/dashboard/ProjectHoursCard';
 
 // ─── Types ────────────────────────────────────────────────────────
 
@@ -1043,14 +1046,19 @@ export default function DashboardPage() {
               </div>
             </CardHeader>
             <CardContent className="pb-3">
+              {/* BARS, not an area. Daily hours are seven DISCRETE buckets: an
+                  area's monotone curve invents a value between two days (hover
+                  midway between Tue and Wed and it reads ~5.9h, an hour nobody
+                  worked), smooths two distinct days into one plateau when their
+                  totals are close, and drags a filled line across a weekend that
+                  simply has no data. One bar per day states each total on its
+                  own and leaves the empty days empty. */}
               <ChartContainer config={employeeChartConfig} className="aspect-auto h-[220px] w-full">
-                <AreaChart data={employeeChartData} margin={{ top: 5, right: 5, left: -5, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="fillEmployeeHours" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--color-hours)" stopOpacity={0.5} />
-                      <stop offset="95%" stopColor="var(--color-hours)" stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
+                <BarChart
+                  data={employeeChartData}
+                  margin={{ top: 5, right: 5, left: -5, bottom: 0 }}
+                  barCategoryGap="28%"
+                >
                   <CartesianGrid vertical={false} strokeDasharray="3 3" className="opacity-30" />
                   <XAxis
                     dataKey="day"
@@ -1077,17 +1085,18 @@ export default function DashboardPage() {
                       label={{ value: 'Daily target', position: 'right', fontSize: 11 }}
                     />
                   )}
-                  <Area
+                  <Bar
                     dataKey="hours"
-                    type="monotone"
-                    fill="url(#fillEmployeeHours)"
-                    stroke="var(--color-hours)"
-                    strokeWidth={2.5}
-                    dot={{ r: 3.5, fill: "var(--color-hours)", strokeWidth: 2, stroke: "var(--card)" }}
-                    activeDot={{ r: 5, strokeWidth: 2 }}
+                    fill="var(--color-hours)"
+                    // Rounded top only: the data-end gets the corner, the
+                    // baseline stays square and anchored to the axis.
+                    radius={[4, 4, 0, 0]}
+                    maxBarSize={48}
                   />
-                  <ChartLegend content={<ChartLegendContent />} />
-                </AreaChart>
+                  {/* No legend: one series, already named by the card title.
+                      A legend box for a single measure is a row of height
+                      spent on information the heading already carries. */}
+                </BarChart>
               </ChartContainer>
             </CardContent>
           </Card>
@@ -1189,7 +1198,12 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Attendance Overview + Project Hours + Pending Approvals (admin only) */}
+      {/* Hours by Project — sits between the "when did I work" chart and the
+          "which entries" timesheet, answering the step in between. Employees
+          have no Reports section, so this is where they see project time. */}
+      {isEmployeeView && <ProjectHoursCard />}
+
+      {/* Attendance Overview + Approved Leave + Pending Approvals (admin only) */}
       {!isEmployeeView && (
         <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
           {/* Attendance Overview — Tabular Listing */}

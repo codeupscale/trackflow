@@ -346,4 +346,129 @@ class DashboardController extends Controller
             'date_to'             => $responseDateTo,
         ]);
     }
+
+    /**
+     * "What did I spend my time on?" — the caller's OWN hours for one month,
+     * grouped by project.
+     *
+     * Always self-scoped, whatever the caller's role: this answers a question
+     * about your own work, so there is no user_id parameter to widen it with.
+     * That is also why it sits behind dashboard.view_own_stats — the one
+     * permission every role holds — rather than reports.view, which employees
+     * deliberately do not have.
+     *
+     * The month is resolved in the user's date timezone (the same zone the
+     * dashboard cards and the daily breakdown bucket by), so a late-evening
+     * entry does not fall into the next month for anyone east of UTC. Worked
+     * time is the documented rule — closed, not idle, approved — and the
+     * duration comes from WorkedTime so this card can never disagree with the
+     * "This Week" card sitting above it.
+     */
+    public function projectHours(Request $request): JsonResponse
+    {
+        $request->validate([
+            'period' => ['sometimes', 'in:today,week,month,custom'],
+            'month' => ['sometimes', 'nullable', 'date_format:Y-m'],
+            'week_of' => ['sometimes', 'nullable', 'date_format:Y-m-d'],
+            'start_date' => ['sometimes', 'nullable', 'date_format:Y-m-d'],
+            'end_date' => ['sometimes', 'nullable', 'date_format:Y-m-d', 'after_or_equal:start_date'],
+            'project_id' => ['sometimes', 'nullable', 'uuid'],
+        ]);
+
+        $user = $request->user();
+        $tz = $user->getTimezoneForDates();
+
+        // Same period contract as the project-time report (week / month /
+        // custom), so one mental model covers both screens.
+        [$from, $to, $startDate, $endDate] = $this->resolveProjectHoursRange($request, $tz);
+
+        $duration = WorkedTime::durationExpr('time_entries');
+
+        $query = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+            // Explicit org scope alongside user_id: this is a raw aggregate, and
+            // rule 1 does not make an exception for "the user id implies it".
+            ->where('time_entries.organization_id', $user->organization_id)
+            ->where('time_entries.user_id', $user->id)
+            ->where('time_entries.started_at', '>=', $from)
+            ->where('time_entries.started_at', '<', $to)
+            ->whereNotNull('time_entries.ended_at')
+            ->where('time_entries.type', '!=', 'idle')
+            ->where('time_entries.approval_status', 'approved');
+
+        if ($request->filled('project_id')) {
+            $query->where('time_entries.project_id', $request->input('project_id'));
+        }
+
+        $rows = $query
+            ->leftJoin('projects', 'projects.id', '=', 'time_entries.project_id')
+            ->groupBy('time_entries.project_id', 'projects.name', 'projects.color')
+            ->selectRaw("
+                time_entries.project_id,
+                projects.name as project_name,
+                projects.color as project_color,
+                COUNT(*) as entry_count,
+                COALESCE(SUM({$duration}), 0) as total_seconds
+            ")
+            ->orderByDesc('total_seconds')
+            ->get();
+
+        $projects = $rows->map(fn ($row) => [
+            'project_id' => $row->project_id,
+            // A tracked entry with no project is real work and must still be
+            // counted, or the rows would not add up to the total.
+            'name' => $row->project_name ?? 'No project',
+            'color' => $row->project_color,
+            'entry_count' => (int) $row->entry_count,
+            'total_seconds' => (int) $row->total_seconds,
+        ])->values();
+
+        return response()->json([
+            'period' => $request->input('period', 'month'),
+            'date_from' => $startDate,
+            'date_to' => $endDate,
+            'total_seconds' => (int) $projects->sum('total_seconds'),
+            'projects' => $projects,
+        ]);
+    }
+
+    /**
+     * [$startUtc, $endUtc, $startLocalDate, $endLocalDate] for the requested
+     * period, resolved in the user's date timezone.
+     *
+     * Mirrors ProjectTimeReportService::resolveRange — deliberately the same
+     * parameter names (period / month / week_of / start_date+end_date), so the
+     * two surfaces cannot drift into answering the same question differently.
+     * The local dates are returned alongside the UTC bounds because the client
+     * renders the range it asked for, not the instant it was translated to.
+     */
+    private function resolveProjectHoursRange(Request $request, string $tz): array
+    {
+        $period = $request->input('period', 'month');
+
+        if ($period === 'today') {
+            // Today in the user's own zone, not the server's — the same day the
+            // "Today's Hours" card counts.
+            $start = Carbon::now($tz)->toDateString();
+            $end = $start;
+        } elseif ($period === 'custom') {
+            $start = $request->input('start_date') ?: Carbon::now($tz)->toDateString();
+            $end = $request->input('end_date') ?: $start;
+        } elseif ($period === 'week') {
+            $anchor = $request->filled('week_of')
+                ? Carbon::parse($request->input('week_of'), $tz)
+                : Carbon::now($tz);
+            $start = $anchor->copy()->startOfWeek()->toDateString();
+            $end = $anchor->copy()->endOfWeek()->toDateString();
+        } else {
+            $anchor = $request->filled('month')
+                ? Carbon::parse($request->input('month') . '-01', $tz)
+                : Carbon::now($tz);
+            $start = $anchor->copy()->startOfMonth()->toDateString();
+            $end = $anchor->copy()->endOfMonth()->toDateString();
+        }
+
+        [$fromUtc, $toUtc] = TimezoneAwareDateRange::toUtcBounds($start, $end, $tz);
+
+        return [$fromUtc, $toUtc, $start, $end];
+    }
 }

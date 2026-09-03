@@ -105,7 +105,10 @@ class CheckInMultiSessionTest extends TestCase
         $this->assertSame('on_time', $record->check_in_status);
         $this->assertFalse((bool) $record->is_early_checkout);
         $this->assertSame(0, (int) $record->check_out_early_minutes);
-        $this->assertSame(15, (int) $record->check_out_overtime_minutes);
+        // Extra hours are presence MINUS the requirement: 11:40 -> 20:45 is
+        // 9h05m against a 9h day, so 5 minutes. The old rule measured the
+        // clock-out against the 20:30 off time and called it 15.
+        $this->assertSame(5, (int) $record->check_out_overtime_minutes);
         // Rollup instants: first-in 11:40, last-out 20:45.
         $this->assertSame('11:40', $this->localHm($record->check_in_at));
         $this->assertSame('20:45', $this->localHm($record->check_out_at));
@@ -139,7 +142,7 @@ class CheckInMultiSessionTest extends TestCase
         $record = $this->record($user->id, self::MONDAY);
         $this->assertFalse((bool) $record->is_early_checkout);
         $this->assertSame(0, (int) $record->check_out_early_minutes);
-        $this->assertSame(15, (int) $record->check_out_overtime_minutes);
+        $this->assertSame(5, (int) $record->check_out_overtime_minutes);
         $this->assertSame(2, $record->sessions_count);
     }
 
@@ -275,7 +278,13 @@ class CheckInMultiSessionTest extends TestCase
 
     // ── 7: single session, checkout exactly at the off boundary ────────────
 
-    public function test_single_session_checkout_at_exact_off_boundary_is_normal(): void
+    /**
+     * Leaving exactly at the off time is NOT automatically a complete day.
+     * The employee owes nine hours of PRESENCE, so arriving 10 minutes after the
+     * official start means owing 10 minutes at the end. Under the old
+     * grace-deducted rule this counted as a clean day.
+     */
+    public function test_single_session_checkout_at_off_boundary_is_short_when_arrival_was_late(): void
     {
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
@@ -288,9 +297,31 @@ class CheckInMultiSessionTest extends TestCase
         $this->checkOut()->assertOk();
 
         $record = $this->record($user->id, self::MONDAY);
+        // 11:40 -> 20:30 is 8h50m of a 9h day: 10 minutes short.
+        $this->assertTrue((bool) $record->is_early_checkout);
+        $this->assertSame(10, (int) $record->check_out_early_minutes);
+        $this->assertSame(0, (int) $record->check_out_overtime_minutes);
+    }
+
+    /** Arriving on the official start and serving the full nine hours. */
+    public function test_a_full_nine_hours_is_neither_short_nor_extra(): void
+    {
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        $this->freezeUtc(self::MONDAY . ' 06:30:00'); // in 11:30 local
+        $this->checkIn()->assertStatus(201);
+
+        $this->freezeUtc(self::MONDAY . ' 15:30:00'); // out 20:30 local
+        $this->checkOut()->assertOk();
+
+        $record = $this->record($user->id, self::MONDAY);
+        $this->assertTrue((bool) $record->met_required_hours);
         $this->assertFalse((bool) $record->is_early_checkout);
         $this->assertSame(0, (int) $record->check_out_early_minutes);
         $this->assertSame(0, (int) $record->check_out_overtime_minutes);
+        $this->assertSame(9 * 3600, (int) $record->required_day_seconds);
     }
 
     // ── 8: rollup parity with the pre-migration single-pair invariant ──────
@@ -314,8 +345,9 @@ class CheckInMultiSessionTest extends TestCase
         $this->assertSame(31800, $record->worked_seconds);
         $this->assertSame('on_time', $record->check_in_status);
         $this->assertSame(0, (int) $record->check_in_late_minutes);
-        $this->assertFalse((bool) $record->is_early_checkout);
-        $this->assertSame(0, (int) $record->check_out_early_minutes);
+        // 8h50m of presence against a 9h day — short by 10 minutes.
+        $this->assertTrue((bool) $record->is_early_checkout);
+        $this->assertSame(10, (int) $record->check_out_early_minutes);
         $this->assertSame(0, (int) $record->check_out_overtime_minutes);
         $this->assertSame('11:40', $this->localHm($record->check_in_at));
         $this->assertSame('20:30', $this->localHm($record->check_out_at));
