@@ -511,9 +511,12 @@ class PermissionSeeder extends Seeder
             // projects — own (assigned) view only
             'projects.view' => 'own',
 
-            // reports — own
-            'reports.view'   => 'own',
-            'reports.export' => 'own',
+            // reports — NONE. An employee's own-scope report repeated what the
+            // dashboard, Time Entries and My Attendance already show, so the
+            // Reports section was a fourth door onto the same numbers. Removed
+            // rather than hidden: a menu that filters on key presence cannot
+            // gate an API, and the /reports URL stays reachable to anyone who
+            // still holds the permission.
 
             // dashboard — own stats only
             'dashboard.view_own_stats' => 'none',
@@ -547,11 +550,13 @@ class PermissionSeeder extends Seeder
             // requires the actor to actually manage a team, so an employee who
             // manages nobody can neither create nor assign, and the UI hides the
             // controls for them. See 2026_08_27_000002.
-            'shifts.view'               => 'none',
-            'shifts.create'             => 'project',
-            'shifts.edit'               => 'project',
-            'shifts.delete'             => 'project',
-            'shifts.manage_assignments' => 'project',
+            // shifts — VIEW ONLY. An employee sees the shift they are on, and
+            // nothing else. Management was briefly granted here at 'project'
+            // scope for team leads; that put "Shifts" and "Shift Assignment" in
+            // every employee's sidebar, because the nav filters on key presence
+            // and cannot know whether someone manages a team. Team-scoped
+            // management still works — grant it to a role that needs it.
+            'shifts.view' => 'none',
         ];
     }
 
