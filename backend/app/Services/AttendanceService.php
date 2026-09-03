@@ -722,6 +722,17 @@ class AttendanceService
             $overtimeMinutes = (int) ($record->check_out_overtime_minutes ?? 0);
         }
 
+        // Early departure gets the SAME fallback as overtime above. Without it
+        // the row reported a shortfall of 0 next to an "Early Checkout" badge:
+        // early_departure_minutes is written by the tracker rollup and stays 0
+        // on a check-in-only record, while check_out_early_minutes holds the
+        // figure the badge was decided from. Badge and number must come from
+        // one place — the whole point of measuring both against presence.
+        $earlyDepartureMinutes = (int) $record->early_departure_minutes;
+        if ($earlyDepartureMinutes <= 0) {
+            $earlyDepartureMinutes = (int) ($record->check_out_early_minutes ?? 0);
+        }
+
         $data = [
             'id' => $record->id,
             'organization_id' => $record->organization_id,
@@ -739,7 +750,7 @@ class AttendanceService
             'clock_out' => $clockOut,
             'total_hours' => $totalHours,
             'late_minutes' => $lateMinutes,
-            'early_departure_minutes' => (int) $record->early_departure_minutes,
+            'early_departure_minutes' => $earlyDepartureMinutes,
             'overtime_minutes' => $overtimeMinutes,
             'overtime_hours' => round($overtimeMinutes / 60, 2),
             'is_regularized' => (bool) $record->is_regularized,
