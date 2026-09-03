@@ -64,6 +64,31 @@ abstract class TestCase extends BaseTestCase
         return $user;
     }
 
+    /**
+     * Grant one permission to a user's system role, at the given scope.
+     *
+     * For cases that exercise a scope the default role no longer carries — an
+     * employee reading an own-scope report, say. Asserting the SCOPE narrows
+     * correctly and asserting a ROLE holds the key are different tests; this
+     * keeps the first from silently disappearing when the second changes.
+     */
+    protected function grantPermission(User $user, string $key, string $scope = 'none'): void
+    {
+        $this->ensurePermissionsSeeded();
+
+        $roleId = DB::table('user_roles')->where('user_id', $user->id)->value('role_id');
+        $permissionId = $this->permissionMap[$key] ?? null;
+
+        if (! $roleId || ! $permissionId) {
+            return;
+        }
+
+        DB::table('role_permissions')->updateOrInsert(
+            ['role_id' => $roleId, 'permission_id' => $permissionId],
+            ['id' => Str::uuid()->toString(), 'scope' => $scope, 'created_at' => now()],
+        );
+    }
+
     // -- Private RBAC helpers --
 
     /**

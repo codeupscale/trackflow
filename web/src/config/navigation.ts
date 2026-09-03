@@ -153,17 +153,20 @@ export const navigationConfig: NavGroup[] = [
     {
         label: "Scheduling",
         items: [
+            // These two were inverted: viewing shifts required shifts.create,
+            // while MANAGING assignments required only shifts.view — which every
+            // employee holds, so Shift Assignment appeared in their sidebar.
             {
                 name: "Shifts",
                 href: "/hr/shifts",
                 icon: Clock4,
-                requiredPermission: "shifts.create",
+                requiredPermission: "shifts.view",
             },
             {
                 name: "Shift Assignment",
                 href: "/hr/shifts/management",
                 icon: CalendarClock,
-                requiredPermission: "shifts.view",
+                requiredPermission: "shifts.manage_assignments",
             },
         ],
     },

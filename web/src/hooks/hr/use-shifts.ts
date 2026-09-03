@@ -5,6 +5,8 @@ import type { PaginatedShifts, Shift, ShiftFormData } from '@/lib/validations/sh
 
 interface ShiftFilters {
   is_active?: boolean;
+  /** Narrow to the shift the caller is assigned to (read-only employee view). */
+  mine?: boolean;
   search?: string;
   page?: number;
 }
@@ -27,6 +29,7 @@ export function useShifts(filters?: ShiftFilters) {
     queryFn: async () => {
       const params = buildParams({
         is_active: filters?.is_active,
+        mine: filters?.mine ? 1 : undefined,
         search: filters?.search,
         page: filters?.page,
       });
