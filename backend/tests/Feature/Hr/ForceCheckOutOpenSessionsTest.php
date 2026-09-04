@@ -193,7 +193,7 @@ class ForceCheckOutOpenSessionsTest extends TestCase
         $user = $this->createUser($org, 'employee');
 
         $this->checkInMonday($user);
-        // Tracked work ends 21:00 local = 16:00 UTC — 30 min past the 20:30 off-time.
+        // Tracked work ends 21:00 local = 16:00 UTC, so the forced checkout lands there.
         $this->trackedEntry($org, $user, self::MONDAY . ' 06:40:00', self::MONDAY . ' 16:00:00');
 
         $this->freezeUtc(self::MIDNIGHT_UTC);
@@ -202,7 +202,9 @@ class ForceCheckOutOpenSessionsTest extends TestCase
         $record = AttendanceRecord::where('user_id', $user->id)->where('date', self::MONDAY)->first();
         $this->assertFalse((bool) $record->is_early_checkout);
         $this->assertSame(0, $record->check_out_early_minutes);
-        $this->assertSame(30, $record->check_out_overtime_minutes);
+        // Extra by PRESENCE: 11:40 -> 21:00 is 9h20m of a 9h day, so 20 minutes.
+        // The old rule measured the stamped checkout against the 20:30 off time (30).
+        $this->assertSame(20, $record->check_out_overtime_minutes);
         // 06:40 → 16:00 UTC = 9h20m = 33600s.
         $this->assertSame(33600, $record->worked_seconds);
     }

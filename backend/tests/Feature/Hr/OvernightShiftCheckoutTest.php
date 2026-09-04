@@ -128,12 +128,14 @@ class OvernightShiftCheckoutTest extends TestCase
 
         $this->checkInMondayEvening($user);
 
-        $this->freezeUtc(self::MONDAY . ' 18:59:00'); // 23:59 local — 61m short of 01:00
+        $this->freezeUtc(self::MONDAY . ' 18:59:00'); // 23:59 local
         $response = $this->postJson('/api/v1/hr/attendance/check-out');
 
+        // Short by PRESENCE: 16:10 -> 23:59 is 7h49m of a 9h shift, so 71m.
+        // The old rule measured the clock-out against the 01:00 off time (61m).
         $response->assertStatus(200)
             ->assertJsonPath('data.is_early_checkout', true)
-            ->assertJsonPath('data.check_out_early_minutes', 61)
+            ->assertJsonPath('data.check_out_early_minutes', 71)
             ->assertJsonPath('data.check_out_overtime_minutes', 0);
 
         // The defect booked this as ~23h of overtime.
@@ -154,19 +156,24 @@ class OvernightShiftCheckoutTest extends TestCase
 
         $this->checkInMondayEvening($user);
 
-        $this->freezeUtc(self::MONDAY . ' 21:00:00'); // Tue 02:00 local — 60m past 01:00
+        $this->freezeUtc(self::MONDAY . ' 21:00:00'); // Tue 02:00 local
         $this->postJson('/api/v1/hr/attendance/check-out')->assertStatus(200);
 
         // Assert on MONDAY's record, not the response: the checkout body reports
         // getTodayStatus(), and by 02:00 local "today" is already Tuesday.
         $record = $this->mondayRecord($user);
 
+        // Extra by PRESENCE: 16:10 -> 02:00 is 9h50m of a 9h shift, so 50m.
         $this->assertFalse((bool) $record->is_early_checkout);
         $this->assertSame(0, $record->check_out_early_minutes);
-        $this->assertSame(60, $record->check_out_overtime_minutes);
+        $this->assertSame(50, $record->check_out_overtime_minutes);
     }
 
-    public function test_checkout_exactly_at_the_overnight_off_time_is_neither_early_nor_overtime(): void
+    /**
+     * Reaching the off time no longer settles an overnight day either: nine
+     * hours of presence are owed, and this check-in was 10 minutes late.
+     */
+    public function test_checkout_at_the_overnight_off_time_is_short_when_arrival_was_late(): void
     {
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
@@ -181,8 +188,9 @@ class OvernightShiftCheckoutTest extends TestCase
         // Monday's record — "today" has already rolled to Tuesday at 01:00 local.
         $record = $this->mondayRecord($user);
 
-        $this->assertFalse((bool) $record->is_early_checkout);
-        $this->assertSame(0, $record->check_out_early_minutes);
+        // 16:10 -> 01:00 is 8h50m: 10 minutes short of the nine hours owed.
+        $this->assertTrue((bool) $record->is_early_checkout);
+        $this->assertSame(10, $record->check_out_early_minutes);
         $this->assertSame(0, $record->check_out_overtime_minutes);
         // Genuinely closed at the boundary, not merely an absent Tuesday row.
         $this->assertSame(
@@ -275,7 +283,9 @@ class OvernightShiftCheckoutTest extends TestCase
         );
         $this->assertSame(8 * 3600 + 35 * 60, $record->worked_seconds); // 16:10 → 00:45
         $this->assertTrue((bool) $record->is_early_checkout);
-        $this->assertSame(15, $record->check_out_early_minutes); // 00:45 → 01:00
+        // 16:10 -> 00:45 is 8h35m of a 9h shift: 25m short. The old rule measured
+        // the stamped checkout against the 01:00 off time and said 15.
+        $this->assertSame(25, $record->check_out_early_minutes);
         $this->assertSame(0, $record->check_out_overtime_minutes);
     }
 
@@ -320,11 +330,13 @@ class OvernightShiftCheckoutTest extends TestCase
         $this->freezeUtc(self::MONDAY . ' 06:40:00'); // 11:40 local
         $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(201);
 
-        $this->freezeUtc(self::MONDAY . ' 16:00:00'); // 21:00 local — 30m past 20:30
+        $this->freezeUtc(self::MONDAY . ' 16:00:00'); // 21:00 local
+        // 11:40 -> 21:00 is 9h20m of a 9h shift, so 20m extra (the old rule
+        // measured 21:00 against the 20:30 off time and said 30).
         $this->postJson('/api/v1/hr/attendance/check-out')
             ->assertStatus(200)
             ->assertJsonPath('data.is_early_checkout', false)
-            ->assertJsonPath('data.check_out_overtime_minutes', 30);
+            ->assertJsonPath('data.check_out_overtime_minutes', 20);
     }
 
     public function test_midnight_force_checkout_still_closes_a_finished_same_day_shift(): void

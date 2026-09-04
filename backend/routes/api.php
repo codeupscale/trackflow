@@ -175,6 +175,10 @@ Route::prefix('v1')->group(function () {
         Route::get('dashboard/project-hours', [\App\Http\Controllers\Api\V1\DashboardController::class, 'projectHours'])
             ->middleware('permission:dashboard.view_own_stats');
 
+        // Per-day team hours + activity for the admin trend chart.
+        Route::get('dashboard/team-trend', [\App\Http\Controllers\Api\V1\DashboardController::class, 'teamTrend'])
+            ->middleware('permission:dashboard.view_team_stats');
+
         // Agent (desktop safety — auth:sanctum only)
         Route::get('agent/config', [\App\Http\Controllers\Api\V1\AgentController::class, 'config'])->middleware('min.agent');
         Route::get('agent/my-shift', [\App\Http\Controllers\Api\V1\AgentController::class, 'myShift']);
