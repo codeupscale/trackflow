@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subDays, subWeeks, subMonths, isToday, isSameDay, addDays } from 'date-fns';
+import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subDays, subWeeks, subMonths, isToday, isSameDay } from 'date-fns';
 import {
   Clock,
   Users,
@@ -21,8 +21,10 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import {
-  AreaChart,
-  Area,
+  BarChart,
+  Bar,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -49,8 +51,6 @@ import {
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
-  ChartLegend,
-  ChartLegendContent,
   type ChartConfig,
 } from '@/components/ui/chart';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
@@ -68,6 +68,8 @@ import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
 import { useTimerStore } from '@/stores/timer-store';
 import { DateFilter } from '@/components/date-filter';
+import { ProjectHoursCard } from '@/components/dashboard/ProjectHoursCard';
+import { useTeamTrend, type TeamTrendPeriod } from '@/hooks/dashboard/use-team-trend';
 
 // ─── Types ────────────────────────────────────────────────────────
 
@@ -225,7 +227,9 @@ export default function DashboardPage() {
   const [dateTo, setDateTo] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [weekOffset, setWeekOffset] = useState(0);
   const [chartPeriod, setChartPeriod] = useState<string>('7d');
-  const [teamPeriod, setTeamPeriod] = useState<string>('7d');
+  // Which measure the team trend chart plots — they have different units, so
+  // the chart shows one at a time rather than two y-scales.
+  const [chartMetric, setChartMetric] = useState<'hours' | 'activity'>('hours');
   const [attendanceFilter, setAttendanceFilter] = useState<string>('today');
   const [attCustomFrom, setAttCustomFrom] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [attCustomTo, setAttCustomTo] = useState(() => format(new Date(), 'yyyy-MM-dd'));
@@ -560,27 +564,17 @@ export default function DashboardPage() {
 
   // ── Build chart data ──
 
-  const adminChartData = useMemo(() => {
-    if (isEmployeeView || team.length === 0) return [];
-    const now = new Date();
-    const weekStart = startOfWeek(now, { weekStartsOn: 1 });
-    const todayStr = format(now, 'yyyy-MM-dd');
-    const totalHours = team.reduce((sum, m) => sum + m.today_seconds / 3600, 0);
-    const avgActivity = team.length > 0
-      ? Math.round(team.reduce((s, m) => s + m.activity_score, 0) / team.length)
-      : 0;
-
-    return Array.from({ length: 7 }, (_, i) => {
-      const day = addDays(weekStart, i);
-      const dayStr = format(day, 'yyyy-MM-dd');
-      const isCurrentDay = dayStr === todayStr;
-      return {
-        day: format(day, 'EEE'),
-        hours: isCurrentDay ? Math.round(totalHours * 10) / 10 : 0,
-        activity: isCurrentDay ? avgActivity : 0,
-      };
-    });
-  }, [isEmployeeView, team]);
+  // Real per-day series from the server, driven by the period toggle. The old
+  // version was synthesised here: every member's today_seconds summed onto
+  // today, zero on the other six days, and chartPeriod wired to nothing.
+  const { data: teamTrend } = useTeamTrend(
+    chartPeriod as TeamTrendPeriod,
+    !isEmployeeView,
+  );
+  const adminChartData = useMemo(
+    () => (isEmployeeView ? [] : (teamTrend ?? [])),
+    [isEmployeeView, teamTrend],
+  );
 
   const employeeChartData = useMemo(() => {
     if (!isEmployeeView || !data?.dailyBreakdown?.length) return [];
@@ -820,10 +814,31 @@ export default function DashboardPage() {
                   <BarChart3 className="h-4 w-4 text-primary" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold">Team Activity</h3>
-                  <p className="text-[0.65rem] text-muted-foreground mt-0.5">Hours tracked and activity scores</p>
+                  {/* Named for what it plots. The status card beside it was
+                      also called "Team Activity" — two adjacent cards under one
+                      title is half of why this row read as clutter. */}
+                  <h3 className="text-sm font-semibold">Team Trend</h3>
+                  <p className="text-[0.65rem] text-muted-foreground mt-0.5">
+                    {chartMetric === 'hours' ? 'Hours tracked per day' : 'Average activity score per day'}
+                  </p>
                 </div>
               </div>
+              <div className="flex items-center gap-2">
+                {/* One measure at a time. Hours are a quantity and activity is a
+                    percentage, so putting both on one plot needed two y-scales —
+                    and two scales can be slid against each other until any two
+                    series appear to move together. Choosing between them keeps
+                    each on its own honest scale. */}
+                <ToggleGroup
+                  value={[chartMetric]}
+                  onValueChange={(val) => { if (val.length > 0) setChartMetric(val[0] as 'hours' | 'activity'); }}
+                  variant="outline"
+                  size="sm"
+                  className="bg-muted/50 rounded-lg p-0.5"
+                >
+                  <ToggleGroupItem value="hours" className="text-[0.65rem] rounded-md px-2 data-[state=on]:bg-background data-[state=on]:shadow-sm">Hours</ToggleGroupItem>
+                  <ToggleGroupItem value="activity" className="text-[0.65rem] rounded-md px-2 data-[state=on]:bg-background data-[state=on]:shadow-sm">Activity</ToggleGroupItem>
+                </ToggleGroup>
               <ToggleGroup
                 value={[chartPeriod]}
                 onValueChange={(val) => {
@@ -837,66 +852,62 @@ export default function DashboardPage() {
                 <ToggleGroupItem value="30d" className="text-[0.65rem] rounded-md px-2 data-[state=on]:bg-background data-[state=on]:shadow-sm">30 days</ToggleGroupItem>
                 <ToggleGroupItem value="7d" className="text-[0.65rem] rounded-md px-2 data-[state=on]:bg-background data-[state=on]:shadow-sm">7 days</ToggleGroupItem>
               </ToggleGroup>
+              </div>
             </CardHeader>
             <CardContent className="pb-3">
+              {/* ONE measure at a time, chosen by the Hours/Activity toggle.
+                  This chart used to plot both on a single plot with TWO
+                  y-scales — a left axis in % for activity and a right axis in
+                  hours. Two scales can be slid against each other until any two
+                  series appear to move together, so every crossing and gap
+                  between those lines was an artefact of the axes, not a fact
+                  about the team. Each measure now gets the whole plot and its
+                  own honest scale: bars for hours (discrete daily totals), a
+                  line for activity (a rate, where the trend is the point).
+                  Single series either way, so no legend — the toggle and the
+                  subtitle already name what is on screen. */}
               <ChartContainer config={adminChartConfig} className="aspect-auto h-[220px] w-full">
-                <AreaChart data={adminChartData} margin={{ top: 5, right: 5, left: -5, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="fillActivity" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--color-activity)" stopOpacity={0.5} />
-                      <stop offset="95%" stopColor="var(--color-activity)" stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" className="opacity-30" />
-                  <XAxis
-                    dataKey="day"
-                    tickLine={false}
-                    axisLine={false}
-                    tickMargin={8}
-                    fontSize={11}
-                  />
-                  <YAxis
-                    yAxisId="left"
-                    tickLine={false}
-                    axisLine={false}
-                    tickMargin={4}
-                    width={35}
-                    fontSize={10}
-                    tickFormatter={(v: number) => `${v}%`}
-                    domain={[0, 100]}
-                  />
-                  <YAxis
-                    yAxisId="right"
-                    orientation="right"
-                    tickLine={false}
-                    axisLine={false}
-                    tickMargin={4}
-                    width={30}
-                    fontSize={10}
-                    tickFormatter={(v: number) => `${v}h`}
-                    domain={[0, (dataMax: number) => Math.max(dataMax, 1)]}
-                  />
-                  <ChartTooltip content={<ChartTooltipContent />} />
-                  <Area
-                    yAxisId="left"
-                    dataKey="activity"
-                    type="monotone"
-                    fill="url(#fillActivity)"
-                    stroke="var(--color-activity)"
-                    strokeWidth={2.5}
-                  />
-                  <Area
-                    yAxisId="right"
-                    dataKey="hours"
-                    type="monotone"
-                    fill="none"
-                    stroke="var(--color-hours)"
-                    strokeWidth={2}
-                    dot={{ r: 3.5, fill: "var(--color-hours)", strokeWidth: 2, stroke: "var(--card)" }}
-                    activeDot={{ r: 5, strokeWidth: 2 }}
-                  />
-                  <ChartLegend content={<ChartLegendContent />} />
-                </AreaChart>
+                {chartMetric === 'hours' ? (
+                  <BarChart data={adminChartData} margin={{ top: 5, right: 5, left: -5, bottom: 0 }} barCategoryGap="28%">
+                    <CartesianGrid vertical={false} strokeDasharray="3 3" className="opacity-30" />
+                    <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={8} fontSize={11} />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      tickMargin={4}
+                      width={35}
+                      fontSize={10}
+                      tickFormatter={(v) => `${v}h`}
+                      domain={[0, (dataMax) => Math.max(dataMax, 1)]}
+                    />
+                    <ChartTooltip content={<ChartTooltipContent />} />
+                    <Bar dataKey="hours" fill="var(--color-hours)" radius={[4, 4, 0, 0]} maxBarSize={44} />
+                  </BarChart>
+                ) : (
+                  <LineChart data={adminChartData} margin={{ top: 5, right: 5, left: -5, bottom: 0 }}>
+                    <CartesianGrid vertical={false} strokeDasharray="3 3" className="opacity-30" />
+                    <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={8} fontSize={11} />
+                    <YAxis
+                      tickLine={false}
+                      axisLine={false}
+                      tickMargin={4}
+                      width={35}
+                      fontSize={10}
+                      tickFormatter={(v) => `${v}%`}
+                      domain={[0, 100]}
+                      ticks={[0, 25, 50, 75, 100]}
+                    />
+                    <ChartTooltip content={<ChartTooltipContent />} />
+                    <Line
+                      dataKey="activity"
+                      type="monotone"
+                      stroke="var(--color-activity)"
+                      strokeWidth={2}
+                      dot={{ r: 3, fill: "var(--color-activity)", strokeWidth: 2, stroke: "var(--card)" }}
+                      activeDot={{ r: 5, strokeWidth: 2 }}
+                    />
+                  </LineChart>
+                )}
               </ChartContainer>
             </CardContent>
           </Card>
@@ -920,19 +931,6 @@ export default function DashboardPage() {
                   {team.filter(m => m.is_online).length}/{team.length} online
                 </Badge>
               </div>
-              <ToggleGroup
-                value={[teamPeriod]}
-                onValueChange={(val) => {
-                  if (val.length > 0) setTeamPeriod(val[0]);
-                }}
-                variant="outline"
-                size="sm"
-                className="bg-muted/50 rounded-lg p-0.5"
-              >
-                <ToggleGroupItem value="90d" className="text-[0.65rem] rounded-md px-2 data-[state=on]:bg-background data-[state=on]:shadow-sm">3 months</ToggleGroupItem>
-                <ToggleGroupItem value="30d" className="text-[0.65rem] rounded-md px-2 data-[state=on]:bg-background data-[state=on]:shadow-sm">30 days</ToggleGroupItem>
-                <ToggleGroupItem value="7d" className="text-[0.65rem] rounded-md px-2 data-[state=on]:bg-background data-[state=on]:shadow-sm">7 days</ToggleGroupItem>
-              </ToggleGroup>
             </CardHeader>
             <CardContent className="px-0 pb-1">
               {isLoading ? (
@@ -947,48 +945,33 @@ export default function DashboardPage() {
                   <p className="text-muted-foreground text-sm font-medium">No team members yet</p>
                 </div>
               ) : (
-                <div className="overflow-y-auto max-h-[260px]">
-                  <Table>
-                    <TableHeader className="sticky top-0 bg-card z-10">
-                      <TableRow className="hover:bg-transparent border-b border-border/50">
-                        <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground h-7 px-4">Name</TableHead>
-                        <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground h-7 px-2">Status</TableHead>
-                        <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground h-7 px-2">Hours</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {team.map((member) => (
-                        <TableRow key={member.id} className="hover:bg-muted/30 border-b border-border/30">
-                          <TableCell className="py-2 px-4">
-                            <span className="text-[0.7rem] font-medium text-foreground truncate block max-w-[100px]">
-                              {member.name}
-                            </span>
-                          </TableCell>
-                          <TableCell className="py-2 px-2">
-                            <div className="flex items-center gap-1.5">
-                              <span className={`h-1.5 w-1.5 rounded-full ${
-                                member.is_online
-                                  ? 'bg-emerald-500'
-                                  : 'bg-muted-foreground/40'
-                              }`} />
-                              <span className={`text-[0.65rem] font-medium ${
-                                member.is_online
-                                  ? 'text-emerald-600 dark:text-emerald-400'
-                                  : 'text-muted-foreground'
-                              }`}>
-                                {member.is_online ? 'Online' : 'Offline'}
-                              </span>
-                            </div>
-                          </TableCell>
-                          <TableCell className="py-2 px-2">
-                            <span className="text-[0.7rem] font-mono font-semibold text-foreground tabular-nums">
-                              {formatTimeShort(member.today_seconds)}
-                            </span>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                // A LIST, not a three-column table. The Status column repeated
+                // "Offline" once per person while the badge above already said
+                // "0/8 online" — the same fact told nine times, in the narrowest
+                // column on the dashboard. The dot beside the name carries that
+                // state now, which removes a column and the header row with it.
+                // Online members sort first: the point of a live status panel is
+                // who is working right now, not alphabetical order.
+                <div className="overflow-y-auto max-h-[260px] px-2">
+                  {[...team]
+                    .sort((a, b) => Number(b.is_online) - Number(a.is_online))
+                    .map((member) => (
+                      <div
+                        key={member.id}
+                        className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-muted/30 transition-colors"
+                      >
+                        <span
+                          className={`h-1.5 w-1.5 rounded-full shrink-0 ${member.is_online ? 'bg-emerald-500' : 'bg-muted-foreground/30'}`}
+                          title={member.is_online ? 'Online' : 'Offline'}
+                        />
+                        <span className={`text-[0.72rem] truncate flex-1 ${member.is_online ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>
+                          {member.name}
+                        </span>
+                        <span className="text-[0.72rem] font-mono font-semibold text-foreground tabular-nums shrink-0">
+                          {formatTimeShort(member.today_seconds)}
+                        </span>
+                      </div>
+                    ))}
                 </div>
               )}
             </CardContent>
@@ -1043,14 +1026,19 @@ export default function DashboardPage() {
               </div>
             </CardHeader>
             <CardContent className="pb-3">
+              {/* BARS, not an area. Daily hours are seven DISCRETE buckets: an
+                  area's monotone curve invents a value between two days (hover
+                  midway between Tue and Wed and it reads ~5.9h, an hour nobody
+                  worked), smooths two distinct days into one plateau when their
+                  totals are close, and drags a filled line across a weekend that
+                  simply has no data. One bar per day states each total on its
+                  own and leaves the empty days empty. */}
               <ChartContainer config={employeeChartConfig} className="aspect-auto h-[220px] w-full">
-                <AreaChart data={employeeChartData} margin={{ top: 5, right: 5, left: -5, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="fillEmployeeHours" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="var(--color-hours)" stopOpacity={0.5} />
-                      <stop offset="95%" stopColor="var(--color-hours)" stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
+                <BarChart
+                  data={employeeChartData}
+                  margin={{ top: 5, right: 5, left: -5, bottom: 0 }}
+                  barCategoryGap="28%"
+                >
                   <CartesianGrid vertical={false} strokeDasharray="3 3" className="opacity-30" />
                   <XAxis
                     dataKey="day"
@@ -1077,17 +1065,18 @@ export default function DashboardPage() {
                       label={{ value: 'Daily target', position: 'right', fontSize: 11 }}
                     />
                   )}
-                  <Area
+                  <Bar
                     dataKey="hours"
-                    type="monotone"
-                    fill="url(#fillEmployeeHours)"
-                    stroke="var(--color-hours)"
-                    strokeWidth={2.5}
-                    dot={{ r: 3.5, fill: "var(--color-hours)", strokeWidth: 2, stroke: "var(--card)" }}
-                    activeDot={{ r: 5, strokeWidth: 2 }}
+                    fill="var(--color-hours)"
+                    // Rounded top only: the data-end gets the corner, the
+                    // baseline stays square and anchored to the axis.
+                    radius={[4, 4, 0, 0]}
+                    maxBarSize={48}
                   />
-                  <ChartLegend content={<ChartLegendContent />} />
-                </AreaChart>
+                  {/* No legend: one series, already named by the card title.
+                      A legend box for a single measure is a row of height
+                      spent on information the heading already carries. */}
+                </BarChart>
               </ChartContainer>
             </CardContent>
           </Card>
@@ -1189,7 +1178,12 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Attendance Overview + Project Hours + Pending Approvals (admin only) */}
+      {/* Hours by Project — sits between the "when did I work" chart and the
+          "which entries" timesheet, answering the step in between. Employees
+          have no Reports section, so this is where they see project time. */}
+      {isEmployeeView && <ProjectHoursCard />}
+
+      {/* Attendance Overview + Approved Leave + Pending Approvals (admin only) */}
       {!isEmployeeView && (
         <div className="grid gap-4 grid-cols-1 lg:grid-cols-3">
           {/* Attendance Overview — Tabular Listing */}

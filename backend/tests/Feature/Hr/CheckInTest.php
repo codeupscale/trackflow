@@ -205,12 +205,14 @@ class CheckInTest extends TestCase
         $this->freezeUtc(self::MONDAY . ' 06:40:00');
         $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(201);
 
-        $this->freezeUtc(self::MONDAY . ' 15:00:00'); // 20:00 local — 30 min early
+        $this->freezeUtc(self::MONDAY . ' 15:00:00'); // 20:00 local
         $response = $this->postJson('/api/v1/hr/attendance/check-out');
 
+        // Short by PRESENCE: 11:40 -> 20:00 is 8h20m of a 9h day, so 40 minutes.
+        // The old rule compared the clock-out to the 20:30 off time and said 30.
         $response->assertOk()
             ->assertJsonPath('data.is_early_checkout', true)
-            ->assertJsonPath('data.check_out_early_minutes', 30)
+            ->assertJsonPath('data.check_out_early_minutes', 40)
             ->assertJsonPath('data.check_out_overtime_minutes', 0);
     }
 
@@ -223,16 +225,21 @@ class CheckInTest extends TestCase
         $this->freezeUtc(self::MONDAY . ' 06:40:00');
         $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(201);
 
-        $this->freezeUtc(self::MONDAY . ' 16:00:00'); // 21:00 local — 30 min OT
+        $this->freezeUtc(self::MONDAY . ' 16:00:00'); // 21:00 local
         $response = $this->postJson('/api/v1/hr/attendance/check-out');
 
+        // Extra by PRESENCE: 11:40 -> 21:00 is 9h20m of a 9h day, so 20 minutes.
         $response->assertOk()
             ->assertJsonPath('data.is_early_checkout', false)
             ->assertJsonPath('data.check_out_early_minutes', 0)
-            ->assertJsonPath('data.check_out_overtime_minutes', 30);
+            ->assertJsonPath('data.check_out_overtime_minutes', 20);
     }
 
-    public function test_checkout_at_exact_off_boundary_is_normal(): void
+    /**
+     * Leaving at the off time no longer settles the day on its own: nine hours
+     * of presence are owed, so a 10-minute-later arrival owes 10 minutes back.
+     */
+    public function test_checkout_at_off_boundary_is_short_when_arrival_was_late(): void
     {
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
@@ -244,9 +251,10 @@ class CheckInTest extends TestCase
         $this->freezeUtc(self::MONDAY . ' 15:30:00'); // exactly 20:30 local
         $response = $this->postJson('/api/v1/hr/attendance/check-out');
 
+        // 11:40 -> 20:30 is 8h50m: 10 minutes short of the nine hours owed.
         $response->assertOk()
-            ->assertJsonPath('data.is_early_checkout', false)
-            ->assertJsonPath('data.check_out_early_minutes', 0)
+            ->assertJsonPath('data.is_early_checkout', true)
+            ->assertJsonPath('data.check_out_early_minutes', 10)
             ->assertJsonPath('data.check_out_overtime_minutes', 0);
     }
 
@@ -268,7 +276,8 @@ class CheckInTest extends TestCase
             ->assertJsonPath('data.check_in_status', 'late')
             ->assertJsonPath('data.is_early_checkout', true)
             ->assertJsonPath('data.check_in_late_minutes', 5)
-            ->assertJsonPath('data.check_out_early_minutes', 30);
+            // 11:50 -> 20:00 is 8h10m of a 9h day: 50 minutes short.
+            ->assertJsonPath('data.check_out_early_minutes', 50);
     }
 
     // ── Edge 8: midnight spanning / stale backstop / next-day check-in ─────
