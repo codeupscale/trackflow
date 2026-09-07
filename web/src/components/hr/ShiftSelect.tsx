@@ -37,7 +37,12 @@ export function ShiftSelect({
 
   return (
     <Select
-      value={value ?? undefined}
+      // Empty string, not undefined: Base UI decides controlled-vs-uncontrolled
+      // on the FIRST render from whether value is undefined, so a null start
+      // (an unset filter) followed by a selection flipped the component from
+      // uncontrolled to controlled and logged a React warning. An empty string
+      // is still "nothing selected" and keeps it controlled throughout.
+      value={value ?? ''}
       onValueChange={(val) => {
         if (val === NONE_VALUE) {
           onClear?.();

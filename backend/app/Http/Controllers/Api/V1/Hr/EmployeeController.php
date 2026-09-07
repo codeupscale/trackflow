@@ -25,7 +25,10 @@ class EmployeeController extends Controller
 
         $employees = $this->service->getDirectory(
             $request->user()->organization_id,
-            $request->only(['search', 'department_id', 'position_id', 'employment_status', 'employment_type', 'per_page']),
+            $request->only(['search', 'department_id', 'position_id', 'employment_status', 'employment_type', 'shift_id', 'per_page'])
+                // ?archived=1 is the Archive tab. Absent means active only, so
+                // every existing caller keeps hiding archived people.
+                + ['archived' => $request->boolean('archived')],
             $request->user(),
         );
 
@@ -168,5 +171,50 @@ class EmployeeController extends Controller
             : $this->service->maskFinancialField($updated->tax_id);
 
         return response()->json(['data' => $data]);
+    }
+
+    /**
+     * Archive employees in bulk — "these people have left".
+     *
+     * Hides them from every list in the system, revokes their tokens so a
+     * running desktop agent stops tracking, and closes what was still open in
+     * their name. See EmployeeService::archive().
+     */
+    public function archive(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'user_ids' => ['required', 'array', 'min:1', 'max:200'],
+            'user_ids.*' => ['uuid'],
+        ]);
+
+        $count = $this->service->archive(
+            $request->user()->organization_id,
+            $validated['user_ids'],
+            $request->user(),
+        );
+
+        return response()->json([
+            'archived' => $count,
+            'message' => $count === 1 ? '1 employee archived.' : "{$count} employees archived.",
+        ]);
+    }
+
+    /** Bring archived employees back into the active directory. */
+    public function restore(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'user_ids' => ['required', 'array', 'min:1', 'max:200'],
+            'user_ids.*' => ['uuid'],
+        ]);
+
+        $count = $this->service->restore(
+            $request->user()->organization_id,
+            $validated['user_ids'],
+        );
+
+        return response()->json([
+            'restored' => $count,
+            'message' => $count === 1 ? '1 employee restored.' : "{$count} employees restored.",
+        ]);
     }
 }

@@ -38,8 +38,13 @@ class UserController extends Controller
         $perPage = (int) $request->query('per_page', 50);
         $perPage = max(1, min($perPage, 100));
 
+        // Archived employees (is_active = false) are hidden by default. This
+        // endpoint feeds every people picker in the product — assignment
+        // dropdowns, resource filters, the team list — so someone who has left
+        // must not be offerable as a choice. ?archived=1 is the Archive tab.
         $query = User::with('teams')
-            ->where('organization_id', $request->user()->organization_id);
+            ->where('organization_id', $request->user()->organization_id)
+            ->where('is_active', ! $request->boolean('archived'));
 
         // Optional filter: restrict to members of one or more projects (project_user pivot).
         // Accepts `project_id` as a single UUID or an array (project_id[]=...).
