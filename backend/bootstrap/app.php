@@ -40,6 +40,20 @@ return Application::configure(basePath: dirname(__DIR__))
             'min.agent' => EnforceMinimumAgentVersion::class,
         ]);
 
+        // An unauthenticated API caller must get 401, never a redirect.
+        //
+        // Laravel's guest redirect calls route('login'), which does not exist
+        // in an API-only app, so the RouteNotFoundException surfaced as a 500
+        // — for any missing, invalid or REVOKED token whose request did not
+        // send Accept: application/json. That matters beyond tidiness: the
+        // desktop agent signs out on 401/403 and treats everything else as a
+        // transient error, so an archived employee's agent would have kept
+        // retrying instead of stopping. Returning null here makes the guard
+        // throw AuthenticationException, which the handler renders as 401.
+        $middleware->redirectGuestsTo(
+            fn (Request $request) => $request->is('api/*') ? null : '/login'
+        );
+
         // Global middleware
         $middleware->append(SecurityHeaders::class);
         $middleware->append(RequestId::class);

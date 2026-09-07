@@ -9,6 +9,8 @@ export interface UsePayslipsParams {
   payroll_period_id?: string;
   status?: string;
   user_id?: string;
+  /** Archive tab: payslips belonging to archived employees. */
+  archived?: boolean;
   page?: number;
   per_page?: number;
 }
@@ -23,6 +25,7 @@ export function usePayslips(params?: UsePayslipsParams) {
       if (params?.payroll_period_id) queryParams.payroll_period_id = params.payroll_period_id;
       if (params?.status) queryParams.status = params.status;
       if (params?.user_id) queryParams.user_id = params.user_id;
+      if (params?.archived) queryParams.archived = 1;
       const res = await api.get('/hr/payslips', { params: queryParams });
       const raw = res.data;
       return {

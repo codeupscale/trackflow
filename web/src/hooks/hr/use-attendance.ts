@@ -18,8 +18,11 @@ interface TeamAttendanceFilters {
   department_id?: string | null;
   user_id?: string | null;
   search?: string | null;
+  shift_id?: string | null;
   start_date?: string;
   end_date?: string;
+  /** Archive tab: attendance of archived employees. */
+  archived?: boolean;
   page?: number;
 }
 
@@ -57,8 +60,10 @@ export function useTeamAttendance(filters?: TeamAttendanceFilters) {
         department_id: filters?.department_id,
         user_id: filters?.user_id,
         search: filters?.search,
+        shift_id: filters?.shift_id,
         start_date: filters?.start_date,
         end_date: filters?.end_date,
+        archived: filters?.archived ? 1 : undefined,
         page: filters?.page,
       });
       const res = await api.get('/hr/attendance/team', { params });

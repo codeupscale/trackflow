@@ -16,7 +16,9 @@ class PayslipController extends Controller
     public function index(Request $request): JsonResponse
     {
         $payslips = $this->payrollService->getPayslips(
-            $request->all(),
+            // Normalised here rather than trusting the raw query string: "0"
+            // and "false" both have to mean "active only".
+            $request->all() + ['archived' => $request->boolean('archived')],
             $request->user(),
         );
 

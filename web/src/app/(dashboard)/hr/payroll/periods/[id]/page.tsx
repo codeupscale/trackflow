@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
     ArrowLeft,
     DollarSign,
@@ -17,7 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 import { usePayrollPeriod } from "@/hooks/hr/use-payroll";
 import { usePayslips } from "@/hooks/hr/use-payslips";
-import { formatDate } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 
 const statusDot: Record<string, { dot: string; text: string; label: string }> = {
     draft: { dot: "bg-amber-500", text: "text-amber-600 dark:text-amber-400", label: "Draft" },
@@ -37,8 +38,12 @@ export default function PayrollPeriodDetailPage({
         isLoading: periodLoading,
         isError: periodError,
     } = usePayrollPeriod(id);
+    // Payslips of archived staff are hidden with the rest of their data; this
+    // tab is how a past run's full set is read back.
+    const [showArchived, setShowArchived] = useState(false);
     const { data: payslipsData, isLoading: payslipsLoading } = usePayslips({
         payroll_period_id: id,
+        archived: showArchived,
     });
 
     const period = periodData?.data;
@@ -226,6 +231,30 @@ export default function PayrollPeriodDetailPage({
             </div>
 
             {/* Payslips Table */}
+            <div className="flex items-center justify-end">
+                <div className="flex items-center gap-1 rounded-lg bg-muted p-0.5 shrink-0">
+                    {[
+                        { label: "Active", value: false },
+                        { label: "Archived", value: true },
+                    ].map((tab) => (
+                        <button
+                            key={tab.label}
+                            type="button"
+                            onClick={() => setShowArchived(tab.value)}
+                            aria-pressed={showArchived === tab.value}
+                            className={cn(
+                                "rounded-md px-2.5 py-1 text-[0.65rem] font-medium transition-colors",
+                                showArchived === tab.value
+                                    ? "bg-background text-foreground shadow-sm"
+                                    : "text-muted-foreground hover:text-foreground",
+                            )}
+                        >
+                            {tab.label}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
             {payslipsLoading ? (
                 <Card>
                     <CardContent className="p-0">

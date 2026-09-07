@@ -462,10 +462,12 @@ class AttendanceService
         $startDate = $start->toDateString();
         $endDate = $end->toDateString();
 
-        // Active employees (filtered by user / department).
+        // Active employees (filtered by user / department). Archived staff are
+        // hidden here as everywhere else; ?archived=1 is the Archive tab, which
+        // is how their past attendance is read back.
         $usersQuery = User::withoutGlobalScopes()
             ->where('organization_id', $orgId)
-            ->where('is_active', true);
+            ->where('is_active', empty($filters['archived']));
 
         if (!empty($filters['user_id'])) {
             $usersQuery->where('id', $filters['user_id']);
@@ -474,6 +476,36 @@ class AttendanceService
         if (!empty($filters['department_id'])) {
             $usersQuery->whereHas('employeeProfile', function ($q) use ($filters) {
                 $q->where('department_id', $filters['department_id']);
+            });
+        }
+
+        // Shift filter — how a team is picked out in practice, since each team
+        // works its own shift.
+        //
+        // Matched against the assignment active TODAY, not against the reported
+        // range. The question being asked is "show me the sales team's
+        // attendance", and the sales team is who is on that shift now. Keying
+        // it to the range instead returned nothing whenever the shift was set
+        // up after the dates being viewed — the ordinary case the first time
+        // anyone uses this — which reads as a broken filter rather than as a
+        // historical nicety. It also keeps this identical to the employee
+        // directory's shift filter, so the same choice means the same thing on
+        // both screens.
+        if (!empty($filters['shift_id'])) {
+            $today = now()->toDateString();
+
+            $usersQuery->whereExists(function ($q) use ($filters, $orgId, $today) {
+                $q->select(DB::raw(1))
+                    ->from('user_shifts')
+                    ->whereColumn('user_shifts.user_id', 'users.id')
+                    ->where('user_shifts.organization_id', $orgId)
+                    ->where('user_shifts.shift_id', $filters['shift_id'])
+                    ->whereNull('user_shifts.deleted_at')
+                    ->where('user_shifts.effective_from', '<=', $today)
+                    ->where(function ($sq) use ($today) {
+                        $sq->whereNull('user_shifts.effective_to')
+                            ->orWhere('user_shifts.effective_to', '>=', $today);
+                    });
             });
         }
 
