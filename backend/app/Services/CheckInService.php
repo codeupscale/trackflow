@@ -1159,6 +1159,28 @@ class CheckInService
             $query->where('u.id', $filters['user_id']);
         }
 
+        // Shift filter — each team works its own shift, so this is how the
+        // report is narrowed to one team. Matched against the assignment active
+        // TODAY, the same rule the employee directory and team attendance use,
+        // so picking a shift means the same thing on every screen.
+        if (! empty($filters['shift_id'])) {
+            $today = now()->toDateString();
+
+            $query->whereExists(function ($q) use ($filters, $user, $today) {
+                $q->select(DB::raw(1))
+                    ->from('user_shifts')
+                    ->whereColumn('user_shifts.user_id', 'u.id')
+                    ->where('user_shifts.organization_id', $user->organization_id)
+                    ->where('user_shifts.shift_id', $filters['shift_id'])
+                    ->whereNull('user_shifts.deleted_at')
+                    ->where('user_shifts.effective_from', '<=', $today)
+                    ->where(function ($sq) use ($today) {
+                        $sq->whereNull('user_shifts.effective_to')
+                            ->orWhere('user_shifts.effective_to', '>=', $today);
+                    });
+            });
+        }
+
         return $query
             ->groupBy('u.id', 'u.name', 'u.email')
             ->select('u.id as user_id', 'u.name', 'u.email')
@@ -1175,6 +1197,13 @@ class CheckInService
             ->selectRaw('COALESCE(SUM(CASE WHEN ar.met_required_hours THEN 1 ELSE 0 END), 0) as full_days_count')
             ->selectRaw('COALESCE(SUM(CASE WHEN ar.met_required_hours = false THEN 1 ELSE 0 END), 0) as early_checkout_count')
             ->selectRaw('COALESCE(SUM(CASE WHEN ar.missing_checkout THEN 1 ELSE 0 END), 0) as missing_checkout_count')
+            // Days that were BOTH late and short — arrived after the grace
+            // window and still left before the hours were served. Counted here
+            // per DAY rather than inferred from the two totals: an employee
+            // late on Monday and short on Tuesday has neither day that is
+            // both, and treating them the same would flag people who were never
+            // actually late-and-short on any single day.
+            ->selectRaw("COALESCE(SUM(CASE WHEN ar.check_in_status = 'late' AND ar.met_required_hours = false THEN 1 ELSE 0 END), 0) as late_and_short_count")
             ->orderBy('u.name');
     }
 
@@ -1197,6 +1226,9 @@ class CheckInService
             'late_count' => (int) $row->late_count,
             'early_checkout_count' => (int) $row->early_checkout_count,
             'missing_checkout_count' => (int) $row->missing_checkout_count,
+            // Days that were late AND short — the combination management asks
+            // about, and the one the report highlights.
+            'late_and_short_count' => (int) $row->late_and_short_count,
             'full_days_count' => (int) $row->full_days_count,
             // Percentage of PRESENT days that met the target. Days present is the
             // denominator, never calendar days — counting approved leave against

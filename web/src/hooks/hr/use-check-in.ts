@@ -26,6 +26,8 @@ export interface CheckInSummaryFilters {
   start_date?: string; // YYYY-MM-DD when period=range
   end_date?: string; // YYYY-MM-DD when period=range
   user_id?: string | null;
+  /** Narrow to one shift — how a team is picked out. */
+  shift_id?: string | null;
   per_page?: number;
   page?: number;
 }
@@ -37,6 +39,8 @@ export interface CheckInExportFilters {
   start_date?: string;
   end_date?: string;
   user_id?: string | null;
+  /** Narrow to one shift — the CSV must match the filtered view on screen. */
+  shift_id?: string | null;
   view?: 'detail' | 'summary';
 }
 
@@ -166,6 +170,7 @@ export function useCheckInsSummary(filters?: CheckInSummaryFilters) {
         start_date: filters?.start_date,
         end_date: filters?.end_date,
         user_id: filters?.user_id,
+        shift_id: filters?.shift_id,
         per_page: filters?.per_page,
         page: filters?.page,
       });
@@ -208,6 +213,7 @@ export async function exportCheckIns(filters: CheckInExportFilters): Promise<voi
     start_date: filters.start_date,
     end_date: filters.end_date,
     user_id: filters.user_id,
+    shift_id: filters.shift_id,
     view,
     format: 'csv',
   });
