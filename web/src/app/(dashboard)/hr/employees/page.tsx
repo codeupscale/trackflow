@@ -46,7 +46,7 @@ import {
 
 import { EmptyState } from '@/components/common/EmptyState';
 import { DepartmentSelect } from '@/components/hr/DepartmentSelect';
-import { ShiftSelect } from '@/components/hr/ShiftSelect';
+import { ShiftTabs } from '@/components/hr/ShiftTabs';
 import { EmployeeDetailModal, RoleBadge } from '@/components/hr/EmployeeDetailModal';
 
 import { Badge } from '@/components/ui/badge';
@@ -457,7 +457,9 @@ export default function EmployeesPage() {
       <Card className="border-border">
         <CardContent className="p-3">
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Search */}
+            {/* Search first — it is how anyone looks for one person, and the
+                thing the eye goes to on arriving. Shift next, then the Filters
+                panel for the rarer narrowing. */}
             <div className="relative flex-1 min-w-[200px] max-w-sm">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
               <Input
@@ -468,6 +470,11 @@ export default function EmployeesPage() {
                 aria-label="Search employees"
               />
             </div>
+
+            <ShiftTabs
+              value={shiftId}
+              onChange={(v) => { setShiftId(v); handleFilterChange(); }}
+            />
 
             <div className="h-5 w-px bg-border mx-0.5 hidden sm:block" />
 
@@ -569,22 +576,6 @@ export default function EmployeesPage() {
                       handleFilterChange();
                     }}
                     placeholder="All Departments"
-                  />
-                </div>
-              </div>
-
-              {/* Shift — how a team is selected in practice. Options come from
-                  the shifts you have created, so renaming one or adding a
-                  third needs no code change. */}
-              <div className="grid gap-1">
-                <label className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Shift</label>
-                <div className="w-[170px]">
-                  <ShiftSelect
-                    value={shiftId}
-                    onChange={(v) => { setShiftId(v); handleFilterChange(); }}
-                    placeholder="All Shifts"
-                    allowNone
-                    onClear={() => { setShiftId(null); handleFilterChange(); }}
                   />
                 </div>
               </div>

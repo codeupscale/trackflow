@@ -174,6 +174,12 @@ export interface CheckInSummaryRow {
   late_count: number;
   early_checkout_count: number;
   missing_checkout_count: number;
+  /**
+   * Days that were BOTH late and short of the required hours — counted per day
+   * on the server, so it is not the same as having late days and short days
+   * somewhere in the period.
+   */
+  late_and_short_count: number;
   /** Days that reached the required hours for that day. */
   full_days_count: number;
   /** full_days_count / days_present as a percentage; null when never present. */
