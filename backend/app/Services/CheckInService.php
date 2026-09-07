@@ -516,6 +516,24 @@ class CheckInService
         return max(0, (int) $start->diffInSeconds($off));
     }
 
+    /**
+     * Recompute day rollups for records whose sessions were closed out of band.
+     *
+     * Archiving an employee closes any check-in session still open in their
+     * name; the day's totals then have to be rebuilt from the session set, the
+     * same as after a normal checkout. Public because EmployeeService owns the
+     * archive transaction but must not reach into the rollup rules itself.
+     *
+     * @param  array<int,string>  $recordIds
+     */
+    public function recomputeRecordsAfterArchive(array $recordIds): void
+    {
+        AttendanceRecord::withoutGlobalScopes()
+            ->whereIn('id', $recordIds)
+            ->get()
+            ->each(fn (AttendanceRecord $record) => $this->recomputeRecordRollups($record));
+    }
+
     private function recomputeRecordRollups(AttendanceRecord $record): void
     {
         // Off time of the record's own day (rebuilt per-date so DST is handled).

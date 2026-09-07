@@ -329,6 +329,14 @@ class PayrollService
             'payrollPeriod:id,name,start_date,end_date,status',
         ]);
 
+        // Archived employees are hidden here too. A payslip is history and is
+        // never deleted — it simply stops appearing in the default list, and
+        // the Archive tab (?archived=1) is where an archived person's slips are
+        // read. An employee viewing their OWN slips is exempt: if they can
+        // still sign in they are not archived, and the self-scope below already
+        // narrows to them.
+        $query->whereHas('user', fn ($q) => $q->where('is_active', ! ($filters['archived'] ?? false)));
+
         // Role-scoped access
         if ($this->permissionService->hasPermission($viewer, 'payroll.view_all')) {
             // Admin/accountant: see all

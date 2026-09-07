@@ -22,8 +22,12 @@ interface PaginatedResponse<T> {
 export interface UseEmployeesParams {
     search?: string;
     department_id?: string;
+    /** Filter to the people on one shift — how a team is picked out. */
+    shift_id?: string;
     employment_status?: string;
     employment_type?: string;
+    /** Archive tab: list archived (is_active=false) employees instead of active ones. */
+    archived?: boolean;
     page?: number;
     per_page?: number;
 }
@@ -38,10 +42,12 @@ export function useEmployees(params?: UseEmployeesParams) {
             if (params?.search) queryParams.search = params.search;
             if (params?.department_id)
                 queryParams.department_id = params.department_id;
+            if (params?.shift_id) queryParams.shift_id = params.shift_id;
             if (params?.employment_status && params.employment_status !== "all")
                 queryParams.employment_status = params.employment_status;
             if (params?.employment_type && params.employment_type !== "all")
                 queryParams.employment_type = params.employment_type;
+            if (params?.archived) queryParams.archived = 1;
             const res = await api.get("/hr/employees", { params: queryParams });
             const raw = res.data;
             // Laravel returns flat pagination; normalize to {data, meta} format
@@ -107,4 +113,70 @@ export function useUpdateEmployeeProfile() {
             toast.error(err.message || "Failed to update profile");
         },
     });
+}
+
+/**
+ * Archive employees — "these people have left".
+ *
+ * Hides them from every list in the product, revokes their tokens so a running
+ * desktop agent stops tracking, and closes anything still open in their name.
+ * Reversible via useRestoreEmployees.
+ */
+export function useArchiveEmployees() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (userIds: string[]) => {
+            const res = await api.post("/hr/employees/archive", {
+                user_ids: userIds,
+            });
+            return res.data as { archived: number; message: string };
+        },
+        onSuccess: (data) => {
+            // Archiving changes headcount, pickers, payroll rosters and the
+            // dashboard team, so the whole people surface is invalidated
+            // rather than just the directory the action was fired from.
+            invalidatePeopleSurface(queryClient);
+            toast.success(data.message);
+        },
+        onError: (err: Error) => {
+            toast.error(err.message || "Failed to archive employees");
+        },
+    });
+}
+
+/** Bring archived employees back into the active directory. */
+export function useRestoreEmployees() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (userIds: string[]) => {
+            const res = await api.post("/hr/employees/restore", {
+                user_ids: userIds,
+            });
+            return res.data as { restored: number; message: string };
+        },
+        onSuccess: (data) => {
+            invalidatePeopleSurface(queryClient);
+            toast.success(data.message);
+        },
+        onError: (err: Error) => {
+            toast.error(err.message || "Failed to restore employees");
+        },
+    });
+}
+
+/** Every cached list whose contents depend on who is active. */
+function invalidatePeopleSurface(queryClient: ReturnType<typeof useQueryClient>) {
+    [
+        "employees",
+        "users",
+        "user-list",
+        "team",
+        "dashboard",
+        "payslips",
+        "salary-roster",
+        "attendance",
+        "shift-assignments",
+    ].forEach((key) => queryClient.invalidateQueries({ queryKey: [key] }));
 }

@@ -58,6 +58,7 @@ import {
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { DepartmentSelect } from '@/components/hr/DepartmentSelect';
+import { ShiftSelect } from '@/components/hr/ShiftSelect';
 import { EmployeeSelect } from '@/components/hr/EmployeeSelect';
 import { CheckInStatusBadge, type CheckInBadgeStatus } from '@/components/hr/CheckInStatusBadge';
 import {
@@ -198,6 +199,8 @@ function TeamTab() {
   const policyCheckInTime = todayStatus?.policy?.check_in_time;
 
   const [departmentId, setDepartmentId] = useState<string | null>(null);
+  // Shift is how a team is picked out — each team works its own shift.
+  const [shiftId, setShiftId] = useState<string | null>(null);
   // Empty by default — no date is pre-selected, so the list opens unfiltered
   // rather than silently pinned to the current month.
   const [dateFrom, setDateFrom] = useState('');
@@ -206,6 +209,9 @@ function TeamTab() {
 
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  // Archived staff are hidden from this list like everywhere else; this tab is
+  // how their past attendance is read back.
+  const [showArchived, setShowArchived] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -235,6 +241,8 @@ function TeamTab() {
     search: debouncedSearch || undefined,
     start_date: dateFrom || undefined,
     end_date: dateTo || undefined,
+    shift_id: shiftId,
+    archived: showArchived,
     page: currentPage,
   });
 
@@ -254,6 +262,28 @@ function TeamTab() {
     <>
       {/* Filters */}
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+        {/* Active / Archived, pinned right on the filter row. */}
+        <div className="flex items-center gap-1 rounded-lg bg-muted p-0.5 shrink-0 order-last sm:ml-auto">
+          {[
+            { label: 'Active', value: false },
+            { label: 'Archived', value: true },
+          ].map((tab) => (
+            <button
+              key={tab.label}
+              type="button"
+              onClick={() => { setShowArchived(tab.value); setCurrentPage(1); }}
+              aria-pressed={showArchived === tab.value}
+              className={cn(
+                'rounded-md px-2.5 py-1 text-[0.65rem] font-medium transition-colors',
+                showArchived === tab.value
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
         <div className="flex flex-col gap-1 w-full sm:w-[220px]">
           <Label className="text-[0.65rem] text-muted-foreground">Employee</Label>
           <div className="relative">
@@ -284,6 +314,18 @@ function TeamTab() {
             value={departmentId}
             onChange={(val) => { setDepartmentId(val); setCurrentPage(1); }}
             placeholder="All departments"
+          />
+        </div>
+        {/* Shift — options come from the shifts you have created, so a rename
+            or a third team needs no code change. */}
+        <div className="flex flex-col gap-1 w-full sm:w-[180px]">
+          <Label className="text-[0.65rem] text-muted-foreground">Shift</Label>
+          <ShiftSelect
+            value={shiftId}
+            onChange={(val) => { setShiftId(val); setCurrentPage(1); }}
+            placeholder="All shifts"
+            allowNone
+            onClear={() => { setShiftId(null); setCurrentPage(1); }}
           />
         </div>
         <div className="flex flex-col gap-1">

@@ -189,6 +189,7 @@ class AttendanceController extends Controller
             'status' => ['sometimes', 'string', 'in:present,absent,half_day,on_leave,weekend,holiday'],
             'user_id' => ['sometimes', 'uuid'],
             'department_id' => ['sometimes', 'uuid'],
+            'shift_id' => ['sometimes', 'uuid'],
             'search' => ['sometimes', 'string', 'max:100'],
             'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
         ]);
@@ -196,7 +197,10 @@ class AttendanceController extends Controller
         $stats = null;
         $records = $this->attendanceService->getTeamAttendance(
             $request->user()->organization_id,
-            $request->only(['start_date', 'end_date', 'status', 'user_id', 'department_id', 'search', 'per_page']),
+            $request->only(['start_date', 'end_date', 'status', 'user_id', 'department_id', 'shift_id', 'search', 'per_page'])
+                // ?archived=1 is the Archive tab; absent means active only, so
+                // every existing caller keeps hiding archived staff.
+                + ['archived' => $request->boolean('archived')],
             $stats
         );
 
