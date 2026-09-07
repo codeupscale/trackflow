@@ -100,12 +100,13 @@ class AttendanceController extends Controller
             'start_date' => ['sometimes', 'date_format:Y-m-d'],
             'end_date' => ['sometimes', 'date_format:Y-m-d', 'after_or_equal:start_date'],
             'user_id' => ['sometimes', 'uuid'],
+            'shift_id' => ['sometimes', 'uuid'],
             'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
         ]);
 
         $summary = $this->checkInService->summarize(
             $request->user(),
-            $request->only(['period', 'date', 'month', 'start_date', 'end_date', 'user_id', 'per_page'])
+            $request->only(['period', 'date', 'month', 'start_date', 'end_date', 'user_id', 'shift_id', 'per_page'])
         );
 
         return response()->json($summary);
@@ -126,12 +127,13 @@ class AttendanceController extends Controller
             'start_date' => ['sometimes', 'date_format:Y-m-d'],
             'end_date' => ['sometimes', 'date_format:Y-m-d', 'after_or_equal:start_date'],
             'user_id' => ['sometimes', 'uuid'],
+            'shift_id' => ['sometimes', 'uuid'],
             'view' => ['sometimes', 'in:detail,summary'],
             'format' => ['sometimes', 'in:csv'],
         ]);
 
         $user = $request->user();
-        $filters = $request->only(['period', 'date', 'month', 'start_date', 'end_date', 'user_id']);
+        $filters = $request->only(['period', 'date', 'month', 'start_date', 'end_date', 'user_id', 'shift_id']);
         $view = $request->input('view', 'detail');
 
         $csv = $view === 'summary'

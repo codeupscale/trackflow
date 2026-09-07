@@ -58,7 +58,7 @@ import {
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { DepartmentSelect } from '@/components/hr/DepartmentSelect';
-import { ShiftSelect } from '@/components/hr/ShiftSelect';
+import { ShiftTabs } from '@/components/hr/ShiftTabs';
 import { EmployeeSelect } from '@/components/hr/EmployeeSelect';
 import { CheckInStatusBadge, type CheckInBadgeStatus } from '@/components/hr/CheckInStatusBadge';
 import {
@@ -262,6 +262,17 @@ function TeamTab() {
     <>
       {/* Filters */}
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+        {/* Shift tabs — the primary way this list is sliced. Same component and
+            position as the employee directory, so one shift means one thing on
+            both screens. */}
+        <div className="flex flex-col gap-1">
+          <Label className="text-[0.65rem] text-muted-foreground">Shift</Label>
+          <ShiftTabs
+            value={shiftId}
+            onChange={(val) => { setShiftId(val); setCurrentPage(1); }}
+            className="h-9"
+          />
+        </div>
         {/* Active / Archived, pinned right on the filter row. */}
         <div className="flex items-center gap-1 rounded-lg bg-muted p-0.5 shrink-0 order-last sm:ml-auto">
           {[
@@ -314,18 +325,6 @@ function TeamTab() {
             value={departmentId}
             onChange={(val) => { setDepartmentId(val); setCurrentPage(1); }}
             placeholder="All departments"
-          />
-        </div>
-        {/* Shift — options come from the shifts you have created, so a rename
-            or a third team needs no code change. */}
-        <div className="flex flex-col gap-1 w-full sm:w-[180px]">
-          <Label className="text-[0.65rem] text-muted-foreground">Shift</Label>
-          <ShiftSelect
-            value={shiftId}
-            onChange={(val) => { setShiftId(val); setCurrentPage(1); }}
-            placeholder="All shifts"
-            allowNone
-            onClear={() => { setShiftId(null); setCurrentPage(1); }}
           />
         </div>
         <div className="flex flex-col gap-1">
@@ -904,9 +903,10 @@ function ReportTab() {
   // Same period control as Leave Management, replacing the old month + year
   // Selects. The API's period=range branch backs the presets a single 'month'
   // string could not express (quarter, year).
-  const [period, setPeriod] = useState<Period>({ kind: 'all' });
+  const [period, setPeriod] = useState<Period>({ kind: 'preset', preset: 'this_month' });
   const [page, setPage] = useState(1);
   const [userId, setUserId] = useState<string | null>(null);
+  const [shiftId, setShiftId] = useState<string | null>(null);
   const [exportingView, setExportingView] = useState<'detail' | 'summary' | null>(null);
   const [showBelowTargetOnly, setShowBelowTargetOnly] = useState(false);
 
@@ -916,20 +916,35 @@ function ReportTab() {
   // rather than falling back to a default window.
   const isAllTime = mode === 'day' ? !day : (!range.start_date || !range.end_date);
 
+  // Which window the counts cover. Stated inside the tooltip because the badge
+  // is a running total for the selected period, not a lifetime figure — without
+  // it "2 days late" invites the question "since when?".
+  const periodLabel = useMemo(() => {
+    if (isAllTime) return 'All recorded attendance';
+    if (mode === 'day') return formatDate(day);
+    // Clamp a future end date to today. "This month" spans Sep 1–30 as a
+    // filter, but on the 7th only seven days have happened — printing the
+    // whole month invites "why don't these add up to 30?".
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const shownEnd = range.end_date! > todayIso ? todayIso : range.end_date!;
+    return `${formatDate(range.start_date!)} – ${formatDate(shownEnd)}`;
+  }, [isAllTime, mode, day, range.start_date, range.end_date]);
+
   const summaryFilters = useMemo(
     () =>
       isAllTime
-        ? { period: 'all' as const, user_id: userId, page }
+        ? { period: 'all' as const, user_id: userId, shift_id: shiftId, page }
         : mode === 'day'
-          ? { period: 'day' as const, date: day, user_id: userId, page }
+          ? { period: 'day' as const, date: day, user_id: userId, shift_id: shiftId, page }
           : {
               period: 'range' as const,
               start_date: range.start_date,
               end_date: range.end_date,
               user_id: userId,
+              shift_id: shiftId,
               page,
             },
-    [mode, day, isAllTime, range.start_date, range.end_date, userId, page],
+    [mode, day, isAllTime, range.start_date, range.end_date, userId, shiftId, page],
   );
 
   const { data, isLoading, isError } = useCheckInsSummary(summaryFilters);
@@ -948,8 +963,11 @@ function ReportTab() {
   ).length;
 
   const totalEmployees = rows.length;
-  const totalLate = rows.reduce((sum, r) => sum + (r.late_count || 0), 0);
-  const totalMissing = rows.reduce((sum, r) => sum + (r.missing_checkout_count || 0), 0);
+  // PEOPLE, not days. These summed days across everyone, so the Late card read
+  // 5 beside a list of 4 late employees — two different units in one view.
+  // Every other card counts people or hours, so days was the odd one out.
+  const lateEmployees = rows.filter((r) => (r.late_count || 0) > 0).length;
+  const earlyEmployees = rows.filter((r) => (r.early_checkout_count || 0) > 0).length;
   const totalWorkedSecs = rows.reduce((sum, r) => sum + (r.total_worked_seconds || 0), 0);
 
   const handleExport = async (view: 'detail' | 'summary') => {
@@ -957,14 +975,15 @@ function ReportTab() {
     try {
       await exportCheckIns(
         isAllTime
-          ? { period: 'all', user_id: userId, view }
+          ? { period: 'all', user_id: userId, shift_id: shiftId, view }
           : mode === 'day'
-            ? { period: 'day', date: day, user_id: userId, view }
+            ? { period: 'day', date: day, user_id: userId, shift_id: shiftId, view }
             : {
                 period: 'range',
                 start_date: range.start_date,
                 end_date: range.end_date,
                 user_id: userId,
+                shift_id: shiftId,
                 view,
               },
       );
@@ -977,118 +996,134 @@ function ReportTab() {
 
   return (
     <>
-      {/* Controls */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-          <div className="flex flex-col gap-1">
-            <Label className="text-[0.65rem] text-muted-foreground">View</Label>
-            <ToggleGroup
-              value={[mode]}
-              onValueChange={(val) => {
-                const v = val[0];
-                if (v === 'day' || v === 'range') { setMode(v); setPage(1); }
-              }}
-              variant="outline"
-              className="h-8"
-            >
-              <ToggleGroupItem value="day" className="text-xs h-8 px-3">Day</ToggleGroupItem>
-              <ToggleGroupItem value="range" className="text-xs h-8 px-3">Range</ToggleGroupItem>
-            </ToggleGroup>
-          </div>
-
-          {mode === 'day' ? (
+      {/* Controls — one filter card instead of a loose row. Reading order is
+          WHO (shift, then employee), then WHEN (view, then the date), then the
+          actions on the result. Every control is 32px and carries a label, so
+          the band stops looking improvised. */}
+      <Card className="border-border">
+        <CardContent className="p-3">
+          <div className="flex flex-wrap items-end gap-3">
             <div className="flex flex-col gap-1">
-              <Label className="text-[0.65rem] text-muted-foreground">Date</Label>
-              <DatePicker
-                value={day}
-                placeholder="All dates"
-                clearable
-                onChange={(v) => { setDay(v); setPage(1); }}
+              <Label className="text-[0.65rem] text-muted-foreground">Shift</Label>
+              <ShiftTabs
+                value={shiftId}
+                onChange={(val) => { setShiftId(val); setPage(1); }}
+                className="h-8"
               />
             </div>
-          ) : (
-            <div className="flex flex-col gap-1">
-              <Label className="text-[0.65rem] text-muted-foreground">Period</Label>
-              <PeriodFilter
-                value={period}
-                onChange={(next) => { setPeriod(next); setPage(1); }}
+
+            <div className="flex flex-col gap-1 w-full sm:w-[190px]">
+              <Label className="text-[0.65rem] text-muted-foreground">Employee</Label>
+              <EmployeeSelect
+                value={userId}
+                onChange={(val) => { setUserId(val); setPage(1); }}
               />
             </div>
-          )}
 
-          <div className="flex flex-col gap-1 w-full sm:w-[200px]">
-            <Label className="text-[0.65rem] text-muted-foreground">Employee</Label>
-            <EmployeeSelect
-              value={userId}
-              onChange={(val) => { setUserId(val); setPage(1); }}
-            />
-          </div>
+            <div className="flex flex-col gap-1">
+              <Label className="text-[0.65rem] text-muted-foreground">View</Label>
+              <ToggleGroup
+                value={[mode]}
+                onValueChange={(val) => {
+                  const v = val[0];
+                  if (v === 'day' || v === 'range') { setMode(v); setPage(1); }
+                }}
+                variant="outline"
+                className="h-8"
+              >
+                <ToggleGroupItem value="day" className="text-xs h-8 px-3">Day</ToggleGroupItem>
+                <ToggleGroupItem value="range" className="text-xs h-8 px-3">Range</ToggleGroupItem>
+              </ToggleGroup>
+            </div>
 
-          <div className="flex flex-col gap-1">
-            <Label className="text-[0.65rem] text-muted-foreground">Completion</Label>
-            <Button
-              type="button"
-              variant={showBelowTargetOnly ? 'default' : 'outline'}
-              size="sm"
-              className="h-8 text-xs"
-              aria-pressed={showBelowTargetOnly}
-              onClick={() => setShowBelowTargetOnly((v) => !v)}
-            >
-              <AlertTriangle className="h-3.5 w-3.5 mr-1.5" />
-              Below target
-              {belowTargetCount > 0 && (
-                <span className={cn(
-                  'ml-1.5 rounded-full px-1.5 py-0.5 text-[0.6rem] font-semibold tabular-nums',
-                  showBelowTargetOnly ? 'bg-primary-foreground/20' : 'bg-muted-foreground/15',
-                )}>
-                  {belowTargetCount}
-                </span>
+            {mode === 'day' ? (
+              <div className="flex flex-col gap-1">
+                <Label className="text-[0.65rem] text-muted-foreground">Date</Label>
+                <DatePicker
+                  value={day}
+                  placeholder="All dates"
+                  clearable
+                  onChange={(v) => { setDay(v); setPage(1); }}
+                />
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1">
+                <Label className="text-[0.65rem] text-muted-foreground">Period</Label>
+                <PeriodFilter
+                  value={period}
+                  onChange={(next) => { setPeriod(next); setPage(1); }}
+                />
+              </div>
+            )}
+
+            {/* These act ON the result rather than describing what is asked
+                for, so they sit apart at the right end. "Below target" had a
+                "Completion" label over it, which made a toggle look like a
+                field with a value. */}
+            <div className="flex items-center gap-2 ml-auto">
+              <Button
+                type="button"
+                variant={showBelowTargetOnly ? 'default' : 'outline'}
+                size="sm"
+                className="h-8 text-xs"
+                aria-pressed={showBelowTargetOnly}
+                onClick={() => setShowBelowTargetOnly((v) => !v)}
+              >
+                <AlertTriangle className="h-3.5 w-3.5 mr-1.5" />
+                Below target
+                {belowTargetCount > 0 && (
+                  <span className={cn(
+                    'ml-1.5 rounded-full px-1.5 py-0.5 text-[0.6rem] font-semibold tabular-nums',
+                    showBelowTargetOnly ? 'bg-primary-foreground/20' : 'bg-muted-foreground/15',
+                  )}>
+                    {belowTargetCount}
+                  </span>
+                )}
+              </Button>
+
+              {canExport && (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={exportingView !== null}
+                    onClick={() => handleExport('summary')}
+                  >
+                    {exportingView === 'summary' ? (
+                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <Download className="h-3.5 w-3.5 mr-1.5" />
+                    )}
+                    Summary
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={exportingView !== null}
+                    onClick={() => handleExport('detail')}
+                  >
+                    {exportingView === 'detail' ? (
+                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <Download className="h-3.5 w-3.5 mr-1.5" />
+                    )}
+                    Detail
+                  </Button>
+                </>
               )}
-            </Button>
+            </div>
           </div>
-        </div>
-
-        {canExport && (
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs"
-              disabled={exportingView !== null}
-              onClick={() => handleExport('summary')}
-            >
-              {exportingView === 'summary' ? (
-                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-              ) : (
-                <Download className="h-3.5 w-3.5 mr-1.5" />
-              )}
-              Summary
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs"
-              disabled={exportingView !== null}
-              onClick={() => handleExport('detail')}
-            >
-              {exportingView === 'detail' ? (
-                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-              ) : (
-                <Download className="h-3.5 w-3.5 mr-1.5" />
-              )}
-              Detail
-            </Button>
-          </div>
-        )}
-      </div>
-
+        </CardContent>
+      </Card>
       {/* Stats Strip */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           { label: 'Employees', value: totalEmployees, icon: Users, color: 'text-blue-500', bg: 'bg-blue-500/10' },
           { label: 'Total Hours', value: totalWorkedSecs > 0 ? formatDuration(totalWorkedSecs) : '0h', icon: Clock, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
-          { label: 'Late', value: totalLate, icon: Hourglass, color: 'text-amber-500', bg: 'bg-amber-500/10' },
-          { label: 'Missing Checkout', value: totalMissing, icon: XCircle, color: 'text-red-500', bg: 'bg-red-500/10' },
+          { label: 'Late', value: lateEmployees, icon: Hourglass, color: 'text-amber-500', bg: 'bg-amber-500/10' },
+          { label: 'Early', value: earlyEmployees, icon: AlertTriangle, color: 'text-orange-500', bg: 'bg-orange-500/10' },
         ].map((s) => (
           <Card key={s.label} className="border-border">
             <CardContent className="p-3">
@@ -1163,12 +1198,30 @@ function ReportTab() {
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Full Days</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Late</th>
                       <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Early</th>
-                      <th className="text-[0.6rem] uppercase tracking-wider font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap text-right">Missing</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((row) => (
-                      <tr key={row.user.id} className="border-b border-border/30 last:border-0 hover:bg-muted/30 transition-colors">
+                    {rows.map((row) => {
+                      // Late AND short on the SAME day — arrived after the
+                      // grace window and still left before the hours were
+                      // served. Counted per day server-side, so this is not
+                      // "has late days and has short days somewhere".
+                      const lateAndShort = row.late_and_short_count > 0;
+
+                      return (
+                      <tr
+                        key={row.user.id}
+                        className={cn(
+                          'border-b border-border/30 last:border-0 transition-colors',
+                          lateAndShort
+                            // A tint plus a left rule, not colour alone: on a
+                            // dark theme a faint row tint is easy to miss, and
+                            // colour by itself is invisible to some readers —
+                            // the badge below carries the same meaning in words.
+                            ? 'bg-red-500/[0.07] hover:bg-red-500/[0.12] shadow-[inset_3px_0_0_0_theme(colors.red.500)]'
+                            : 'hover:bg-muted/30',
+                        )}
+                      >
                         <td className="px-4 py-2.5 whitespace-nowrap">
                           <div className="flex items-center gap-2">
                             <Avatar className="h-6 w-6">
@@ -1177,7 +1230,55 @@ function ReportTab() {
                               </AvatarFallback>
                             </Avatar>
                             <div className="min-w-0">
-                              <p className="text-[0.75rem] font-medium truncate">{row.user.name}</p>
+                              <div className="flex items-center gap-1.5">
+                                <p className="text-[0.75rem] font-medium truncate">{row.user.name}</p>
+                                {lateAndShort && (
+                                  <Tooltip>
+                                    {/* Base UI takes `render`, not asChild. */}
+                                    <TooltipTrigger
+                                      render={<span />}
+                                      tabIndex={0}
+                                      className="inline-flex cursor-help items-center gap-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[0.55rem] font-semibold text-red-700 dark:bg-red-500/15 dark:text-red-400 shrink-0"
+                                    >
+                                      <AlertTriangle className="h-2.5 w-2.5" />
+                                      Late &amp; early
+                                      {row.late_and_short_count > 1 && ` ×${row.late_and_short_count}`}
+                                    </TooltipTrigger>
+                                    {/* ONE child: TooltipContent is an inline-flex
+                                        ROW, so sibling <p> tags become side-by-side
+                                        columns. Everything goes in a single column
+                                        wrapper. Muted text is opacity, not
+                                        text-muted-foreground — the popup paints on
+                                        bg-foreground, where that token disappears. */}
+                                    <TooltipContent className="max-w-[240px]">
+                                      <div className="flex flex-col gap-1 text-left whitespace-normal">
+                                        {/* Plain words, and the same words as the LATE and EARLY column
+                                            headers. "Grace period", "met the requirement" and "short of
+                                            hours" are our terms, not the reader's. */}
+                                        <p className="font-semibold">
+                                          Came late and left early on {row.late_and_short_count}{' '}
+                                          {row.late_and_short_count === 1 ? 'day' : 'days'}
+                                        </p>
+                                        <p className="opacity-75">
+                                          On the same day: came in late, then left before finishing the
+                                          required hours.
+                                        </p>
+                                        {/* Full + early always equals days worked; late overlaps both.
+                                            Naming the denominator stops the numbers looking as though
+                                            they should add up to the whole month. */}
+                                        <p className="opacity-90">
+                                          Worked {row.days_present} {row.days_present === 1 ? 'day' : 'days'} —{' '}
+                                          came late {row.late_count}, left early {row.early_checkout_count},{' '}
+                                          full day {row.full_days_count}
+                                        </p>
+                                        <p className="opacity-60">
+                                          {periodLabel} · only days with a check-in are counted
+                                        </p>
+                                      </div>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                )}
+                              </div>
                               <p className="text-[0.6rem] text-muted-foreground truncate">{row.user.email}</p>
                             </div>
                           </div>
@@ -1221,13 +1322,9 @@ function ReportTab() {
                             <span className="text-orange-600 dark:text-orange-400">{row.early_checkout_count}</span>
                           ) : '—'}
                         </td>
-                        <td className="px-4 py-2.5 whitespace-nowrap text-[0.75rem] tabular-nums text-right">
-                          {row.missing_checkout_count > 0 ? (
-                            <span className="text-red-600 dark:text-red-400">{row.missing_checkout_count}</span>
-                          ) : '—'}
-                        </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

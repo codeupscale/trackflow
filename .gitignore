@@ -1,8 +1,6 @@
 *.log
 .DS_Store
-.env
 .env.backup
-.env.production
 .env.testing
 .phpactor.json
 .phpunit.result.cache
@@ -63,3 +61,4 @@ scripts/*
 
 # TypeScript incremental build artifact
 *.tsbuildinfo
+config.bat
