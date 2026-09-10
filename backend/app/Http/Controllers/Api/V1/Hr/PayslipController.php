@@ -22,7 +22,18 @@ class PayslipController extends Controller
     {
         // Normalised here rather than trusting the raw query string: "0" and
         // "false" both have to mean "active only".
+        //
+        // Held in a variable rather than inlined into the getPayslips() call,
+        // because the totals and the year list below must be computed over the
+        // SAME filters — a second `$request->all()` would drift the moment one
+        // of the three call sites gained a normalisation the others lacked.
         $filters = $request->all() + ['archived' => $request->boolean('archived')];
+
+        // 'all' is the one non-boolean value, and boolean() would flatten it to
+        // false — which is exactly the default it is asking to escape.
+        if ($request->input('archived') === 'all') {
+            $filters['archived'] = 'all';
+        }
 
         $payslips = $this->payrollService->getPayslips($filters, $request->user());
 

@@ -4,6 +4,7 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
+  Archive,
   Building2,
   Briefcase,
   ChevronDown,
@@ -16,6 +17,7 @@ import {
   Mail,
   MapPin,
   RefreshCw,
+  RotateCcw,
   Search,
   Trash2,
   UserCheck,
@@ -27,7 +29,12 @@ import {
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
-import { useEmployees, type UseEmployeesParams } from '@/hooks/hr/use-employees';
+import {
+  useEmployees,
+  useArchiveEmployees,
+  useRestoreEmployees,
+  type UseEmployeesParams,
+} from '@/hooks/hr/use-employees';
 
 import type { EmployeeListItem } from '@/lib/validations/employee';
 import {
@@ -39,6 +46,7 @@ import {
 
 import { EmptyState } from '@/components/common/EmptyState';
 import { DepartmentSelect } from '@/components/hr/DepartmentSelect';
+import { ShiftTabs } from '@/components/hr/ShiftTabs';
 import { EmployeeDetailModal, RoleBadge } from '@/components/hr/EmployeeDetailModal';
 
 import { Badge } from '@/components/ui/badge';
@@ -47,6 +55,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Checkbox } from '@/components/ui/checkbox';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import {
   Dialog,
   DialogContent,
@@ -159,6 +169,10 @@ export default function EmployeesPage() {
 
   const isManagerOrAdmin = hasPermissionWithScope('employees.view_directory', 'project');
   const canInvite = hasPermission('team.invite');
+  // Owner + Org Manager + HR Manager hold employees.edit_profile at
+  // organization scope; Finance and employees do not. No new permission was
+  // needed for archiving.
+  const canArchive = hasPermissionWithScope('employees.edit_profile', 'organization');
 
   useEffect(() => {
     if (user && !isManagerOrAdmin) {
@@ -171,9 +185,17 @@ export default function EmployeesPage() {
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [departmentId, setDepartmentId] = useState<string | null>(null);
+  // Shift is how a team is picked out in practice — each team works its own
+  // shift, so "Sales Team" is whoever is on the sales shift.
+  const [shiftId, setShiftId] = useState<string | null>(null);
   const [employmentStatus, setEmploymentStatus] = useState<string>('all');
   const [employmentType, setEmploymentType] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
+  // Archive tab. Archived people are hidden from every list in the product;
+  // this is the one place they can be seen and brought back.
+  const [showArchived, setShowArchived] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [confirmArchive, setConfirmArchive] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
 
   // Employee detail modal
@@ -264,12 +286,27 @@ export default function EmployeesPage() {
       search: debouncedSearch || undefined,
       department_id: departmentId ?? undefined,
       employment_status: employmentStatus !== 'all' ? employmentStatus : undefined,
+      shift_id: shiftId ?? undefined,
+      archived: showArchived,
       employment_type: employmentType !== 'all' ? employmentType : undefined,
     }),
-    [page, debouncedSearch, departmentId, employmentStatus, employmentType]
+    [page, debouncedSearch, departmentId, shiftId, employmentStatus, employmentType, showArchived]
   );
 
   const { data, isLoading, isError } = useEmployees(params);
+
+  // Headcount of archived people, fetched independently of the tab in view so
+  // the card reads the same on Active and Archived. per_page 1 because only
+  // meta.total is used — the rows are never rendered.
+  const { data: archivedData } = useEmployees({ archived: true, per_page: 1 });
+  const archivedCount = archivedData?.meta?.total;
+
+  const archiveMutation = useArchiveEmployees();
+  const restoreMutation = useRestoreEmployees();
+
+  // A selection made on one tab must not leak into the other — the ids would
+  // no longer be in view and a bulk action would hit invisible rows.
+  useEffect(() => { setSelectedIds([]); }, [showArchived]);
 
   const employees = data?.data ?? [];
   const meta = data?.meta;
@@ -281,12 +318,14 @@ export default function EmployeesPage() {
 
   const activeFilterCount = [
     departmentId != null,
+    shiftId != null,
     employmentStatus !== 'all',
     employmentType !== 'all',
   ].filter(Boolean).length;
 
   const clearFilters = () => {
     setDepartmentId(null);
+    setShiftId(null);
     setEmploymentStatus('all');
     setEmploymentType('all');
     setPage(1);
@@ -392,15 +431,22 @@ export default function EmployeesPage() {
             </div>
           </CardContent>
         </Card>
+        {/* Archived, in the slot Positions used to hold. Positions are their
+            own screen, and the count here only ever reflected the page in
+            view; how many people have left is a fact about the directory and
+            belongs beside the headcount. Counted independently of the current
+            tab so it reads the same on both. */}
         <Card className="border-border">
           <CardContent className="p-3">
             <div className="flex items-center gap-2.5">
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10 shrink-0">
-                <Briefcase className="h-4 w-4 text-amber-500" />
+                <Archive className="h-4 w-4 text-amber-500" />
               </div>
               <div className="min-w-0">
-                <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Designations</p>
-                <p className="text-base font-bold text-foreground tabular-nums leading-tight">{new Set(employees.map((e) => e.position?.id).filter(Boolean)).size}</p>
+                <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Archived</p>
+                <p className="text-base font-bold text-foreground tabular-nums leading-tight">
+                  {archivedCount ?? '--'}
+                </p>
               </div>
             </div>
           </CardContent>
@@ -411,7 +457,9 @@ export default function EmployeesPage() {
       <Card className="border-border">
         <CardContent className="p-3">
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Search */}
+            {/* Search first — it is how anyone looks for one person, and the
+                thing the eye goes to on arriving. Shift next, then the Filters
+                panel for the rarer narrowing. */}
             <div className="relative flex-1 min-w-[200px] max-w-sm">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
               <Input
@@ -422,6 +470,11 @@ export default function EmployeesPage() {
                 aria-label="Search employees"
               />
             </div>
+
+            <ShiftTabs
+              value={shiftId}
+              onChange={(v) => { setShiftId(v); handleFilterChange(); }}
+            />
 
             <div className="h-5 w-px bg-border mx-0.5 hidden sm:block" />
 
@@ -446,6 +499,67 @@ export default function EmployeesPage() {
                 <X className="h-3 w-3" />
                 Clear
               </Button>
+            )}
+
+            {/* Pushed to the right end of the filter row: the tabs are a
+                filter, so they share this row rather than adding a band of
+                height above it, and the bulk actions sit beside them. */}
+            {canArchive && (
+              <div className="flex items-center gap-2 ml-auto">
+                {selectedIds.length > 0 && (
+                  <>
+                    <span className="text-[0.7rem] text-muted-foreground whitespace-nowrap">
+                      {selectedIds.length} selected
+                    </span>
+                    {showArchived ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs"
+                        disabled={restoreMutation.isPending}
+                        onClick={() => restoreMutation.mutate(selectedIds, {
+                          onSuccess: () => setSelectedIds([]),
+                        })}
+                      >
+                        <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                        Restore
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        className="h-8 text-xs"
+                        onClick={() => setConfirmArchive(true)}
+                      >
+                        <Archive className="h-3.5 w-3.5 mr-1" />
+                        Archive
+                      </Button>
+                    )}
+                  </>
+                )}
+
+                <div className="flex items-center gap-1 rounded-lg bg-muted p-0.5 shrink-0">
+                  {[
+                    { label: 'Active', value: false },
+                    { label: 'Archived', value: true },
+                  ].map((tab) => (
+                    <button
+                      key={tab.label}
+                      type="button"
+                      onClick={() => { setShowArchived(tab.value); setPage(1); }}
+                      aria-pressed={showArchived === tab.value}
+                      className={cn(
+                        'rounded-md px-2.5 py-1 text-[0.65rem] font-medium transition-colors',
+                        showArchived === tab.value
+                          ? 'bg-background text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
 
@@ -640,6 +754,17 @@ export default function EmployeesPage() {
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent border-border">
+                    {canArchive && (
+                      <TableHead className="w-[36px]">
+                        <Checkbox
+                          aria-label="Select all"
+                          checked={employees.length > 0 && selectedIds.length === employees.length}
+                          onCheckedChange={(checked) =>
+                            setSelectedIds(checked ? employees.map((e) => e.id) : [])
+                          }
+                        />
+                      </TableHead>
+                    )}
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[220px]">Employee</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[100px]">Role</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[140px]">Department</TableHead>
@@ -657,6 +782,19 @@ export default function EmployeesPage() {
                       className="border-border/50 hover:bg-muted/30 transition-colors cursor-pointer"
                       onClick={() => { setSelectedEmployeeId(emp.id); setModalOpen(true); }}
                     >
+                      {canArchive && (
+                        <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
+                          <Checkbox
+                            aria-label={`Select ${emp.name}`}
+                            checked={selectedIds.includes(emp.id)}
+                            onCheckedChange={(checked) =>
+                              setSelectedIds((prev) =>
+                                checked ? [...prev, emp.id] : prev.filter((id) => id !== emp.id),
+                              )
+                            }
+                          />
+                        </TableCell>
+                      )}
                       <TableCell className="py-2">
                         <div className="flex items-center gap-2.5">
                           <Avatar className="size-8 shrink-0">
@@ -942,6 +1080,27 @@ export default function EmployeesPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {/* Spells out the consequences: archiving signs them out and stops a
+          running agent, so the wording must not read as a soft "hide". */}
+      <ConfirmDialog
+        open={confirmArchive}
+        onOpenChange={setConfirmArchive}
+        title={selectedIds.length === 1 ? 'Archive this employee?' : `Archive ${selectedIds.length} employees?`}
+        description={
+          selectedIds.length === 1
+            ? 'They will be hidden from every list in the system, signed out of the web and desktop app, and any running timer or check-in will be closed. You can restore them from the Archived tab.'
+            : `They will be hidden from every list in the system, signed out of the web and desktop app, and any running timers or check-ins will be closed. You can restore them from the Archived tab.`
+        }
+        confirmLabel="Archive"
+        variant="destructive"
+        isPending={archiveMutation.isPending}
+        onConfirm={() =>
+          archiveMutation.mutate(selectedIds, {
+            onSuccess: () => { setSelectedIds([]); setConfirmArchive(false); },
+          })
+        }
+      />
     </div>
   );
 }

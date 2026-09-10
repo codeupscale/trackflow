@@ -9,8 +9,13 @@ export interface UsePayslipsParams {
   payroll_period_id?: string;
   status?: string;
   user_id?: string;
-  /** Archive tab: payslips belonging to archived employees. */
-  archived?: boolean;
+  /**
+   * Whose payslips: active employees (default), archived ones (true), or
+   * everyone in the period ('all'). 'all' exists for a period's detail
+   * page, where a run must be reviewed whole or its verified counter
+   * disagrees with the approval gate.
+   */
+  archived?: boolean | 'all';
   /** Calendar year of the payroll PERIOD, not of the row. */
   year?: number;
   /** 1-12, of the payroll PERIOD. Combined with year when both are set. */
@@ -47,7 +52,7 @@ export function usePayslips(params?: UsePayslipsParams) {
       if (params?.payroll_period_id) queryParams.payroll_period_id = params.payroll_period_id;
       if (params?.status) queryParams.status = params.status;
       if (params?.user_id) queryParams.user_id = params.user_id;
-      if (params?.archived) queryParams.archived = 1;
+      if (params?.archived) queryParams.archived = params.archived === 'all' ? 'all' : 1;
       if (params?.year) queryParams.year = params.year;
       if (params?.month) queryParams.month = params.month;
       const res = await api.get('/hr/payslips', { params: queryParams });

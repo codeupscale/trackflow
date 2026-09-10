@@ -105,8 +105,14 @@ export default function PayrollPeriodDetailPage({
         isLoading: periodLoading,
         isError: periodError,
     } = usePayrollPeriod(id);
+    // A run is reviewed WHOLE — every payslip it produced, including any for
+    // someone who has since been archived. The Active/Archived tabs that used
+    // to split this list are gone by request, and splitting it here would make
+    // the "n of m verified" counter disagree with the approval gate, which
+    // counts every payslip in the period.
     const { data: payslipsData, isLoading: payslipsLoading } = usePayslips({
         payroll_period_id: id,
+        archived: 'all',
     });
 
     const period = periodData?.data;

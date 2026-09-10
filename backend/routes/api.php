@@ -384,13 +384,13 @@ Route::prefix('v1')->group(function () {
                 ->middleware('permission:employees.view_directory');
             // Archive / restore. Registered BEFORE employees/{employee} so
             // "archive" is never captured as an employee id by the wildcard.
-            // Org-scoped employees.edit_profile is exactly owner + org_manager
-            // + hr_manager — finance and employees are excluded by it, so no
-            // new permission was needed.
+            //
             // The ,organization scope argument is load-bearing: employees hold
             // employees.edit_profile at 'own' scope so they can edit their own
-            // details, and without the scope the middleware's key-presence
-            // check would have let any employee archive their colleagues.
+            // details, and without it the middleware's key-presence check would
+            // have let any employee archive their colleagues. With the scope it
+            // resolves to exactly owner + org_manager + hr_manager, so no new
+            // permission was needed.
             Route::post('employees/archive', [EmployeeController::class, 'archive'])
                 ->middleware('permission:employees.edit_profile,organization');
             Route::post('employees/restore', [EmployeeController::class, 'restore'])
