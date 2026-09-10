@@ -556,9 +556,13 @@ class EmployeeService
             'current_address',
             'permanent_address',
             'bank_name',
+            'bank_account_title',
             'bank_account_number',
             'bank_routing_number',
             'tax_id',
+            // An employee may keep their own bank details current, the same as
+            // the account number they sit beside.
+            'payment_mode',
         ];
     }
 }

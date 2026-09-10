@@ -15,6 +15,60 @@ abstract class TestCase extends BaseTestCase
     use RefreshDatabase;
 
     /**
+     * Databases a test run is allowed to destroy.
+     *
+     * `RefreshDatabase` truncates every table in whatever database the app is
+     * pointed at. If that is the development database, running the suite
+     * deletes the developer's work with no warning and no undo — which has now
+     * happened twice on this project.
+     *
+     * `phpunit.xml` sets `DB_DATABASE=trackflow_test` with `force="true"` and
+     * it is NOT sufficient: Laravel disables Dotenv's putenv adapter, so an
+     * environment variable PHPUnit sets that way never reaches `env()`. The
+     * documented workaround has been to remember `-e DB_DATABASE=trackflow_test`
+     * on every invocation, and a safeguard that depends on remembering is not a
+     * safeguard.
+     *
+     * So the check happens here, where it cannot be skipped, and it ABORTS
+     * rather than warns. A test suite that refuses to run costs a minute; one
+     * that runs against the wrong database costs whatever was in it.
+     */
+    private const DESTROYABLE_DATABASES = ['trackflow_test', 'testing', ':memory:'];
+
+    protected function setUpTraits(): array
+    {
+        $this->guardAgainstNonTestDatabase();
+
+        return parent::setUpTraits();
+    }
+
+    private function guardAgainstNonTestDatabase(): void
+    {
+        $connection = config('database.default');
+        $database = config("database.connections.{$connection}.database");
+
+        if (in_array($database, self::DESTROYABLE_DATABASES, true)) {
+            return;
+        }
+
+        // Not an exception: a failed test is something a runner reports and
+        // moves past, and the next test would truncate the database anyway.
+        // The process has to die before any table is touched.
+        fwrite(STDERR, PHP_EOL . str_repeat('=', 72) . PHP_EOL);
+        fwrite(STDERR, "REFUSING TO RUN TESTS" . PHP_EOL . PHP_EOL);
+        fwrite(STDERR, "  Connected to database: '{$database}'" . PHP_EOL);
+        fwrite(STDERR, '  Allowed for tests:     ' . implode(', ', self::DESTROYABLE_DATABASES) . PHP_EOL . PHP_EOL);
+        fwrite(STDERR, "RefreshDatabase would TRUNCATE EVERY TABLE in '{$database}'." . PHP_EOL);
+        fwrite(STDERR, 'Re-run with the test database. Note that -e is a flag of' . PHP_EOL);
+        fwrite(STDERR, 'docker compose exec, NOT of artisan — artisan rejects it:' . PHP_EOL . PHP_EOL);
+        fwrite(STDERR, '  docker compose exec -e DB_DATABASE=trackflow_test laravel.test \\' . PHP_EOL);
+        fwrite(STDERR, '      php artisan test' . PHP_EOL);
+        fwrite(STDERR, str_repeat('=', 72) . PHP_EOL . PHP_EOL);
+
+        exit(1);
+    }
+
+    /**
      * Whether permissions have been seeded in this test run.
      * Reset per-test by RefreshDatabase.
      */

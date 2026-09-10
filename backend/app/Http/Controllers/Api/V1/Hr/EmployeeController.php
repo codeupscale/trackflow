@@ -113,6 +113,14 @@ class EmployeeController extends Controller
         $data['tax_id'] = $canViewFinancial
             ? $profile->tax_id
             : $this->service->maskFinancialField($profile->tax_id);
+        // Masked under the same rule as the account number it belongs to: an
+        // account title names the person who holds the account.
+        $data['bank_account_title'] = $canViewFinancial
+            ? $profile->bank_account_title
+            : $this->service->maskFinancialField($profile->bank_account_title);
+        // Not financially identifying — "Bank transfer" tells nobody anything —
+        // so it is returned in full, and the payslip needs it.
+        $data['payment_mode'] = $profile->payment_mode;
 
         return response()->json(['data' => $data]);
     }

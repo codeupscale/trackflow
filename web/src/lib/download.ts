@@ -43,16 +43,32 @@ export async function readBlobError(err: unknown): Promise<string | null> {
 
   if (data instanceof Blob) {
     try {
-      const text = await data.text();
-      return (JSON.parse(text) as { message?: string })?.message ?? null;
+      return extractMessage(JSON.parse(await data.text()));
     } catch {
       return null;
     }
   }
 
-  if (typeof data === 'object' && data && 'message' in data) {
-    return String((data as { message?: unknown }).message ?? '') || null;
-  }
+  return extractMessage(data);
+}
+
+/**
+ * Pull the human-readable reason out of an API error body.
+ *
+ * This API wraps errors as `{ error: { code, message } }` (see the render()
+ * handler in backend/bootstrap/app.php) and only validation failures also
+ * carry a top-level `message`. Reading `message` alone therefore missed the
+ * reason on every abort() — a 422 explaining exactly what was wrong arrived at
+ * the UI as a generic fallback.
+ */
+function extractMessage(data: unknown): string | null {
+  if (typeof data !== 'object' || data === null) return null;
+
+  const wrapped = (data as { error?: { message?: unknown } }).error?.message;
+  if (typeof wrapped === 'string' && wrapped) return wrapped;
+
+  const plain = (data as { message?: unknown }).message;
+  if (typeof plain === 'string' && plain) return plain;
 
   return null;
 }

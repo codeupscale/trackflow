@@ -37,6 +37,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { EmployeePayslipTab } from "@/components/hr/EmployeePayslipTab";
 
 // ── Role display helpers ──
 
@@ -179,6 +180,10 @@ function getDefaults(employee: EmployeeDetail | null): EmployeeProfileInput {
     emergency_contact_phone: employee?.emergency_contact_phone ?? null,
     emergency_contact_relation: employee?.emergency_contact_relation ?? null,
     bank_name: employee?.bank_name ?? null,
+    // Prefilled, unlike the account and tax numbers: these are readable values
+    // the form should show rather than blank out on every save.
+    bank_account_title: employee?.bank_account_title ?? null,
+    payment_mode: employee?.payment_mode ?? null,
     bank_account_number: null,
     bank_routing_number: null,
     tax_id: null,
@@ -214,6 +219,21 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
   const { data: employeeData, isLoading, isError } = useEmployee(employeeId ?? undefined);
   const employee = employeeData?.data ?? null;
   const isSelf = employee?.user_id === user?.id;
+
+  /**
+   * Payslip Info is for the people who run payroll: Owner, HR Manager and
+   * Finance Manager.
+   *
+   * A role list rather than a permission because no single permission
+   * expresses this set — `payroll.view_all` would also let in Org Manager, and
+   * `employees.view_financial` would let an employee open their own. This is
+   * VISIBILITY only: the bank and tax values behind it are still gated on
+   * `employees.view_financial` server-side, so hiding the tab narrows what is
+   * offered without being what protects the data.
+   */
+  const canSeePayslipInfo = ['owner', 'hr_manager', 'finance_manager'].includes(
+    user?.role ?? '',
+  );
   const canEdit = canEditAllFields || isSelf;
   const canUploadDoc = hasPermission("employees.manage_documents") || isSelf;
   const canVerifyDoc = canManageDocumentsOrg;
@@ -281,6 +301,8 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
           emergency_contact_phone: data.emergency_contact_phone,
           emergency_contact_relation: data.emergency_contact_relation,
           bank_name: data.bank_name,
+          bank_account_title: data.bank_account_title,
+          payment_mode: data.payment_mode,
           bank_account_number: data.bank_account_number,
           bank_routing_number: data.bank_routing_number,
           tax_id: data.tax_id,
@@ -355,6 +377,11 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
                       <div className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                         {[
                           { key: "employee", label: "Employee Info" },
+                          // Everything a payslip prints, in one place — the
+                          // fields and the money that fills them.
+                          ...(canSeePayslipInfo
+                            ? [{ key: "payslip", label: "Payslip Info" }]
+                            : []),
                           { key: "personal", label: "Personal" },
                           { key: "emergency", label: "Emergency & Address" },
                           { key: "documents", label: "Documents" },
@@ -427,7 +454,11 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
                                 )} />
                                 <FormField control={form.control} name="job_title" render={({ field }) => (
                                   <FormItem>
-                                    <FormLabel className="text-xs">Position</FormLabel>
+                                    {/* "Designation" — the same field the
+                                        payslip prints under that name. One
+                                        word for one thing beats making someone
+                                        work out that Position is Designation. */}
+                                    <FormLabel className="text-xs">Designation</FormLabel>
                                     <FormControl>
                                       <Input placeholder="e.g. Software Engineer" className="rounded-xl" value={field.value ?? ''} onChange={(e) => field.onChange(e.target.value || null)} />
                                     </FormControl>
@@ -549,11 +580,16 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
                                     )} />
                                     <FormField control={form.control} name="tax_id" render={({ field }) => (
                                       <FormItem>
-                                        <FormLabel className="text-xs">Tax File Number</FormLabel>
-                                        <FormControl><Input placeholder="Tax ID" value={field.value ?? ""} onChange={(e) => field.onChange(e.target.value || null)} /></FormControl>
+                                        <FormLabel className="text-xs">CNIC / Tax ID</FormLabel>
+                                        <FormControl><Input placeholder="35202-1234567-8" value={field.value ?? ""} onChange={(e) => field.onChange(e.target.value || null)} /></FormControl>
                                         <FormMessage />
                                       </FormItem>
                                     )} />
+                                    {/* Mode of Payment and Account Title are
+                                        edited on the Payslip Info tab, with
+                                        the rest of what a payslip prints. Two
+                                        forms writing the same column is how
+                                        one of them ends up stale. */}
                                   </div>
                                 </div>
                               </>
@@ -582,7 +618,7 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
                               </div>
                               <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-0.5">
                                 <InfoRow label="Department" value={employee.department?.name} />
-                                <InfoRow label="Position" value={employee.position?.title ?? employee.job_title} />
+                                <InfoRow label="Designation" value={employee.position?.title ?? employee.job_title} />
                                 <InfoRow
                                   label="Shift"
                                   value={employee.shift ? `${employee.shift.name} (${employee.shift.start_time.slice(0, 5)}–${employee.shift.end_time.slice(0, 5)})` : null}
@@ -606,10 +642,12 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
                                     <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Financial Information</h3>
                                   </div>
                                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-0.5">
+                                    <InfoRow label="Mode of Payment" value={employee.payment_mode} />
                                     <InfoRow label="Bank Name" value={employee.bank_name} />
-                                    <InfoRow label="Account Number" value={employee.bank_account_number} />
+                                    <InfoRow label="Account Title" value={employee.bank_account_title} />
+                                    <InfoRow label="Account / IBAN" value={employee.bank_account_number} />
                                     <InfoRow label="BSB / Routing" value={employee.bank_routing_number} />
-                                    <InfoRow label="Tax File Number" value={employee.tax_id} />
+                                    <InfoRow label="CNIC / Tax ID" value={employee.tax_id} />
                                   </div>
                                 </div>
                               </>
@@ -617,6 +655,15 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
                           </div>
                         )}
                       </div>}
+
+                      {/* ─── Payslip Info Tab ─── */}
+                      {activeTab === "payslip" && canSeePayslipInfo && (
+                        <EmployeePayslipTab
+                          employee={employee}
+                          form={form}
+                          editing={editing}
+                        />
+                      )}
 
                       {/* ─── Personal Tab ─── */}
                       {activeTab === "personal" && <div className="space-y-4">

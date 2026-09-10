@@ -768,7 +768,7 @@ export default function EmployeesPage() {
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[220px]">Employee</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[100px]">Role</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[140px]">Department</TableHead>
-                    <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[140px]">Position</TableHead>
+                    <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[140px]">Designation</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[130px]">Shift</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[90px]">Type</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[80px]">Status</TableHead>

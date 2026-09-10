@@ -22,11 +22,40 @@ class Payslip extends Model
         'total_deductions',
         'total_allowances',
         'net_salary',
+        // The currency this payslip was produced in. Null means "the org's
+        // current one" — true for every payslip until the org switches.
+        'currency',
         'status',
         'payment_date',
         'payment_method',
         'notes',
+        'verified_at',
+        'verified_by',
+        'withdrawn_at',
+        'withdrawn_by',
     ];
+
+    /**
+     * Has this payslip been released to the employee?
+     *
+     * Verified AND not since withdrawn. The two are recorded separately so the
+     * history survives — withdrawing used to erase the verification, leaving no
+     * trace that the document had ever been checked or by whom.
+     */
+    public function isVerified(): bool
+    {
+        return $this->verified_at !== null && $this->withdrawn_at === null;
+    }
+
+    public function withdrawnBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'withdrawn_by');
+    }
+
+    public function verifier(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'verified_by');
+    }
 
     protected function casts(): array
     {
@@ -36,6 +65,8 @@ class Payslip extends Model
             'total_allowances' => 'decimal:2',
             'net_salary' => 'decimal:2',
             'payment_date' => 'date',
+            'verified_at' => 'datetime',
+            'withdrawn_at' => 'datetime',
         ];
     }
 

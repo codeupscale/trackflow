@@ -221,3 +221,50 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/auth/login \
 | **Mode B:** `bind: address already in use` on 8000/3000/3001 | Mode A is still running natively (`artisan serve` / `npm run dev`), or the other mode's containers are up                                                        | Stop the native processes, or `docker compose down`. The two modes share ports by design. |
 | **Mode B:** web loads but every API call fails    | Something set `NEXT_PUBLIC_API_URL` to a container name. It is read by the **browser**, which runs on your host and cannot resolve `laravel.test`.                                        | It must stay `http://localhost:8000/api/v1`. `compose.yaml` sets this already.     |
 | **Mode A:** uploads land in the real S3 bucket    | `backend/.env` has `FILESYSTEM_DISK=s3` with the live AWS keys from the root `.env`. Mode B redirects to MinIO; native mode does not.                                                     | Point `backend/.env` at MinIO — see *File storage* below.                          |
+
+## Backend speed on Windows (why it was slow, and the trade-off)
+
+The project is bind-mounted into the container (`./backend:/var/www/html`).
+On Windows that filesystem is **~700x slower** than the container's own disk —
+measured at 14.6ms per file read and 4.3ms per stat, against 0.02ms locally.
+
+The app is served by PHP's built-in server (`php -S`), which runs under the
+**CLI SAPI, where opcache is off by default**. So every request re-read and
+recompiled the whole framework across that mount. A request to
+`/api/health/live` — a route that does nothing — took 3–5 seconds.
+
+`backend/docker/8.5/php-perf.ini` (mounted in `compose.yaml`) fixes it:
+`opcache.enable_cli=1` plus `opcache.validate_timestamps=0`. Measured after:
+
+| | before | after |
+|---|---|---|
+| `health/live` | 4.8s | 0.16s |
+| `auth/me` | 3.4s | 0.21s |
+| `hr/payroll-periods` | 7.5s | 0.21s |
+| `hr/salary-roster` | 9.1s | 0.31s |
+
+**The trade-off: PHP code changes are not picked up until you restart.**
+
+```bash
+docker compose restart laravel.test horizon
+```
+
+**Restart `horizon` too — it is a second long-running PHP process with its own
+opcache.** Anything a queued job touches runs there, not in `laravel.test`, so
+restarting only the web container leaves every job executing the code as it was
+when Horizon last started. This is not a theoretical hazard: a `RunPayrollJob`
+kept writing payslip lines with no `category` for hours after the fix shipped,
+because `laravel.test` had been restarted and `horizon` had not. The symptom is
+the worst kind — the web app is demonstrably running the new code, so the
+evidence points everywhere except the actual cause.
+
+`php artisan tinker` is misleading here for the same reason. Each invocation is
+a fresh process with an empty opcache, so it always compiles the current file
+and always agrees with you. A check that passes in tinker and fails in the
+browser or in a job is this bug, not a data problem.
+
+Config is cached too (`php artisan config:cache`), so **`.env` changes need**
+`php artisan config:clear`. Routes are deliberately NOT cached — the ~50ms it
+saves is not worth a new route silently 404ing.
+
+Front-end work is unaffected; Next has its own dev server and hot reload.

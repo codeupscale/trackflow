@@ -220,14 +220,13 @@ class PermissionSeeder extends Seeder
             'attendance.view_all'                => 'none',
             'attendance.export'                  => 'none',
 
-            // payroll — admin gets full access
+            // payroll — OWN PAYSLIP ONLY (owner decision, 2026-09-09).
+            //
+            // Running payroll, seeing what colleagues earn, and approving a run
+            // are finance duties, not general management ones. An organization
+            // manager administers people and projects; salary is deliberately
+            // outside that. Owner and finance_manager hold the rest.
             'payroll.view_own'          => 'none',
-            'payroll.view_team'         => 'none',
-            'payroll.view_all'          => 'none',
-            'payroll.run'               => 'none',
-            'payroll.manage_structures' => 'none',
-            'payroll.manage_components' => 'none',
-            'payroll.approve'           => 'none',
 
             // shifts
             'shifts.view'               => 'none',
@@ -327,14 +326,13 @@ class PermissionSeeder extends Seeder
             'attendance.view_all'                => 'none',
             'attendance.export'                  => 'none',
 
-            // payroll — full management (run, structures, components, approve)
+            // payroll — OWN PAYSLIP ONLY (owner decision, 2026-09-09).
+            //
+            // HR owns people, not pay. Leaving HR able to read every salary in
+            // the company — and to approve a run — is the widest read in the
+            // product for a role that does not need it. Salary structures and
+            // assignments move to finance with the rest of payroll.
             'payroll.view_own'            => 'none',
-            'payroll.view_team'           => 'none',
-            'payroll.view_all'            => 'none',
-            'payroll.run'                 => 'none',
-            'payroll.manage_structures'   => 'none',
-            'payroll.manage_components'   => 'none',
-            'payroll.approve'             => 'none',
 
             // shifts — full management
             'shifts.view'               => 'none',

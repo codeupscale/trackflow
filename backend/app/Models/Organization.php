@@ -110,6 +110,12 @@ class Organization extends Model
             // Production default: prompt user to keep/discard idle time (Hubstaff-like).
             'keep_idle_time' => 'prompt',
             'timezone' => 'Asia/Karachi',
+            // The org's money. ONE currency for the whole organization: every
+            // salary, rate and total is denominated in it, and nothing is
+            // converted. Per-record currencies would make every SUM in reports
+            // and payroll meaningless without dated exchange rates, which is a
+            // different feature from "show our numbers in our own currency".
+            'currency' => config('money.default', 'PKR'),
             'can_add_manual_time' => true,
             'employees_see_all_projects' => false, // if false, employees see only projects they are assigned to
             // When true, the FIRST timer start of the day auto-creates an attendance

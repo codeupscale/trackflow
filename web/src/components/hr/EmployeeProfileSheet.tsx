@@ -116,6 +116,8 @@ export function EmployeeProfileSheet({
                   emergency_contact_phone: data.emergency_contact_phone,
                   emergency_contact_relation: data.emergency_contact_relation,
                   bank_name: data.bank_name,
+                  bank_account_title: data.bank_account_title,
+                  payment_mode: data.payment_mode,
                   bank_account_number: data.bank_account_number,
                   bank_routing_number: data.bank_routing_number,
                   tax_id: data.tax_id,
@@ -202,7 +204,7 @@ export function EmployeeProfileSheet({
                                     name="position_id"
                                     render={({ field }) => (
                                         <FormItem>
-                                            <FormLabel>Position</FormLabel>
+                                            <FormLabel>Designation</FormLabel>
                                             <FormControl>
                                                 <PositionSelect
                                                     value={field.value}
@@ -709,6 +711,59 @@ export function EmployeeProfileSheet({
                             Financial Information
                         </h3>
 
+                        {/* These four are what a payslip prints under "Mode of
+                            Payment", "Bank Name", "Account Title" and
+                            "Account/IBAN" — filling them here is what lets the
+                            payslip design resolve them per employee. */}
+                        <div className="grid grid-cols-2 gap-4">
+                            <FormField
+                                control={form.control}
+                                name="payment_mode"
+                                render={({ field }) => (
+                                    <FormItem>
+                                        <FormLabel>Mode of Payment</FormLabel>
+                                        <FormControl>
+                                            <Input
+                                                placeholder="e.g. Bank Transfer"
+                                                value={field.value ?? ""}
+                                                onChange={(e) =>
+                                                    field.onChange(
+                                                        e.target.value || null,
+                                                    )
+                                                }
+                                            />
+                                        </FormControl>
+                                        <FormMessage />
+                                    </FormItem>
+                                )}
+                            />
+
+                            <FormField
+                                control={form.control}
+                                name="bank_account_title"
+                                render={({ field }) => (
+                                    <FormItem>
+                                        <FormLabel>Account Title</FormLabel>
+                                        <FormControl>
+                                            <Input
+                                                placeholder={
+                                                    employee?.name ??
+                                                    "Name on the account"
+                                                }
+                                                value={field.value ?? ""}
+                                                onChange={(e) =>
+                                                    field.onChange(
+                                                        e.target.value || null,
+                                                    )
+                                                }
+                                            />
+                                        </FormControl>
+                                        <FormMessage />
+                                    </FormItem>
+                                )}
+                            />
+                        </div>
+
                         <FormField
                             control={form.control}
                             name="bank_name"
@@ -923,6 +978,10 @@ function getDefaults(employee: EmployeeDetail | null): EmployeeProfileInput {
         emergency_contact_relation:
             employee?.emergency_contact_relation ?? null,
         bank_name: employee?.bank_name ?? null,
+        // Prefilled, unlike the account number: these are readable values the
+        // form should show rather than silently overwrite on save.
+        bank_account_title: employee?.bank_account_title ?? null,
+        payment_mode: employee?.payment_mode ?? null,
         bank_account_number: null, // Always empty — write-only
         bank_routing_number: null,
         tax_id: null,

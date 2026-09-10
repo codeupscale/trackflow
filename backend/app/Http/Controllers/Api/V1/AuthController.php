@@ -733,7 +733,14 @@ class AuthController extends Controller
                 'slug' => $user->organization->slug,
                 'plan' => $user->organization->plan,
                 'trial_ends_at' => $user->organization->trial_ends_at,
-                'settings' => $user->organization->settings,
+                // Merged, so a default the org has never explicitly saved still
+                // reaches the client. The currency is read off this on nearly
+                // every screen; a missing key would silently format every
+                // amount with the wrong symbol.
+                'settings' => array_merge(
+                    $user->organization->getDefaultSettings(),
+                    $user->organization->settings ?? [],
+                ),
             ],
         ];
     }

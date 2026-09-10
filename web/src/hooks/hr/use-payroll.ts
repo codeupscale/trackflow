@@ -102,7 +102,15 @@ export function useDeletePayrollPeriod() {
   });
 }
 
-export function useRunPayroll() {
+/**
+ * Start a run. The work happens on the queue, so this returns as soon as the
+ * job is accepted — it does NOT mean the payslips exist yet.
+ *
+ * `silent` is for a caller that shows the run's progress itself. "Queued" is a
+ * poor thing to be told by a screen that is about to sit and watch the job
+ * finish anyway; it reads as the end of the story when it is the start.
+ */
+export function useRunPayroll(options?: { silent?: boolean }) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -113,10 +121,56 @@ export function useRunPayroll() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['payroll-periods'] });
       queryClient.invalidateQueries({ queryKey: ['payslips'] });
-      toast.success('Payroll run has been queued');
+      if (!options?.silent) toast.success('Payroll run has been queued');
     },
-    onError: (err: Error) => {
-      toast.error(err.message || 'Failed to run payroll');
+    onError: (err: unknown) => {
+      // The server refuses a run when anyone is missing a salary, and names
+      // them. That reason must reach the screen: "Failed to run payroll" turns
+      // a fixable setup problem into a mystery. Errors arrive wrapped as
+      // { error: { message } } — see bootstrap/app.php.
+      toast.error(apiErrorMessage(err) ?? (err as Error).message ?? 'Failed to run payroll', {
+        duration: 8000,
+      });
+    },
+  });
+}
+
+/** The human-readable reason an API call failed, from this API's envelope. */
+function apiErrorMessage(err: unknown): string | null {
+  const data = (err as { response?: { data?: unknown } })?.response?.data;
+  if (typeof data !== 'object' || data === null) return null;
+
+  const wrapped = (data as { error?: { message?: unknown } }).error?.message;
+  if (typeof wrapped === 'string' && wrapped) return wrapped;
+
+  const plain = (data as { message?: unknown }).message;
+  return typeof plain === 'string' && plain ? plain : null;
+}
+
+/**
+ * Close a period once the money has gone out — the final step of the pipeline.
+ * The server rejects this with a 422 unless the period is approved, so the
+ * message is surfaced rather than a generic failure.
+ */
+export function useMarkPayrollPaid() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (periodId: string) => {
+      const res = await api.post(`/hr/payroll-periods/${periodId}/mark-paid`);
+      return res.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['payroll-periods'] });
+      queryClient.invalidateQueries({ queryKey: ['payslips'] });
+      toast.success('Payroll marked as paid');
+    },
+    onError: (err: unknown) => {
+      const message =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ??
+        (err as { data?: { error?: { message?: string } } })?.data?.error?.message ??
+        (err as Error)?.message;
+      toast.error(message || 'Failed to mark payroll as paid');
     },
   });
 }
@@ -134,8 +188,15 @@ export function useApprovePayroll() {
       queryClient.invalidateQueries({ queryKey: ['payslips'] });
       toast.success('Payroll period approved');
     },
-    onError: (err: Error) => {
-      toast.error(err.message || 'Failed to approve payroll');
+    onError: (err: unknown) => {
+      // The server refuses approval with a 422 that NAMES the reason — most
+      // often that some payslips have not been verified yet. Reading
+      // `err.message` off an axios error gets "Request failed with status code
+      // 422" instead, which tells the user a number and nothing they can act
+      // on. Same lesson as the run hook above.
+      toast.error(apiErrorMessage(err) ?? (err as Error)?.message ?? 'Failed to approve payroll', {
+        duration: 8000,
+      });
     },
   });
 }

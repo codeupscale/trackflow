@@ -56,6 +56,8 @@ import {
 import api from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { usePermissionStore } from "@/stores/permission-store";
+import { CURRENCY_OPTIONS, DEFAULT_CURRENCY } from "@/lib/money";
+import { CurrencyChangeDialog } from "@/components/settings/CurrencyChangeDialog";
 
 interface OrgSettings {
     organization: {
@@ -81,6 +83,7 @@ interface OrgSettings {
             can_add_manual_time: boolean;
             weekly_limit_hours?: number | null;
             timezone: string;
+            currency?: string;
         };
     };
 }
@@ -158,6 +161,13 @@ export default function SettingsPage() {
     const queryClient = useQueryClient();
     const { hasPermission } = usePermissionStore();
     const isAdmin = hasPermission("settings.edit_org");
+    // Distinct from isAdmin. Roles like hr_manager hold NEITHER, so `GET
+    // /settings` 403s for them and the org panel below would render the
+    // hardcoded defaults — an empty name, UTC, the fallback currency — as
+    // though they were this organization's real settings, every field greyed
+    // out. Showing someone wrong values they cannot correct is worse than
+    // showing them nothing.
+    const canViewOrg = hasPermission("settings.view_org");
     const [currentPassword, setCurrentPassword] = useState("");
     const [newPassword, setNewPassword] = useState("");
     const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
@@ -180,6 +190,7 @@ export default function SettingsPage() {
         () => ({
             orgName: data?.organization?.name ?? "",
             timezone: settings?.timezone ?? "UTC",
+            currency: settings?.currency ?? DEFAULT_CURRENCY,
             screenshotInterval: settings
                 ? String(settings.screenshot_interval)
                 : "5",
@@ -238,6 +249,10 @@ export default function SettingsPage() {
 
     const [orgName, setOrgName] = useState("");
     const [timezone, setTimezone] = useState("UTC");
+    const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
+    // Picking a currency does not save it — it opens the conversion dialog,
+    // because the amounts already stored have to be repriced with it.
+    const [pendingCurrency, setPendingCurrency] = useState<string | null>(null);
     const [screenshotInterval, setScreenshotInterval] = useState("5");
     const [screenshotBlur, setScreenshotBlur] = useState(false);
     const [idleTimeout, setIdleTimeout] = useState("5");
@@ -270,6 +285,7 @@ export default function SettingsPage() {
         if (!data || initialized) return;
         setOrgName(defaults.orgName);
         setTimezone(defaults.timezone);
+        setCurrency(defaults.currency);
         setUserTimezone(user?.timezone ?? defaults.timezone);
         setScreenshotInterval(defaults.screenshotInterval);
         setScreenshotBlur(defaults.screenshotBlur);
@@ -1009,6 +1025,22 @@ export default function SettingsPage() {
                             </SectionRow>
 
                             {/* Organization */}
+                            {!canViewOrg ? (
+                                <SectionRow
+                                    icon={Settings}
+                                    iconColor="text-emerald-500"
+                                    iconBg="bg-emerald-500/10"
+                                    title="Organization"
+                                    description="Name, timezone and currency for the whole company."
+                                >
+                                    <p className="rounded-lg border border-border/50 bg-muted/20 p-3 text-[0.7rem] text-muted-foreground">
+                                        Your role does not include access to organization settings.
+                                        Currency in particular reprices every salary, grade and
+                                        project rate in the company, so it is kept with the owner
+                                        and organization managers. Ask one of them to change it.
+                                    </p>
+                                </SectionRow>
+                            ) : (
                             <SectionRow
                                 icon={Settings}
                                 iconColor="text-emerald-500"
@@ -1016,6 +1048,17 @@ export default function SettingsPage() {
                                 title="Organization"
                                 description="General organization settings visible to all members."
                             >
+                                {/* Read-only rather than silently greyed out. A
+                                    disabled field with no reason beside it reads
+                                    as a broken control, not a permission. */}
+                                {!isAdmin && (
+                                    <p className="rounded-lg border border-border/50 bg-muted/20 p-3 text-[0.7rem] text-muted-foreground">
+                                        You can view these but not change them — editing
+                                        organization settings is limited to the owner and
+                                        organization managers.
+                                    </p>
+                                )}
+
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                     <div className="grid gap-1.5">
                                         <Label htmlFor="org-name" className="text-xs">Organization Name</Label>
@@ -1047,6 +1090,54 @@ export default function SettingsPage() {
                                         </Select>
                                     </div>
                                 </div>
+
+                                {/* ONE currency for the whole organization. Every
+                                    salary, rate, payslip and report total is shown
+                                    in it and nothing is converted — so this is a
+                                    statement of what the org's money IS, not a
+                                    display preference. */}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div className="grid gap-1.5">
+                                        <Label htmlFor="org-currency" className="text-xs">Currency</Label>
+                                        <Select
+                                            items={CURRENCY_OPTIONS}
+                                            value={currency}
+                                            onValueChange={(v) => {
+                                                if (v && v !== currency) setPendingCurrency(v);
+                                            }}
+                                            disabled={!isAdmin}
+                                        >
+                                            <SelectTrigger id="org-currency" className="h-9 text-sm">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {CURRENCY_OPTIONS.map((c) => (
+                                                    <SelectItem key={c.value} value={c.value}>
+                                                        {c.label}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                        <p className="text-[0.6rem] text-muted-foreground">
+                                            Used for salaries, payslips, project rates and every
+                                            report. Changing it asks for a conversion rate and
+                                            reprices existing amounts — it does not just swap
+                                            the symbol.
+                                        </p>
+                                    </div>
+                                </div>
+
+                                {/* Not part of the Save button. Converting is a
+                                    data migration, so it is confirmed and applied
+                                    on its own rather than batched with unrelated
+                                    settings edits. */}
+                                <CurrencyChangeDialog
+                                    from={currency}
+                                    to={pendingCurrency}
+                                    onOpenChange={(open) => !open && setPendingCurrency(null)}
+                                    onConverted={setCurrency}
+                                />
+
                                 <div className="grid gap-1.5">
                                     <Label htmlFor="org-slug" className="text-xs">Organization Slug</Label>
                                     <div className="flex items-center gap-2 max-w-md">
@@ -1129,6 +1220,7 @@ export default function SettingsPage() {
                                     )}
                                 </div>
                             </SectionRow>
+                            )}
 
                             {/* Billing */}
                             {isAdmin && (

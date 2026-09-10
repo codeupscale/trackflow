@@ -1,3 +1,9 @@
+@php
+    // The org's currency, resolved once. `$currency` is passed by the service;
+    // the fallback keeps a preview or a test that renders this view directly
+    // from dying on an undefined variable.
+    $money = fn ($n) => \App\Support\Money::format($n ?? 0, $currency ?? config('money.default'));
+@endphp
 <!DOCTYPE html>
 <html>
 <head>
@@ -32,7 +38,7 @@
 
     <div class="summary">
         Total: <span>{{ number_format($summary['total_hours'], 2) }}h</span> |
-        Billable Amount: <span>${{ number_format($summary['billable_amount'], 2) }}</span> |
+        Billable Amount: <span>{{ $money($summary['billable_amount']) }}</span> |
         Entries: <span>{{ $summary['entry_count'] }}</span> |
         Resources: <span>{{ $summary['resource_count'] }}</span> |
         Projects: <span>{{ $summary['project_count'] }}</span>
@@ -73,7 +79,7 @@
                     <td class="right">{{ number_format($row['duration_seconds'] / 3600, 2) }}</td>
                     <td class="right">{{ $row['activity_score'] }}%</td>
                     <td>{{ $row['billable'] ? 'Yes' : 'No' }}</td>
-                    <td class="right">${{ number_format($row['billable_amount'], 2) }}</td>
+                    <td class="right">{{ $money($row['billable_amount']) }}</td>
                 </tr>
             @empty
                 <tr><td colspan="11">No time entries match the selected filters.</td></tr>

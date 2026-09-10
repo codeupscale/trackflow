@@ -49,7 +49,7 @@ class GenerateReportJob implements ShouldQueue
                 $content = ReportExportFormatter::csv($this->type, $data);
                 $filename = "reports/{$this->orgId}/{$this->jobId}.csv";
             } else {
-                $content = ReportExportFormatter::pdf($this->type, $data, $this->dateFrom, $this->dateTo);
+                $content = ReportExportFormatter::pdf($this->type, $data, $this->dateFrom, $this->dateTo, $this->orgId);
                 $filename = "reports/{$this->orgId}/{$this->jobId}.pdf";
             }
 

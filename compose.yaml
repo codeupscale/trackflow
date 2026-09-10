@@ -62,6 +62,10 @@ x-backend: &backend
     env_file: ./backend/.env
     volumes:
         - './backend:/var/www/html'
+        # Turns opcache on for the CLI server the app is actually served by.
+        # Without it every request recompiles the framework off the bind mount.
+        # See the file itself for the code-reload trade-off.
+        - './backend/docker/8.5/php-perf.ini:/etc/php/8.5/cli/conf.d/99-perf.ini:ro'
     networks:
         - sail
     profiles: ['app']

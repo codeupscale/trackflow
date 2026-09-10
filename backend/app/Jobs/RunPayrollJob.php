@@ -21,6 +21,9 @@ class RunPayrollJob implements ShouldQueue
     public function __construct(
         public string $periodId,
         public string $organizationId,
+        /** Who pressed Run. Recorded on the period so a second payroll-capable
+         *  person cannot silently re-run someone else's work. */
+        public ?string $actorId = null,
     ) {
         $this->onQueue('default');
     }
@@ -32,7 +35,7 @@ class RunPayrollJob implements ShouldQueue
             'organization_id' => $this->organizationId,
         ]);
 
-        $period = $payrollService->runPayroll($this->periodId);
+        $period = $payrollService->runPayroll($this->periodId, $this->actorId);
 
         Log::info('RunPayrollJob: completed', [
             'period_id' => $this->periodId,

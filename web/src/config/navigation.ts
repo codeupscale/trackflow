@@ -15,6 +15,7 @@ import {
     Layers,
     LayoutDashboard,
     Megaphone,
+    Palette,
     Puzzle,
     Receipt,
     Settings,
@@ -170,20 +171,23 @@ export const navigationConfig: NavGroup[] = [
             },
         ],
     },
+    // Payroll is split by WHAT YOU DO, not by entity: the monthly task first,
+    // configuration second. Ordered by how often each is opened — the run card
+    // on /hr/payroll now guides setup, so the nav no longer has to teach the
+    // sequence by its ordering.
+    //
+    // "Pay Periods" is deliberately absent. It listed the same periods as
+    // /hr/payroll from the same hook, and the run card creates the current
+    // month's period on demand, so it was a second door to one workflow. The
+    // route still resolves for anyone holding a bookmark.
     {
         label: "Payroll",
         items: [
             {
-                name: "Payroll",
+                name: "Run Payroll",
                 href: "/hr/payroll",
                 icon: DollarSign,
                 requiredPermission: "payroll.view_all",
-            },
-            {
-                name: "Pay Periods",
-                href: "/hr/payroll/periods",
-                icon: CalendarDays,
-                requiredPermission: "payroll.run",
             },
             {
                 name: "My Payslips",
@@ -191,17 +195,35 @@ export const navigationConfig: NavGroup[] = [
                 icon: Receipt,
                 requiredPermission: "payroll.view_own",
             },
+        ],
+    },
+    {
+        label: "Payroll Setup",
+        items: [
+            // "Employee Salaries" is deliberately absent. The roster is a tab
+            // on /hr/payroll now — assigning a salary is part of the run, not
+            // a separate errand, and two doors to one table meant the payroll
+            // screen sent you away mid-task. The route still redirects there
+            // for anyone holding a bookmark.
             {
-                name: "Structures",
+                name: "Salary Structures",
                 href: "/hr/payroll/structures",
                 icon: Layers,
                 requiredPermission: "payroll.manage_structures",
             },
             {
-                name: "Components",
+                name: "Pay Components",
                 href: "/hr/payroll/components",
                 icon: Puzzle,
                 requiredPermission: "payroll.manage_components",
+            },
+            // Presentation only — it cannot change an amount, which is why it
+            // sits last and is gated on the same permission as structures.
+            {
+                name: "Payslip Design",
+                href: "/hr/payroll/template",
+                icon: Palette,
+                requiredPermission: "payroll.manage_structures",
             },
         ],
     },
