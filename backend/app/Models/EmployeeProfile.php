@@ -41,9 +41,12 @@ class EmployeeProfile extends Model
         'tax_id',
         'current_address',
         'permanent_address',
+        'payment_mode',
+        'bank_account_title',
     ];
 
     protected $hidden = [
+        'bank_account_title',
         'bank_name',
         'bank_account_number',
         'bank_routing_number',
@@ -53,6 +56,7 @@ class EmployeeProfile extends Model
     protected function casts(): array
     {
         return [
+            'bank_account_title' => 'encrypted',
             'bank_name' => 'encrypted',
             'bank_account_number' => 'encrypted',
             'bank_routing_number' => 'encrypted',

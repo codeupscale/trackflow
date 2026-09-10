@@ -39,6 +39,7 @@ import {
 import api from "@/lib/api";
 import { formatDuration } from "@/lib/check-in-time";
 import { readBlobError, triggerDownload } from "@/lib/download";
+import { useMoney } from "@/lib/money";
 import { useAuthStore } from "@/stores/auth-store";
 import { usePermissionStore } from "@/stores/permission-store";
 
@@ -74,6 +75,7 @@ const PERIOD_LABEL: Record<
 
 export default function ProjectTimeReportPage() {
     const router = useRouter();
+    const money = useMoney();
     const { user } = useAuthStore();
     const { hasPermission } = usePermissionStore();
     const canView = hasPermission("reports.view");
@@ -159,7 +161,7 @@ export default function ProjectTimeReportPage() {
                   icon: DollarSign,
                   color: "emerald",
                   label: "Billable Amount",
-                  value: `$${summary.billable_amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                  value: money(summary.billable_amount),
               },
               {
                   icon: ListChecks,

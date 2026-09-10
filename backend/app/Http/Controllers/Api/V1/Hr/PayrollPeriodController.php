@@ -37,11 +37,23 @@ class PayrollPeriodController extends Controller
 
     public function show(string $id): JsonResponse
     {
-        $period = PayrollPeriod::with('approver:id,name,email')
-            ->withCount('payslips')
+        $period = PayrollPeriod::with(['approver:id,name,email', 'processor:id,name,email'])
+            ->withCount([
+                'payslips',
+                // Withdrawn excluded, exactly as the listing counts it. A
+                // withdrawn payslip carries the verified_at of the send that
+                // was taken back — counting it as verified made the detail
+                // screen claim payslips were out that had been pulled.
+                'payslips as verified_payslips_count' => fn ($q) => $q->whereNotNull('verified_at')->whereNull('withdrawn_at'),
+            ])
             ->findOrFail($id);
 
         $this->authorize('view', $period);
+
+        // Tells the screen whether these payslips are still current. A draft
+        // payslip is a snapshot from run time and does not follow a later
+        // raise until the period is run again.
+        $period->salaries_changed_since_run = $this->payrollService->salariesChangedSinceRun($period);
 
         return response()->json(['data' => $period]);
     }
@@ -71,11 +83,41 @@ class PayrollPeriodController extends Controller
         $period = PayrollPeriod::findOrFail($id);
         $this->authorize('run', $period);
 
-        RunPayrollJob::dispatch($period->id, $period->organization_id);
+        // Checked BEFORE dispatch so the person pressing Run learns why it was
+        // refused. The service repeats these, but a job that aborts fails into
+        // the queue where nobody is watching.
+        if ($reason = $this->payrollService->runBlockedReason($period, $request->user()->id)) {
+            abort(422, $reason);
+        }
+
+        $missing = $this->payrollService->employeesWithoutSalaryFor($period);
+
+        if ($missing->isNotEmpty()) {
+            abort(422, $this->payrollService->missingSalaryMessage($missing));
+        }
+
+        RunPayrollJob::dispatch($period->id, $period->organization_id, $request->user()->id);
 
         return response()->json([
             'message' => 'Payroll run has been queued.',
             'data' => $period,
+        ]);
+    }
+
+    /**
+     * Close the period once the money has gone out. Gated on the same
+     * permission as approval — it is the final step of the same sign-off.
+     */
+    public function markPaid(Request $request, string $id): JsonResponse
+    {
+        $period = PayrollPeriod::findOrFail($id);
+        $this->authorize('approve', $period);
+
+        $paid = $this->payrollService->markPayrollPaid($id);
+
+        return response()->json([
+            'message' => 'Payroll period marked as paid.',
+            'data' => $paid,
         ]);
     }
 

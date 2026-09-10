@@ -9,14 +9,41 @@ export interface UsePayslipsParams {
   payroll_period_id?: string;
   status?: string;
   user_id?: string;
-  /** Archive tab: payslips belonging to archived employees. */
-  archived?: boolean;
+  /**
+   * Whose payslips: active employees (default), archived ones (true), or
+   * everyone in the period ('all'). 'all' exists for a period's detail
+   * page, where a run must be reviewed whole or its verified counter
+   * disagrees with the approval gate.
+   */
+  archived?: boolean | 'all';
+  /** Calendar year of the payroll PERIOD, not of the row. */
+  year?: number;
+  /** 1-12, of the payroll PERIOD. Combined with year when both are set. */
+  month?: number;
   page?: number;
   per_page?: number;
 }
 
+/** Totals over the whole filtered set — the server sums them, never the page. */
+export interface PayslipTotals {
+  slips: number;
+  /** How many are approved or paid, i.e. final rather than still in a run. */
+  finalised: number;
+  gross: number;
+  allowances: number;
+  tax: number;
+  deductions: number;
+  net: number;
+}
+
+export interface PayslipListResponse extends PaginatedResponse<Payslip> {
+  totals: PayslipTotals;
+  /** Years this viewer has payslips in, newest first — drives the picker. */
+  years: number[];
+}
+
 export function usePayslips(params?: UsePayslipsParams) {
-  return useQuery<PaginatedResponse<Payslip>>({
+  return useQuery<PayslipListResponse>({
     queryKey: ['payslips', params],
     queryFn: async () => {
       const queryParams: Record<string, string | number> = {};
@@ -25,7 +52,9 @@ export function usePayslips(params?: UsePayslipsParams) {
       if (params?.payroll_period_id) queryParams.payroll_period_id = params.payroll_period_id;
       if (params?.status) queryParams.status = params.status;
       if (params?.user_id) queryParams.user_id = params.user_id;
-      if (params?.archived) queryParams.archived = 1;
+      if (params?.archived) queryParams.archived = params.archived === 'all' ? 'all' : 1;
+      if (params?.year) queryParams.year = params.year;
+      if (params?.month) queryParams.month = params.month;
       const res = await api.get('/hr/payslips', { params: queryParams });
       const raw = res.data;
       return {
@@ -38,6 +67,10 @@ export function usePayslips(params?: UsePayslipsParams) {
           from: raw.from ?? null,
           to: raw.to ?? null,
         },
+        totals: raw.totals ?? {
+          slips: 0, finalised: 0, gross: 0, allowances: 0, tax: 0, deductions: 0, net: 0,
+        },
+        years: raw.years ?? [],
       };
     },
   });

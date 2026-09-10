@@ -31,6 +31,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import api from '@/lib/api';
+import { formatMoney } from '@/lib/money';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
 
@@ -45,7 +46,17 @@ interface BillingUsage {
 interface Invoice {
   id: string;
   date: string;
+  /**
+   * MAJOR units — `BillingService::getInvoices()` already divides Stripe's
+   * `amount_due` by 100. This page divided by 100 a second time, so every
+   * invoice rendered at one percent of what was actually charged.
+   */
   amount: number;
+  /**
+   * Stripe's own currency for this invoice, not the org's display currency.
+   * A charge is denominated in whatever it was billed in.
+   */
+  currency?: string | null;
   status: string;
   pdf_url: string | null;
 }
@@ -370,7 +381,7 @@ export default function BillingPage() {
                         {new Date(inv.date).toLocaleDateString()}
                       </td>
                       <td className="px-4 py-2.5 text-[0.75rem] font-medium text-foreground tabular-nums">
-                        ${(inv.amount / 100).toFixed(2)}
+                        {formatMoney(inv.amount, (inv.currency ?? 'usd').toUpperCase())}
                       </td>
                       <td className="px-4 py-2.5">
                         {inv.status === 'paid' ? (

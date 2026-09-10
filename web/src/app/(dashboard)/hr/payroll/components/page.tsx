@@ -43,6 +43,7 @@ import {
 } from '@/hooks/hr/use-pay-components';
 import { usePermissionStore } from '@/stores/permission-store';
 import { useAuthStore } from '@/stores/auth-store';
+import { useMoney } from '@/lib/money';
 import type { PayComponent } from '@/lib/validations/payroll';
 
 const typeDot: Record<string, { dot: string; text: string; label: string }> = {
@@ -57,6 +58,7 @@ export default function PayComponentsPage() {
   const { user } = useAuthStore();
   const { hasPermission } = usePermissionStore();
   const canManage = hasPermission('payroll.manage_components');
+  const money = useMoney();
 
   useEffect(() => {
     if (user && !canManage) {
@@ -231,7 +233,7 @@ export default function PayComponentsPage() {
                           <span className="text-[0.75rem] font-medium text-foreground tabular-nums">
                             {c.calculation_type === 'percentage'
                               ? `${Number(c.value)}%`
-                              : `$${Number(c.value).toLocaleString('en-AU', { minimumFractionDigits: 2 })}`}
+                              : money(c.value)}
                           </span>
                         </td>
                         <td className="px-4 py-2.5 whitespace-nowrap">

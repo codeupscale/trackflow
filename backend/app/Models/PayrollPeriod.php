@@ -22,6 +22,8 @@ class PayrollPeriod extends Model
         'end_date',
         'status',
         'processed_at',
+        'processed_by',
+        'paid_at',
         'approved_by',
     ];
 
@@ -31,7 +33,14 @@ class PayrollPeriod extends Model
             'start_date' => 'date',
             'end_date' => 'date',
             'processed_at' => 'datetime',
+            'paid_at' => 'datetime',
         ];
+    }
+
+    /** Who RAN the payroll, as distinct from who approved it. */
+    public function processor(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'processed_by');
     }
 
     public function approver(): BelongsTo

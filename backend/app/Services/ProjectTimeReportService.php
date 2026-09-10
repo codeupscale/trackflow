@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\User;
+use App\Support\Money;
 use App\Support\TimezoneAwareDateRange;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
@@ -175,6 +176,9 @@ class ProjectTimeReportService
             'meta' => $meta,
             'summary' => $summary,
             'group_by_day' => $groupByDay,
+            // The org's own currency. This report printed a bare '$' over
+            // whatever the numbers actually were.
+            'currency' => Money::currencyFor($actor->organization_id),
         ])->download($filename);
     }
 

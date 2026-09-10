@@ -242,7 +242,13 @@ class ReportController extends Controller
             ]);
         }
 
-        return response(ReportExportFormatter::pdf($request->type, $data, $request->date_from, $request->date_to), 200, [
+        return response(ReportExportFormatter::pdf(
+            $request->type,
+            $data,
+            $request->date_from,
+            $request->date_to,
+            $request->user()->organization_id,
+        ), 200, [
             'Content-Type' => 'application/pdf',
             'Content-Disposition' => "attachment; filename=\"{$filename}.pdf\"",
         ]);
