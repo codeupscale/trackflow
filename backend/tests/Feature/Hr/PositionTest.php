@@ -130,6 +130,26 @@ class PositionTest extends TestCase
         ]);
     }
 
+    // ── Authorization ────────────────────────────────────
+
+    /**
+     * Positions is an HR configuration screen. The employee role has never been
+     * granted positions.view by the seeder, but production databases carried the
+     * grant as drift and showed employees the tab; 2026_09_06_000001 removes it.
+     * Departments stays visible — employees do need the org tree.
+     */
+    public function test_employee_role_cannot_view_positions(): void
+    {
+        $user = $this->actingAsUser('employee');
+
+        Position::factory()->create(['organization_id' => $user->organization_id]);
+
+        $this->getJson('/api/v1/hr/positions')->assertStatus(403);
+
+        // The org tree is still theirs to see.
+        $this->getJson('/api/v1/hr/departments')->assertOk();
+    }
+
     // ── Cross-Org Isolation ──────────────────────────────
 
     public function test_cross_org_isolation(): void

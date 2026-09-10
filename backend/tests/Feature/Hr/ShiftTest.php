@@ -155,18 +155,64 @@ class ShiftTest extends TestCase
         $response->assertStatus(403);
     }
 
-    public function test_employee_can_view_shifts(): void
+    /**
+     * An employee sees the shift they are ON — and nothing else. The org's
+     * shift catalogue is not theirs to browse, so the narrowing is enforced by
+     * the server rather than by the caller passing ?mine=1.
+     */
+    public function test_employee_sees_only_their_own_shift(): void
     {
         $user = $this->actingAsUser('employee');
 
+        $mine = Shift::factory()->create([
+            'organization_id' => $user->organization_id,
+            'name' => 'Morning Shift',
+        ]);
         Shift::factory()->create([
             'organization_id' => $user->organization_id,
+            'name' => 'Night Shift',
         ]);
+
+        app(\App\Services\ShiftService::class)->assignUser(
+            $user->organization_id,
+            $user->id,
+            $mine->id,
+            now()->toDateString(),
+            null,
+        );
 
         $response = $this->getJson('/api/v1/hr/shifts');
 
         $response->assertOk();
         $this->assertCount(1, $response->json('data'));
+        $this->assertSame('Morning Shift', $response->json('data.0.name'));
+        // Read-only: no management affordance is advertised to them.
+        $this->assertFalse($response->json('data.0.can_edit'));
+        $this->assertFalse($response->json('data.0.can_delete'));
+    }
+
+    public function test_unassigned_employee_sees_no_shifts(): void
+    {
+        $user = $this->actingAsUser('employee');
+
+        Shift::factory()->create(['organization_id' => $user->organization_id]);
+
+        $response = $this->getJson('/api/v1/hr/shifts');
+
+        $response->assertOk();
+        $this->assertCount(0, $response->json('data'));
+    }
+
+    public function test_manager_still_sees_the_whole_shift_catalogue(): void
+    {
+        $user = $this->actingAsUser('org_manager');
+
+        Shift::factory()->count(3)->create(['organization_id' => $user->organization_id]);
+
+        $response = $this->getJson('/api/v1/hr/shifts');
+
+        $response->assertOk();
+        $this->assertCount(3, $response->json('data'));
     }
 
     // ── Cross-Org Isolation ─────────────────────────────

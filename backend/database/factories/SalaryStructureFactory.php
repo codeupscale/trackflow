@@ -17,7 +17,14 @@ class SalaryStructureFactory extends Factory
     {
         return [
             'organization_id' => Organization::factory(),
-            'name' => fake()->randomElement(['Junior', 'Mid-Level', 'Senior', 'Lead', 'Principal']) . ' ' . fake()->randomElement(['Engineer', 'Designer', 'Manager', 'Analyst']),
+            // A grade number keeps generated names unique. Level × role alone
+            // is a pool of twenty, so creating a handful in one org collided
+            // often enough to fail at random against the case-insensitive
+            // unique index on (organization_id, lower(name)) for unlinked
+            // grades — a flaky test that says nothing about the code.
+            'name' => fake()->randomElement(['Junior', 'Mid-Level', 'Senior', 'Lead', 'Principal'])
+                . ' ' . fake()->randomElement(['Engineer', 'Designer', 'Manager', 'Analyst'])
+                . ' G' . fake()->unique()->numberBetween(1, 999999),
             'description' => fake()->optional()->sentence(),
             'type' => fake()->randomElement(['monthly', 'hourly', 'daily']),
             'base_salary' => fake()->randomFloat(2, 3000, 15000),

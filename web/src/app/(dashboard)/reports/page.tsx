@@ -41,6 +41,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import api from "@/lib/api";
 import { readBlobError, triggerDownload } from "@/lib/download";
 import { cn, formatDuration } from "@/lib/utils";
+import { useCurrency, useMoney } from "@/lib/money";
 import { useAuthStore } from "@/stores/auth-store";
 import { usePermissionStore } from "@/stores/permission-store";
 
@@ -389,6 +390,8 @@ const reportTypes: { value: ReportType; label: string; description: string }[] =
 
 export default function ReportsPage() {
     const router = useRouter();
+    const currency = useCurrency();
+    const money = useMoney();
     const { user } = useAuthStore();
     const { hasPermission, hasPermissionWithScope } = usePermissionStore();
     const isEmployee = !hasPermission("reports.view");
@@ -630,7 +633,7 @@ export default function ReportsPage() {
             key.includes("rate") ||
             key.includes("earnings")
         ) {
-            return `$${Number(value).toFixed(2)}`;
+            return money(value);
         }
         if (
             key.includes("score") ||
@@ -918,13 +921,9 @@ export default function ReportsPage() {
                                 Budget Used
                             </p>
                             <p className="text-base font-bold tabular-nums leading-tight text-foreground">
-                                $
-                                {analytics.total_budget_used.toLocaleString(
-                                    undefined,
-                                    { maximumFractionDigits: 0 },
-                                )}
+                                {money(analytics.total_budget_used, { compact: true })}
                                 <span className="text-xs font-normal text-muted-foreground ml-0.5">
-                                    USD
+                                    {currency}
                                 </span>
                             </p>
                         </CardContent>

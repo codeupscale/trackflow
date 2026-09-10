@@ -399,7 +399,7 @@ export default function EmployeesPage() {
                 <Briefcase className="h-4 w-4 text-amber-500" />
               </div>
               <div className="min-w-0">
-                <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Positions</p>
+                <p className="text-[0.65rem] font-medium text-muted-foreground uppercase tracking-wider">Designations</p>
                 <p className="text-base font-bold text-foreground tabular-nums leading-tight">{new Set(employees.map((e) => e.position?.id).filter(Boolean)).size}</p>
               </div>
             </div>
@@ -643,7 +643,7 @@ export default function EmployeesPage() {
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[220px]">Employee</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[100px]">Role</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[140px]">Department</TableHead>
-                    <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[140px]">Position</TableHead>
+                    <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[140px]">Designation</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[130px]">Shift</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[90px]">Type</TableHead>
                     <TableHead className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground w-[80px]">Status</TableHead>

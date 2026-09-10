@@ -2,13 +2,18 @@
 
 namespace App\Services;
 
+use App\Models\ActivityLog;
 use App\Models\EmployeeDocument;
 use App\Models\EmployeeNote;
 use App\Models\EmployeeProfile;
+use App\Models\Scopes\GlobalOrganizationScope;
+use App\Models\TimeEntry;
 use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Facades\Storage;
 
 class EmployeeService
@@ -24,8 +29,11 @@ class EmployeeService
      */
     public function getDirectory(string $orgId, array $filters, User $viewer): LengthAwarePaginator
     {
+        // Archived employees are hidden unless the caller explicitly asks for
+        // them (the Archive tab). is_active is the archive flag across the
+        // system — see EmployeeService::archive().
         $query = User::where('users.organization_id', $orgId)
-            ->where('users.is_active', true)
+            ->where('users.is_active', ! empty($filters['archived']) ? false : true)
             ->leftJoin('employee_profiles', function ($join) {
                 $join->on('users.id', '=', 'employee_profiles.user_id')
                     ->on('users.organization_id', '=', 'employee_profiles.organization_id');
@@ -115,6 +123,15 @@ class EmployeeService
         // Filter by department
         if (! empty($filters['department_id'])) {
             $query->where('employee_profiles.department_id', $filters['department_id']);
+        }
+
+        // Filter by shift — the practical way to pick out a team, since each
+        // team works its own shift. Reads the user_shifts join already made
+        // above for the Shift column, which is scoped to the assignment
+        // active TODAY, so this returns who is on that shift now rather than
+        // anyone who was ever on it.
+        if (! empty($filters['shift_id'])) {
+            $query->where('user_shifts.shift_id', $filters['shift_id']);
         }
 
         // Filter by position
@@ -360,6 +377,170 @@ class EmployeeService
     }
 
     /**
+     * Archive employees — the system-wide "this person has left" switch.
+     *
+     * `users.is_active = false` IS the archive flag; there is deliberately no
+     * separate `archived` column. The flag already blocked login and was
+     * already filtered by most listing queries, so a fourth concept would have
+     * meant four things to keep in sync instead of one.
+     *
+     * Flipping the flag is not enough on its own. Deactivation never touched
+     * existing tokens, so an archived employee's DESKTOP AGENT kept tracking
+     * and their browser session kept working until the refresh token expired
+     * up to 30 days later. Archiving therefore also revokes every token, closes
+     * anything still open in their name, and withdraws work that was awaiting
+     * someone else's decision:
+     *
+     *   - open time entries are closed at their last heartbeat, never at now(),
+     *     for the same reason the abandoned-entry backstop does it that way:
+     *     closing at now() bills the hours between leaving and being archived.
+     *   - an open check-in session is closed and the day's rollups recomputed.
+     *   - pending leave requests are cancelled — nobody should be approving
+     *     leave for someone who has left.
+     *
+     * Returns the number of employees actually archived (already-archived ids
+     * are skipped, so a repeated call is a no-op rather than an error).
+     *
+     * @param  array<int,string>  $userIds
+     */
+    public function archive(string $orgId, array $userIds, User $actor): int
+    {
+        return DB::transaction(function () use ($orgId, $userIds, $actor) {
+            $users = User::where('organization_id', $orgId)
+                ->whereIn('id', $userIds)
+                ->where('is_active', true)
+                ->lockForUpdate()
+                ->get();
+
+            // An actor cannot archive themselves: it would revoke the token of
+            // the request in flight and lock them out mid-action.
+            $users = $users->reject(fn (User $u) => $u->id === $actor->id);
+
+            foreach ($users as $user) {
+                $this->closeOpenWorkFor($user);
+
+                $user->forceFill(['is_active' => false])->save();
+                $user->tokens()->delete();
+
+                EmployeeProfile::where('organization_id', $orgId)
+                    ->where('user_id', $user->id)
+                    ->update([
+                        'employment_status' => 'terminated',
+                        // Only stamp an exit date if HR has not recorded one.
+                        'date_of_exit' => DB::raw("COALESCE(date_of_exit, '" . now()->toDateString() . "')"),
+                        'updated_at' => now(),
+                    ]);
+            }
+
+            return $users->count();
+        });
+    }
+
+    /**
+     * Restore archived employees to active.
+     *
+     * Deliberately NOT the inverse of everything archive() did: the closed time
+     * entries, check-in sessions and cancelled leave requests stay closed and
+     * cancelled. Those are history, and a rehire does not resume a session from
+     * before they left. Restore only makes the person visible and able to sign
+     * in again — they get fresh tokens by logging in.
+     *
+     * @param  array<int,string>  $userIds
+     */
+    public function restore(string $orgId, array $userIds): int
+    {
+        return DB::transaction(function () use ($orgId, $userIds) {
+            $users = User::where('organization_id', $orgId)
+                ->whereIn('id', $userIds)
+                ->where('is_active', false)
+                ->lockForUpdate()
+                ->get();
+
+            foreach ($users as $user) {
+                $user->forceFill(['is_active' => true])->save();
+
+                EmployeeProfile::where('organization_id', $orgId)
+                    ->where('user_id', $user->id)
+                    ->update([
+                        'employment_status' => 'active',
+                        'date_of_exit' => null,
+                        'updated_at' => now(),
+                    ]);
+            }
+
+            return $users->count();
+        });
+    }
+
+    /**
+     * Close anything still running in an archived employee's name.
+     *
+     * Open time entries close at their last heartbeat (falling back to their
+     * own start), never at now() — the same rule TimeEntrySyncService uses for
+     * abandoned entries, and for the same reason: an agent left running on a
+     * machine nobody is using must not bill the gap.
+     */
+    private function closeOpenWorkFor(User $user): void
+    {
+        $openEntries = TimeEntry::withoutGlobalScope(GlobalOrganizationScope::class)
+            ->where('organization_id', $user->organization_id)
+            ->where('user_id', $user->id)
+            ->whereNull('ended_at')
+            ->lockForUpdate()
+            ->get();
+
+        foreach ($openEntries as $entry) {
+            // Same resolution order as TimeEntrySyncService: newest heartbeat,
+            // else the agent's last sync, else the entry's own start.
+            $lastHeartbeat = ActivityLog::where('time_entry_id', $entry->id)->max('logged_at');
+
+            $endedAt = $lastHeartbeat
+                ? Carbon::parse($lastHeartbeat)
+                : ($entry->client_synced_at ?? $entry->started_at);
+
+            if ($endedAt->lt($entry->started_at)) {
+                $endedAt = $entry->started_at->copy();
+            }
+
+            $entry->update([
+                'ended_at' => $endedAt,
+                'duration_seconds' => max(0, (int) $entry->started_at->diffInSeconds($endedAt)),
+            ]);
+        }
+
+        // Redis still holds a pointer to the live entry for the timer widget.
+        Redis::del("timer:{$user->id}");
+
+        // Open check-in sessions: close at the same instant and let the
+        // check-in service recompute the day's rollups from the session set.
+        $openSessions = DB::table('check_in_sessions')
+            ->where('organization_id', $user->organization_id)
+            ->where('user_id', $user->id)
+            ->whereNull('check_out_at')
+            ->whereNull('deleted_at')
+            ->pluck('attendance_record_id', 'id');
+
+        if ($openSessions->isNotEmpty()) {
+            DB::table('check_in_sessions')
+                ->whereIn('id', $openSessions->keys())
+                ->update(['check_out_at' => now(), 'updated_at' => now()]);
+
+            app(CheckInService::class)->recomputeRecordsAfterArchive(
+                $openSessions->values()->unique()->all()
+            );
+        }
+
+        // Leave awaiting a decision is withdrawn: nobody approves leave for
+        // someone who has left, and a stale request blocks the approvals queue.
+        DB::table('leave_requests')
+            ->where('organization_id', $user->organization_id)
+            ->where('user_id', $user->id)
+            ->where('status', 'pending')
+            ->whereNull('deleted_at')
+            ->update(['status' => 'cancelled', 'updated_at' => now()]);
+    }
+
+    /**
      * Fields that employees can edit on their own profile.
      */
     private function personalFields(): array
@@ -375,9 +556,13 @@ class EmployeeService
             'current_address',
             'permanent_address',
             'bank_name',
+            'bank_account_title',
             'bank_account_number',
             'bank_routing_number',
             'tax_id',
+            // An employee may keep their own bank details current, the same as
+            // the account number they sit beside.
+            'payment_mode',
         ];
     }
 }

@@ -1,3 +1,8 @@
+@php
+    // The org's currency. This report printed a bare '$' over every figure
+    // regardless of what the org actually pays in.
+    $money = fn ($n) => \App\Support\Money::format($n ?? 0, $currency ?? config('money.default'));
+@endphp
 <!DOCTYPE html>
 <html>
 <head>
@@ -25,7 +30,7 @@
             Idle: <span>{{ round(($data['total_seconds_idle'] ?? 0) / 3600, 2) }}h</span> |
             Avg Activity: <span>{{ round($data['avg_activity'] ?? 0) }}%</span> |
             Total Entries: <span>{{ $data['total_entries'] ?? 0 }}</span> |
-            Earnings: <span>${{ number_format($data['total_earnings'] ?? 0, 2) }}</span>
+            Earnings: <span>{{ $money($data['total_earnings'] ?? 0) }}</span>
         </div>
         <table>
             <tr><th>Date</th><th>Time Utilized (h)</th><th>Idle (h)</th><th>Activity %</th><th>Entries</th></tr>
@@ -62,7 +67,7 @@
                 <td>{{ $row['user']['email'] ?? '' }}</td>
                 <td>{{ $row['total_hours'] ?? 0 }}</td>
                 <td>{{ $row['billable_hours'] ?? 0 }}</td>
-                <td>${{ number_format($row['earnings'] ?? 0, 2) }}</td>
+                <td>{{ $money($row['earnings'] ?? 0) }}</td>
             </tr>
             @endforeach
         </table>

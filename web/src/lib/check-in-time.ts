@@ -52,6 +52,7 @@ export function formatElapsed(totalSeconds: number): string {
 export type DerivedCheckInBadge =
   | 'on_time'
   | 'early_checkout'
+  | 'extra_hours'
   | 'missing_checkout';
 
 /**
@@ -76,15 +77,17 @@ function timeToSeconds(value?: string | null): number | null {
 /**
  * How much presence a day must contain before it counts as complete.
  *
- * Derived from the assigned SHIFT (end − start, overnight-aware) rather than a
- * flat 9 hours, so a 10-hour or 6-hour shift is judged on its own length. The
- * shift's grace period is SUBTRACTED: arriving anywhere inside the grace window
- * is defined as on time, so an 11:30 shift with 15 minutes of grace is fully
- * served by 11:45 → 20:30 (8h45m). Without that subtraction, using the grace the
- * policy grants would itself trigger a short-day badge — the exact case this
- * fixes.
+ * The FULL shift span (end − start, overnight-aware), so a 10-hour or 6-hour
+ * shift is judged on its own length, falling back to REQUIRED_DAY_SECONDS
+ * (nine hours) when there is no usable shift.
  *
- * Falls back to REQUIRED_DAY_SECONDS when there is no usable shift.
+ * Grace is deliberately NOT subtracted (owner decision, 2026-09-03). Grace
+ * moves the line between "on time" and "late"; it is not a discount on the
+ * hours owed. Deducting it turned the standard 11:30–20:30 shift into an 8h45m
+ * day, so leaving a quarter of an hour early was never flagged. Arriving inside
+ * the grace window still is not late — the nine hours simply end later.
+ *
+ * Mirrors CheckInService::requiredDaySeconds; keep the two identical.
  */
 export function requiredDaySeconds(shift?: {
   start_time?: string | null;
@@ -94,16 +97,10 @@ export function requiredDaySeconds(shift?: {
   const start = timeToSeconds(shift?.start_time);
   const end = timeToSeconds(shift?.end_time);
 
-  let span = REQUIRED_DAY_SECONDS;
-  if (start !== null && end !== null) {
-    // An overnight shift (end at or before start) finishes the next day.
-    span = end > start ? end - start : end + 24 * 3600 - start;
-  }
+  if (start === null || end === null) return REQUIRED_DAY_SECONDS;
 
-  const grace = Math.max(0, (shift?.grace_period_minutes ?? 0) * 60);
-
-  // Never let grace erase the whole day.
-  return Math.max(0, span - grace);
+  // An overnight shift (end at or before start) finishes the next day.
+  return end > start ? end - start : end + 24 * 3600 - start;
 }
 
 /**
@@ -116,17 +113,10 @@ export function requiredDayFromPolicy(policy?: {
   late_threshold?: string | null;
   checkout_time?: string | null;
 } | null): number {
-  const start = timeToSeconds(policy?.check_in_time);
-  const threshold = timeToSeconds(policy?.late_threshold);
-  const graceMinutes =
-    start !== null && threshold !== null && threshold > start
-      ? Math.round((threshold - start) / 60)
-      : 0;
-
+  // late_threshold is no longer read: grace does not reduce the hours owed.
   return requiredDaySeconds({
     start_time: policy?.check_in_time,
     end_time: policy?.checkout_time,
-    grace_period_minutes: graceMinutes,
   });
 }
 
@@ -199,13 +189,23 @@ export function deriveCheckInBadges(record: {
   // force on that day, so a later shift change cannot re-judge history. The
   // client-side computation below is only a fallback for rows that predate the
   // snapshot (met_required_hours null) — keep the two rules identical.
+  // Presence beyond the requirement is the mirror image of a short day, and is
+  // read off the SAME comparison — so a day can never be both. The minutes are
+  // in check_out_overtime_minutes; this only decides whether to show the badge.
+  const presence = dayPresenceSeconds(record);
+  const required = requiredDaySeconds(record.shift);
+
   if (record.met_required_hours === false) {
     badges.push('early_checkout');
   } else if (record.met_required_hours == null) {
-    const presence = dayPresenceSeconds(record);
-    if (presence !== null && presence < requiredDaySeconds(record.shift)) {
+    if (presence !== null && presence < required) {
       badges.push('early_checkout');
+    } else if (presence !== null && presence > required) {
+      badges.push('extra_hours');
     }
+  } else if (presence !== null && presence > required) {
+    // Server says the day was met; flag the surplus.
+    badges.push('extra_hours');
   }
 
   if (record.missing_checkout) badges.push('missing_checkout');
@@ -356,6 +356,7 @@ export function checkInBadgeTooltip(
     | 'missing_checkout'
     | 'on_approved_leave'
     | 'worked_on_off_day'
+    | 'extra_hours'
     | 'overtime',
   ctx: CheckInTooltipContext = {}
 ): string | undefined {
@@ -381,6 +382,23 @@ export function checkInBadgeTooltip(
         return `Completed ${formatDuration(ctx.presenceSeconds)} of the required ${required} day — ${formatDuration(short)} short.`;
       }
       return `Did not complete the required ${required} day (break included).`;
+    }
+    case 'extra_hours': {
+      // Mirror of early_checkout, measured against the SAME requirement: hours
+      // present beyond hours owed, not a clock-out after the shift end.
+      const requiredSecs = ctx.requiredSeconds ?? REQUIRED_DAY_SECONDS;
+      const required = formatDuration(requiredSecs);
+      if (ctx.presenceSeconds != null && ctx.presenceSeconds > requiredSecs) {
+        const extra = ctx.presenceSeconds - requiredSecs;
+        return `Completed ${formatDuration(ctx.presenceSeconds)} against a ${required} day — ${formatDuration(extra)} extra.`;
+      }
+      const dur =
+        ctx.overtimeMinutes != null && ctx.overtimeMinutes > 0
+          ? formatMinutes(ctx.overtimeMinutes)
+          : null;
+      return dur
+        ? `Worked ${dur} beyond the required ${required} day.`
+        : `Worked beyond the required ${required} day.`;
     }
     case 'overtime': {
       const checkout = formatPolicyTime(ctx.checkoutTime);

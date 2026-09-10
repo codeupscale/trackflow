@@ -220,14 +220,13 @@ class PermissionSeeder extends Seeder
             'attendance.view_all'                => 'none',
             'attendance.export'                  => 'none',
 
-            // payroll — admin gets full access
+            // payroll — OWN PAYSLIP ONLY (owner decision, 2026-09-09).
+            //
+            // Running payroll, seeing what colleagues earn, and approving a run
+            // are finance duties, not general management ones. An organization
+            // manager administers people and projects; salary is deliberately
+            // outside that. Owner and finance_manager hold the rest.
             'payroll.view_own'          => 'none',
-            'payroll.view_team'         => 'none',
-            'payroll.view_all'          => 'none',
-            'payroll.run'               => 'none',
-            'payroll.manage_structures' => 'none',
-            'payroll.manage_components' => 'none',
-            'payroll.approve'           => 'none',
 
             // shifts
             'shifts.view'               => 'none',
@@ -327,14 +326,13 @@ class PermissionSeeder extends Seeder
             'attendance.view_all'                => 'none',
             'attendance.export'                  => 'none',
 
-            // payroll — full management (run, structures, components, approve)
+            // payroll — OWN PAYSLIP ONLY (owner decision, 2026-09-09).
+            //
+            // HR owns people, not pay. Leaving HR able to read every salary in
+            // the company — and to approve a run — is the widest read in the
+            // product for a role that does not need it. Salary structures and
+            // assignments move to finance with the rest of payroll.
             'payroll.view_own'            => 'none',
-            'payroll.view_team'           => 'none',
-            'payroll.view_all'            => 'none',
-            'payroll.run'                 => 'none',
-            'payroll.manage_structures'   => 'none',
-            'payroll.manage_components'   => 'none',
-            'payroll.approve'             => 'none',
 
             // shifts — full management
             'shifts.view'               => 'none',
@@ -511,9 +509,12 @@ class PermissionSeeder extends Seeder
             // projects — own (assigned) view only
             'projects.view' => 'own',
 
-            // reports — own
-            'reports.view'   => 'own',
-            'reports.export' => 'own',
+            // reports — NONE. An employee's own-scope report repeated what the
+            // dashboard, Time Entries and My Attendance already show, so the
+            // Reports section was a fourth door onto the same numbers. Removed
+            // rather than hidden: a menu that filters on key presence cannot
+            // gate an API, and the /reports URL stays reachable to anyone who
+            // still holds the permission.
 
             // dashboard — own stats only
             'dashboard.view_own_stats' => 'none',
@@ -547,11 +548,13 @@ class PermissionSeeder extends Seeder
             // requires the actor to actually manage a team, so an employee who
             // manages nobody can neither create nor assign, and the UI hides the
             // controls for them. See 2026_08_27_000002.
-            'shifts.view'               => 'none',
-            'shifts.create'             => 'project',
-            'shifts.edit'               => 'project',
-            'shifts.delete'             => 'project',
-            'shifts.manage_assignments' => 'project',
+            // shifts — VIEW ONLY. An employee sees the shift they are on, and
+            // nothing else. Management was briefly granted here at 'project'
+            // scope for team leads; that put "Shifts" and "Shift Assignment" in
+            // every employee's sidebar, because the nav filters on key presence
+            // and cannot know whether someone manages a team. Team-scoped
+            // management still works — grant it to a role that needs it.
+            'shifts.view' => 'none',
         ];
     }
 

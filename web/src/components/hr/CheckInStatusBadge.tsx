@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 export type CheckInBadgeStatus =
   | 'on_time'
   | 'early_checkout'
+  | 'extra_hours'
   | 'missing_checkout'
   | 'on_approved_leave'
   | 'worked_on_off_day';
@@ -27,6 +28,14 @@ const statusConfig: Record<CheckInBadgeStatus, { label: string; className: strin
     label: 'Early Checkout',
     className:
       'bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:border-orange-800',
+  },
+  // Beyond the hours owed. Deliberately NOT green: "On Time" means the day was
+  // exactly as expected, while extra hours are worth noticing — for the
+  // employee's credit and for a manager watching sustained overwork.
+  extra_hours: {
+    label: 'Extra Hours',
+    className:
+      'bg-indigo-100 text-indigo-800 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400 dark:border-indigo-800',
   },
   missing_checkout: {
     label: 'Missing Checkout',

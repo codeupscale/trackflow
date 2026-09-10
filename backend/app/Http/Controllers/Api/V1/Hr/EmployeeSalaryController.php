@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1\Hr;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Hr\AssignEmployeeSalaryRequest;
+use App\Http\Requests\Hr\BulkAssignSalaryRequest;
 use App\Models\EmployeeSalaryAssignment;
 use App\Models\User;
 use App\Services\PayrollService;
@@ -54,6 +55,9 @@ class EmployeeSalaryController extends Controller
                 'email' => $row->email,
                 'avatar_url' => $row->avatar_url,
                 'role' => $row->role,
+                'position' => $row->position_id
+                    ? ['id' => $row->position_id, 'title' => $row->position_title]
+                    : null,
                 'assignment' => $row->assignment_id ? [
                     'id' => $row->assignment_id,
                     'effective_from' => $row->effective_from,
@@ -96,5 +100,32 @@ class EmployeeSalaryController extends Controller
         );
 
         return response()->json(['data' => $assignment->load('salaryStructure')], 201);
+    }
+
+    /**
+     * Assign one salary structure to many employees in a single transaction.
+     *
+     * Exists so the payroll screen can get everyone covered without visiting a
+     * separate page per person — an eight-person org needed eight dialogs
+     * before a run could even start.
+     */
+    public function bulkStore(BulkAssignSalaryRequest $request): JsonResponse
+    {
+        $this->authorize('create', EmployeeSalaryAssignment::class);
+
+        $data = $request->validated();
+        $userIds = $data['user_ids'];
+        unset($data['user_ids']);
+
+        $count = $this->payrollService->bulkAssignSalary(
+            $request->user()->organization_id,
+            $userIds,
+            $data,
+        );
+
+        return response()->json([
+            'message' => $count . ' ' . ($count === 1 ? 'employee' : 'employees') . ' assigned a salary.',
+            'data' => ['assigned' => $count],
+        ]);
     }
 }

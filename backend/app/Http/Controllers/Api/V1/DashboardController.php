@@ -346,4 +346,206 @@ class DashboardController extends Controller
             'date_to'             => $responseDateTo,
         ]);
     }
+
+    /**
+     * Per-day team hours and activity for the admin "Team Trend" chart.
+     *
+     * The chart previously synthesised its series client-side: the sum of every
+     * member's today_seconds placed on today, zero on the other six days, and a
+     * period toggle wired to nothing. This is the real thing — one row per
+     * calendar day (org timezone) over the requested window, days with no work
+     * included as zero so the axis never has holes.
+     *
+     * Hours use the documented worked-time rule via WorkedTime. Activity is the
+     * same formula the team list uses — active_seconds over 30-second windows —
+     * grouped by the day the OWNING ENTRY started, so a heartbeat is credited to
+     * the same day its hours are.
+     */
+    public function teamTrend(Request $request): JsonResponse
+    {
+        $request->validate(['period' => ['sometimes', 'in:7d,30d,90d']]);
+
+        $user = $request->user();
+        $orgId = $user->organization_id;
+        $tz = $user->getTimezoneForDates();
+
+        $days = match ($request->input('period', '7d')) {
+            '90d' => 90,
+            '30d' => 30,
+            default => 7,
+        };
+
+        $end = Carbon::now($tz)->startOfDay();
+        $start = $end->copy()->subDays($days - 1);
+        [$fromUtc, $toUtc] = TimezoneAwareDateRange::toUtcBounds($start->toDateString(), $end->toDateString(), $tz);
+
+        $dateExpr = WorkedTime::localDateExpr($tz, 'time_entries');
+        $duration = WorkedTime::durationExpr('time_entries');
+
+        $hoursByDay = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+            ->where('time_entries.organization_id', $orgId)
+            ->where('time_entries.started_at', '>=', $fromUtc)
+            ->where('time_entries.started_at', '<', $toUtc)
+            ->whereNotNull('time_entries.ended_at')
+            ->where('time_entries.type', '!=', 'idle')
+            ->where('time_entries.approval_status', 'approved')
+            ->groupByRaw($dateExpr)
+            ->selectRaw("{$dateExpr} as d, COALESCE(SUM({$duration}), 0) as secs")
+            ->pluck('secs', 'd');
+
+        $activityByDay = DB::table('activity_logs')
+            ->join('time_entries', 'activity_logs.time_entry_id', '=', 'time_entries.id')
+            ->where('activity_logs.organization_id', $orgId)
+            ->where('time_entries.started_at', '>=', $fromUtc)
+            ->where('time_entries.started_at', '<', $toUtc)
+            ->where('time_entries.type', 'tracked')
+            ->whereNotNull('time_entries.ended_at')
+            ->groupByRaw($dateExpr)
+            ->selectRaw("{$dateExpr} as d, SUM(activity_logs.active_seconds) as active_secs, COUNT(*) as log_count")
+            ->get()
+            ->keyBy('d');
+
+        $series = [];
+        for ($i = 0; $i < $days; $i++) {
+            $day = $start->copy()->addDays($i);
+            $key = $day->toDateString();
+            $act = $activityByDay->get($key);
+            $series[] = [
+                'date' => $key,
+                // Weekday names only read on a 7-day axis; longer windows label by date.
+                'day' => $days === 7 ? $day->format('D') : $day->format('M j'),
+                'hours' => round(((int) ($hoursByDay[$key] ?? 0)) / self::SECONDS_PER_HOUR, 1),
+                'activity' => $act && $act->log_count > 0
+                    ? (int) round(min(100, ($act->active_secs / ($act->log_count * 30)) * 100))
+                    : 0,
+            ];
+        }
+
+        return response()->json(['period' => "{$days}d", 'data' => $series]);
+    }
+
+    /**
+     * "What did I spend my time on?" — the caller's OWN hours for one month,
+     * grouped by project.
+     *
+     * Always self-scoped, whatever the caller's role: this answers a question
+     * about your own work, so there is no user_id parameter to widen it with.
+     * That is also why it sits behind dashboard.view_own_stats — the one
+     * permission every role holds — rather than reports.view, which employees
+     * deliberately do not have.
+     *
+     * The month is resolved in the user's date timezone (the same zone the
+     * dashboard cards and the daily breakdown bucket by), so a late-evening
+     * entry does not fall into the next month for anyone east of UTC. Worked
+     * time is the documented rule — closed, not idle, approved — and the
+     * duration comes from WorkedTime so this card can never disagree with the
+     * "This Week" card sitting above it.
+     */
+    public function projectHours(Request $request): JsonResponse
+    {
+        $request->validate([
+            'period' => ['sometimes', 'in:today,week,month,custom'],
+            'month' => ['sometimes', 'nullable', 'date_format:Y-m'],
+            'week_of' => ['sometimes', 'nullable', 'date_format:Y-m-d'],
+            'start_date' => ['sometimes', 'nullable', 'date_format:Y-m-d'],
+            'end_date' => ['sometimes', 'nullable', 'date_format:Y-m-d', 'after_or_equal:start_date'],
+            'project_id' => ['sometimes', 'nullable', 'uuid'],
+        ]);
+
+        $user = $request->user();
+        $tz = $user->getTimezoneForDates();
+
+        // Same period contract as the project-time report (week / month /
+        // custom), so one mental model covers both screens.
+        [$from, $to, $startDate, $endDate] = $this->resolveProjectHoursRange($request, $tz);
+
+        $duration = WorkedTime::durationExpr('time_entries');
+
+        $query = TimeEntry::withoutGlobalScope(\App\Models\Scopes\GlobalOrganizationScope::class)
+            // Explicit org scope alongside user_id: this is a raw aggregate, and
+            // rule 1 does not make an exception for "the user id implies it".
+            ->where('time_entries.organization_id', $user->organization_id)
+            ->where('time_entries.user_id', $user->id)
+            ->where('time_entries.started_at', '>=', $from)
+            ->where('time_entries.started_at', '<', $to)
+            ->whereNotNull('time_entries.ended_at')
+            ->where('time_entries.type', '!=', 'idle')
+            ->where('time_entries.approval_status', 'approved');
+
+        if ($request->filled('project_id')) {
+            $query->where('time_entries.project_id', $request->input('project_id'));
+        }
+
+        $rows = $query
+            ->leftJoin('projects', 'projects.id', '=', 'time_entries.project_id')
+            ->groupBy('time_entries.project_id', 'projects.name', 'projects.color')
+            ->selectRaw("
+                time_entries.project_id,
+                projects.name as project_name,
+                projects.color as project_color,
+                COUNT(*) as entry_count,
+                COALESCE(SUM({$duration}), 0) as total_seconds
+            ")
+            ->orderByDesc('total_seconds')
+            ->get();
+
+        $projects = $rows->map(fn ($row) => [
+            'project_id' => $row->project_id,
+            // A tracked entry with no project is real work and must still be
+            // counted, or the rows would not add up to the total.
+            'name' => $row->project_name ?? 'No project',
+            'color' => $row->project_color,
+            'entry_count' => (int) $row->entry_count,
+            'total_seconds' => (int) $row->total_seconds,
+        ])->values();
+
+        return response()->json([
+            'period' => $request->input('period', 'month'),
+            'date_from' => $startDate,
+            'date_to' => $endDate,
+            'total_seconds' => (int) $projects->sum('total_seconds'),
+            'projects' => $projects,
+        ]);
+    }
+
+    /**
+     * [$startUtc, $endUtc, $startLocalDate, $endLocalDate] for the requested
+     * period, resolved in the user's date timezone.
+     *
+     * Mirrors ProjectTimeReportService::resolveRange — deliberately the same
+     * parameter names (period / month / week_of / start_date+end_date), so the
+     * two surfaces cannot drift into answering the same question differently.
+     * The local dates are returned alongside the UTC bounds because the client
+     * renders the range it asked for, not the instant it was translated to.
+     */
+    private function resolveProjectHoursRange(Request $request, string $tz): array
+    {
+        $period = $request->input('period', 'month');
+
+        if ($period === 'today') {
+            // Today in the user's own zone, not the server's — the same day the
+            // "Today's Hours" card counts.
+            $start = Carbon::now($tz)->toDateString();
+            $end = $start;
+        } elseif ($period === 'custom') {
+            $start = $request->input('start_date') ?: Carbon::now($tz)->toDateString();
+            $end = $request->input('end_date') ?: $start;
+        } elseif ($period === 'week') {
+            $anchor = $request->filled('week_of')
+                ? Carbon::parse($request->input('week_of'), $tz)
+                : Carbon::now($tz);
+            $start = $anchor->copy()->startOfWeek()->toDateString();
+            $end = $anchor->copy()->endOfWeek()->toDateString();
+        } else {
+            $anchor = $request->filled('month')
+                ? Carbon::parse($request->input('month') . '-01', $tz)
+                : Carbon::now($tz);
+            $start = $anchor->copy()->startOfMonth()->toDateString();
+            $end = $anchor->copy()->endOfMonth()->toDateString();
+        }
+
+        [$fromUtc, $toUtc] = TimezoneAwareDateRange::toUtcBounds($start, $end, $tz);
+
+        return [$fromUtc, $toUtc, $start, $end];
+    }
 }

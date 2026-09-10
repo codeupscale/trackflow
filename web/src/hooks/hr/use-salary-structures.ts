@@ -68,6 +68,12 @@ export function useUpdateSalaryStructure() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['salary-structures'] });
+      // A grade's amount is shown wherever someone is assigned to it — the
+      // salary roster, the employee's Payslip Info tab, the directory. Those
+      // read the structure through a join, so they are stale until refetched.
+      queryClient.invalidateQueries({ queryKey: ['salary-roster'] });
+      queryClient.invalidateQueries({ queryKey: ['employee-salary'] });
+      queryClient.invalidateQueries({ queryKey: ['employees'] });
       toast.success('Salary structure updated');
     },
     onError: (err: Error) => {

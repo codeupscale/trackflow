@@ -34,14 +34,25 @@ class ReportExportFormatter
         return $csv;
     }
 
-    public static function pdf(string $type, array $data, string $dateFrom, string $dateTo): string
-    {
+    /**
+     * `$organizationId` decides the currency the money columns print in. It is
+     * optional so an older caller still renders — as the configured default
+     * rather than the bare '$' this view used to hardcode over every figure.
+     */
+    public static function pdf(
+        string $type,
+        array $data,
+        string $dateFrom,
+        string $dateTo,
+        ?string $organizationId = null,
+    ): string {
         if (class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
             return \Barryvdh\DomPDF\Facade\Pdf::loadView('reports.generic', [
                 'type' => $type,
                 'data' => $data,
                 'dateFrom' => $dateFrom,
                 'dateTo' => $dateTo,
+                'currency' => Money::currencyFor($organizationId),
             ])->output();
         }
 

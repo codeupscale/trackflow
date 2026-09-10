@@ -80,6 +80,7 @@ import api from '@/lib/api';
 import type { UserRole } from '@/lib/roles';
 import { useAuthStore } from '@/stores/auth-store';
 import { usePermissionStore } from '@/stores/permission-store';
+import { useMoney } from '@/lib/money';
 
 interface Task {
   id: string;
@@ -118,6 +119,7 @@ const COLORS = [
 
 export default function ProjectsPage() {
   const { user } = useAuthStore();
+  const money = useMoney();
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
@@ -503,7 +505,7 @@ export default function ProjectsPage() {
                           <TableCell className="px-4 py-2">
                             {project.billable ? (
                               <span className="text-[0.75rem] text-foreground">
-                                {project.hourly_rate ? `$${project.hourly_rate}/hr` : 'Billable'}
+                                {project.hourly_rate ? `${money(project.hourly_rate)}/hr` : 'Billable'}
                               </span>
                             ) : (
                               <span className="text-[0.75rem] text-muted-foreground">

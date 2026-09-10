@@ -33,6 +33,23 @@ class ShiftService
         return app(PermissionService::class)->hasPermission($actor, $permissionKey, 'organization');
     }
 
+    /**
+     * Does the actor manage shifts at all (either tier)? False for a plain
+     * employee, who may only ever see the shift they are on.
+     */
+    public function canManageAnyShift(User $actor): bool
+    {
+        $permissions = app(PermissionService::class);
+
+        foreach (['shifts.create', 'shifts.edit', 'shifts.delete', 'shifts.manage_assignments'] as $key) {
+            if ($permissions->hasPermission($actor, $key)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /** Users a team manager may act on: themselves + members of teams they manage. */
     public function managedUserIds(User $actor): array
     {
@@ -94,6 +111,15 @@ class ShiftService
         if (! empty($filters['search'])) {
             $search = str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $filters['search']);
             $query->where('name', 'ilike', '%' . $search . '%');
+        }
+
+        // 'mine' narrows to the shift the caller is actually on. An employee has
+        // no business browsing the org's whole shift catalogue — they are asking
+        // "what are my hours?". Enforced HERE rather than by hiding rows in the
+        // UI, so the other shifts never leave the server.
+        if (! empty($filters['mine']) && ! empty($filters['viewer_id'])) {
+            $own = $this->getUserCurrentShift($orgId, $filters['viewer_id']);
+            $query->whereKey($own?->id ?? '00000000-0000-0000-0000-000000000000');
         }
 
         return $query->orderBy('name')->paginate($filters['per_page'] ?? 25);

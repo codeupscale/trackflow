@@ -490,13 +490,20 @@ class CheckInService
      * those are first-check-in-owned and set once in checkIn().
      */
     /**
-     * How much presence a day must contain to count as complete: the scheduled
-     * span (off time − start), MINUS the grace window.
+     * How much presence a day must contain to count as complete: the FULL
+     * scheduled span (off time − start).
      *
-     * Subtracting grace is the point. Grace is time the policy grants: on an
-     * 11:30 shift with 15 minutes of grace, arriving 11:45 and leaving at the
-     * 20:30 off time is 8h45m — a complete day. Measuring against the raw 9-hour
-     * span would penalise the employee for using the allowance they were given.
+     * Grace is deliberately NOT deducted (owner decision, 2026-09-03). Grace
+     * moves the line between "on time" and "late" — it is not a discount on the
+     * hours owed. The org's standard day is nine hours, and subtracting a
+     * 15-minute allowance quietly turned the 11:30–20:30 shift into an 8h45m
+     * requirement, so someone leaving 15 minutes early was never flagged.
+     * Arriving inside the grace window is still not "late"; it just means the
+     * nine hours end fifteen minutes later.
+     *
+     * An employee with no shift falls back to 11:30–20:30, which is exactly
+     * nine hours — so the org default and the standard shift now agree by
+     * construction rather than by coincidence.
      *
      * Built with the same per-date Carbon rebuild the rest of this service uses,
      * so DST transitions and overnight shifts are handled rather than assumed.
@@ -506,13 +513,25 @@ class CheckInService
         $start = Carbon::parse("{$date} {$schedule->check_in_time}", $tz);
         $off = $this->offTimeFor($date, $schedule, $tz);
 
-        $span = (int) $start->diffInSeconds($off);
+        return max(0, (int) $start->diffInSeconds($off));
+    }
 
-        // late_threshold is start + grace; recover the grace as a duration.
-        $threshold = Carbon::parse("{$date} {$schedule->late_threshold}", $tz);
-        $grace = $threshold->gt($start) ? (int) $start->diffInSeconds($threshold) : 0;
-
-        return max(0, $span - $grace);
+    /**
+     * Recompute day rollups for records whose sessions were closed out of band.
+     *
+     * Archiving an employee closes any check-in session still open in their
+     * name; the day's totals then have to be rebuilt from the session set, the
+     * same as after a normal checkout. Public because EmployeeService owns the
+     * archive transaction but must not reach into the rollup rules itself.
+     *
+     * @param  array<int,string>  $recordIds
+     */
+    public function recomputeRecordsAfterArchive(array $recordIds): void
+    {
+        AttendanceRecord::withoutGlobalScopes()
+            ->whereIn('id', $recordIds)
+            ->get()
+            ->each(fn (AttendanceRecord $record) => $this->recomputeRecordRollups($record));
     }
 
     private function recomputeRecordRollups(AttendanceRecord $record): void
@@ -538,24 +557,6 @@ class CheckInService
         /** @var Carbon|null $lastClosedOut */
         $lastClosedOut = $closed->max('check_out_at');
 
-        $offAt = $this->offTimeFor($recordDate, $schedule, $tz);
-
-        $isEarly = false;
-        $earlyMinutes = 0;
-        $overtimeMinutes = 0;
-
-        if ($lastClosedOut !== null) {
-            $localOut = $lastClosedOut->copy()->setTimezone($tz);
-            if ($localOut->lt($offAt)) {
-                // Left before the official off time.
-                $isEarly = true;
-                $earlyMinutes = (int) $localOut->diffInMinutes($offAt);
-            } else {
-                // At or after the off time — overtime (exactly the off time = 0 OT, normal).
-                $overtimeMinutes = (int) $offAt->diffInMinutes($localOut);
-            }
-        }
-
         // Day-completion snapshot. Presence is the SPAN from the first check-in to
         // the last checkout — the break counts toward the requirement, so someone
         // in at 09:00 and out at 18:00 with an hour for lunch has completed a
@@ -563,9 +564,32 @@ class CheckInService
         // presence for the same day.
         $requiredSeconds = $this->requiredDaySeconds($schedule, $recordDate, $tz);
         $metRequired = null;
+        $presence = null;
         if ($first !== null && $lastClosedOut !== null) {
             $presence = (int) $first->check_in_at->diffInSeconds($lastClosedOut);
             $metRequired = $presence >= $requiredSeconds;
+        }
+
+        // Short / extra hours are measured against the SAME requirement the
+        // badge is (hours present vs hours owed), not against the shift's
+        // clock-out time. Those were two different rules wearing one label: a
+        // day could be flagged short by presence while reporting positive
+        // overtime because the person also left after the off time — arrive at
+        // 13:00, leave at 21:00 on a 9-hour shift and the old code reported
+        // "30 minutes overtime" for a day that was 1h short. Now the pair is
+        // exclusive and both read off the one number.
+        $isEarly = false;
+        $earlyMinutes = 0;
+        $overtimeMinutes = 0;
+
+        if ($presence !== null) {
+            $delta = $presence - $requiredSeconds;
+            if ($delta < 0) {
+                $isEarly = true;
+                $earlyMinutes = intdiv(-$delta, 60);
+            } else {
+                $overtimeMinutes = intdiv($delta, 60);
+            }
         }
 
         $payload = [
@@ -1135,6 +1159,28 @@ class CheckInService
             $query->where('u.id', $filters['user_id']);
         }
 
+        // Shift filter — each team works its own shift, so this is how the
+        // report is narrowed to one team. Matched against the assignment active
+        // TODAY, the same rule the employee directory and team attendance use,
+        // so picking a shift means the same thing on every screen.
+        if (! empty($filters['shift_id'])) {
+            $today = now()->toDateString();
+
+            $query->whereExists(function ($q) use ($filters, $user, $today) {
+                $q->select(DB::raw(1))
+                    ->from('user_shifts')
+                    ->whereColumn('user_shifts.user_id', 'u.id')
+                    ->where('user_shifts.organization_id', $user->organization_id)
+                    ->where('user_shifts.shift_id', $filters['shift_id'])
+                    ->whereNull('user_shifts.deleted_at')
+                    ->where('user_shifts.effective_from', '<=', $today)
+                    ->where(function ($sq) use ($today) {
+                        $sq->whereNull('user_shifts.effective_to')
+                            ->orWhere('user_shifts.effective_to', '>=', $today);
+                    });
+            });
+        }
+
         return $query
             ->groupBy('u.id', 'u.name', 'u.email')
             ->select('u.id as user_id', 'u.name', 'u.email')
@@ -1151,6 +1197,13 @@ class CheckInService
             ->selectRaw('COALESCE(SUM(CASE WHEN ar.met_required_hours THEN 1 ELSE 0 END), 0) as full_days_count')
             ->selectRaw('COALESCE(SUM(CASE WHEN ar.met_required_hours = false THEN 1 ELSE 0 END), 0) as early_checkout_count')
             ->selectRaw('COALESCE(SUM(CASE WHEN ar.missing_checkout THEN 1 ELSE 0 END), 0) as missing_checkout_count')
+            // Days that were BOTH late and short — arrived after the grace
+            // window and still left before the hours were served. Counted here
+            // per DAY rather than inferred from the two totals: an employee
+            // late on Monday and short on Tuesday has neither day that is
+            // both, and treating them the same would flag people who were never
+            // actually late-and-short on any single day.
+            ->selectRaw("COALESCE(SUM(CASE WHEN ar.check_in_status = 'late' AND ar.met_required_hours = false THEN 1 ELSE 0 END), 0) as late_and_short_count")
             ->orderBy('u.name');
     }
 
@@ -1173,6 +1226,9 @@ class CheckInService
             'late_count' => (int) $row->late_count,
             'early_checkout_count' => (int) $row->early_checkout_count,
             'missing_checkout_count' => (int) $row->missing_checkout_count,
+            // Days that were late AND short — the combination management asks
+            // about, and the one the report highlights.
+            'late_and_short_count' => (int) $row->late_and_short_count,
             'full_days_count' => (int) $row->full_days_count,
             // Percentage of PRESENT days that met the target. Days present is the
             // denominator, never calendar days — counting approved leave against

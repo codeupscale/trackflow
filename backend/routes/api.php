@@ -19,6 +19,7 @@ use App\Http\Controllers\Api\V1\Hr\PublicHolidayController;
 use App\Http\Controllers\Api\V1\Hr\PayComponentController;
 use App\Http\Controllers\Api\V1\Hr\PayrollPeriodController;
 use App\Http\Controllers\Api\V1\Hr\PayslipController;
+use App\Http\Controllers\Api\V1\Hr\PayslipTemplateController;
 use App\Http\Controllers\Api\V1\Hr\SalaryStructureController;
 use App\Http\Controllers\Api\V1\Hr\EmployeeSalaryController;
 use App\Http\Controllers\Api\V1\Hr\ShiftAssignmentController;
@@ -170,6 +171,15 @@ Route::prefix('v1')->group(function () {
         Route::get('dashboard', [\App\Http\Controllers\Api\V1\DashboardController::class, 'index'])
             ->middleware('permission:dashboard.view_own_stats');
 
+        // "My hours by project" — always self-scoped, so it rides on the
+        // own-stats permission every role holds rather than reports.view.
+        Route::get('dashboard/project-hours', [\App\Http\Controllers\Api\V1\DashboardController::class, 'projectHours'])
+            ->middleware('permission:dashboard.view_own_stats');
+
+        // Per-day team hours + activity for the admin trend chart.
+        Route::get('dashboard/team-trend', [\App\Http\Controllers\Api\V1\DashboardController::class, 'teamTrend'])
+            ->middleware('permission:dashboard.view_team_stats');
+
         // Agent (desktop safety — auth:sanctum only)
         Route::get('agent/config', [\App\Http\Controllers\Api\V1\AgentController::class, 'config'])->middleware('min.agent');
         Route::get('agent/my-shift', [\App\Http\Controllers\Api\V1\AgentController::class, 'myShift']);
@@ -240,6 +250,9 @@ Route::prefix('v1')->group(function () {
         Route::get('settings', [\App\Http\Controllers\Api\V1\SettingsController::class, 'show'])
             ->middleware('permission:settings.view_org');
         Route::put('settings', [\App\Http\Controllers\Api\V1\SettingsController::class, 'update'])->middleware('permission:settings.edit_org');
+        // Its own route because it converts stored amounts, not just a setting.
+        Route::post('settings/currency', [\App\Http\Controllers\Api\V1\SettingsController::class, 'convertCurrency'])
+            ->middleware('permission:settings.edit_org');
 
         // Job Monitoring
         Route::get('jobs/health', [JobMonitorController::class, 'health'])
@@ -369,6 +382,20 @@ Route::prefix('v1')->group(function () {
             // Employee Directory & Profiles
             Route::get('employees', [EmployeeController::class, 'index'])
                 ->middleware('permission:employees.view_directory');
+            // Archive / restore. Registered BEFORE employees/{employee} so
+            // "archive" is never captured as an employee id by the wildcard.
+            // Org-scoped employees.edit_profile is exactly owner + org_manager
+            // + hr_manager — finance and employees are excluded by it, so no
+            // new permission was needed.
+            // The ,organization scope argument is load-bearing: employees hold
+            // employees.edit_profile at 'own' scope so they can edit their own
+            // details, and without the scope the middleware's key-presence
+            // check would have let any employee archive their colleagues.
+            Route::post('employees/archive', [EmployeeController::class, 'archive'])
+                ->middleware('permission:employees.edit_profile,organization');
+            Route::post('employees/restore', [EmployeeController::class, 'restore'])
+                ->middleware('permission:employees.edit_profile,organization');
+
             Route::get('employees/{employee}', [EmployeeController::class, 'show'])
                 ->middleware('permission:employees.view_profile');
             Route::put('employees/{employee}/profile', [EmployeeController::class, 'updateProfile'])
@@ -456,16 +483,50 @@ Route::prefix('v1')->group(function () {
             Route::post('payroll-periods/{id}/mark-paid', [PayrollPeriodController::class, 'markPaid'])
                 ->middleware('permission:payroll.approve');
 
+            // Payroll — Payslip design. Registered BEFORE the payslips/{id}
+            // wildcard so "template" and "template/preview" are never captured
+            // as a payslip id.
+            Route::get('payslips/template', [PayslipTemplateController::class, 'show'])
+                ->middleware('permission:payroll.view_all');
+            Route::put('payslips/template', [PayslipTemplateController::class, 'update'])
+                ->middleware('permission:payroll.manage_structures');
+            // POST as well as GET: the settings screen previews UNSAVED edits by
+            // sending them in the body, so it needs a request that carries one.
+            Route::match(['get', 'post'], 'payslips/template/preview', [PayslipTemplateController::class, 'preview'])
+                ->middleware('permission:payroll.view_all');
+            Route::get('payslips/template/placeholders', [PayslipTemplateController::class, 'placeholders'])
+                ->middleware('permission:payroll.view_all');
+            Route::get('payslips/template/fields', [PayslipTemplateController::class, 'fields'])
+                ->middleware('permission:payroll.view_all');
+
             // Payroll — Payslips
             Route::get('payslips', [PayslipController::class, 'index'])
                 ->middleware('permission:payroll.view_own');
             Route::get('payslips/{id}', [PayslipController::class, 'show'])
                 ->middleware('permission:payroll.view_own');
+            // The document. Gated at view_own like the JSON detail — the
+            // service's own own/team/all check is what actually decides whose
+            // payslip you may render.
+            Route::get('payslips/{id}/download', [PayslipController::class, 'download'])
+                ->middleware('permission:payroll.view_own');
+
+            // Editing a payslip's figures is payroll work, not viewing.
+            Route::put('payslips/{id}/lines', [PayslipController::class, 'updateLines'])
+                ->middleware('permission:payroll.run');
+
+            // Verification releases a payslip to its employee, so it is gated
+            // on approve — NOT on view_own, which every employee holds.
+            Route::post('payslips/{id}/verify', [PayslipController::class, 'verify'])
+                ->middleware('permission:payroll.approve');
+            Route::post('payslips/{id}/unverify', [PayslipController::class, 'unverify'])
+                ->middleware('permission:payroll.approve');
 
             // Payroll — Employee Salary. The roster is registered BEFORE the
             // {employee} routes so "salary-roster" is never captured as an id.
             Route::get('salary-roster', [EmployeeSalaryController::class, 'index'])
                 ->middleware('permission:payroll.view_all');
+            Route::post('salary-roster/bulk-assign', [EmployeeSalaryController::class, 'bulkStore'])
+                ->middleware('permission:payroll.manage_structures');
             Route::get('employees/{employee}/salary', [EmployeeSalaryController::class, 'show'])
                 ->middleware('permission:payroll.view_all');
             Route::post('employees/{employee}/salary', [EmployeeSalaryController::class, 'store'])

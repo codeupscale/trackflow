@@ -109,6 +109,8 @@ export interface EmployeeDetail extends EmployeeListItem {
   emergency_contact_phone: string | null;
   emergency_contact_relation: string | null;
   bank_name: string | null;
+  bank_account_title: string | null;
+  payment_mode: string | null;
   bank_account_number: string | null;
   bank_routing_number: string | null;
   tax_id: string | null;
@@ -182,6 +184,9 @@ export const employeeProfileSchema = z.object({
 
   // Financial
   bank_name: z.string().max(255).optional().nullable(),
+  // Printed on the payslip as "Account Title" and "Mode of Payment".
+  bank_account_title: z.string().max(255).optional().nullable(),
+  payment_mode: z.string().max(50).optional().nullable(),
   bank_account_number: z.string().max(100).optional().nullable(),
   bank_routing_number: z.string().max(50).optional().nullable(),
   tax_id: z.string().max(100).optional().nullable(),

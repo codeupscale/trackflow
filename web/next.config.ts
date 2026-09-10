@@ -65,7 +65,18 @@ const nextConfig: NextConfig = {
               "img-src 'self' data: blob: https://*.codeupscale.com https://*.s3.amazonaws.com https://*.s3.*.amazonaws.com https://*.amazonaws.com https://*.googleusercontent.com https://*.google.com" + localhostImgCsp,
               "font-src 'self' data: https://fonts.gstatic.com",
               "connect-src 'self' https://*.codeupscale.com wss://*.codeupscale.com https://us.i.posthog.com https://us-assets.i.posthog.com https://us.posthog.com https://accounts.google.com https://oauth2.googleapis.com" + localhostCsp,
-              "frame-src 'self' https://accounts.google.com",
+              // blob: is required to display a PDF the app itself generated —
+              // payslip review and the payslip-design preview fetch the
+              // document with the user's bearer token, wrap it in a Blob and
+              // frame the object URL. Without it Chrome renders "This content
+              // is blocked" in place of the payslip. A blob: URL is created by
+              // our own code, is same-origin and is unguessable, so this does
+              // not let anyone else's content into a frame; embedding of THIS
+              // app elsewhere is still refused by frame-ancestors 'none' below.
+              "frame-src 'self' blob: https://accounts.google.com",
+              // Same document, when the browser routes a PDF through the
+              // plugin path (<embed>/<object>) instead of the frame.
+              "object-src 'self' blob:",
               // Prevent the page from being embedded in iframes (defense in depth with X-Frame-Options)
               "frame-ancestors 'none'",
               "base-uri 'self'",

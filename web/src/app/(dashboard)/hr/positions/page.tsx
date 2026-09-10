@@ -1,6 +1,8 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { Loader2 } from 'lucide-react';
 import {
   Briefcase,
   Plus,
@@ -16,6 +18,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { usePermissionStore } from '@/stores/permission-store';
+import { useAuthStore } from '@/stores/auth-store';
 import { usePositions, useArchivePosition } from '@/hooks/hr/use-positions';
 import {
   positionLevels,
@@ -67,8 +70,22 @@ import {
 } from '@/components/ui/pagination';
 
 export default function PositionsPage() {
+  const router = useRouter();
+  const { user } = useAuthStore();
   const { hasPermission } = usePermissionStore();
   const canManage = hasPermission('positions.create');
+
+  // The sidebar hides this from anyone without positions.view, but a menu that
+  // filters on key presence gates a menu and nothing else — a bookmark or typed
+  // URL walked straight in and landed on a page of 403s (the whole positions
+  // resource is behind permission:positions.view).
+  const canViewPositions = hasPermission('positions.view');
+
+  useEffect(() => {
+    if (user && !canViewPositions) {
+      router.replace('/dashboard');
+    }
+  }, [user, canViewPositions, router]);
 
   const [page, setPage] = useState(1);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -135,6 +152,16 @@ export default function PositionsPage() {
       onSuccess: () => setArchiveTarget(null),
     });
   };
+
+  // Hold the spinner until the permission map has loaded, so an authorised user
+  // never sees a flash of the redirect.
+  if (!user || !canViewPositions) {
+    return (
+      <div className="flex items-center justify-center min-h-[50vh]">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3">
