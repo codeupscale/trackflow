@@ -14,6 +14,8 @@ use Illuminate\Support\Str;
 
 class SsoController extends Controller
 {
+    use \App\Support\AnnouncesOrgActivity;
+
     public function __construct(
         private readonly AuthTokenService $authTokens,
     ) {}
@@ -148,7 +150,12 @@ class SsoController extends Controller
         }
 
         // JIT provisioning: find or create user
-        $user = DB::transaction(function () use ($email, $name, $org) {
+        // Only a FIRST login provisions a member; every later SSO login finds
+        // the existing row. The flag is how the announcement tells the two
+        // apart — without it every sign-in would announce a "new" joiner.
+        $provisioned = false;
+
+        $user = DB::transaction(function () use ($email, $name, $org, &$provisioned) {
             $user = User::where('email', $email)
                 ->where('organization_id', $org->id)
                 ->first();
@@ -165,6 +172,7 @@ class SsoController extends Controller
                     'sso_provider_id' => $email,
                     'email_verified_at' => now(),
                 ]);
+                $provisioned = true;
             } else {
                 $user->update([
                     'sso_provider' => 'saml2',
@@ -174,6 +182,10 @@ class SsoController extends Controller
 
             return $user;
         });
+
+        if ($provisioned) {
+            $this->announceJoiner($user);
+        }
 
         $tokens = $this->authTokens->issueTokenPair($user);
 

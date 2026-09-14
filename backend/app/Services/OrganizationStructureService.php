@@ -4,14 +4,17 @@ namespace App\Services;
 
 use App\Models\Department;
 use App\Models\Organization;
+use App\Notifications\OrgActivity;
 use App\Models\Position;
 use Illuminate\Database\Eloquent\Collection;
 
 class OrganizationStructureService
 {
+    use \App\Support\AnnouncesOrgActivity;
+
     public function createDepartment(Organization $org, array $data): Department
     {
-        return Department::create([
+        $department = Department::create([
             'organization_id' => $org->id,
             'name' => $data['name'],
             'code' => $data['code'],
@@ -20,6 +23,18 @@ class OrganizationStructureService
             'manager_id' => $data['manager_id'] ?? null,
             'is_active' => $data['is_active'] ?? true,
         ]);
+
+        $this->announceToOrg($org->id, auth()->id(), OrgActivity::departmentCreated(
+            name: $department->name,
+            createdBy: auth()->user()?->name ?? 'Someone',
+            // The parent tells a reader WHERE it landed in the tree, which is
+            // the only part of a new department anyone can get wrong.
+            parent: $department->parent_department_id
+                ? Department::withoutGlobalScopes()->find($department->parent_department_id)?->name
+                : null,
+        ));
+
+        return $department;
     }
 
     public function updateDepartment(Department $dept, array $data): Department

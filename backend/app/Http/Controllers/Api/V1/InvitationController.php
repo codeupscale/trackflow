@@ -17,6 +17,8 @@ use Illuminate\Support\Str;
 
 class InvitationController extends Controller
 {
+    use \App\Support\AnnouncesOrgActivity;
+
     public function __construct(private readonly BillingService $billingService)
     {
     }
@@ -266,6 +268,9 @@ class InvitationController extends Controller
 
             return $user;
         });
+
+        // After the transaction, so the row the notification names exists.
+        $this->announceJoiner($user);
 
         $token = $user->createToken('access_token', ['*'], now()->addMinutes(config('security.tokens.access_ttl')));
         $refreshToken = $user->createToken('refresh_token', ['refresh'], now()->addMinutes(config('security.tokens.refresh_ttl')));

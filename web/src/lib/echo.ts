@@ -28,9 +28,17 @@ export function getEcho(): Echo<'reverb'> {
     broadcaster: 'reverb',
     key: process.env.NEXT_PUBLIC_REVERB_APP_KEY || '',
     wsHost: process.env.NEXT_PUBLIC_REVERB_HOST || 'trackflow.codeupscale.com',
-    wsPort: 443,
-    wssPort: 443,
-    forceTLS: true,
+    // Port and scheme are env-driven so a LOCAL dev server can reach the local
+    // Reverb container on :8080 over plain ws. They were hardcoded to 443/TLS,
+    // which meant a developer's browser silently subscribed to PRODUCTION's
+    // websocket: the connection succeeded, so nothing looked broken, and events
+    // raised by the local backend simply never arrived.
+    //
+    // Defaults are unchanged, so deployed behaviour is exactly as before: with
+    // neither variable set this is still 443 over TLS.
+    wsPort: Number(process.env.NEXT_PUBLIC_REVERB_PORT ?? 443),
+    wssPort: Number(process.env.NEXT_PUBLIC_REVERB_PORT ?? 443),
+    forceTLS: (process.env.NEXT_PUBLIC_REVERB_SCHEME ?? 'https') === 'https',
     enabledTransports: ['ws', 'wss'],
     authEndpoint: `${process.env.NEXT_PUBLIC_API_URL || 'https://trackflow.codeupscale.com/api/v1'}/broadcasting/auth`,
     auth: {

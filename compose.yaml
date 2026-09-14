@@ -41,6 +41,14 @@ x-backend-env: &backend-env
     REDIS_PORT: 6379
     MAIL_HOST: mailpit
     MAIL_PORT: 1025
+    # Reverb, same reason. REVERB_HOST is where the BACKEND posts events for
+    # broadcast, and .env sets it to localhost for a non-Docker run — inside a
+    # container localhost is that container, so every broadcast died with
+    # "cURL error 7: failed to connect to localhost port 8080" and took its
+    # queued job down with it. The websocket looked healthy throughout: the
+    # browser connects to the reverb container directly through the published
+    # port, so only the server-to-server leg was broken.
+    REVERB_HOST: reverb
     # Local S3 via MinIO, so Docker mode never writes to the real AWS bucket.
     AWS_ACCESS_KEY_ID: '${MINIO_ROOT_USER:-trackflow}'
     AWS_SECRET_ACCESS_KEY: '${MINIO_ROOT_PASSWORD:-trackflow-local}'
@@ -237,6 +245,9 @@ services:
             NEXT_PUBLIC_REVERB_APP_KEY: '${REVERB_APP_KEY:-trackflow-key}'
             NEXT_PUBLIC_REVERB_HOST: localhost
             NEXT_PUBLIC_REVERB_PORT: '${REVERB_PORT:-8081}'
+            # Plain ws locally. Without this the client defaults to https/443,
+            # which is correct for deployment and cannot reach a local port.
+            NEXT_PUBLIC_REVERB_SCHEME: http
             NEXT_PUBLIC_GOOGLE_CLIENT_ID: '${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-}'
             # Bind-mounted source on macOS does not deliver inotify events reliably.
             WATCHPACK_POLLING: 'true'

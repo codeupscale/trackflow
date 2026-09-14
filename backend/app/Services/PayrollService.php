@@ -9,12 +9,15 @@ use App\Models\PayslipLineItem;
 use App\Models\PayrollPeriod;
 use App\Models\SalaryStructure;
 use App\Models\User;
+use App\Notifications\OrgActivity;
 use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 
 class PayrollService
 {
+    use \App\Support\AnnouncesOrgActivity;
+
     public function __construct(
         private readonly PermissionService $permissionService,
     ) {}
@@ -494,7 +497,7 @@ class PayrollService
             abort(422, $this->missingSalaryMessage($missing));
         }
 
-        return DB::transaction(function () use ($period, $actorId) {
+        $result = DB::transaction(function () use ($period, $actorId) {
             // processed_by is stamped with the run, so the period carries a name
             // as well as a time from the moment it starts.
             $period->update([
@@ -528,6 +531,26 @@ class PayrollService
 
             return $period->fresh()->loadCount('payslips');
         });
+
+        $this->announceToOrg($result->organization_id, $actorId, OrgActivity::payrollRun(
+            period: $result->name,
+            runBy: $actorId ? (User::withoutGlobalScopes()->find($actorId)?->name ?? 'Someone') : 'Someone',
+            payslips: (int) ($result->payslips_count ?? 0),
+            // The gross is the number that tells a reader whether the run looks
+            // right at a glance — a month that suddenly halves is visible here
+            // and nowhere else in the notification.
+            gross: $this->formatMoney($result->payslips()->sum('gross_salary'), $result->organization_id),
+        ));
+
+        return $result;
+    }
+
+    /** Money for a notification line: whole units, thousands separated. */
+    private function formatMoney(float|int|string $amount, string $orgId): string
+    {
+        $currency = \App\Models\Organization::withoutGlobalScopes()->find($orgId)?->getSetting('currency') ?? '';
+
+        return trim($currency . ' ' . number_format((float) $amount, 0));
     }
 
     /**
@@ -627,7 +650,7 @@ class PayrollService
 
     public function approvePayroll(string $periodId, User $approver): PayrollPeriod
     {
-        return DB::transaction(function () use ($periodId, $approver) {
+        $period = DB::transaction(function () use ($periodId, $approver) {
             $period = PayrollPeriod::lockForUpdate()->findOrFail($periodId);
 
             if ($period->status !== 'draft') {
@@ -669,6 +692,32 @@ class PayrollService
 
             return $period->fresh()->load('approver:id,name,email')->loadCount('payslips');
         });
+
+        $this->announceCompletion($period, $approver->name, 'approved');
+
+        return $period;
+    }
+
+    /**
+     * Tell the owner and HR that a run reached a settled state.
+     *
+     * Approved and paid are two different facts and both matter: approval locks
+     * the figures, payment is when the money has actually gone. The NET is
+     * quoted rather than the gross, because that is what left the account.
+     */
+    private function announceCompletion(PayrollPeriod $period, string $by, string $stage): void
+    {
+        $this->announceToOrg(
+            $period->organization_id,
+            auth()->id(),
+            OrgActivity::payrollCompleted(
+                period: $period->name,
+                by: $by,
+                net: $this->formatMoney($period->payslips()->sum('net_salary'), $period->organization_id),
+                payslips: (int) ($period->payslips_count ?? $period->payslips()->count()),
+                stage: $stage,
+            ),
+        );
     }
 
     /**
@@ -682,11 +731,14 @@ class PayrollService
      */
     public function markPayrollPaid(string $periodId): PayrollPeriod
     {
-        return DB::transaction(function () use ($periodId) {
+        $justPaid = false;
+
+        $period = DB::transaction(function () use ($periodId, &$justPaid) {
             $period = PayrollPeriod::lockForUpdate()->findOrFail($periodId);
 
             if ($period->status === 'paid') {
-                // Idempotent: a double-click must not error.
+                // Idempotent: a double-click must not error — and must not
+                // announce a second time either.
                 return $period->load('approver:id,name,email')->loadCount('payslips');
             }
 
@@ -699,9 +751,16 @@ class PayrollService
 
             $period->update(['status' => 'paid', 'paid_at' => now()]);
             $period->payslips()->where('status', 'approved')->update(['status' => 'paid']);
+            $justPaid = true;
 
             return $period->fresh()->load('approver:id,name,email')->loadCount('payslips');
         });
+
+        if ($justPaid) {
+            $this->announceCompletion($period, auth()->user()?->name ?? 'Someone', 'paid');
+        }
+
+        return $period;
     }
 
     // ─── Payslips (role-scoped) ────────────────────────────────────
@@ -1062,7 +1121,9 @@ class PayrollService
 
     public function verifyPayslip(string $payslipId, User $verifier): Payslip
     {
-        return DB::transaction(function () use ($payslipId, $verifier) {
+        $released = false;
+
+        $payslip = DB::transaction(function () use ($payslipId, $verifier, &$released) {
             $payslip = Payslip::lockForUpdate()->findOrFail($payslipId);
 
             $this->refuseSelfService($payslip, $verifier, 'verify');
@@ -1070,6 +1131,8 @@ class PayrollService
             if ($payslip->isVerified()) {
                 return $payslip->load(['user:id,name,email', 'verifier:id,name']);
             }
+
+            $released = true;
 
             // Clears any withdrawal: re-verifying is what puts the payslip back
             // in front of the employee, and leaving the old stamp would keep it
@@ -1083,6 +1146,44 @@ class PayrollService
 
             return $payslip->load(['user:id,name,email', 'verifier:id,name']);
         });
+
+        // Only on the transition. Re-verifying an already-verified payslip is a
+        // no-op above, and must not send the employee a second "your payslip is
+        // ready" for a payslip they have had for a week.
+        //
+        // After the commit, and never able to fail the verification: the
+        // payslip IS released the moment the row is saved, and a queue that is
+        // down must not turn that into an error the operator has to retry.
+        if ($released) {
+            try {
+                $this->announcePayslipSent($payslip);
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
+
+        return $payslip;
+    }
+
+    /**
+     * Tell the employee their payslip has been released.
+     *
+     * Addressed to the payslip's OWNER, not the verifier — the verifier is the
+     * person who just pressed the button.
+     */
+    private function announcePayslipSent(Payslip $payslip): void
+    {
+        $employee = $payslip->relationLoaded('user') ? $payslip->user : $payslip->user()->first();
+
+        if (! $employee) {
+            return;
+        }
+
+        $periodName = PayrollPeriod::withoutGlobalScopes()
+            ->whereKey($payslip->payroll_period_id)
+            ->value('name') ?? 'this period';
+
+        $employee->notify(new \App\Notifications\PayslipSent($payslip, $periodName));
     }
 
     /**

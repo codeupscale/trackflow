@@ -9,11 +9,15 @@ use App\Models\LeaveRequest;
 use App\Models\LeaveType;
 use App\Models\PublicHoliday;
 use App\Models\User;
+use App\Notifications\LeaveResolved;
+use App\Notifications\OrgActivity;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 
 class LeaveService
 {
+    use \App\Support\AnnouncesOrgActivity;
+
     public function __construct(private readonly PermissionService $permissionService) {}
 
     /**
@@ -42,7 +46,7 @@ class LeaveService
 
         $workingDays = $this->calculateWorkingDays($startDate, $endDate, $orgId, $halfDay);
 
-        return DB::transaction(function () use ($user, $data, $orgId, $startDate, $endDate, $workingDays, $halfDay) {
+        $created = DB::transaction(function () use ($user, $data, $orgId, $startDate, $endDate, $workingDays, $halfDay) {
             $year = $startDate->year;
 
             // Get or initialize balance
@@ -93,6 +97,32 @@ class LeaveService
 
             return $leaveRequest->load('leaveType', 'user');
         });
+
+        // The requester is excluded: they just filed it.
+        $this->announceToOrg($user->organization_id, $user->id, OrgActivity::leaveApplied(
+            employeeName: $user->name,
+            type: $created->leaveType?->name ?? 'Leave',
+            dates: $this->describeRange($created->start_date, $created->end_date),
+            days: (float) $created->days_count,
+            requestId: $created->id,
+        ));
+
+        return $created;
+    }
+
+    /** "12 Mar 2026", or "12–15 Mar 2026" when it spans more than one day. */
+    private function describeRange($start, $end): string
+    {
+        $from = Carbon::parse($start);
+        $to = Carbon::parse($end);
+
+        if ($from->isSameDay($to)) {
+            return $from->format('d M Y');
+        }
+
+        return $from->isSameMonth($to)
+            ? $from->format('d') . '–' . $to->format('d M Y')
+            : $from->format('d M') . ' – ' . $to->format('d M Y');
     }
 
     /**
@@ -193,7 +223,7 @@ class LeaveService
      */
     public function approveLeave(LeaveRequest $request, User $approver): LeaveRequest
     {
-        return DB::transaction(function () use ($request, $approver) {
+        $fresh = DB::transaction(function () use ($request, $approver) {
             $balance = LeaveBalance::where('user_id', $request->user_id)
                 ->where('leave_type_id', $request->leave_type_id)
                 ->where('year', $request->start_date->year)
@@ -211,6 +241,10 @@ class LeaveService
 
             return $request->fresh()->load('leaveType', 'user', 'approver');
         });
+
+        $this->announceResolution($fresh, true);
+
+        return $fresh;
     }
 
     /**
@@ -218,7 +252,7 @@ class LeaveService
      */
     public function rejectLeave(LeaveRequest $request, User $approver, string $reason): LeaveRequest
     {
-        return DB::transaction(function () use ($request, $approver, $reason) {
+        $fresh = DB::transaction(function () use ($request, $approver, $reason) {
             $balance = LeaveBalance::where('user_id', $request->user_id)
                 ->where('leave_type_id', $request->leave_type_id)
                 ->where('year', $request->start_date->year)
@@ -236,6 +270,37 @@ class LeaveService
 
             return $request->fresh()->load('leaveType', 'user', 'approver');
         });
+
+        $this->announceResolution($fresh, false, $reason);
+
+        return $fresh;
+    }
+
+    /**
+     * Tell the requester what was decided.
+     *
+     * After the commit and never able to fail the decision: the leave IS
+     * approved once the row is written, and a queue that is down must not turn
+     * that into an error the approver has to retry.
+     *
+     * The approver is not told — they just pressed the button. When someone
+     * resolves their OWN request (which LeaveService already refuses, but a
+     * custom flow might allow) the guard still holds: notifying yourself about
+     * your own action is noise.
+     */
+    private function announceResolution(LeaveRequest $request, bool $approved, ?string $reason = null): void
+    {
+        try {
+            $employee = $request->relationLoaded('user') ? $request->user : $request->user()->first();
+
+            if (! $employee || $employee->id === $request->approved_by) {
+                return;
+            }
+
+            $employee->notify(new LeaveResolved($request, $approved, $reason));
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 
     /**
