@@ -1,2 +1,4 @@
-export const DESKTOP_VERSION = 'v1.0.46'
-export const RELEASE_URL = `https://github.com/codeupscale/trackflow/releases/tag/${DESKTOP_VERSION}`
+// Download links point at GitHub's /releases/latest, which redirects to the newest
+// non-prerelease. That keeps the marketing site correct after every desktop release
+// without a commit — the release workflow can't push to protected main anyway.
+export const RELEASE_URL = 'https://github.com/codeupscale/trackflow/releases/latest'
