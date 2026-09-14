@@ -39,6 +39,20 @@ class PermissionSeeder extends Seeder
             ['reports.view',   'reports', 'view',   'Access reports section',    true],
             ['reports.export', 'reports', 'export', 'Export reports as CSV/PDF', true],
 
+            // --- notifications (3) ---
+            //
+            // notifications.view gates the bell and the /notifications page.
+            // Every role holds it: a notification is addressed to a USER, and
+            // the API only ever returns the caller's own rows.
+            //
+            // The two receive_* keys are the interesting half. They decide who
+            // is TOLD about an event, and they are permissions rather than a
+            // hardcoded role list so an org's CUSTOM role can be given the job
+            // — the role set is open, and the team that watches attendance in
+            // one org is a custom role in the next.
+            ['notifications.view',               'notifications', 'view',               'See your own notifications',                   false],
+            ['notifications.receive_org_activity', 'notifications', 'receive_org_activity', 'Be notified about organisation activity: joiners, leave, attendance, payroll, shifts, departments and job posts', false],
+
             // --- dashboard (2) ---
             ['dashboard.view_own_stats',  'dashboard', 'view_own_stats',  'See own time, activity, projects',        false],
             ['dashboard.view_team_stats', 'dashboard', 'view_team_stats', 'See team overview cards and charts',      false],
@@ -171,6 +185,11 @@ class PermissionSeeder extends Seeder
             'dashboard.view_own_stats'  => 'none',
             'dashboard.view_team_stats' => 'none',
 
+            // The bell only. Org activity is deliberately NOT here: this stream
+            // is for the people who own the org and the people who run HR, and
+            // widening it is what turns a bell into something people mute.
+            'notifications.view' => 'none',
+
             // departments
             'departments.view'   => 'none',
             'departments.create' => 'none',
@@ -262,6 +281,15 @@ class PermissionSeeder extends Seeder
             // dashboard
             'dashboard.view_own_stats'  => 'none',
             'dashboard.view_team_stats' => 'none',
+
+            // The bell only. Org activity is deliberately NOT here: this stream
+            // is for the people who own the org and the people who run HR, and
+            // widening it is what turns a bell into something people mute.
+            // HR runs the org day to day, so HR is told about it: joiners,
+            // leave, attendance, payroll, shifts, departments, job posts.
+            // The owner holds it by bypass and needs no row.
+            'notifications.view'                  => 'none',
+            'notifications.receive_org_activity'  => 'none',
 
             // time_entries — view/export org-wide, create/edit/delete own only
             'time_entries.view'    => 'organization',
@@ -359,6 +387,12 @@ class PermissionSeeder extends Seeder
             'dashboard.view_own_stats'  => 'none',
             'dashboard.view_team_stats' => 'none',
 
+            // notifications — bell for themselves, and told about payroll.
+            // Attendance is deliberately absent: finance holds attendance.view_all
+            // for payroll purposes, but nobody in finance acts on a check-in.
+            // The bell only — see the note in the org_manager block.
+            'notifications.view' => 'none',
+
             // time_entries — view + export (for payroll calculations)
             'time_entries.view'   => 'organization',
             'time_entries.export' => 'organization',
@@ -370,9 +404,15 @@ class PermissionSeeder extends Seeder
             // positions — salary band visibility
             'positions.view_salary' => 'none',
 
-            // job_postings — compensation visibility only; hiring is HR's to run
-            'job_postings.view'        => 'none',
-            'job_postings.view_salary' => 'none',
+            // job_postings — NONE (owner decision, 2026-09-10). Finance held
+            // view + view_salary so they could read the compensation on an open
+            // role, but recruitment is HR's to run and the item only crowded
+            // their sidebar. view_salary goes with it: it is consulted while
+            // rendering a posting, so on its own it grants nothing.
+            //
+            // Revoked rather than hidden — a menu that filters on key presence
+            // is not a gate, and /hr/job-postings stays reachable to anyone who
+            // types it. The route is gated on job_postings.view.
 
             // employees — view directory + profile + financial data + documents
             'employees.view_directory'   => 'organization',
@@ -454,6 +494,11 @@ class PermissionSeeder extends Seeder
             'dashboard.view_own_stats'  => 'none',
             'dashboard.view_team_stats' => 'none',
 
+            // The bell only. Org activity is deliberately NOT here: this stream
+            // is for the people who own the org and the people who run HR, and
+            // widening it is what turns a bell into something people mute.
+            'notifications.view' => 'none',
+
             // departments, positions & job postings — view only
             'departments.view'  => 'none',
             'positions.view'    => 'none',
@@ -515,6 +560,12 @@ class PermissionSeeder extends Seeder
             // rather than hidden: a menu that filters on key presence cannot
             // gate an API, and the /reports URL stays reachable to anyone who
             // still holds the permission.
+
+            // notifications — the bell, for notifications addressed to them.
+            // No receive_* keys: an employee is never told about a colleague's
+            // check-in. Their own payslip notification is addressed to them
+            // directly and needs no permission to arrive.
+            'notifications.view' => 'none',
 
             // dashboard — own stats only
             'dashboard.view_own_stats' => 'none',

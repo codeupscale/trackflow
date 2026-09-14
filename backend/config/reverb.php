@@ -82,7 +82,15 @@ return [
                     'scheme' => env('REVERB_SCHEME', 'https'),
                     'useTLS' => env('REVERB_SCHEME', 'https') === 'https',
                 ],
-                'allowed_origins' => explode(',', env('REVERB_ALLOWED_ORIGINS', 'http://localhost:3000')),
+                // Reverb matches these against the Origin header's HOST — it runs
+                // parse_url($origin, PHP_URL_HOST) before comparing — so an entry
+                // must be a host ("localhost", "app.example.com", or a Str::is
+                // pattern like "*.example.com"), NEVER a full URL. The default
+                // here was 'http://localhost:3000', which can never equal
+                // 'localhost', so every browser was closed with 4009 "Origin not
+                // allowed" the moment it connected. The socket opened first, so
+                // the app looked connected and simply never received anything.
+                'allowed_origins' => explode(',', env('REVERB_ALLOWED_ORIGINS', 'localhost')),
                 'ping_interval' => env('REVERB_APP_PING_INTERVAL', 60),
                 'activity_timeout' => env('REVERB_APP_ACTIVITY_TIMEOUT', 30),
                 'max_connections' => env('REVERB_APP_MAX_CONNECTIONS'),

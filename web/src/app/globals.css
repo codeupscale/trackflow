@@ -285,3 +285,45 @@
     animation: none;
   }
 }
+
+/* ── Notification bell arrival ───────────────────────────────────────────
+   A short pivot from the bell's top, the way a real bell swings from its
+   mount — hence `origin-top` on the icon. Deliberately under a second and
+   damped (12deg, 10, 6, 3): a bell that keeps shaking reads as an error
+   state, and the badge is already carrying the count. */
+.animate-bell-ring {
+  animation: tf-bell-ring 0.85s cubic-bezier(0.36, 0.07, 0.19, 0.97) 1;
+}
+
+@keyframes tf-bell-ring {
+  0%   { transform: rotate(0); }
+  10%  { transform: rotate(12deg); }
+  22%  { transform: rotate(-10deg); }
+  34%  { transform: rotate(7deg); }
+  46%  { transform: rotate(-5deg); }
+  58%  { transform: rotate(3deg); }
+  70%  { transform: rotate(-2deg); }
+  82%  { transform: rotate(1deg); }
+  100% { transform: rotate(0); }
+}
+
+/* The badge grows once as the count changes, so the eye is drawn to the
+   number rather than only to the movement of the icon. */
+.animate-badge-pop {
+  animation: tf-badge-pop 0.45s ease-out 1;
+}
+
+@keyframes tf-badge-pop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.35); }
+  100% { transform: scale(1); }
+}
+
+/* Motion is the decoration; the badge and the chime carry the message, so
+   removing it costs nothing for anyone who asked for less movement. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-bell-ring,
+  .animate-badge-pop {
+    animation: none;
+  }
+}

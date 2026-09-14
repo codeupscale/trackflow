@@ -32,6 +32,7 @@ import {
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
@@ -48,6 +49,8 @@ import { usePermissionStore } from '@/stores/permission-store';
 import { navigationConfig } from '@/config/navigation';
 import { useAuthGuard } from '@/hooks/use-auth-guard';
 import { HolidayAnnouncementBanner } from '@/components/hr/HolidayAnnouncementBanner';
+import { NotificationBell } from '@/components/notifications/NotificationBell';
+import { useNotificationStream, useUnreadNotificationCount } from '@/hooks/use-notifications';
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const { isAuthenticated } = useAuthGuard();
@@ -61,6 +64,17 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const currentPage = allNavItems.find(
     (item) => pathname === item.href || pathname.startsWith(item.href + '/')
   );
+
+  // Subscribed ONCE, here, for the whole dashboard. Mounting it inside the
+  // bell would open a fresh Reverb subscription every time the header
+  // remounted, and deliver the same notification once per subscription.
+  // Only for those who can actually read them — the subscription would
+  // otherwise sit open for a user whose every fetch comes back 403.
+  const canSeeNotifications = hasPermission('notifications.view');
+  useNotificationStream(canSeeNotifications);
+  // Shares the bell's cache entry, so the sidebar and the header show one
+  // number from one source and can never disagree.
+  const unreadNotifications = useUnreadNotificationCount(canSeeNotifications);
 
   const queryClient = useQueryClient();
   const isTimerRunning = useTimerStore((s) => s.isRunning);
@@ -153,17 +167,50 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                     {group.visibleItems.map((item) => {
                       const Icon = item.icon;
                       const isActive = item.href === activeHref;
+                      // Only the notifications item carries a count today. Keyed on
+                      // the href rather than the label so renaming the item in the
+                      // nav config cannot silently drop its badge.
+                      const badge = item.href === '/notifications' ? unreadNotifications : 0;
+                      const badgeLabel = badge > 99 ? '99+' : String(badge);
                       return (
                         <SidebarMenuItem key={item.name}>
                           <SidebarMenuButton
                             isActive={isActive}
-                            tooltip={item.name}
+                            tooltip={badge > 0 ? `${item.name} (${badgeLabel} unread)` : item.name}
                             render={<Link href={item.href} />}
                             className={isActive ? 'border-l-[3px] border-orange-500 rounded-l-none font-semibold' : ''}
                           >
-                            <Icon className="h-4 w-4 shrink-0" />
+                            <span className="relative flex shrink-0">
+                              <Icon className="h-4 w-4 shrink-0" />
+                              {/* Collapsed (icon-only) sidebar: a dot, not a number.
+                                  A count does not fit on a 16px icon, and the
+                                  tooltip above carries the exact figure on hover. */}
+                              {badge > 0 && (
+                                <span
+                                  aria-hidden="true"
+                                  className="absolute -right-1 -top-1 hidden h-2 w-2 rounded-full bg-orange-500 ring-2 ring-sidebar group-data-[collapsible=icon]:block"
+                                />
+                              )}
+                            </span>
                             <span>{item.name}</span>
                           </SidebarMenuButton>
+                          {/* Expanded: the count itself. SidebarMenuBadge already hides
+                              in icon mode. Nothing at zero — a "0" pill is clutter
+                              that teaches people to stop reading the badge. The
+                              peer-* overrides keep the text white on hover and on the
+                              active row, where the primitive would otherwise recolour
+                              it to the sidebar's accent. Sized to match the header
+                              bell's badge (h-4) rather than the primitive's h-5, which
+                              read as a button beside a 14px label; top-2 re-centres
+                              the smaller pill in the 32px row. */}
+                          {badge > 0 && (
+                            <SidebarMenuBadge
+                              aria-label={`${badgeLabel} unread notifications`}
+                              className="h-4 min-w-4 rounded-full bg-orange-500 px-1 text-[0.6rem] font-semibold leading-none text-white peer-hover/menu-button:text-white peer-data-active/menu-button:text-white peer-data-[size=default]/menu-button:top-2"
+                            >
+                              {badgeLabel}
+                            </SidebarMenuBadge>
+                          )}
                         </SidebarMenuItem>
                       );
                     })}
@@ -219,6 +266,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
           {/* Right side */}
           <div className="flex items-center gap-2">
+            {/* Bell first: it is the only thing in the header that CHANGES on
+                its own, and the eye should find it without hunting past the
+                theme toggle. Hidden without the permission — a bell that is
+                only ever empty is worse than no bell, and the API refuses the
+                request anyway. */}
+            {canSeeNotifications && <NotificationBell />}
             <ThemeToggle />
             <Separator orientation="vertical" className="h-6 hidden md:block" />
 

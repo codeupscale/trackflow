@@ -9,6 +9,7 @@ use App\Models\Organization;
 use App\Models\Shift;
 use App\Models\TimeEntry;
 use App\Models\User;
+use App\Notifications\OrgActivity;
 use App\Support\CheckInSchedule;
 use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
@@ -31,6 +32,8 @@ use Illuminate\Support\LazyCollection;
  */
 class CheckInService
 {
+    use \App\Support\AnnouncesOrgActivity;
+
     public function __construct(
         private readonly AttendanceService $attendanceService,
     ) {}
@@ -326,7 +329,9 @@ class CheckInService
         $officialStart = Carbon::parse("{$date} {$schedule->check_in_time}", $tz);
         $lateAt = Carbon::parse("{$date} {$schedule->late_threshold}", $tz);
 
-        return DB::transaction(function () use ($user, $schedule, $tz, $now, $local, $date, $officialStart, $lateAt) {
+        $announce = null;
+
+        $record = DB::transaction(function () use ($user, $schedule, $tz, $now, $local, $date, $officialStart, $lateAt, &$announce) {
             // 1. Ensure the day row exists. The unique(org,user,date) index serializes the
             //    first-of-day check-in even under concurrency. The row may already exist
             //    (nightly attendance job pre-creates it with a null check_in_at), in which
@@ -400,7 +405,7 @@ class CheckInService
             // 6-7. Append the new session with the next per-day sequence number.
             $seq = ($record->sessions()->max('seq') ?? 0) + 1;
 
-            CheckInSession::create([
+            $session = CheckInSession::create([
                 'organization_id' => $user->organization_id,
                 'user_id' => $user->id,
                 'attendance_record_id' => $record->id,
@@ -412,8 +417,49 @@ class CheckInService
             // 8. Recompute the day rollup columns from the session set.
             $this->recomputeRecordRollups($record);
 
-            return $record->refresh();
+            $record = $record->refresh();
+
+            // 9. Remember what to announce. Dispatched AFTER the commit, never
+            //    inside it: a queue worker is fast enough to pick the job up
+            //    before this transaction lands, and it would then read a
+            //    session that does not exist yet.
+            $announce = $session;
+
+            return $record;
         });
+
+        // Announcing is a side effect of the check-in, never a condition of
+        // it. A broken queue or mailer must not be able to stop someone
+        // clocking in, so the failure is swallowed and logged.
+        if ($announce !== null) {
+            try {
+                $this->announceCheckIn($user, $announce, $record, $tz);
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
+
+        return $record;
+    }
+
+    /**
+     * Tell the people who watch attendance that someone clocked in.
+     *
+     * The employee themselves is excluded — they just pressed the button.
+     */
+    private function announceCheckIn(User $user, CheckInSession $session, AttendanceRecord $record, string $tz): void
+    {
+        $this->announceToOrg(
+            $user->organization_id,
+            $user->id,
+            OrgActivity::checkedIn(
+                employeeName: $user->name,
+                at: Carbon::parse($session->check_in_at)->setTimezone($tz)->format('h:i A'),
+                late: ($record->check_in_status ?? 'on_time') === 'late',
+                lateMinutes: (int) ($record->check_in_late_minutes ?? 0),
+                session: (int) ($session->seq ?? 1),
+            ),
+        );
     }
 
     /**
@@ -423,7 +469,7 @@ class CheckInService
     {
         $now = now(); // UTC, authoritative
 
-        return DB::transaction(function () use ($user, $now) {
+        $record = DB::transaction(function () use ($user, $now) {
             // 1. Locate the open session (no lock yet — we only need its record id). The
             //    36h lookback lets a forgotten checkout that crosses midnight still close
             //    the prior day's open session.
@@ -474,6 +520,39 @@ class CheckInService
 
             return $record->refresh();
         });
+
+        // Same rule as check-in: announced after the commit, and never able to
+        // fail the checkout itself. The timezone is resolved out here because
+        // the schedule that owns it lives inside the closure.
+        $this->announceCheckOut($user, $record, $this->orgTimezone($user->organization_id));
+
+        return $record;
+    }
+
+    /**
+     * Tell the owner and HR that someone finished for the day.
+     *
+     * An EARLY checkout says so in the title — that is the version anyone acts
+     * on. The day's worked total rides along because the first question on
+     * reading "left at 16:20" is whether that was a full day.
+     */
+    private function announceCheckOut(User $user, AttendanceRecord $record, string $tz): void
+    {
+        $seconds = (int) ($record->worked_seconds ?? 0);
+
+        $this->announceToOrg(
+            $user->organization_id,
+            $user->id,
+            OrgActivity::checkedOut(
+                employeeName: $user->name,
+                at: $record->check_out_at
+                    ? Carbon::parse($record->check_out_at)->setTimezone($tz)->format('h:i A')
+                    : now()->setTimezone($tz)->format('h:i A'),
+                worked: sprintf('%dh %02dm', intdiv($seconds, 3600), intdiv($seconds % 3600, 60)),
+                early: (bool) ($record->is_early_checkout ?? false),
+                earlyMinutes: (int) ($record->check_out_early_minutes ?? 0),
+            ),
+        );
     }
 
     /**

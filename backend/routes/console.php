@@ -3,6 +3,7 @@
 use App\Jobs\CloseStaleCheckInsJob;
 use App\Jobs\ForceCheckOutOpenSessionsJob;
 use App\Jobs\GenerateDailyAttendanceJob;
+use App\Jobs\PruneNotificationsJob;
 use App\Jobs\PruneOldActivityLogsJob;
 use App\Jobs\SendDailyActivitySummaryJob;
 use App\Jobs\SendTimerIdleAlertJob;
@@ -47,6 +48,19 @@ Schedule::call(function () {
             }
         });
 })->dailyAt('02:00')->name('prune-activity-logs');
+
+// Notifications: read ones after 90 days, anything after 180. See the job for
+// why the two horizons differ. 02:15 so it never shares a window with the
+// activity-log prune above, which touches a far larger table.
+Schedule::call(function () {
+    Organization::query()
+        ->select('id')
+        ->chunkById(500, function ($orgs) {
+            foreach ($orgs as $org) {
+                PruneNotificationsJob::dispatch($org->id);
+            }
+        });
+})->dailyAt('02:15')->name('prune-notifications');
 
 // Clean up expired invitations — Daily 3am UTC
 Schedule::call(function () {
