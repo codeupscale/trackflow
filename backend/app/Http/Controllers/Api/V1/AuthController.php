@@ -23,6 +23,8 @@ use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
+    use \App\Support\AnnouncesOrgActivity;
+
     public function __construct(
         private readonly AuthTokenService $authTokens,
     ) {}
@@ -445,6 +447,12 @@ class AuthController extends Controller
                 }
                 return collect($users);
             });
+
+            // Each invited org gets told its new member arrived. The personal
+            // org created below is NOT announced: it has no one else in it.
+            foreach ($createdUsers as $joined) {
+                $this->announceJoiner($joined);
+            }
 
             // Also create a personal org so the user always has one
             $personalUser = DB::transaction(function () use ($name, $email, $googleId, $avatarUrl, $rbac) {

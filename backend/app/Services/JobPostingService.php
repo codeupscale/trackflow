@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\JobPosting;
+use App\Notifications\OrgActivity;
 use App\Models\Organization;
 use Illuminate\Support\Carbon;
 use Illuminate\Validation\ValidationException;
@@ -13,6 +14,8 @@ use Illuminate\Validation\ValidationException;
  */
 class JobPostingService
 {
+    use \App\Support\AnnouncesOrgActivity;
+
     /** Fields a posting owns. Salary is a snapshot, not a live read from the position. */
     private const ATTRIBUTES = [
         'department_id',
@@ -55,7 +58,22 @@ class JobPostingService
             $attributes['is_published'] = false;
         }
 
-        return JobPosting::create($this->normaliseSalary($attributes));
+        $posting = JobPosting::create($this->normaliseSalary($attributes));
+
+        $this->announceToOrg($org->id, auth()->id(), OrgActivity::jobPosted(
+            title: $posting->title ?? 'Untitled role',
+            postedBy: auth()->user()?->name ?? 'Someone',
+            department: $posting->department_id
+                ? \App\Models\Department::withoutGlobalScopes()->find($posting->department_id)?->name
+                : null,
+            // Published vs scheduled matters: a future-dated post is NOT live
+            // yet, and reading "new job post" for something nobody can see is
+            // how a recruiter wastes an afternoon.
+            status: $posting->is_published ? 'published' : 'scheduled',
+            jobId: $posting->id,
+        ));
+
+        return $posting;
     }
 
     public function update(JobPosting $posting, array $data): JobPosting

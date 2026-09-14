@@ -4,13 +4,19 @@ namespace App\Services;
 
 use App\Models\Shift;
 use App\Models\User;
+use App\Notifications\OrgActivity;
+use App\Notifications\ShiftAssigned as ShiftAssignedNotification;
+use App\Notifications\ShiftTimingUpdated;
 use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Str;
 
 class ShiftService
 {
+    use \App\Support\AnnouncesOrgActivity;
+
     // ─── Shift CRUD ──────────────────────────────────────────────
 
     // ─── Team-scoped management ──────────────────────────────────
@@ -140,11 +146,84 @@ class ShiftService
     /**
      * Update an existing shift.
      */
+    /**
+     * Fields that change when someone is expected at their desk.
+     *
+     * Renaming a shift or recolouring it is not one of them: a notification for
+     * a colour change trains people to ignore the ones that matter.
+     */
+    private const TIMING_FIELDS = ['start_time', 'end_time', 'grace_period_minutes', 'timezone', 'break_minutes'];
+
     public function updateShift(Shift $shift, array $data): Shift
     {
-        $shift->update($data);
+        // Captured BEFORE the write, because afterwards there is nothing left
+        // to compare against — and the notification quotes the old hours beside
+        // the new ones, since "your shift changed" without them just sends the
+        // reader hunting for what changed.
+        $before = $shift->only(self::TIMING_FIELDS);
 
-        return $shift->fresh();
+        $shift->update($data);
+        $shift = $shift->fresh();
+
+        $changes = [];
+        foreach (self::TIMING_FIELDS as $field) {
+            if (! array_key_exists($field, $data)) {
+                continue;
+            }
+
+            // Loose comparison on purpose: "09:00" and "09:00:00" are the same
+            // instant, and a strict one would announce a change nobody made.
+            if ((string) ($before[$field] ?? '') !== (string) ($shift->{$field} ?? '')) {
+                $changes[$field] = ['from' => $before[$field] ?? null, 'to' => $shift->{$field} ?? null];
+            }
+        }
+
+        if ($changes !== []) {
+            $this->announceTimingChange($shift, $changes);
+        }
+
+        return $shift;
+    }
+
+    /**
+     * Tell the people who work this shift that its hours moved.
+     *
+     * Only ACTIVE assignments — someone whose assignment ended last month is no
+     * longer affected by it. Never able to fail the update itself: the shift IS
+     * changed once the row is written.
+     */
+    private function announceTimingChange(Shift $shift, array $changes): void
+    {
+        try {
+            $userIds = DB::table('user_shifts')
+                ->where('shift_id', $shift->id)
+                ->where('organization_id', $shift->organization_id)
+                ->whereNull('deleted_at')
+                ->where(function ($q) {
+                    $q->whereNull('effective_to')
+                        ->orWhere('effective_to', '>=', now()->toDateString());
+                })
+                ->pluck('user_id')
+                ->unique();
+
+            if ($userIds->isEmpty()) {
+                return;
+            }
+
+            $users = User::withoutGlobalScopes()
+                ->whereIn('id', $userIds)
+                ->where('is_active', true)
+                ->whereNull('deleted_at')
+                ->get();
+
+            if ($users->isEmpty()) {
+                return;
+            }
+
+            Notification::send($users, new ShiftTimingUpdated($shift, $changes));
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 
     /**
@@ -183,7 +262,7 @@ class ShiftService
     /**
      * Assign a user to a shift. Validates no overlapping active assignment.
      */
-    public function assignUser(string $orgId, string $userId, string $shiftId, string $effectiveFrom, ?string $effectiveTo, ?User $actor = null): void
+    public function assignUser(string $orgId, string $userId, string $shiftId, string $effectiveFrom, ?string $effectiveTo, ?User $actor = null, bool $announce = true): void
     {
         // A team manager may only place their own team members. Passing the
         // actor is what activates the check — internal callers that have already
@@ -229,6 +308,64 @@ class ShiftService
             'created_at' => now(),
             'updated_at' => now(),
         ]);
+
+        if ($announce) {
+            $this->announceAssignment($orgId, $shiftId, [$userId], $effectiveFrom);
+        }
+    }
+
+    /**
+     * Tell the owner and HR who was put on which shift, and from when.
+     *
+     * Named people rather than a count: "3 employees assigned" is a number
+     * nobody can check, while three names can be read against the rota. Past
+     * five it becomes "and N others", because a notification is a line, not a
+     * list.
+     */
+    private function announceAssignment(string $orgId, string $shiftId, array $userIds, string $effectiveFrom): void
+    {
+        $shift = Shift::withoutGlobalScopes()->find($shiftId);
+
+        if (! $shift) {
+            return;
+        }
+
+        $people = User::withoutGlobalScopes()
+            ->whereIn('id', $userIds)
+            ->where('is_active', true)
+            ->whereNull('deleted_at')
+            ->orderBy('name')
+            ->get();
+
+        if ($people->isEmpty()) {
+            return;
+        }
+
+        // Each person assigned hears it directly — before this, the first sign
+        // of new hours was being marked late on day one. The one doing the
+        // assigning is skipped if they put themselves on the shift.
+        try {
+            $recipients = $people->reject(fn (User $u) => $u->id === auth()->id());
+
+            if ($recipients->isNotEmpty()) {
+                Notification::send($recipients, new ShiftAssignedNotification($shift, $effectiveFrom));
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
+        $names = $people->pluck('name');
+
+        $who = $names->count() > 5
+            ? $names->take(5)->implode(', ') . ' and ' . ($names->count() - 5) . ' others'
+            : $names->implode(', ');
+
+        $this->announceToOrg($orgId, auth()->id(), OrgActivity::shiftAssigned(
+            shiftName: $shift->name,
+            hours: substr((string) $shift->start_time, 0, 5) . '–' . substr((string) $shift->end_time, 0, 5),
+            who: $who,
+            from: Carbon::parse($effectiveFrom)->format('d M Y'),
+        ));
     }
 
     /**
@@ -261,15 +398,21 @@ class ShiftService
      */
     public function bulkAssign(string $orgId, string $shiftId, array $userIds, string $effectiveFrom, ?string $effectiveTo, ?User $actor = null): int
     {
-        return DB::transaction(function () use ($orgId, $shiftId, $userIds, $effectiveFrom, $effectiveTo, $actor) {
-            $count = 0;
+        $count = DB::transaction(function () use ($orgId, $shiftId, $userIds, $effectiveFrom, $effectiveTo, $actor) {
+            $done = 0;
             foreach ($userIds as $userId) {
-                $this->assignUser($orgId, $userId, $shiftId, $effectiveFrom, $effectiveTo, $actor);
-                $count++;
+                // Silent per user — see assignUser's $announce.
+                $this->assignUser($orgId, $userId, $shiftId, $effectiveFrom, $effectiveTo, $actor, false);
+                $done++;
             }
 
-            return $count;
+            return $done;
         });
+
+        // One notification naming everyone, after the commit.
+        $this->announceAssignment($orgId, $shiftId, $userIds, $effectiveFrom);
+
+        return $count;
     }
 
     /**

@@ -14,6 +14,7 @@ import {
     FolderOpen,
     Layers,
     LayoutDashboard,
+    Bell,
     Megaphone,
     Palette,
     Puzzle,
@@ -48,6 +49,17 @@ export const navigationConfig: NavGroup[] = [
                 href: "/dashboard",
                 icon: LayoutDashboard,
                 requiredPermission: "dashboard.view_own_stats",
+            },
+            {
+                // Every role holds notifications.view by default, and a
+                // notification is addressed to a user — the API can only ever
+                // return the caller's own rows. The key exists so an org can
+                // withhold the feature from a role, and so this item filters on
+                // something that means what it says.
+                name: "Notifications",
+                href: "/notifications",
+                icon: Bell,
+                requiredPermission: "notifications.view",
             },
             {
                 name: "Time Entries",

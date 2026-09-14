@@ -5,9 +5,12 @@ namespace App\Services;
 use App\Models\Task;
 use App\Models\TimeEntry;
 use App\Models\User;
+use App\Notifications\OrgActivity;
+use App\Notifications\TimeEntryResolved;
 use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Notification;
 
 /**
  * Manual time entry with an approval workflow.
@@ -136,7 +139,7 @@ class ManualTimeEntryService
         $this->assertNotSelfApproval($actor, $entry);
         $this->assertPending($entry);
 
-        return DB::transaction(function () use ($actor, $entry) {
+        $resolved = DB::transaction(function () use ($actor, $entry) {
             $entry->update([
                 'approval_status' => 'approved',
                 'is_approved' => true,
@@ -149,6 +152,10 @@ class ManualTimeEntryService
 
             return $entry->fresh()->load(['project', 'task', 'user', 'submitter', 'approver']);
         });
+
+        $this->announceResolution($resolved, $actor, true);
+
+        return $resolved;
     }
 
     /**
@@ -162,7 +169,7 @@ class ManualTimeEntryService
         $this->assertNotSelfApproval($actor, $entry);
         $this->assertPending($entry);
 
-        return DB::transaction(function () use ($actor, $entry, $reason) {
+        $resolved = DB::transaction(function () use ($actor, $entry, $reason) {
             $entry->update([
                 'approval_status' => 'rejected',
                 'is_approved' => false,
@@ -176,6 +183,58 @@ class ManualTimeEntryService
 
             return $entry->fresh()->load(['project', 'task', 'user', 'submitter', 'approver']);
         });
+
+        $this->announceResolution($resolved, $actor, false, $reason);
+
+        return $resolved;
+    }
+
+    /**
+     * Tell the employee, and the owner and HR, what was decided.
+     *
+     * Two separate sends in two separate guards, so a failure delivering one
+     * can never swallow the other. Not the approver — they just decided it. After the commit, and wrapped:
+     * the decision IS made once the row is written, and a queue that is down
+     * must not turn that into an error the approver has to retry.
+     */
+    private function announceResolution(TimeEntry $entry, User $actor, bool $approved, ?string $reason = null): void
+    {
+        // The person whose hours these are. Self-approval is already refused
+        // upstream, but the guard stays: a decision on your own entry is not
+        // news to you.
+        try {
+            $owner = $entry->user;
+
+            if ($owner && $owner->id !== $actor->id) {
+                $owner->notify(new TimeEntryResolved($entry, $approved, $actor->name, $reason));
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
+        try {
+            $watchers = app(NotificationRecipients::class)
+                ->orgActivityWatchers($actor->organization_id, $actor->id);
+
+            if ($watchers->isEmpty()) {
+                return;
+            }
+
+            $seconds = (int) ($entry->duration_seconds ?? 0);
+            $hours = sprintf('%dh %02dm', intdiv($seconds, 3600), intdiv($seconds % 3600, 60));
+
+            Notification::send($watchers, OrgActivity::timeEntryResolved(
+                employeeName: $entry->user?->name ?? 'An employee',
+                approverName: $actor->name,
+                approved: $approved,
+                hours: $hours,
+                day: Carbon::parse($entry->started_at)->format('d M Y'),
+                reason: $reason,
+                entryId: $entry->id,
+            ));
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 
     /**

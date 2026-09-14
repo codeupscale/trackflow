@@ -81,6 +81,24 @@ Route::prefix('v1')->group(function () {
     // Authenticated routes
     Route::middleware('auth:sanctum')->group(function () {
 
+        // Notifications.
+        //
+        // Every route reads through the current user's own relation, so the
+        // permission is not what keeps one person out of another's bell —
+        // that much is structural. notifications.view exists so an org CAN
+        // withhold the feature from a role, and so the sidebar has a real key
+        // to filter on rather than borrowing the dashboard's: a menu that
+        // hides an item is not a gate, and /notifications stays reachable by
+        // anyone who types it.
+        Route::middleware('permission:notifications.view')->group(function () {
+            Route::get('notifications', [\App\Http\Controllers\Api\V1\NotificationController::class, 'index']);
+            Route::get('notifications/preferences', [\App\Http\Controllers\Api\V1\NotificationController::class, 'preferences']);
+            Route::put('notifications/preferences', [\App\Http\Controllers\Api\V1\NotificationController::class, 'updatePreferences']);
+            Route::post('notifications/read-all', [\App\Http\Controllers\Api\V1\NotificationController::class, 'markAllRead']);
+            Route::post('notifications/{id}/read', [\App\Http\Controllers\Api\V1\NotificationController::class, 'markRead']);
+            Route::delete('notifications/{id}', [\App\Http\Controllers\Api\V1\NotificationController::class, 'destroy']);
+        });
+
         // Profile
         Route::get('profile', [ProfileController::class, 'show']);
         Route::put('profile', [ProfileController::class, 'update']);

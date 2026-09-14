@@ -5,9 +5,12 @@ namespace App\Http\Controllers\Api\V1\Hr;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Hr\StorePublicHolidayRequest;
 use App\Models\PublicHoliday;
+use App\Models\User;
+use App\Notifications\HolidayAnnounced;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Notification;
 
 class PublicHolidayController extends Controller
 {
@@ -33,6 +36,8 @@ class PublicHolidayController extends Controller
             'announced_by' => $request->user()->id,
             ...$request->validated(),
         ]);
+
+        $this->announce($holiday, $request->user());
 
         return response()->json(['data' => $holiday->load('announcer:id,name')], 201);
     }
@@ -87,5 +92,37 @@ class PublicHolidayController extends Controller
         $holiday->delete();
 
         return response()->json(['message' => 'Holiday removed.']);
+    }
+
+    /**
+     * Tell the whole organization.
+     *
+     * The one notification in the product that is genuinely broadcast rather
+     * than addressed: a holiday changes when EVERYBODY works. The dashboard
+     * banner already shows the next one, but a banner is only seen by whoever
+     * opens the app that day — an announcement three months out would scroll
+     * past unnoticed.
+     *
+     * The announcer is excluded; they just created it. Never able to fail the
+     * request: the holiday IS created once the row is written.
+     */
+    private function announce(PublicHoliday $holiday, User $announcer): void
+    {
+        try {
+            $staff = User::withoutGlobalScopes()
+                ->where('organization_id', $holiday->organization_id)
+                ->where('is_active', true)
+                ->whereNull('deleted_at')
+                ->where('id', '!=', $announcer->id)
+                ->get();
+
+            if ($staff->isEmpty()) {
+                return;
+            }
+
+            Notification::send($staff, new HolidayAnnounced($holiday));
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 }
