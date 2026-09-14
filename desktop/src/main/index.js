@@ -5145,6 +5145,9 @@ function renderIdleFreeze() {
     }
 }
 
+// Midnight split switch. OFF: sessions are no longer cut at org-local 00:00.
+const MIDNIGHT_SPLIT_ENABLED = false;
+
 /**
  * Split the live session at any org-local midnight it has crossed, and re-point the
  * in-memory timer at the resulting new session.
@@ -5190,6 +5193,11 @@ function maybeSplitAtMidnight() {
         );
         return;
     }
+
+    // Split turned OFF: a live session now runs straight through midnight as one row.
+    // The stale-session guard above still runs — it closes dead sessions at their last
+    // input, which matters whether or not anything is split.
+    if (!MIDNIGHT_SPLIT_ENABLED) return;
 
     const result = sessionSyncWorker.splitAtMidnightIfNeeded();
     if (!result || result.splits === 0 || !result.live) return;
