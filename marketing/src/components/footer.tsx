@@ -1,5 +1,5 @@
 import { TrackFlowLogo } from "./logo";
-import { DESKTOP_VERSION, RELEASE_URL } from "../lib/version";
+import { RELEASE_URL } from "../lib/version";
 
 const footerLinks = {
   Product: [
@@ -11,7 +11,7 @@ const footerLinks = {
     { label: "Changelog", href: "#" },
   ],
   Downloads: [
-    { label: `Desktop App (${DESKTOP_VERSION})`, href: RELEASE_URL },
+    { label: "Desktop App", href: RELEASE_URL },
     { label: "macOS", href: RELEASE_URL },
     { label: "Windows", href: RELEASE_URL },
     { label: "Linux", href: RELEASE_URL },
