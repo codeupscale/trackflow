@@ -412,44 +412,26 @@ jobs:
             desktop/dist/*.yml
           retention-days: 5
 
-  # ── Update release notes + marketing version ─────────────────────────────────
+  # ── Update release notes ─────────────────────────────────────────────────────
+  # Production (main) only. Edits the release through the API — this job must NEVER
+  # push to a branch: main and develop are protected by rulesets that require a PR
+  # and signed commits, so any bot push is rejected (GH013) and fails the run.
+  #
+  # The marketing site no longer needs a per-release commit either: its download
+  # links point at /releases/latest, which GitHub resolves to the newest
+  # non-prerelease on its own (marketing/src/lib/version.ts).
   update-release-notes:
     needs: [preflight, build-mac, build-windows, build-linux]
-    # Production (main) only — this job pushes to main and edits the production
-    # release notes. Dev prereleases from develop must not touch main.
     if: always() && needs.preflight.outputs.channel == 'production' && (needs.build-mac.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: main
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update marketing version
-        run: |
-          VER="${{ needs.preflight.outputs.version }}"
-          # RELEASE_URL must reference DESKTOP_VERSION (which already carries the leading
-          # "v"), NOT a `${VER}` that exists only in this shell and not in the emitted
-          # TypeScript module. Getting that wrong re-broke version.ts on every production
-          # release and failed deploy.yml's "Marketing type check" gate — which skips the
-          # API image build, silently leaving production on a stale backend.
-          cat > marketing/src/lib/version.ts <<EOF
-          export const DESKTOP_VERSION = 'v${VER}'
-          export const RELEASE_URL = \`https://github.com/codeupscale/trackflow/releases/tag/\${DESKTOP_VERSION}\`
-          EOF
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add marketing/src/lib/version.ts
-          git diff --staged --quiet || git commit -m "chore: bump marketing desktop version to v${VER}"
-          git push origin main
-
       - name: Update release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="v${{ needs.preflight.outputs.version }}"
           VER="${{ needs.preflight.outputs.version }}"
-          gh release edit "$VERSION" --notes "## TrackFlow Desktop ${VER}
+          gh release edit "$VERSION" --repo ${{ github.repository }} --notes "## TrackFlow Desktop ${VER}
 
           ### Downloads
 
@@ -460,24 +442,6 @@ jobs:
           | **Windows** | \`TrackFlow-${VER}-win-x64.exe\` | Windows 10+ |
           | **Linux (.deb)** | \`TrackFlow-${VER}-linux-amd64.deb\` | Ubuntu/Debian |
           | **Linux (AppImage)** | \`TrackFlow-${VER}-x86_64.AppImage\` | Universal Linux |
-
-          ---
-
-          ### What's New
-
-          **New Features**
-          - **Shift info display** — timer window now shows assigned shift name, time range, and break duration when tracking
-          - **Branded icons** — new TrackFlow-branded tray icon, app icon, and notification icon across all platforms
-          - **Simplified authentication** — streamlined login flow with reduced API overhead
-
-          **Improvements**
-          - Redesigned tray icons with idle/tracking states and color variants for better system tray visibility
-          - Added dedicated notification icon for macOS/Windows alerts
-          - Retina (@2x) tray icon support for high-DPI displays
-          - Cleaner main process code — refactored for maintainability
-
-          **Testing**
-          - New test coverage: API client error handling, idle alert reappearance after window close, tray click behavior
 
           ---
 
@@ -568,60 +532,6 @@ jobs:
           - Windows: \`%APPDATA%/trackflow-agent/trackflow.log\`
           - Linux: \`~/.config/trackflow-agent/trackflow.log\`
           "
-
-  # ── Keep desktop/package.json honest on develop ──────────────────────────────
-  # Production only. After a release ships, write the NEXT patch into
-  # desktop/package.json on develop so the committed number tracks reality instead
-  # of drifting (it sat at 1.0.43 while production was on v1.0.46). Preflight no
-  # longer DEPENDS on this — main resolves past shipped versions on its own — this
-  # just keeps the file meaningful and starts the next dev prerelease from the
-  # right base.
-  #
-  # Pushes to DEVELOP, never main: a push to main touching desktop/** would
-  # retrigger this workflow and immediately release the bumped version. (A push
-  # made with GITHUB_TOKEN does not trigger workflows, and [skip ci] is a second
-  # guard, but the branch choice is the real one.)
-  bump-develop-version:
-    needs: [preflight, build-mac, build-windows, build-linux]
-    if: always() && needs.preflight.outputs.channel == 'production' && (needs.build-mac.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: develop
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Bump desktop/package.json to the next patch
-        run: |
-          RELEASED="${{ needs.preflight.outputs.version }}"
-          NEXT=$(echo "${RELEASED}" | awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}')
-          CURRENT=$(node -p 'require("./desktop/package.json").version')
-
-          # Never move the version BACKWARDS — develop may already be ahead if a
-          # minor/major was bumped by hand for the next cycle.
-          HIGHEST=$(printf '%s\n%s\n' "${CURRENT}" "${NEXT}" | sort -V | tail -1)
-          if [ "${HIGHEST}" = "${CURRENT}" ] && [ "${CURRENT}" != "${NEXT}" ]; then
-            echo "develop is already at ${CURRENT} (ahead of ${NEXT}) — leaving it alone."
-            exit 0
-          fi
-
-          ( cd desktop && npm version "${NEXT}" --no-git-tag-version --allow-same-version )
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add desktop/package.json desktop/package-lock.json
-          if git diff --staged --quiet; then
-            echo "desktop/package.json already at ${NEXT} — nothing to commit."
-            exit 0
-          fi
-          git commit -m "chore(desktop): bump version to ${NEXT} after v${RELEASED} [skip ci]"
-
-          # develop moves constantly; rebase and retry rather than failing the run.
-          git push origin develop || {
-            git pull --rebase origin develop && git push origin develop
-          }
-          echo "::notice::desktop/package.json on develop is now ${NEXT}."
 
   # ── Finalize dev prerelease ──────────────────────────────────────────────────
   # Dev channel only. The release is pre-created as a prerelease in preflight, but
