@@ -136,6 +136,13 @@ describe("the guard is actually wired into the midnight split", () => {
         expect(guarded).toMatch(/return;/);
     });
 
+    test("the midnight split is switched off, but the stale guard still runs first", () => {
+        expect(SRC).toMatch(/const MIDNIGHT_SPLIT_ENABLED = false;/);
+        const gateIdx = split.indexOf("if (!MIDNIGHT_SPLIT_ENABLED) return;");
+        expect(gateIdx).toBeGreaterThan(split.indexOf("staleLiveSessionDecision("));
+        expect(gateIdx).toBeLessThan(split.indexOf("splitAtMidnightIfNeeded()"));
+    });
+
     test("the last-active stamp comes from the OS idle counter, not a server ack", () => {
         expect(SRC).toMatch(/function _stampLastActiveFromOsIdle\(\)/);
         expect(SRC).toMatch(/powerMonitor\.getSystemIdleTime\(\)/);
