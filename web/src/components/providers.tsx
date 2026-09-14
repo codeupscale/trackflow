@@ -6,6 +6,7 @@ import { useState, type ReactNode } from 'react';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { PHProvider } from '@/components/posthog-provider';
+import { useClearCacheOnUserChange } from '@/hooks/use-clear-cache-on-user-change';
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -19,6 +20,10 @@ export function Providers({ children }: { children: ReactNode }) {
         },
       })
   );
+
+  // One user's cached data must never be served to the next person to sign in
+  // on the same tab. See the hook for why this keys on the user, not on logout.
+  useClearCacheOnUserChange(queryClient);
 
   return (
     <PHProvider>
