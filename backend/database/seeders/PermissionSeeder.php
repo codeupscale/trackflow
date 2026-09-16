@@ -51,6 +51,14 @@ class PermissionSeeder extends Seeder
             // — the role set is open, and the team that watches attendance in
             // one org is a custom role in the next.
             ['notifications.view',               'notifications', 'view',               'See your own notifications',                   false],
+            // --- assets (2) ---
+            //
+            // assets.view is scoped: 'organization' is the whole register,
+            // 'own' is only the items you currently hold. assets.manage covers
+            // every write — adding items and handing them over — and is HR's.
+            ['assets.view',   'assets', 'view',   'See company items: the whole register, or only your own', true],
+            ['assets.manage', 'assets', 'manage', 'Add company items and record hand-overs and returns',     false],
+
             ['notifications.receive_org_activity', 'notifications', 'receive_org_activity', 'Be notified about organisation activity: joiners, leave, attendance, payroll, shifts, departments and job posts', false],
 
             // --- dashboard (2) ---
@@ -190,6 +198,9 @@ class PermissionSeeder extends Seeder
             // widening it is what turns a bell into something people mute.
             'notifications.view' => 'none',
 
+            // assets — only the company items this person currently holds.
+            'assets.view' => 'own',
+
             // departments
             'departments.view'   => 'none',
             'departments.create' => 'none',
@@ -290,6 +301,10 @@ class PermissionSeeder extends Seeder
             // The owner holds it by bypass and needs no row.
             'notifications.view'                  => 'none',
             'notifications.receive_org_activity'  => 'none',
+
+            // assets — HR keeps the register and records every hand-over.
+            'assets.view'   => 'organization',
+            'assets.manage' => 'none',
 
             // time_entries — view/export org-wide, create/edit/delete own only
             'time_entries.view'    => 'organization',
@@ -392,6 +407,9 @@ class PermissionSeeder extends Seeder
             // for payroll purposes, but nobody in finance acts on a check-in.
             // The bell only — see the note in the org_manager block.
             'notifications.view' => 'none',
+
+            // assets — only the company items this person currently holds.
+            'assets.view' => 'own',
 
             // time_entries — view + export (for payroll calculations)
             'time_entries.view'   => 'organization',
@@ -499,6 +517,9 @@ class PermissionSeeder extends Seeder
             // widening it is what turns a bell into something people mute.
             'notifications.view' => 'none',
 
+            // assets — only the company items this person currently holds.
+            'assets.view' => 'own',
+
             // departments, positions & job postings — view only
             'departments.view'  => 'none',
             'positions.view'    => 'none',
@@ -566,6 +587,9 @@ class PermissionSeeder extends Seeder
             // check-in. Their own payslip notification is addressed to them
             // directly and needs no permission to arrive.
             'notifications.view' => 'none',
+
+            // assets — only the company items this person currently holds.
+            'assets.view' => 'own',
 
             // dashboard — own stats only
             'dashboard.view_own_stats' => 'none',
