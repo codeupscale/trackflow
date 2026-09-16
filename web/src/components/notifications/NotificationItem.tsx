@@ -17,6 +17,8 @@ import {
   LogIn,
   LogOut,
   Megaphone,
+  PackageCheck,
+  PackageOpen,
   PartyPopper,
   Receipt,
   Send,
@@ -131,6 +133,26 @@ const LOOKS: Record<string, { icon: LucideIcon; tint: string; bg: string }> = {
   },
   'payroll.payslip_released': {
     icon: Send,
+    tint: 'text-emerald-600 dark:text-emerald-400',
+    bg: 'bg-emerald-500/10',
+  },
+  'asset.assigned_to_you': {
+    icon: PackageOpen,
+    tint: 'text-blue-600 dark:text-blue-400',
+    bg: 'bg-blue-500/10',
+  },
+  'asset.return_recorded': {
+    icon: PackageCheck,
+    tint: 'text-emerald-600 dark:text-emerald-400',
+    bg: 'bg-emerald-500/10',
+  },
+  'asset.assigned': {
+    icon: PackageOpen,
+    tint: 'text-blue-600 dark:text-blue-400',
+    bg: 'bg-blue-500/10',
+  },
+  'asset.returned': {
+    icon: PackageCheck,
     tint: 'text-emerald-600 dark:text-emerald-400',
     bg: 'bg-emerald-500/10',
   },

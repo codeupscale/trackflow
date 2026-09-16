@@ -226,4 +226,36 @@ class OrgActivity extends TrackflowNotification
             ['employee' => $employeeName, 'status' => $late ? 'late' : 'on_time', 'late_minutes' => $late ? $lateMinutes : 0, 'session' => $session],
         );
     }
+
+    // ── Assets ────────────────────────────────────────────────────────
+
+    public static function assetAssigned(string $assetName, string $assetTag, string $holderName, string $by): self
+    {
+        return new self(
+            'asset.assigned',
+            "{$assetName} assigned to {$holderName}",
+            "{$assetTag}, handed over by {$by}.",
+            '/hr/assets',
+            ['asset_tag' => $assetTag, 'holder' => $holderName],
+        );
+    }
+
+    public static function assetReturned(string $assetName, string $assetTag, string $fromName, string $condition, string $statusAfter): self
+    {
+        // A return that sends the item to repair, or records it lost, is the
+        // version someone needs to act on — so it says so in the title.
+        $title = match ($statusAfter) {
+            'lost' => "{$assetName} reported lost by {$fromName}",
+            'in_repair' => "{$assetName} returned for repair",
+            default => "{$assetName} returned by {$fromName}",
+        };
+
+        return new self(
+            'asset.returned',
+            $title,
+            "{$assetTag} · condition: {$condition}.",
+            '/hr/assets',
+            ['asset_tag' => $assetTag, 'condition' => $condition, 'status' => $statusAfter],
+        );
+    }
 }

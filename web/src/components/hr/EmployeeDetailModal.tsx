@@ -38,6 +38,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { EmployeePayslipTab } from "@/components/hr/EmployeePayslipTab";
+import { EmployeeAssetsTab } from "@/components/hr/assets/EmployeeAssetsTab";
 
 // ── Role display helpers ──
 
@@ -235,6 +236,15 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
     user?.role ?? '',
   );
   const canEdit = canEditAllFields || isSelf;
+  /**
+   * Company items: anyone who can see the whole asset register sees this tab
+   * for any employee; everyone else sees it only on their own profile. The API
+   * enforces the same rule — an own-scope viewer asking for someone else's
+   * items gets nothing back — so this narrows what is offered, not what is
+   * protected.
+   */
+  const canSeeAssets =
+    hasPermission("assets.manage") || hasPermissionWithScope("assets.view", "organization") || isSelf;
   const canUploadDoc = hasPermission("employees.manage_documents") || isSelf;
   const canVerifyDoc = canManageDocumentsOrg;
   const canDeleteDoc = canManageDocumentsOrg;
@@ -385,6 +395,7 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
                           { key: "personal", label: "Personal" },
                           { key: "emergency", label: "Emergency & Address" },
                           { key: "documents", label: "Documents" },
+                          ...(canSeeAssets ? [{ key: "assets", label: "Assets" }] : []),
                           { key: "leave", label: "Leave History" },
                           ...(canManageNotes ? [{ key: "notes", label: "Notes" }] : []),
                         ].map((tab) => (
@@ -663,6 +674,11 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
                           form={form}
                           editing={editing}
                         />
+                      )}
+
+                      {/* ─── Assets Tab ─── */}
+                      {activeTab === "assets" && canSeeAssets && (
+                        <EmployeeAssetsTab employee={employee} editing={editing} />
                       )}
 
                       {/* ─── Personal Tab ─── */}
