@@ -16,6 +16,7 @@ import {
     LayoutDashboard,
     Bell,
     Megaphone,
+    Package,
     Palette,
     Puzzle,
     Receipt,
@@ -125,6 +126,15 @@ export const navigationConfig: NavGroup[] = [
                 href: "/hr/job-postings",
                 icon: Megaphone,
                 requiredPermission: "job_postings.view",
+            },
+            {
+                // Everyone with assets.view gets this item: HR sees the whole
+                // register, everyone else sees only the items they hold. The
+                // server decides which from the permission's scope.
+                name: "Assets",
+                href: "/hr/assets",
+                icon: Package,
+                requiredPermission: "assets.view",
             },
         ],
     },

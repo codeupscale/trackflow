@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\DataPrivacyController;
+use App\Http\Controllers\Api\V1\Hr\AssetController;
 use App\Http\Controllers\Api\V1\Hr\AttendanceController;
 use App\Http\Controllers\Api\V1\Hr\AttendanceRegularizationController;
 use App\Http\Controllers\Api\V1\Hr\DepartmentController;
@@ -436,6 +437,30 @@ Route::prefix('v1')->group(function () {
                 ->middleware('permission:employees.manage_notes');
             Route::delete('employees/{employee}/notes/{note}', [EmployeeNoteController::class, 'destroy'])
                 ->middleware('permission:employees.manage_notes');
+
+            // Assets — company property and who holds it.
+            //
+            // assets.view gates the screen for everyone; its SCOPE decides
+            // whether the caller sees the whole register or only what they
+            // hold, and that narrowing happens in AssetService, not here.
+            // Every write needs assets.manage. Static paths are registered
+            // before assets/{asset} so "summary" is never bound as an id.
+            Route::get('assets', [AssetController::class, 'index'])
+                ->middleware('permission:assets.view');
+            Route::get('assets/summary', [AssetController::class, 'summary'])
+                ->middleware('permission:assets.manage');
+            Route::post('assets', [AssetController::class, 'store'])
+                ->middleware('permission:assets.manage');
+            Route::get('assets/{asset}', [AssetController::class, 'show'])
+                ->middleware('permission:assets.view');
+            Route::put('assets/{asset}', [AssetController::class, 'update'])
+                ->middleware('permission:assets.manage');
+            Route::delete('assets/{asset}', [AssetController::class, 'destroy'])
+                ->middleware('permission:assets.manage');
+            Route::post('assets/{asset}/assign', [AssetController::class, 'assign'])
+                ->middleware('permission:assets.manage');
+            Route::post('assets/{asset}/return', [AssetController::class, 'returnAsset'])
+                ->middleware('permission:assets.manage');
 
             // Shifts
             Route::get('shifts', [ShiftController::class, 'index'])

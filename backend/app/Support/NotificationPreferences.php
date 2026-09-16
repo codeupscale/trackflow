@@ -36,10 +36,12 @@ class NotificationPreferences
         'time_entries' => ['Time entry decisions', 'When manual time is approved or rejected.', ['time_entry.'], 'org'],
         'people' => ['People and hiring', 'New joiners, departments and job posts.', ['employee.', 'department.', 'job_posting.'], 'org'],
         'shift_assignments' => ['Shift assignments', 'When people are put on a shift.', ['shift.assigned'], 'org'],
+        'assets' => ['Asset hand-overs', 'When company items are assigned or returned.', ['asset.assigned', 'asset.returned'], 'org'],
         'payroll' => ['Payroll activity', 'Runs, payslips released, approvals and payments.', ['payroll.run', 'payroll.payslip_released', 'payroll.completed'], 'org'],
         'my_leave' => ['My leave', 'When your own leave is approved or declined.', ['leave.approved', 'leave.rejected'], 'personal'],
         'my_shifts' => ['My shifts', 'When you are put on a shift or its hours change.', ['shift.timing_updated', 'shift.assigned_to_you'], 'personal'],
         'my_payslips' => ['My payslips', 'When your payslip is ready.', ['payroll.payslip_sent'], 'personal'],
+        'my_assets' => ['My company items', 'When an item is assigned to you or your return is recorded.', ['asset.assigned_to_you', 'asset.return_recorded'], 'personal'],
         'holidays' => ['Holidays', 'When a public holiday is announced.', ['holiday.'], 'personal'],
     ];
 
