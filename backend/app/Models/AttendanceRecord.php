@@ -46,6 +46,26 @@ class AttendanceRecord extends Model
         'check_in_flags',
         // Multi-session redesign (Module 3.1)
         'sessions_count',
+        // Why the day was short, given at checkout (write-once).
+        'early_checkout_category',
+        'early_checkout_reason',
+        'early_checkout_approved_by',
+        'early_checkout_reason_at',
+    ];
+
+    /**
+     * The early-checkout explanation never rides along on a raw model
+     * serialization. Some endpoints return AttendanceRecord models directly
+     * (the check-in list), and those have no chance to apply the visibility
+     * rule — so the columns are hidden by default and surfaced deliberately by
+     * AttendanceService::serializeRecord, which does apply it. Property access
+     * is unaffected, so the service and the CSV writer read them normally.
+     */
+    protected $hidden = [
+        'early_checkout_category',
+        'early_checkout_reason',
+        'early_checkout_approved_by',
+        'early_checkout_reason_at',
     ];
 
     protected function casts(): array
@@ -71,7 +91,25 @@ class AttendanceRecord extends Model
             'missing_checkout' => 'boolean',
             // Multi-session redesign (Module 3.1)
             'sessions_count' => 'integer',
+            'early_checkout_reason_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Who permitted the early departure, when the employee named someone.
+     */
+    public function earlyCheckoutApprover(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'early_checkout_approved_by');
+    }
+
+    /**
+     * Was a reason given for this short day? Only ever true alongside a
+     * category — the note on its own is not a complete answer.
+     */
+    public function hasEarlyCheckoutReason(): bool
+    {
+        return $this->early_checkout_category !== null;
     }
 
     public function user(): BelongsTo

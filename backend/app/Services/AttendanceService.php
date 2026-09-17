@@ -11,6 +11,7 @@ use App\Models\OvertimeRule;
 use App\Models\PublicHoliday;
 use App\Models\TimeEntry;
 use App\Models\User;
+use App\Support\EarlyCheckoutReasons;
 use App\Support\TimezoneAwareDateRange;
 use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
@@ -19,6 +20,34 @@ use Illuminate\Support\Facades\Log;
 
 class AttendanceService
 {
+    public function __construct(
+        private readonly PermissionService $permissions,
+    ) {}
+
+    /**
+     * May this viewer read WHY someone else's day was short?
+     *
+     * Keyed on `leave.approve` — the owner, the org manager and HR — which is
+     * the same set that may be named as having approved the departure. The
+     * people who authorise time away are the people who may read the reason
+     * for it; there is no case for those two lists differing.
+     *
+     * Finance is deliberately outside it. They can already see every
+     * attendance row, because payroll needs the hours — but "Carol left early
+     * for a family emergency" is a personal circumstance, not a payroll input,
+     * and reading every attendance row is not a reason to be told it.
+     *
+     * Your own reason is always yours to see.
+     */
+    public function canReadEarlyCheckoutReason(User $viewer, ?string $subjectUserId = null): bool
+    {
+        if ($subjectUserId !== null && $viewer->id === $subjectUserId) {
+            return true;
+        }
+
+        return $this->permissions->hasPermission($viewer, 'leave.approve');
+    }
+
     /**
      * Generate daily attendance records for all active users in an organization.
      * Queries time_entries for the given date, computes totals, compares against shifts,
@@ -337,7 +366,7 @@ class AttendanceService
         $existing = AttendanceRecord::where('organization_id', $orgId)
             ->where('user_id', $userId)
             ->whereBetween('date', [$startDate, $endDate])
-            ->with('shift:id,name,start_time,end_time,grace_period_minutes')
+            ->with(['shift:id,name,start_time,end_time,grace_period_minutes', 'earlyCheckoutApprover:id,name'])
             ->withCount(['sessions as open_sessions_count' => fn ($q) => $q->whereNull('check_out_at')])
             ->get()
             ->keyBy(fn ($r) => Carbon::parse($r->date)->toDateString());
@@ -399,6 +428,8 @@ class AttendanceService
                 'check_in_late_minutes' => 0,
                 'is_early_checkout' => false,
                 'missing_checkout' => false,
+                'has_open_session' => false,
+                'early_checkout_reason' => null,
                 'check_in_flags' => null,
                 'is_synthetic' => true,
                 'shift' => null,
@@ -442,7 +473,12 @@ class AttendanceService
      *                             reconcile. Free to compute: every row is already
      *                             materialised here before slicing.
      */
-    public function getTeamAttendance(string $orgId, array $filters, ?array &$stats = null): LengthAwarePaginator
+    /**
+     * @param  User|null  $viewer  Who is reading. Decides whether each row
+     *   carries its early-checkout reason. Null hides every reason rather than
+     *   showing them: an unidentified caller is not a reason to disclose.
+     */
+    public function getTeamAttendance(string $orgId, array $filters, ?array &$stats = null, ?User $viewer = null): LengthAwarePaginator
     {
         $stats = ['total' => 0, 'present' => 0, 'absent' => 0, 'late' => 0];
 
@@ -539,7 +575,7 @@ class AttendanceService
         $existing = AttendanceRecord::where('organization_id', $orgId)
             ->whereIn('user_id', $userIds)
             ->whereBetween('date', [$startDate, $endDate])
-            ->with(['user:id,name,email,avatar_url', 'shift:id,name,start_time,end_time,grace_period_minutes'])
+            ->with(['user:id,name,email,avatar_url', 'shift:id,name,start_time,end_time,grace_period_minutes', 'earlyCheckoutApprover:id,name'])
             ->withCount(['sessions as open_sessions_count' => fn ($q) => $q->whereNull('check_out_at')])
             ->get()
             ->keyBy(fn ($r) => $r->user_id . '|' . Carbon::parse($r->date)->toDateString());
@@ -569,12 +605,22 @@ class AttendanceService
 
         $tz = $this->orgTimezone($orgId);
 
+        // Resolved ONCE for the page rather than per row — the answer cannot
+        // vary between rows of one request, and asking per row would run a
+        // permission lookup for every employee on screen.
+        $showEarlyReason = $viewer !== null && $this->canReadEarlyCheckoutReason($viewer);
+
         $rows = [];
         foreach ($users as $u) {
             foreach ($dates as $dateStr) {
                 $record = $existing->get($u->id . '|' . $dateStr);
                 if ($record) {
-                    $rows[] = $this->serializeRecord($record, $tz) + ['is_synthetic' => false];
+                    // Your own reason is yours to read even without the permission.
+                    $rows[] = $this->serializeRecord(
+                        $record,
+                        $tz,
+                        $showEarlyReason || ($viewer !== null && $viewer->id === $u->id),
+                    ) + ['is_synthetic' => false];
                     continue;
                 }
 
@@ -608,6 +654,8 @@ class AttendanceService
                     'check_in_late_minutes' => 0,
                     'is_early_checkout' => false,
                     'missing_checkout' => false,
+                    'has_open_session' => false,
+                    'early_checkout_reason' => null,
                     'check_in_flags' => null,
                     'is_synthetic' => true,
                     'user' => [
@@ -707,7 +755,7 @@ class AttendanceService
      * The raw check-in signal columns are also passed through so the row can render
      * the on-time / late / early-checkout / missing-checkout badge.
      */
-    private function serializeRecord(AttendanceRecord $record, string $tz): array
+    private function serializeRecord(AttendanceRecord $record, string $tz, bool $showEarlyReason = true): array
     {
         $date = $record->date instanceof Carbon
             ? $record->date->toDateString()
@@ -799,6 +847,20 @@ class AttendanceService
             'required_day_seconds' => $record->required_day_seconds,
             'met_required_hours' => $record->met_required_hours,
             'missing_checkout' => (bool) $record->missing_checkout && $hasOpenSession,
+            // Still at work. The client must not judge the day short or long
+            // while this is true — and it cannot infer it, because check_out_at
+            // above is deliberately nulled for exactly this case.
+            'has_open_session' => $hasOpenSession,
+            // Why the day was short, when the employee said. Null on every other
+            // row. Row visibility is already role-scoped by the caller, so anyone
+            // who can see the row is entitled to the explanation on it.
+            'early_checkout_reason' => ($showEarlyReason && $record->early_checkout_category) ? [
+                'category' => $record->early_checkout_category,
+                'category_label' => EarlyCheckoutReasons::label($record->early_checkout_category),
+                'note' => $record->early_checkout_reason,
+                'approved_by' => $record->earlyCheckoutApprover?->name,
+                'given_at' => $record->early_checkout_reason_at?->toIso8601String(),
+            ] : null,
             'check_in_flags' => $record->check_in_flags,
             'shift' => $record->shift ? [
                 'id' => $record->shift->id,

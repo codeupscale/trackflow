@@ -13,6 +13,8 @@ import { cn } from '@/lib/utils';
 export type CheckInBadgeStatus =
   | 'on_time'
   | 'early_checkout'
+  | 'early_explained'
+  | 'half_hour'
   | 'extra_hours'
   | 'missing_checkout'
   | 'on_approved_leave'
@@ -29,7 +31,25 @@ const statusConfig: Record<CheckInBadgeStatus, { label: string; className: strin
     className:
       'bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:border-orange-800',
   },
-  // Beyond the hours owed. Deliberately NOT green: "On Time" means the day was
+  // A short day the employee explained at checkout. Deliberately NOT orange:
+  // the day is still short and HR still needs to see it, but "left early with a
+  // reason on record" is a different fact from "left early, unexplained", and
+  // rendering them identically would tell a manager nothing. The reason itself
+  // rides in the badge's tooltip.
+  early_explained: {
+    label: 'Early — Reason Given',
+    className:
+      'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-800',
+  },
+  // Half an hour to just under an hour beyond the day owed. A quieter shade
+  // than Extra Hours on purpose: worth recording, but not the signal a manager
+  // watching sustained overwork is looking for.
+  half_hour: {
+    label: 'Half Hour',
+    className:
+      'bg-sky-100 text-sky-800 border-sky-200 dark:bg-sky-900/30 dark:text-sky-400 dark:border-sky-800',
+  },
+  // An hour or more beyond the hours owed. Deliberately NOT green: "On Time" means the day was
   // exactly as expected, while extra hours are worth noticing — for the
   // employee's credit and for a manager watching sustained overwork.
   extra_hours: {

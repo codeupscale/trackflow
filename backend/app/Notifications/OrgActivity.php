@@ -134,17 +134,64 @@ class OrgActivity extends TrackflowNotification
 
     // ── Attendance ────────────────────────────────────────────────────
 
-    public static function checkedOut(string $employeeName, string $at, string $worked, bool $early, int $earlyMinutes): self
+    /**
+     * @param  string|null  $earlyReason  The explanation given at checkout, already
+     *   composed as "Medical appointment — dentist, approved by Hina HR". Carrying
+     *   it in the body is the difference between a notification that prompts a
+     *   question and one that answers it, so the reader never has to open the
+     *   attendance screen to find out why someone left.
+     */
+    public static function checkedOut(string $employeeName, string $at, string $worked, bool $early, int $earlyMinutes, ?string $earlyReason = null): self
     {
+        $title = $early
+            ? ($earlyReason !== null
+                ? "{$employeeName} checked out early (reason given)"
+                : "{$employeeName} checked out early")
+            : "{$employeeName} checked out";
+
+        // "539 minutes early" is a number the reader has to do arithmetic on
+        // before it means anything; "8h 59m early" is the same fact, already
+        // understood.
+        $body = $early
+            ? "Left at {$at}, " . self::humanMinutes($earlyMinutes) . " early. {$worked} worked today."
+            : "Left at {$at}. {$worked} worked today.";
+
+        if ($early && $earlyReason !== null) {
+            $body .= " Reason: {$earlyReason}";
+        }
+
         return new self(
             'attendance.checked_out',
-            $early ? "{$employeeName} checked out early" : "{$employeeName} checked out",
-            $early
-                ? "Left at {$at}, {$earlyMinutes} minutes early. {$worked} worked today."
-                : "Left at {$at}. {$worked} worked today.",
+            $title,
+            $body,
             '/hr/attendance/team',
-            ['employee' => $employeeName, 'early' => $early, 'early_minutes' => $earlyMinutes],
+            [
+                'employee' => $employeeName,
+                'early' => $early,
+                'early_minutes' => $earlyMinutes,
+                'early_reason' => $earlyReason,
+            ],
         );
+    }
+
+    /**
+     * A minute count as a duration someone can read at a glance:
+     * 539 → "8h 59m", 45 → "45m", 120 → "2h", 0 → "under a minute".
+     */
+    private static function humanMinutes(int $minutes): string
+    {
+        if ($minutes <= 0) {
+            return 'under a minute';
+        }
+
+        $hours = intdiv($minutes, 60);
+        $rest = $minutes % 60;
+
+        if ($hours === 0) {
+            return "{$rest}m";
+        }
+
+        return $rest === 0 ? "{$hours}h" : "{$hours}h {$rest}m";
     }
 
     // ── Payroll ───────────────────────────────────────────────────────

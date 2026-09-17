@@ -252,6 +252,7 @@ class ReportExportFormatter
         fputcsv($out, [
             'Employee', 'Email', 'Date', 'Sessions', 'First In', 'Last Out', 'Total (HH:MM)',
             'Status', 'Late By', 'Early Checkout By', 'Overtime', 'Missing Checkout',
+            'Early Reason', 'Early Reason Note', 'Early Approved By',
         ]);
 
         foreach ($rows as $row) {
@@ -271,6 +272,9 @@ class ReportExportFormatter
                 self::neutralizeCsv(self::minutesToHuman(self::val($row, 'early_minutes', 0))),
                 self::neutralizeCsv(self::minutesToHuman(self::val($row, 'overtime_minutes', 0))),
                 self::val($row, 'missing_checkout') ? 'yes' : 'no',
+                self::neutralizeCsv(self::val($row, 'early_reason_category', '')),
+                self::neutralizeCsv(self::val($row, 'early_reason_note', '')),
+                self::neutralizeCsv(self::val($row, 'early_reason_approved_by', '')),
             ]);
         }
 

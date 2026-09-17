@@ -358,6 +358,7 @@ export default function MyAttendancePage() {
                                     checkoutTime: policyCheckoutTime,
                                     presenceSeconds: dayPresenceSeconds(record),
                                     requiredSeconds: requiredDaySeconds(record.shift),
+                                    earlyReason: record.early_checkout_reason,
                                   })}
                                 />
                               ))}

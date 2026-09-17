@@ -1,5 +1,7 @@
 import { z } from 'zod/v4';
 
+import type { EarlyCheckoutReason } from '@/lib/check-in-time';
+
 // --- Zod Schemas ---
 
 export const regularizationSchema = z.object({
@@ -89,6 +91,10 @@ export interface AttendanceRecord {
   /** Day-completion snapshot, judged against the schedule in force that day. */
   required_day_seconds?: number | null;
   met_required_hours?: boolean | null;
+  /** Still checked in — the day is not over, so it is not judged yet. */
+  has_open_session?: boolean;
+  /** Why the day was short, if the employee said at checkout. Null otherwise. */
+  early_checkout_reason?: EarlyCheckoutReason | null;
   check_in_flags?: CheckInFlags | null;
   /** Assigned shift for the day — drives the short-day requirement and its grace. */
   shift?: {
@@ -160,6 +166,21 @@ export interface TodayStatus {
     AttendancePolicy,
     'check_in_time' | 'late_threshold' | 'checkout_time' | 'timezone'
   >;
+  /**
+   * Hours owed for TODAY, from the server, so the checkout dialog is judged
+   * against exactly the number the badge will later be judged against.
+   */
+  required_day_seconds?: number;
+  /** Everything the early-checkout dialog needs to render itself. */
+  early_checkout?: {
+    categories: { value: string; label: string }[];
+    min_note_length: number;
+    approvers: { id: string; name: string }[];
+    /** Already explained today — do not ask a second time. */
+    reason_given: boolean;
+  };
+  /** Today's explanation, when one was given — same shape as the row's. */
+  early_checkout_reason?: EarlyCheckoutReason | null;
 }
 
 export interface CheckInSummaryRow {

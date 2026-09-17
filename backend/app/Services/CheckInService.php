@@ -11,6 +11,7 @@ use App\Models\TimeEntry;
 use App\Models\User;
 use App\Notifications\OrgActivity;
 use App\Support\CheckInSchedule;
+use App\Support\EarlyCheckoutReasons;
 use Carbon\Carbon;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
@@ -36,6 +37,7 @@ class CheckInService
 
     public function __construct(
         private readonly AttendanceService $attendanceService,
+        private readonly NotificationRecipients $recipients,
     ) {}
 
     /**
@@ -243,7 +245,7 @@ class CheckInService
             return null;
         }
 
-        return DB::transaction(function () use ($user, $tz, $startedAt, $startLocal, $date, $lateAt) {
+        return DB::transaction(function () use ($user, $schedule, $tz, $startedAt, $startLocal, $date, $lateAt) {
             // 1. Ensure the day row exists (unique(org,user,date) serializes creation).
             $record = AttendanceRecord::withoutGlobalScopes()->firstOrCreate(
                 [
@@ -253,6 +255,8 @@ class CheckInService
                 ],
                 ['status' => $this->checkedInStatus($user, $date)]
             );
+
+            $this->stampSchedule($record, $schedule);
 
             // 2. Row lock — the transaction's serialization anchor, so a racing
             //    manual web check-in and this path cannot both create a session.
@@ -348,6 +352,10 @@ class CheckInService
                     'status' => $this->checkedInStatus($user, $date),
                 ]
             );
+
+            // Which shift this day is measured against, so the Shift column is
+            // filled from the first check-in rather than by the nightly job.
+            $this->stampSchedule($record, $schedule);
 
             // 2. Re-select under a row lock — the day-lock anchor for the whole transaction.
             $record = AttendanceRecord::withoutGlobalScopes()
@@ -465,11 +473,16 @@ class CheckInService
     /**
      * Check the user out, closing their open session.
      */
-    public function checkOut(User $user): AttendanceRecord
+    /**
+     * @param  array{category?: string|null, reason?: string|null, approved_by?: string|null}|null  $earlyReason
+     *   Why the employee is leaving before the hours owed are done. Optional by
+     *   design — see recordEarlyCheckoutReason.
+     */
+    public function checkOut(User $user, ?array $earlyReason = null): AttendanceRecord
     {
         $now = now(); // UTC, authoritative
 
-        $record = DB::transaction(function () use ($user, $now) {
+        $record = DB::transaction(function () use ($user, $now, $earlyReason) {
             // 1. Locate the open session (no lock yet — we only need its record id). The
             //    36h lookback lets a forgotten checkout that crosses midnight still close
             //    the prior day's open session.
@@ -518,6 +531,11 @@ class CheckInService
             // 6. Recompute the day rollup columns from the session set.
             $this->recomputeRecordRollups($record);
 
+            // 7. Only now is it known whether the day actually came up short, so
+            //    the reason is judged against the recomputed rollup rather than
+            //    against whatever the client believed when it opened the dialog.
+            $this->recordEarlyCheckoutReason($user, $record->refresh(), $earlyReason);
+
             return $record->refresh();
         });
 
@@ -527,6 +545,56 @@ class CheckInService
         $this->announceCheckOut($user, $record, $this->orgTimezone($user->organization_id));
 
         return $record;
+    }
+
+    /**
+     * Store why the day was short, when the employee gave a reason.
+     *
+     * Three rules, each deliberate:
+     *
+     * 1. The reason is OPTIONAL. Refusing to close the session without one would
+     *    not produce better data — it would produce people who never check out at
+     *    all, and a missing checkout is worse for HR than an unexplained early one.
+     *    Skipping simply leaves the plain "Early Checkout" flag in place.
+     * 2. It is only kept when the day is ACTUALLY short. Someone who leaves early,
+     *    comes back and finishes the hours has nothing to explain, and a stale
+     *    reason on a complete day would misrepresent them.
+     * 3. It is WRITE-ONCE. A later checkout on the same day cannot overwrite the
+     *    first answer, so nobody can rewrite the story after a manager asks.
+     */
+    private function recordEarlyCheckoutReason(User $user, AttendanceRecord $record, ?array $earlyReason): void
+    {
+        $category = $earlyReason['category'] ?? null;
+
+        if ($category === null || $record->met_required_hours !== false || $record->hasEarlyCheckoutReason()) {
+            return;
+        }
+
+        if (! array_key_exists($category, EarlyCheckoutReasons::CATEGORIES)) {
+            abort(422, 'That is not a valid early checkout reason.');
+        }
+
+        // An approver must be a real colleague in the same organization. Resolved
+        // here rather than trusted from the request, so a crafted id can never
+        // attach someone from another tenant to this record.
+        $approverId = $earlyReason['approved_by'] ?? null;
+        if ($approverId !== null) {
+            $approverExists = User::withoutGlobalScopes()
+                ->where('organization_id', $user->organization_id)
+                ->whereKey($approverId)
+                ->exists();
+
+            if (! $approverExists) {
+                abort(422, 'The person who approved this could not be found in your organization.');
+            }
+        }
+
+        $record->update([
+            'early_checkout_category' => $category,
+            'early_checkout_reason' => $earlyReason['reason'] ?? null,
+            'early_checkout_approved_by' => $approverId,
+            'early_checkout_reason_at' => now(),
+        ]);
     }
 
     /**
@@ -548,11 +616,69 @@ class CheckInService
                 at: $record->check_out_at
                     ? Carbon::parse($record->check_out_at)->setTimezone($tz)->format('h:i A')
                     : now()->setTimezone($tz)->format('h:i A'),
-                worked: sprintf('%dh %02dm', intdiv($seconds, 3600), intdiv($seconds % 3600, 60)),
+                // A day under a minute long reported as "0h 00m worked today",
+                // which reads like a broken figure rather than a very short day.
+                worked: $seconds < 60
+                    ? 'Less than a minute'
+                    : sprintf('%dh %02dm', intdiv($seconds, 3600), intdiv($seconds % 3600, 60)),
                 early: (bool) ($record->is_early_checkout ?? false),
                 earlyMinutes: (int) ($record->check_out_early_minutes ?? 0),
+                earlyReason: $this->describeEarlyCheckoutReason($record),
             ),
         );
+    }
+
+    /**
+     * The stored reason as one readable sentence, or null when none was given.
+     * Used by the notification and the CSV export so both read the same way.
+     */
+    public function describeEarlyCheckoutReason(AttendanceRecord $record): ?string
+    {
+        if (! $record->hasEarlyCheckoutReason()) {
+            return null;
+        }
+
+        $parts = [EarlyCheckoutReasons::label($record->early_checkout_category)];
+
+        if (filled($record->early_checkout_reason)) {
+            $parts[] = $record->early_checkout_reason;
+        }
+
+        $line = implode(' — ', $parts);
+
+        $approver = $record->relationLoaded('earlyCheckoutApprover')
+            ? $record->earlyCheckoutApprover
+            : ($record->early_checkout_approved_by ? $record->earlyCheckoutApprover()->first() : null);
+
+        return $approver ? "{$line} (approved by {$approver->name})" : $line;
+    }
+
+    /**
+     * Record WHICH shift this day was worked against, at check-in time.
+     *
+     * The day row used to carry shift_id, expected_start and expected_end only
+     * after generateDailyAttendance ran — which is the NEXT night. So the
+     * attendance screens showed an empty Shift column all day for the person
+     * who had just checked in, and it filled itself in overnight.
+     *
+     * The schedule is already resolved here (it is what decided the check-in
+     * window and lateness), so the row can be stamped the moment it is created.
+     *
+     * Only fills what is MISSING. The nightly job is authoritative for a day it
+     * has already judged, and a shift reassigned mid-day must not silently
+     * rewrite the schedule the morning was measured against.
+     */
+    private function stampSchedule(AttendanceRecord $record, CheckInSchedule $schedule): void
+    {
+        if ($record->shift_id !== null || $schedule->shift_id === null) {
+            return;
+        }
+
+        $record->forceFill([
+            'shift_id' => $schedule->shift_id,
+            'expected_start' => $schedule->check_in_time,
+            'expected_end' => $schedule->checkout_time,
+        ])->save();
     }
 
     /**
@@ -644,7 +770,16 @@ class CheckInService
         $requiredSeconds = $this->requiredDaySeconds($schedule, $recordDate, $tz);
         $metRequired = null;
         $presence = null;
-        if ($first !== null && $lastClosedOut !== null) {
+
+        // A day with a session STILL OPEN is not over, so it cannot be judged.
+        // Measuring to the last CLOSED checkout while someone is back at work
+        // reports the gap between their sessions as a shortfall: check in at
+        // 11:30, step out at 12:30, come back, and the day was flagged "Early
+        // Checkout" while they were sitting at their desk. Null is the right
+        // answer here — "not yet known", which is distinct from "fell short".
+        $dayIsOver = $sessions->isNotEmpty() && $closed->count() === $sessions->count();
+
+        if ($first !== null && $lastClosedOut !== null && $dayIsOver) {
             $presence = (int) $first->check_in_at->diffInSeconds($lastClosedOut);
             $metRequired = $presence >= $requiredSeconds;
         }
@@ -800,6 +935,33 @@ class CheckInService
                 'timezone' => $schedule->timezone,
                 'allow_early_check_in' => $schedule->allow_early_check_in,
             ],
+
+            // Everything the checkout dialog needs to decide whether to ask for a
+            // reason, and what to offer. The requirement is sent from here rather
+            // than re-derived client-side so the dialog is judged against exactly
+            // the same number the badge will be.
+            'required_day_seconds' => $this->requiredDaySeconds($schedule, $date, $tz),
+            'early_checkout' => [
+                'categories' => EarlyCheckoutReasons::options(),
+                'min_note_length' => EarlyCheckoutReasons::MIN_NOTE_LENGTH,
+                'approvers' => $this->recipients
+                    ->earlyCheckoutApprovers($user->organization_id, $user->id)
+                    ->map(fn (User $approver) => ['id' => $approver->id, 'name' => $approver->name])
+                    ->values()
+                    ->all(),
+                // Already answered for today — the dialog stays shut on a second
+                // checkout rather than asking a question that cannot be re-answered.
+                'reason_given' => (bool) $record?->hasEarlyCheckoutReason(),
+            ],
+            // The answer itself, in the same shape the attendance rows use, so
+            // the card badge and the row badge for the SAME day cannot disagree.
+            'early_checkout_reason' => $record?->hasEarlyCheckoutReason() ? [
+                'category' => $record->early_checkout_category,
+                'category_label' => EarlyCheckoutReasons::label($record->early_checkout_category),
+                'note' => $record->early_checkout_reason,
+                'approved_by' => $record->earlyCheckoutApprover?->name,
+                'given_at' => $record->early_checkout_reason_at?->toIso8601String(),
+            ] : null,
         ];
     }
 
@@ -812,7 +974,7 @@ class CheckInService
         $query = AttendanceRecord::withoutGlobalScopes()
             ->where('organization_id', $user->organization_id)
             ->whereNotNull('check_in_at')
-            ->with(['user:id,name,email,avatar_url', 'shift:id,name,start_time,end_time,grace_period_minutes']);
+            ->with(['user:id,name,email,avatar_url', 'shift:id,name,start_time,end_time,grace_period_minutes', 'earlyCheckoutApprover:id,name']);
 
         // Role-scoping resolved once, from the attendance.view_all permission (held by
         // admin/owner + hr_manager) down to managed-team members, down to self.
@@ -1152,7 +1314,7 @@ class CheckInService
         $query = AttendanceRecord::withoutGlobalScopes()
             ->where('organization_id', $user->organization_id)
             ->whereNotNull('check_in_at')
-            ->with('user:id,name,email')
+            ->with(['user:id,name,email', 'earlyCheckoutApprover:id,name'])
             ->orderBy('date')
             ->orderBy('check_in_at');
 
@@ -1169,7 +1331,11 @@ class CheckInService
             $query->where('user_id', $filters['user_id']);
         }
 
-        return $query->cursor()->map(function (AttendanceRecord $record) use ($tz) {
+        // Same visibility rule as the on-screen rows — an export must never be
+        // the back door to something the screen withholds.
+        $showEarlyReason = $this->attendanceService->canReadEarlyCheckoutReason($user);
+
+        return $query->cursor()->map(function (AttendanceRecord $record) use ($tz, $user, $showEarlyReason) {
             $date = $record->date instanceof Carbon
                 ? $record->date->toDateString()
                 : Carbon::parse((string) $record->date)->toDateString();
@@ -1193,6 +1359,18 @@ class CheckInService
                     $record,
                     $this->recordHasOpenSession($record)
                 ),
+                // Split into two columns rather than one sentence: the category is
+                // what a spreadsheet can group and count, the note is what a person
+                // reads. Empty on every day that was not short, or not explained.
+                ...($showEarlyReason || $record->user_id === $user->id ? [
+                    'early_reason_category' => EarlyCheckoutReasons::label($record->early_checkout_category) ?? '',
+                    'early_reason_note' => $record->early_checkout_reason ?? '',
+                    'early_reason_approved_by' => $record->earlyCheckoutApprover?->name ?? '',
+                ] : [
+                    'early_reason_category' => '',
+                    'early_reason_note' => '',
+                    'early_reason_approved_by' => '',
+                ]),
             ];
         });
     }
