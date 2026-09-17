@@ -2,7 +2,6 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
@@ -42,19 +41,30 @@ return new class extends Migration
                 ->nullOnDelete();
         });
 
-        // Backs "show me every explained early checkout this month" without
-        // carrying an index entry for the overwhelming majority of rows, which
-        // have no reason at all.
-        DB::statement(
-            'CREATE INDEX idx_att_early_reason ON attendance_records (organization_id, date) '
-            . 'WHERE early_checkout_category IS NOT NULL'
-        );
+        // NO INDEX HERE, deliberately.
+        //
+        // An earlier version created a partial index on (organization_id, date)
+        // WHERE early_checkout_category IS NOT NULL, to back "every explained
+        // early checkout this month". Two reasons it is gone:
+        //
+        // 1. attendance_records ALREADY carries idx_ar_org_date on exactly
+        //    (organization_id, date). The partial index is the same two columns
+        //    with a filter, so the planner can answer the same question from the
+        //    existing index and discard the rows without a reason — a cheap
+        //    filter, since explained short days are a small minority.
+        // 2. A plain CREATE INDEX takes a lock that blocks WRITES to
+        //    attendance_records while it builds, and writes to this table are
+        //    people clocking in and out. Paying an outage in the check-in flow
+        //    for a duplicate of an index that already exists is a bad trade.
+        //
+        // If this ever does need its own index, build it CONCURRENTLY in its own
+        // migration with `public $withinTransaction = false` — CONCURRENTLY
+        // cannot run inside the transaction Laravel wraps PostgreSQL migrations
+        // in.
     }
 
     public function down(): void
     {
-        DB::statement('DROP INDEX IF EXISTS idx_att_early_reason');
-
         Schema::table('attendance_records', function (Blueprint $table) {
             $table->dropForeign(['early_checkout_approved_by']);
             $table->dropColumn([
