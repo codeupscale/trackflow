@@ -11,7 +11,13 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { cn } from '@/lib/utils';
 import { CheckInStatusBadge } from '@/components/hr/CheckInStatusBadge';
-import { useTodayStatus, useCheckIn, useCheckOut } from '@/hooks/hr/use-check-in';
+import { EarlyCheckoutDialog } from '@/components/hr/EarlyCheckoutDialog';
+import {
+  useTodayStatus,
+  useCheckIn,
+  useCheckOut,
+  type EarlyCheckoutPayload,
+} from '@/hooks/hr/use-check-in';
 import { useTimerStore } from '@/stores/timer-store';
 import {
   computeClockOffset,
@@ -23,6 +29,15 @@ import {
   requiredDayFromPolicy,
 } from '@/lib/check-in-time';
 import type { CheckInSessionRow } from '@/lib/validations/attendance';
+
+/**
+ * The wall clock, read outside the component. Event handlers legitimately need
+ * the current instant; going through a module-level helper keeps that out of
+ * the render path, which must stay pure and idempotent.
+ */
+function nowMs(): number {
+  return Date.now();
+}
 
 function formatClockTime(iso: string | null | undefined, timezone: string): string {
   if (!iso) return '';
@@ -78,6 +93,12 @@ export function CheckInCard({ className }: { className?: string }) {
 
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
+
+  // Non-null only while the early-checkout dialog is up, holding the shortfall
+  // measured at the instant the button was pressed. Kept in state rather than
+  // recomputed each render: the shortfall is a fact about one moment, and
+  // reading the clock during render is neither pure nor stable.
+  const [earlyCheckout, setEarlyCheckout] = useState<{ shortfall: number } | null>(null);
 
   const offsetRef = useRef(0);
   useEffect(() => {
@@ -158,7 +179,34 @@ export function CheckInCard({ className }: { className?: string }) {
   const shortDaySeconds =
     presence !== null && presence < requiredSeconds ? presence : null;
 
+  // The server sends the day's own requirement, so the dialog and the badge are
+  // judged on one number rather than two that can disagree.
+  const requiredToday = data.required_day_seconds ?? requiredSeconds;
+  // Asked once a day. A second early checkout cannot overwrite the first answer
+  // server-side, so asking again would collect something that is thrown away.
+  const alreadyExplained = data.early_checkout?.reason_given ?? false;
+
+  const handleCheckOutClick = () => {
+    // What the day comes to if they leave right now — measured from the FIRST
+    // check-in, because the requirement is presence across the day (breaks
+    // included), not the sum of the sessions. Read through nowMs so the clock
+    // is touched in the click, never during a render.
+    const presenceIfLeavingNow = elapsedSeconds(firstIn, offsetRef.current, nowMs());
+    const shortfall = Math.max(0, requiredToday - presenceIfLeavingNow);
+
+    if (shortfall > 0 && !alreadyExplained) {
+      setEarlyCheckout({ shortfall });
+      return;
+    }
+    checkOut.mutate(undefined);
+  };
+
+  const confirmCheckOut = (payload?: EarlyCheckoutPayload) => {
+    checkOut.mutate(payload, { onSuccess: () => setEarlyCheckout(null) });
+  };
+
   return (
+    <>
     <Card className={cn('overflow-hidden', className)}>
       {/* Tracker warning */}
       {isTimerRunning && !data.has_open_session && data.can_check_in && (
@@ -211,13 +259,21 @@ export function CheckInCard({ className }: { className?: string }) {
                 {/* No Late badge — retired. Short-day is judged on presence
                     against the 9-hour requirement, and only once the day is
                     closed, so someone still working is never flagged. */}
+                {/* Same rule as the attendance rows: a reason changes WHICH badge
+                    the short day gets, never whether it gets one. Reading the
+                    reason off the today payload keeps the card and the row for
+                    one day from telling two different stories. */}
                 {!isLive && shortDaySeconds !== null && (
                   <CheckInStatusBadge
-                    status="early_checkout"
-                    tooltip={checkInBadgeTooltip('early_checkout', {
-                      presenceSeconds: shortDaySeconds,
-                      requiredSeconds,
-                    })}
+                    status={data.early_checkout_reason ? 'early_explained' : 'early_checkout'}
+                    tooltip={checkInBadgeTooltip(
+                      data.early_checkout_reason ? 'early_explained' : 'early_checkout',
+                      {
+                        presenceSeconds: shortDaySeconds,
+                        requiredSeconds,
+                        earlyReason: data.early_checkout_reason,
+                      },
+                    )}
                   />
                 )}
                 {!isLive && data.missing_checkout && (
@@ -259,7 +315,7 @@ export function CheckInCard({ className }: { className?: string }) {
                 size="sm"
                 className="h-9 px-4 text-xs border-red-500/30 text-red-500 hover:bg-red-500/10 hover:text-red-600 dark:border-red-500/20 dark:text-red-400 dark:hover:bg-red-500/10 dark:hover:text-red-300"
                 disabled={checkOut.isPending}
-                onClick={() => checkOut.mutate()}
+                onClick={handleCheckOutClick}
               >
                 {checkOut.isPending ? (
                   <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
@@ -304,5 +360,18 @@ export function CheckInCard({ className }: { className?: string }) {
         )}
       </CardContent>
     </Card>
+
+    <EarlyCheckoutDialog
+      open={earlyCheckout !== null}
+      onOpenChange={(open) => !open && setEarlyCheckout(null)}
+      shortfallSeconds={earlyCheckout?.shortfall ?? 0}
+      requiredSeconds={requiredToday}
+      categories={data.early_checkout?.categories}
+      approvers={data.early_checkout?.approvers}
+      minNoteLength={data.early_checkout?.min_note_length}
+      isPending={checkOut.isPending}
+      onConfirm={confirmCheckOut}
+    />
+    </>
   );
 }

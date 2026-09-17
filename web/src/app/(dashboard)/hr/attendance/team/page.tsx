@@ -368,6 +368,7 @@ export default function TeamAttendancePage() {
                                       checkInTime: policyCheckInTime,
                                       presenceSeconds: dayPresenceSeconds(record),
                                       requiredSeconds: requiredDaySeconds(record.shift),
+                                      earlyReason: record.early_checkout_reason,
                                     })}
                                   />
                                 ))}

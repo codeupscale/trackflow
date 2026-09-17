@@ -52,8 +52,45 @@ export function formatElapsed(totalSeconds: number): string {
 export type DerivedCheckInBadge =
   | 'on_time'
   | 'early_checkout'
+  | 'early_explained'
+  | 'half_hour'
   | 'extra_hours'
   | 'missing_checkout';
+
+/**
+ * The explanation an employee gave at checkout for a short day, as the API
+ * returns it. Present only on days that were BOTH short and explained.
+ */
+export interface EarlyCheckoutReason {
+  category: string;
+  category_label: string;
+  note?: string | null;
+  approved_by?: string | null;
+  given_at?: string | null;
+}
+
+/**
+ * How much surplus is worth a badge, and which one.
+ *
+ * Any surplus at all used to raise "Extra Hours", so someone who stayed four
+ * minutes past their day was flagged the same as someone who stayed two hours.
+ * That made the badge meaningless and the column noisy.
+ *
+ *   under 30 min  → nothing. Ordinary overrun; not worth a word.
+ *   30–59 min     → "Half Hour".
+ *   60 min and up → "Extra Hours".
+ */
+export const HALF_HOUR_SECONDS = 30 * 60;
+
+export const EXTRA_HOURS_SECONDS = 60 * 60;
+
+/** Which surplus badge a day earns, if any. */
+export function surplusBadge(surplusSeconds: number): 'half_hour' | 'extra_hours' | null {
+  if (surplusSeconds >= EXTRA_HOURS_SECONDS) return 'extra_hours';
+  if (surplusSeconds >= HALF_HOUR_SECONDS) return 'half_hour';
+
+  return null;
+}
 
 /**
  * Fallback full working day, INCLUSIVE of the break — 9 hours from first
@@ -166,6 +203,10 @@ export function deriveCheckInBadges(record: {
   worked_seconds?: number | null;
   /** Server snapshot: did this day reach its requirement? Null = not yet judged. */
   met_required_hours?: boolean | null;
+  /** Still at work — the day cannot be judged short or long yet. */
+  has_open_session?: boolean;
+  /** Given at checkout. Softens the short-day badge; never removes it. */
+  early_checkout_reason?: EarlyCheckoutReason | null;
   shift?: {
     start_time?: string | null;
     end_time?: string | null;
@@ -195,17 +236,41 @@ export function deriveCheckInBadges(record: {
   const presence = dayPresenceSeconds(record);
   const required = requiredDaySeconds(record.shift);
 
+  // The surplus, not merely "more than required", decides the badge — see
+  // surplusBadge for the thresholds.
+  const surplus = presence !== null ? presence - required : null;
+
+  // A short day that was explained at checkout still shows a badge — the hours
+  // are still missing and HR still has to see it — but a different one, so
+  // "left early, told us why" is not reported as "left early, said nothing".
+  const shortBadge: DerivedCheckInBadge = record.early_checkout_reason
+    ? 'early_explained'
+    : 'early_checkout';
+
+  // An UNFINISHED day is never judged. With more than one session the row
+  // carries a closed checkout AND an open session at the same time, so the
+  // presence figure is the span up to a break the person has already come back
+  // from — and someone sitting at their desk was shown "Early Checkout". The
+  // short/surplus verdict waits until every session is closed.
+  if (record.has_open_session) {
+    if (record.missing_checkout) badges.push('missing_checkout');
+    if (badges.length === 0 && record.check_in_status === 'on_time') badges.push('on_time');
+    return badges;
+  }
+
   if (record.met_required_hours === false) {
-    badges.push('early_checkout');
+    badges.push(shortBadge);
   } else if (record.met_required_hours == null) {
     if (presence !== null && presence < required) {
-      badges.push('early_checkout');
-    } else if (presence !== null && presence > required) {
-      badges.push('extra_hours');
+      badges.push(shortBadge);
+    } else if (surplus !== null) {
+      const badge = surplusBadge(surplus);
+      if (badge) badges.push(badge);
     }
-  } else if (presence !== null && presence > required) {
-    // Server says the day was met; flag the surplus.
-    badges.push('extra_hours');
+  } else if (surplus !== null && surplus > 0) {
+    // Server says the day was met; flag the surplus if it is big enough.
+    const badge = surplusBadge(surplus);
+    if (badge) badges.push(badge);
   }
 
   if (record.missing_checkout) badges.push('missing_checkout');
@@ -333,6 +398,24 @@ export interface CheckInTooltipContext {
   presenceSeconds?: number | null;
   /** The day's requirement after grace (requiredDaySeconds); defaults to 9h. */
   requiredSeconds?: number | null;
+  /** The explanation given at checkout, for the 'early_explained' tooltip. */
+  earlyReason?: EarlyCheckoutReason | null;
+}
+
+/**
+ * The stored reason as one readable line — "Medical appointment or unwell —
+ * dentist at 5, approved by Hina HR". Mirrors the backend's
+ * CheckInService::describeEarlyCheckoutReason so the tooltip, the notification
+ * and the CSV all read the same way.
+ */
+export function describeEarlyReason(reason?: EarlyCheckoutReason | null): string | undefined {
+  if (!reason) return undefined;
+
+  let line = reason.category_label || reason.category;
+  if (reason.note) line += ` — ${reason.note}`;
+  if (reason.approved_by) line += `, approved by ${reason.approved_by}`;
+
+  return line;
 }
 
 /**
@@ -353,10 +436,12 @@ export function checkInBadgeTooltip(
     | 'on_time'
     | 'late'
     | 'early_checkout'
+    | 'early_explained'
     | 'missing_checkout'
     | 'on_approved_leave'
     | 'worked_on_off_day'
     | 'extra_hours'
+    | 'half_hour'
     | 'overtime',
   ctx: CheckInTooltipContext = {}
 ): string | undefined {
@@ -372,6 +457,20 @@ export function checkInBadgeTooltip(
         ? `Checked in ${dur} after ${anchor}.`
         : `Checked in after ${anchor}.`;
     }
+    case 'early_explained': {
+      // The reason leads, because it is the whole point of the badge — the
+      // shortfall is the supporting detail, not the headline.
+      const reason = describeEarlyReason(ctx.earlyReason);
+      const requiredSecs = ctx.requiredSeconds ?? REQUIRED_DAY_SECONDS;
+      const shortfall =
+        ctx.presenceSeconds != null && ctx.presenceSeconds > 0 && ctx.presenceSeconds < requiredSecs
+          ? ` Left ${formatDuration(requiredSecs - ctx.presenceSeconds)} early.`
+          : '';
+
+      return reason
+        ? `${reason}.${shortfall}`
+        : `Left before the required ${formatDuration(requiredSecs)} day, with a reason on record.`;
+    }
     case 'early_checkout': {
       // Short DAY, measured against the 9-hour requirement (break included) —
       // not a clock-out that merely preceded the shift end.
@@ -383,6 +482,7 @@ export function checkInBadgeTooltip(
       }
       return `Did not complete the required ${required} day (break included).`;
     }
+    case 'half_hour':
     case 'extra_hours': {
       // Mirror of early_checkout, measured against the SAME requirement: hours
       // present beyond hours owed, not a clock-out after the shift end.

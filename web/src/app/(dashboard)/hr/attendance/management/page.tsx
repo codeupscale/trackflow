@@ -66,6 +66,8 @@ import {
   formatDuration,
   formatMinutes,
   checkInBadgeTooltip,
+  dayPresenceSeconds,
+  requiredDaySeconds,
 } from '@/lib/check-in-time';
 import { useTeamAttendance } from '@/hooks/hr/use-attendance';
 import {
@@ -455,8 +457,19 @@ function TeamTab() {
                                 <span className={`inline-block w-1.5 h-1.5 rounded-full ${sd.dot}`} />
                                 {sd.label}
                               </span>
+                              {/* The short-day badges carry a tooltip here because this
+                                  is the screen HR reads: "Early — Reason Given" is only
+                                  useful if the reason itself is one hover away. */}
                               {deriveCheckInBadges(record).map((s) => (
-                                <CheckInStatusBadge key={s} status={s as CheckInBadgeStatus} />
+                                <CheckInStatusBadge
+                                  key={s}
+                                  status={s as CheckInBadgeStatus}
+                                  tooltip={checkInBadgeTooltip(s, {
+                                    presenceSeconds: dayPresenceSeconds(record),
+                                    requiredSeconds: requiredDaySeconds(record.shift),
+                                    earlyReason: record.early_checkout_reason,
+                                  })}
+                                />
                               ))}
                             </div>
                           </td>
