@@ -12,6 +12,8 @@ import {
   dayPresenceSeconds,
   requiredDaySeconds,
   requiredDayFromPolicy,
+  surplusBadge,
+  describeEarlyReason,
   REQUIRED_DAY_SECONDS,
 } from '@/lib/check-in-time';
 
@@ -313,6 +315,51 @@ describe('deriveCheckInBadges', () => {
     ).toEqual(['missing_checkout']);
   });
 
+  it('only badges a surplus once it reaches half an hour', () => {
+    // Reported from production: any overrun at all raised "Extra Hours", so
+    // four minutes past the day looked the same as two hours past it.
+    // 9h is the requirement; presence is measured first-in to last-out.
+    const day = (outAt: string) => ({
+      check_in_at: '2026-07-03T04:00:00Z',
+      check_out_at: outAt,
+    });
+
+    // 9h exactly, 9h29m — under the threshold, so nothing is flagged.
+    expect(deriveCheckInBadges(day('2026-07-03T13:00:00Z'))).toEqual([]);
+    expect(deriveCheckInBadges(day('2026-07-03T13:29:00Z'))).toEqual([]);
+
+    // 9h30m and 9h40m — half hour.
+    expect(deriveCheckInBadges(day('2026-07-03T13:30:00Z'))).toEqual(['half_hour']);
+    expect(deriveCheckInBadges(day('2026-07-03T13:40:00Z'))).toEqual(['half_hour']);
+
+    // 9h59m is still half hour; 10h exactly crosses into extra hours.
+    expect(deriveCheckInBadges(day('2026-07-03T13:59:00Z'))).toEqual(['half_hour']);
+    expect(deriveCheckInBadges(day('2026-07-03T14:00:00Z'))).toEqual(['extra_hours']);
+    expect(deriveCheckInBadges(day('2026-07-03T16:00:00Z'))).toEqual(['extra_hours']);
+  });
+
+  it('applies the same thresholds when the server says the day was met', () => {
+    // met_required_hours true takes the other branch; the rule must not differ.
+    const day = (outAt: string) => ({
+      check_in_at: '2026-07-03T04:00:00Z',
+      check_out_at: outAt,
+      met_required_hours: true,
+    });
+
+    expect(deriveCheckInBadges(day('2026-07-03T13:20:00Z'))).toEqual([]);
+    expect(deriveCheckInBadges(day('2026-07-03T13:35:00Z'))).toEqual(['half_hour']);
+    expect(deriveCheckInBadges(day('2026-07-03T14:30:00Z'))).toEqual(['extra_hours']);
+  });
+
+  it('surplusBadge names the thresholds directly', () => {
+    expect(surplusBadge(0)).toBeNull();
+    expect(surplusBadge(29 * 60)).toBeNull();
+    expect(surplusBadge(30 * 60)).toBe('half_hour');
+    expect(surplusBadge(59 * 60)).toBe('half_hour');
+    expect(surplusBadge(60 * 60)).toBe('extra_hours');
+    expect(surplusBadge(5 * 60 * 60)).toBe('extra_hours');
+  });
+
   it('flags a short day as early_checkout, measured on PRESENCE not clock-out time', () => {
     // 8h present — under the 9h requirement.
     expect(
@@ -330,13 +377,15 @@ describe('deriveCheckInBadges', () => {
       })
     ).toEqual([]);
 
-    // Over 9h is likewise complete.
+    // Over 9h is likewise not short — but a surplus of 1h30m now earns the
+    // extra-hours badge (owner decision, 2026-09-17). This assertion predates
+    // the surplus thresholds and expected no badge at all.
     expect(
       deriveCheckInBadges({
         check_in_at: '2026-07-03T04:00:00Z',
         check_out_at: '2026-07-03T14:30:00Z',
       })
-    ).toEqual([]);
+    ).toEqual(['extra_hours']);
   });
 
   it('counts the break toward the 9 hours (span, not summed sessions)', () => {
@@ -572,5 +621,126 @@ describe('dayPresenceSeconds', () => {
         worked_seconds: 3600,
       })
     ).toBe(3600);
+  });
+});
+
+describe('early checkout reason', () => {
+  const REASON = {
+    category: 'medical',
+    category_label: 'Medical appointment or unwell',
+    note: 'Dentist at 5 PM',
+    approved_by: 'Hina HR',
+  };
+
+  it('softens the short-day badge when a reason was given', () => {
+    // The hours are still missing — the badge must not disappear, only change.
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T09:00:00Z', // 5h against a 9h day
+        met_required_hours: false,
+        early_checkout_reason: REASON,
+      })
+    ).toEqual(['early_explained']);
+  });
+
+  it('leaves the plain badge when no reason was given', () => {
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T09:00:00Z',
+        met_required_hours: false,
+      })
+    ).toEqual(['early_checkout']);
+  });
+
+  it('applies to a locally-judged short day too', () => {
+    // met_required_hours null = a row that predates the server snapshot.
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T09:00:00Z',
+        early_checkout_reason: REASON,
+      })
+    ).toEqual(['early_explained']);
+  });
+
+  it('never shows the explained badge on a day that was not short', () => {
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T13:00:00Z', // 9h — complete
+        met_required_hours: true,
+        early_checkout_reason: REASON,
+      })
+    ).toEqual([]);
+  });
+
+  it('describes the reason as one readable line', () => {
+    expect(describeEarlyReason(REASON)).toBe(
+      'Medical appointment or unwell — Dentist at 5 PM, approved by Hina HR'
+    );
+    expect(describeEarlyReason({ category: 'other', category_label: 'Other' })).toBe('Other');
+    expect(describeEarlyReason(null)).toBeUndefined();
+  });
+
+  it('leads the tooltip with the reason, then the shortfall', () => {
+    expect(
+      checkInBadgeTooltip('early_explained', {
+        earlyReason: REASON,
+        presenceSeconds: 5 * 3600,
+        requiredSeconds: 9 * 3600,
+      })
+    ).toBe('Medical appointment or unwell — Dentist at 5 PM, approved by Hina HR. Left 4h early.');
+  });
+});
+
+describe('an unfinished day is never judged', () => {
+  it('shows no short-day badge while a session is still open', () => {
+    // Multi-session day: checked in 11:30, out 12:30 for lunch, back at 13:00.
+    // The row carries the 12:30 checkout AND an open session, so the naive
+    // presence figure is one hour against a nine-hour day.
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T06:30:00Z',
+        check_out_at: '2026-07-03T07:30:00Z',
+        worked_seconds: 3600,
+        has_open_session: true,
+        check_in_status: 'on_time',
+      })
+    ).toEqual(['on_time']);
+  });
+
+  it('shows no surplus badge while a session is still open either', () => {
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T04:00:00Z',
+        check_out_at: '2026-07-03T15:00:00Z', // 11h — would be Extra Hours
+        has_open_session: true,
+      })
+    ).toEqual([]);
+  });
+
+  it('still reports a missing checkout on an open day', () => {
+    // The backstop's flag is about the day never being closed, which is
+    // knowable while it is open — unlike whether the hours were met.
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T06:30:00Z',
+        has_open_session: true,
+        missing_checkout: true,
+      })
+    ).toEqual(['missing_checkout']);
+  });
+
+  it('judges the day once every session is closed', () => {
+    expect(
+      deriveCheckInBadges({
+        check_in_at: '2026-07-03T06:30:00Z',
+        check_out_at: '2026-07-03T07:30:00Z',
+        has_open_session: false,
+        met_required_hours: false,
+      })
+    ).toEqual(['early_checkout']);
   });
 });

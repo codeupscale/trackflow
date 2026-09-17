@@ -121,12 +121,22 @@ export function useCheckIn() {
   });
 }
 
+/**
+ * The explanation for a short day, collected by EarlyCheckoutDialog.
+ * Omitted entirely for a normal checkout — the endpoint takes no body then.
+ */
+export interface EarlyCheckoutPayload {
+  early_checkout_category: string;
+  early_checkout_reason?: string;
+  early_checkout_approved_by?: string | null;
+}
+
 export function useCheckOut() {
   const invalidate = useInvalidateAfterCheckAction();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async () => {
-      const res = await api.post('/hr/attendance/check-out');
+    mutationFn: async (payload?: EarlyCheckoutPayload) => {
+      const res = await api.post('/hr/attendance/check-out', payload ?? {});
       return res.data;
     },
     onSuccess: () => {

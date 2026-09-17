@@ -77,4 +77,23 @@ class NotificationRecipients
     {
         return $this->withPermission($organizationId, 'notifications.receive_org_activity', $exceptUserId);
     }
+
+    /**
+     * Who an employee may name as having approved an early departure.
+     *
+     * Keyed on `leave.approve` — the people who already authorise time away
+     * from work, which is the owner, the org manager and HR. Leaving three
+     * hours early and taking a half-day off are the same decision at different
+     * scales, so they should not have two different sets of approvers.
+     *
+     * Finance is deliberately outside it: they read attendance for payroll,
+     * they do not authorise anyone's hours. (`attendance.manage_policy` would
+     * have been the closer name, but that permission was removed in July 2026 —
+     * resolving against a key nothing grants would have returned the owner
+     * alone and silently hidden HR from the picker.)
+     */
+    public function earlyCheckoutApprovers(string $organizationId, ?string $exceptUserId = null): Collection
+    {
+        return $this->withPermission($organizationId, 'leave.approve', $exceptUserId);
+    }
 }

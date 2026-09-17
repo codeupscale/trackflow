@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\Hr;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Hr\CheckOutRequest;
 use App\Models\AttendanceRecord;
 use App\Services\AttendanceService;
 use App\Services\CheckInService;
@@ -35,13 +36,16 @@ class AttendanceController extends Controller
     }
 
     /**
-     * Check out, closing the open session. No request body is accepted.
+     * Check out, closing the open session.
+     *
+     * The body is optional and carries only the explanation for a short day;
+     * the checkout instant itself is always the server's own now().
      */
-    public function checkOut(Request $request): JsonResponse
+    public function checkOut(CheckOutRequest $request): JsonResponse
     {
         $this->authorize('checkIn', AttendanceRecord::class);
 
-        $this->checkInService->checkOut($request->user());
+        $this->checkInService->checkOut($request->user(), $request->earlyReason());
 
         return response()->json([
             'message' => 'Checked out successfully.',
@@ -203,7 +207,8 @@ class AttendanceController extends Controller
                 // ?archived=1 is the Archive tab; absent means active only, so
                 // every existing caller keeps hiding archived staff.
                 + ['archived' => $request->boolean('archived')],
-            $stats
+            $stats,
+            $request->user(),
         );
 
         // `stats` spans the whole filtered set; the paginated `data` is one page of it.
