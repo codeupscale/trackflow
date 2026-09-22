@@ -413,7 +413,7 @@ class AttendanceService
                 'clock_in' => null,
                 'clock_out' => null,
                 'total_hours' => 0,
-                'status' => $this->deriveAbsentStatus($userId, $dateStr, $holidays, $leaves),
+                'status' => $this->deriveAbsentStatus($userId, $dateStr, $holidays, $leaves, $todayStr),
                 'late_minutes' => 0,
                 'early_departure_minutes' => 0,
                 'overtime_minutes' => 0,
@@ -486,7 +486,22 @@ class AttendanceService
         $page = \Illuminate\Pagination\LengthAwarePaginator::resolveCurrentPage();
 
         // Resolve range (default to today). Cap span to avoid runaway synthesis.
-        $end = !empty($filters['end_date']) ? Carbon::parse($filters['end_date']) : Carbon::now();
+        //
+        // Never past TODAY. A day that has not happened cannot be an absence,
+        // but with no ceiling here a "this month" filter synthesised every
+        // remaining day of the month as Absent — the Team view listed people as
+        // absent on the 25th while it was still the 22nd, and counted those days
+        // in the Absent card. My Attendance has always stopped at today; this
+        // brings the Team view in line. Compared as org-local DATE STRINGS, so
+        // "today" means the organisation's today, not the server's UTC one.
+        $todayStr = Carbon::now($this->orgTimezone($orgId))->toDateString();
+        $endStr = !empty($filters['end_date'])
+            ? Carbon::parse($filters['end_date'])->toDateString()
+            : $todayStr;
+        if ($endStr > $todayStr) {
+            $endStr = $todayStr;
+        }
+        $end = Carbon::parse($endStr);
         $start = !empty($filters['start_date']) ? Carbon::parse($filters['start_date']) : $end->copy();
         if ($start->gt($end)) {
             $start = $end->copy();
@@ -639,7 +654,7 @@ class AttendanceService
                     'clock_in' => null,
                     'clock_out' => null,
                     'total_hours' => 0,
-                    'status' => $this->deriveAbsentStatus($u->id, $dateStr, $holidays, $leaves),
+                    'status' => $this->deriveAbsentStatus($u->id, $dateStr, $holidays, $leaves, $todayStr),
                     'late_minutes' => 0,
                     'early_departure_minutes' => 0,
                     'overtime_minutes' => 0,
@@ -716,7 +731,7 @@ class AttendanceService
      * Synthesised rows have zero worked hours, so they can only be
      * holiday / on_leave / weekend / absent (never present or half-day).
      */
-    private function deriveAbsentStatus(string $userId, string $dateStr, $holidays, $leavesByUser): string
+    private function deriveAbsentStatus(string $userId, string $dateStr, $holidays, $leavesByUser, ?string $todayStr = null): string
     {
         if ($holidays->has($dateStr)) {
             return 'holiday';
@@ -736,6 +751,17 @@ class AttendanceService
         $dow = strtolower(Carbon::parse($dateStr)->format('l'));
         if (in_array($dow, ['saturday', 'sunday'])) {
             return 'weekend';
+        }
+
+        // TODAY is not over, so it cannot yet be an absence. With no record, the
+        // row said "Absent" from midnight until the moment someone checked in —
+        // an employee opening the app at 9am saw themselves marked absent for a
+        // shift that had not started. Holidays, leave and weekends are decided
+        // above, because those ARE known in advance. Absence is decided by the
+        // nightly job once the day has actually ended — the same principle as
+        // an open session never being judged short.
+        if ($todayStr !== null && $dateStr === $todayStr) {
+            return 'not_checked_in';
         }
 
         return 'absent';
@@ -1020,7 +1046,7 @@ class AttendanceService
         for ($d = Carbon::parse($rangeStartStr); $rangeStartStr <= $rangeEndStr && $d->lte($rangeEnd); $d->addDay()) {
             $dateStr = $d->toDateString();
             $record = $records->get($dateStr);
-            $status = $record ? $record->status : $this->deriveAbsentStatus($userId, $dateStr, $holidays, $leaves);
+            $status = $record ? $record->status : $this->deriveAbsentStatus($userId, $dateStr, $holidays, $leaves, $todayStr);
 
             match ($status) {
                 'present' => $presentDays++,
