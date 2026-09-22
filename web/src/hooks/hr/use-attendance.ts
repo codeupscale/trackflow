@@ -23,6 +23,8 @@ interface TeamAttendanceFilters {
   end_date?: string;
   /** Archive tab: attendance of archived employees. */
   archived?: boolean;
+  /** Present / absent / … — 'all' (or empty) means no filter. */
+  status?: string;
   page?: number;
 }
 
@@ -64,6 +66,8 @@ export function useTeamAttendance(filters?: TeamAttendanceFilters) {
         start_date: filters?.start_date,
         end_date: filters?.end_date,
         archived: filters?.archived ? 1 : undefined,
+        // buildParams drops 'all', so the default sends nothing.
+        status: filters?.status,
         page: filters?.page,
       });
       const res = await api.get('/hr/attendance/team', { params });

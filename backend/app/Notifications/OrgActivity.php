@@ -266,7 +266,7 @@ class OrgActivity extends TrackflowNotification
             match (true) {
                 // A second session reads as a mistake unless it says so.
                 $returning => "Checked in again at {$at} (session {$session}).",
-                $late => "Checked in at {$at}, {$lateMinutes} minutes late.",
+                $late => "Checked in at {$at}, " . self::humanMinutes($lateMinutes) . ' late.',
                 default => "Checked in at {$at}.",
             },
             '/hr/attendance/team',

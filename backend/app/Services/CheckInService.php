@@ -245,7 +245,9 @@ class CheckInService
             return null;
         }
 
-        return DB::transaction(function () use ($user, $schedule, $tz, $startedAt, $startLocal, $date, $lateAt) {
+        $session = null;
+
+        $record = DB::transaction(function () use ($user, $schedule, $tz, $startedAt, $startLocal, $date, $lateAt, &$session) {
             // 1. Ensure the day row exists (unique(org,user,date) serializes creation).
             $record = AttendanceRecord::withoutGlobalScopes()->firstOrCreate(
                 [
@@ -282,8 +284,7 @@ class CheckInService
 
             // 4. First-check-in-owned fields, computed off the REAL start time. No
             //    pre-window block — an early start is exactly what we record.
-            $isLate = $startLocal->gt($lateAt);
-            $lateMinutes = $isLate ? (int) $lateAt->diffInMinutes($startLocal) : 0;
+            [$isLate, $lateMinutes] = $this->lateness($startLocal, $lateAt);
 
             $flags = ['auto_check_in' => true]; // marks this as tracker-created, not manual
             if ($this->attendanceService->isOnApprovedLeave($user, $date)) {
@@ -302,7 +303,7 @@ class CheckInService
 
             // 5. The session, stamped at the true start. seq is always 1 — the
             //    guard above guarantees no prior session exists.
-            CheckInSession::create([
+            $session = CheckInSession::create([
                 'organization_id' => $user->organization_id,
                 'user_id' => $user->id,
                 'attendance_record_id' => $record->id,
@@ -316,6 +317,24 @@ class CheckInService
 
             return $record->refresh();
         });
+
+        // Announced exactly like a check-in from the web, because to the owner
+        // and HR it IS one — this path used to create the session and say
+        // nothing, so anyone checked in by starting the desktop tracker appeared
+        // on the attendance screens and never in the notification panel. After
+        // the commit, never inside it; and never able to fail the check-in.
+        // Only reached when a session was actually created — every skip path
+        // returns null above — so a queue retry after success cannot notify
+        // twice.
+        if ($record !== null && $session !== null) {
+            try {
+                $this->announceCheckIn($user, $session, $record, $tz);
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
+
+        return $record;
     }
 
     /**
@@ -386,12 +405,24 @@ class CheckInService
             // 5. First-check-in-owned fields (late/status/flags), computed ONCE and never
             //    recomputed on subsequent sessions.
             $isFirst = $record->sessions()->count() === 0;
+
+            // Coming back after a checkout re-opens the day. Whatever reason
+            // explained that earlier departure described a departure that turned
+            // out NOT to be the end of the day — kept, it would silently label the
+            // day's real final checkout, and suppress the dialog that should ask
+            // about it. The owner and HR already received it in the check-out
+            // notification, so clearing it here loses nothing they were sent.
+            if (! $isFirst && $record->hasEarlyCheckoutReason()) {
+                $record->update([
+                    'early_checkout_category' => null,
+                    'early_checkout_reason' => null,
+                    'early_checkout_approved_by' => null,
+                    'early_checkout_reason_at' => null,
+                ]);
+            }
+
             if ($isFirst) {
-                // On-time vs late. Boundary (exactly the late threshold) counts as on-time.
-                $isLate = $local->gt($lateAt);
-                // Late minutes are measured from the LATE THRESHOLD — the grace window
-                // up to the threshold is free, so lateness only counts past it.
-                $lateMinutes = $isLate ? (int) $lateAt->diffInMinutes($local) : 0;
+                [$isLate, $lateMinutes] = $this->lateness($local, $lateAt);
 
                 // Advisory flags (do not block the check-in).
                 $flags = [];
@@ -668,6 +699,32 @@ class CheckInService
      * has already judged, and a shift reassigned mid-day must not silently
      * rewrite the schedule the morning was measured against.
      */
+    /**
+     * Was this check-in late, and by how many WHOLE minutes?
+     *
+     * Judged at minute precision. Comparing to the second marked someone who
+     * pressed the button at 16:30:40 against a 16:30 start as "late" — and then
+     * reported them as "0 minutes late", because the diff truncates to whole
+     * minutes. Two rules, one number: lateness is the whole minutes past the
+     * threshold, and a check-in is late only once that is at least one. Anything
+     * inside the threshold minute is on time.
+     *
+     * Shared by the manual and the tracker check-in so the two can never
+     * disagree about the same instant.
+     *
+     * @return array{0: bool, 1: int} [isLate, lateMinutes]
+     */
+    private function lateness(Carbon $at, Carbon $lateAt): array
+    {
+        if ($at->lte($lateAt)) {
+            return [false, 0];
+        }
+
+        $minutes = intdiv((int) $lateAt->diffInSeconds($at, true), 60);
+
+        return [$minutes >= 1, $minutes];
+    }
+
     private function stampSchedule(AttendanceRecord $record, CheckInSchedule $schedule): void
     {
         if ($record->shift_id !== null || $schedule->shift_id === null) {

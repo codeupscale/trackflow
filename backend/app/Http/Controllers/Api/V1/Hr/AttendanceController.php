@@ -76,7 +76,7 @@ class AttendanceController extends Controller
             'start_date' => ['sometimes', 'date'],
             'end_date' => ['sometimes', 'date', 'after_or_equal:start_date'],
             'user_id' => ['sometimes', 'uuid'],
-            'status' => ['sometimes', 'string', 'in:present,absent,half_day,on_leave,weekend,holiday'],
+            'status' => ['sometimes', 'string', 'in:present,absent,half_day,on_leave,weekend,holiday,not_checked_in'],
             'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
         ]);
 
@@ -167,7 +167,7 @@ class AttendanceController extends Controller
         $request->validate([
             'start_date' => ['sometimes', 'date'],
             'end_date' => ['sometimes', 'date', 'after_or_equal:start_date'],
-            'status' => ['sometimes', 'string', 'in:present,absent,half_day,on_leave,weekend,holiday'],
+            'status' => ['sometimes', 'string', 'in:present,absent,half_day,on_leave,weekend,holiday,not_checked_in'],
             'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
         ]);
 
@@ -192,7 +192,7 @@ class AttendanceController extends Controller
         $request->validate([
             'start_date' => ['sometimes', 'date'],
             'end_date' => ['sometimes', 'date', 'after_or_equal:start_date'],
-            'status' => ['sometimes', 'string', 'in:present,absent,half_day,on_leave,weekend,holiday'],
+            'status' => ['sometimes', 'string', 'in:present,absent,half_day,on_leave,weekend,holiday,not_checked_in'],
             'user_id' => ['sometimes', 'uuid'],
             'department_id' => ['sometimes', 'uuid'],
             'shift_id' => ['sometimes', 'uuid'],
