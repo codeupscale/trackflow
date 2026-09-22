@@ -90,6 +90,9 @@ const statusDot: Record<string, { dot: string; text: string; label: string }> = 
   half_day: { dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400', label: 'Half Day' },
   on_leave: { dot: 'bg-blue-500', text: 'text-blue-600 dark:text-blue-400', label: 'On Leave' },
   weekend: { dot: 'bg-muted-foreground/40', text: 'text-muted-foreground', label: 'Weekend' },
+  // Today, before a check-in. Neutral on purpose: the day is not over, so it is
+  // not an absence — the nightly job decides that once the day has ended.
+  not_checked_in: { dot: 'bg-slate-400 ring-2 ring-slate-400/25', text: 'text-muted-foreground', label: 'Not checked in' },
   holiday: { dot: 'bg-violet-500', text: 'text-violet-600 dark:text-violet-400', label: 'Holiday' },
   pending: { dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400', label: 'Pending' },
   approved: { dot: 'bg-emerald-500', text: 'text-emerald-600 dark:text-emerald-400', label: 'Approved' },
@@ -112,6 +115,33 @@ function getInitials(name: string) {
 }
 
 type Tab = 'team' | 'regularizations' | 'report';
+
+/**
+ * One employee's days, over the window the report was showing — what a click on
+ * a Check-in Report row opens in the Team tab. The report says "came late and
+ * left early on 3 days"; this is how you see WHICH three.
+ */
+interface TeamFocus {
+  userId: string;
+  userName: string;
+  /** Empty for an all-time report, which leaves the Team tab undated. */
+  startDate: string;
+  endDate: string;
+  /** The report's own wording for the window, repeated on the filter chip. */
+  periodLabel: string;
+}
+
+// Same set, same order, as My Attendance — plus "Not checked in", which only
+// managers need: it is how HR sees who has not arrived yet today.
+const TEAM_STATUS_FILTERS = ['all', 'present', 'absent', 'on_leave', 'not_checked_in'] as const;
+
+const teamStatusLabel: Record<(typeof TEAM_STATUS_FILTERS)[number], string> = {
+  all: 'All',
+  present: 'Present',
+  absent: 'Absent',
+  on_leave: 'On Leave',
+  not_checked_in: 'Not checked in',
+};
 
 const rejectReviewSchema = z.object({
   review_note: z.string().min(1, 'Review note is required').max(500, 'Must be 500 characters or less'),
@@ -139,6 +169,14 @@ export default function AttendanceManagementPage() {
 
   const defaultTab: Tab = canViewTeam ? 'team' : canApproveRegularizations ? 'regularizations' : 'report';
   const [activeTab, setActiveTab] = useState<Tab>(defaultTab);
+  const [teamFocus, setTeamFocus] = useState<TeamFocus | null>(null);
+
+  // From a report row to that person's days. Only offered to someone who can
+  // actually open the Team tab — otherwise the click would lead nowhere.
+  const openEmployeeInTeam = (focus: TeamFocus) => {
+    setTeamFocus(focus);
+    setActiveTab('team');
+  };
 
   if (!user || !hasAccess) {
     return (
@@ -170,7 +208,9 @@ export default function AttendanceManagementPage() {
           <button
             key={t.key}
             type="button"
-            onClick={() => setActiveTab(t.key)}
+            // Choosing a tab by hand starts clean: a focus carried over from a
+            // report click is only meant for the trip that created it.
+            onClick={() => { setTeamFocus(null); setActiveTab(t.key); }}
             className={cn(
               'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[0.7rem] font-medium transition-colors',
               activeTab === t.key
@@ -185,16 +225,26 @@ export default function AttendanceManagementPage() {
       </div>
 
       {/* Tab content */}
-      {activeTab === 'team' && canViewTeam && <TeamTab />}
+      {activeTab === 'team' && canViewTeam && (
+        <TeamTab focus={teamFocus} onClearFocus={() => setTeamFocus(null)} />
+      )}
       {activeTab === 'regularizations' && canApproveRegularizations && <RegularizationsTab />}
-      {activeTab === 'report' && canViewAll && <ReportTab />}
+      {activeTab === 'report' && canViewAll && (
+        <ReportTab onOpenEmployee={canViewTeam ? openEmployeeInTeam : undefined} />
+      )}
     </div>
   );
 }
 
 // ─── Team Tab ───────────────────────────────────────────────────────────────
 
-function TeamTab() {
+function TeamTab({
+  focus,
+  onClearFocus,
+}: {
+  focus: TeamFocus | null;
+  onClearFocus: () => void;
+}) {
   const { hasPermission } = usePermissionStore();
   const canCheckIn = hasPermission('attendance.check_in');
   const { data: todayStatus } = useTodayStatus({ enabled: canCheckIn });
@@ -204,10 +254,23 @@ function TeamTab() {
   // Shift is how a team is picked out — each team works its own shift.
   const [shiftId, setShiftId] = useState<string | null>(null);
   // Empty by default — no date is pre-selected, so the list opens unfiltered
-  // rather than silently pinned to the current month.
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
+  // rather than silently pinned to the current month. Arriving from a report
+  // row, the report's own window is used instead, so the days listed are the
+  // days that report was counting.
+  const [dateFrom, setDateFrom] = useState(focus?.startDate ?? '');
+  const [dateTo, setDateTo] = useState(focus?.endDate ?? '');
   const [currentPage, setCurrentPage] = useState(1);
+  // One employee, set only by a report click and cleared by its chip. Kept apart
+  // from the free-text search on purpose: search matches names loosely, and two
+  // people called "Ali" would both appear.
+  const [focusUserId, setFocusUserId] = useState<string | null>(focus?.userId ?? null);
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+
+  const clearFocus = () => {
+    setFocusUserId(null);
+    setCurrentPage(1);
+    onClearFocus();
+  };
 
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -245,6 +308,8 @@ function TeamTab() {
     end_date: dateTo || undefined,
     shift_id: shiftId,
     archived: showArchived,
+    user_id: focusUserId,
+    status: statusFilter,
     page: currentPage,
   });
 
@@ -349,6 +414,44 @@ function TeamTab() {
             className="h-8 text-xs w-[140px]"
           />
         </div>
+      </div>
+
+      {/* Status filter, and — when arrived at from the report — who and when. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1 rounded-lg bg-muted p-1 w-fit" role="group" aria-label="Filter by status">
+          {TEAM_STATUS_FILTERS.map((status) => (
+            <button
+              key={status}
+              type="button"
+              onClick={() => { setStatusFilter(status); setCurrentPage(1); }}
+              className={cn(
+                'rounded-md px-3 py-1.5 text-[0.65rem] font-medium transition-colors',
+                statusFilter === status
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              aria-pressed={statusFilter === status}
+            >
+              {teamStatusLabel[status]}
+            </button>
+          ))}
+        </div>
+
+        {focus && focusUserId && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 py-1 pl-2.5 pr-1 text-[0.65rem] font-medium text-foreground">
+            <span className="text-muted-foreground">Showing</span>
+            {focus.userName}
+            <span className="text-muted-foreground">· {focus.periodLabel}</span>
+            <button
+              type="button"
+              onClick={clearFocus}
+              aria-label={`Stop filtering to ${focus.userName}`}
+              className="ml-0.5 rounded-full p-0.5 text-muted-foreground hover:bg-primary/15 hover:text-foreground"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        )}
       </div>
 
       {/* Stats Strip */}
@@ -905,7 +1008,12 @@ function RegularizationsTab() {
 /** Which control drives the report window: a single day, or a period range. */
 type ViewMode = 'day' | 'range';
 
-function ReportTab() {
+function ReportTab({
+  onOpenEmployee,
+}: {
+  /** Absent when the viewer cannot open the Team tab — rows are then inert. */
+  onOpenEmployee?: (focus: TeamFocus) => void;
+}) {
   const { hasPermission } = usePermissionStore();
   const canExport = hasPermission('attendance.export');
 
@@ -974,6 +1082,24 @@ function ReportTab() {
   const belowTargetCount = allRows.filter(
     (r) => r.completion_rate !== null && r.completion_rate < 100,
   ).length;
+
+  // The window a row's counts cover, as the Team tab needs it. A day report is
+  // a one-day range; an all-time report leaves the Team tab undated.
+  const openRow = (row: { user: { id: string; name: string } }) => {
+    if (!onOpenEmployee) return;
+    const [startDate, endDate] = isAllTime
+      ? ['', '']
+      : mode === 'day'
+        ? [day, day]
+        : [range.start_date ?? '', range.end_date ?? ''];
+    onOpenEmployee({
+      userId: row.user.id,
+      userName: row.user.name,
+      startDate,
+      endDate,
+      periodLabel,
+    });
+  };
 
   const totalEmployees = rows.length;
   // PEOPLE, not days. These summed days across everyone, so the Late card read
@@ -1224,8 +1350,26 @@ function ReportTab() {
                       return (
                       <tr
                         key={row.user.id}
+                        // A row is a total ("late 3, left early 2"); clicking it
+                        // opens the days behind that total in the Team tab.
+                        // Every row, not only the red ones — the question
+                        // "which days?" is the same for any count.
+                        onClick={onOpenEmployee ? () => openRow(row) : undefined}
+                        onKeyDown={
+                          onOpenEmployee
+                            ? (e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  openRow(row);
+                                }
+                              }
+                            : undefined
+                        }
+                        tabIndex={onOpenEmployee ? 0 : undefined}
+                        aria-label={onOpenEmployee ? `Show ${row.user.name}'s attendance days` : undefined}
                         className={cn(
                           'border-b border-border/30 last:border-0 transition-colors',
+                          onOpenEmployee && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
                           lateAndShort
                             // A tint plus a left rule, not colour alone: on a
                             // dark theme a faint row tint is easy to miss, and

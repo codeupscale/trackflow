@@ -118,27 +118,88 @@ class EarlyCheckoutReasonTest extends TestCase
         $this->assertNull($record->early_checkout_category);
     }
 
-    public function test_the_reason_is_write_once(): void
+    public function test_checking_back_in_clears_the_earlier_reason(): void
     {
-        // A later checkout on the same day must not be able to rewrite the
-        // answer given the first time.
+        // Reported from production: leave early with a reason, come back later
+        // the same day, and the day still carried the old reason. That departure
+        // turned out not to be the end of the day, so the reason no longer
+        // describes anything — and left in place it would label the day's real
+        // final checkout while suppressing the dialog that should ask about it.
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
         $this->assignShift($user);
 
         $this->workUntil($user, '12:30:00', [
             'category' => 'medical',
-            'reason' => 'The original answer',
+            'reason' => 'Doctor visit this afternoon',
         ]);
 
-        // Back in and out again, still short of nine hours.
+        Carbon::setTestNow(Carbon::parse(self::MONDAY . ' 13:00:00', 'UTC'));
+        $record = app(CheckInService::class)->checkIn($user);
+
+        $this->assertNull($record->early_checkout_category, 'the day is open again, so it has nothing to explain');
+        $this->assertNull($record->early_checkout_reason);
+        $this->assertNull($record->early_checkout_reason_at);
+    }
+
+    public function test_the_final_early_checkout_is_explained_on_its_own_terms(): void
+    {
+        // Back in and out again, still short: THIS departure gets its own
+        // answer, rather than inheriting one written for a different one.
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->assignShift($user);
+
+        $this->workUntil($user, '12:30:00', [
+            'category' => 'medical',
+            'reason' => 'Doctor visit this afternoon',
+        ]);
+
         Carbon::setTestNow(Carbon::parse(self::MONDAY . ' 13:00:00', 'UTC'));
         app(CheckInService::class)->checkIn($user);
         Carbon::setTestNow(Carbon::parse(self::MONDAY . ' 13:30:00', 'UTC'));
         $record = app(CheckInService::class)->checkOut($user, [
-            'category' => 'other',
-            'reason' => 'A convenient rewrite',
+            'category' => 'family_emergency',
+            'reason' => 'Called home for my child',
         ]);
+
+        $this->assertSame('family_emergency', $record->early_checkout_category);
+        $this->assertSame('Called home for my child', $record->early_checkout_reason);
+    }
+
+    public function test_the_dialog_asks_again_after_checking_back_in(): void
+    {
+        // reason_given drives whether the checkout dialog opens at all. Left
+        // true after a re-check-in, the final departure was never asked about.
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->assignShift($user);
+
+        $this->workUntil($user, '12:30:00', ['category' => 'medical', 'reason' => 'Doctor visit this afternoon']);
+
+        Carbon::setTestNow(Carbon::parse(self::MONDAY . ' 13:00:00', 'UTC'));
+        app(CheckInService::class)->checkIn($user);
+
+        $data = $this->actingAs($user, 'sanctum')->getJson('/api/v1/hr/attendance/today')->assertOk()->json('data');
+
+        $this->assertFalse($data['early_checkout']['reason_given']);
+        $this->assertNull($data['early_checkout_reason']);
+    }
+
+    public function test_a_reason_cannot_be_rewritten_for_the_same_departure(): void
+    {
+        // What write-once still protects: without checking back in, a second
+        // checkout call cannot replace the answer already on record.
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->assignShift($user);
+
+        $this->workUntil($user, '12:30:00', ['category' => 'medical', 'reason' => 'The original answer']);
+
+        // A repeated checkout with no session open in between (double-click,
+        // stale tab) — it is the SAME departure.
+        Carbon::setTestNow(Carbon::parse(self::MONDAY . ' 12:31:00', 'UTC'));
+        $record = app(CheckInService::class)->checkOut($user, ['category' => 'other', 'reason' => 'A convenient rewrite']);
 
         $this->assertSame('medical', $record->early_checkout_category);
         $this->assertSame('The original answer', $record->early_checkout_reason);

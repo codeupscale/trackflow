@@ -45,7 +45,9 @@ export type AttendanceStatus =
   | 'half_day'
   | 'on_leave'
   | 'holiday'
-  | 'weekend';
+  | 'weekend'
+  /** Today, before any check-in — never persisted, only on synthesised rows. */
+  | 'not_checked_in';
 
 // --- Check-in / Checkout ---
 

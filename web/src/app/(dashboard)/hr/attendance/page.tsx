@@ -77,6 +77,9 @@ const statusDot: Record<string, { dot: string; text: string; label: string }> = 
   on_leave: { dot: 'bg-blue-500', text: 'text-blue-600 dark:text-blue-400', label: 'On Leave' },
   holiday: { dot: 'bg-violet-500', text: 'text-violet-600 dark:text-violet-400', label: 'Holiday' },
   weekend: { dot: 'bg-muted-foreground/40', text: 'text-muted-foreground', label: 'Weekend' },
+  // Today, before a check-in. Neutral on purpose: the day is not over, so it is
+  // not an absence — the nightly job decides that once the day has ended.
+  not_checked_in: { dot: 'bg-slate-400 ring-2 ring-slate-400/25', text: 'text-muted-foreground', label: 'Not checked in' },
 };
 
 export default function MyAttendancePage() {

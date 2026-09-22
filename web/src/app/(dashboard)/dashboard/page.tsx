@@ -136,6 +136,8 @@ const ATTENDANCE_STATUS_STYLES: Record<string, { label: string; className: strin
   on_leave: { label: 'On Leave', className: 'bg-violet-500/15 text-violet-600 dark:text-violet-400 border-violet-500/20' },
   weekend: { label: 'Weekend', className: 'bg-muted text-muted-foreground border-border' },
   holiday: { label: 'Holiday', className: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/20' },
+  // Today, before a check-in — not an absence yet.
+  not_checked_in: { label: 'Not checked in', className: 'bg-muted text-muted-foreground border-border' },
 };
 
 
