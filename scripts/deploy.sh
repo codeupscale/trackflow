@@ -159,7 +159,7 @@ timeout 60 bash -c \
   || { err "postgres not healthy after 60s"; $COMPOSE_CMD logs postgres --tail 20; exit 1; }
 log "Waiting for redis..."
 timeout 30 bash -c \
-  'until docker inspect --format="{{.State.Health.Status}}" infra-redis-1 2>/dev/null | grep -q healthy; do sleep 2; done' \
+  'until docker inspect --format="{{.State.Health.Status}}" "$(docker compose ps -q redis)" 2>/dev/null | grep -q healthy; do sleep 2; done' \
   || { err "redis not healthy after 30s"; $COMPOSE_CMD logs redis --tail 10; exit 1; }
 log "postgres + redis healthy"
 
