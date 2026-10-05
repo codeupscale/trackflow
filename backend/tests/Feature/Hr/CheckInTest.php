@@ -419,19 +419,68 @@ class CheckInTest extends TestCase
             ->assertJsonPath('data.check_in_flags.worked_on_off_day', true);
     }
 
-    public function test_weekend_check_in_allowed_keeps_status_with_flag(): void
+    public function test_weekend_check_in_is_recorded_as_present_with_flag(): void
     {
         $org = $this->createOrganization();
         $user = $this->createUser($org, 'employee');
         $this->actingAs($user, 'sanctum');
 
-        // Saturday 11:40 local (06:40 UTC).
+        // Saturday 11:40 local (06:40 UTC). Someone who checks in on a weekend
+        // worked that day — the row must say so, not "Weekend". The flag keeps the
+        // day-off context.
         $this->freezeUtc(self::SATURDAY . ' 06:40:00');
         $response = $this->postJson('/api/v1/hr/attendance/check-in');
 
         $response->assertStatus(201)
-            ->assertJsonPath('data.status', 'weekend')
+            ->assertJsonPath('data.status', 'present')
             ->assertJsonPath('data.check_in_flags.worked_on_off_day', true);
+    }
+
+    /**
+     * Once someone checks in on a weekend, the day is judged exactly like a weekday
+     * (owner rule, 2026-10-05): the same hours owed, the same short-day / extra-hours
+     * outcome. Mirrors test_checkout_before_off_time_sets_early and
+     * test_checkout_after_off_time_sets_overtime on the Saturday.
+     */
+    public function test_weekend_short_day_is_judged_like_a_weekday(): void
+    {
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        $this->freezeUtc(self::SATURDAY . ' 06:40:00'); // 11:40 local
+        $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(201);
+
+        $this->freezeUtc(self::SATURDAY . ' 15:00:00'); // 20:00 local
+        $this->postJson('/api/v1/hr/attendance/check-out')
+            ->assertOk()
+            ->assertJsonPath('data.status', 'present')
+            ->assertJsonPath('data.is_early_checkout', true)
+            ->assertJsonPath('data.check_out_early_minutes', 40);
+
+        // The persisted verdict every manager screen reads.
+        $record = AttendanceRecord::withoutGlobalScopes()->where('user_id', $user->id)->first();
+        $this->assertFalse($record->met_required_hours);
+    }
+
+    public function test_weekend_full_day_is_judged_like_a_weekday(): void
+    {
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $this->actingAs($user, 'sanctum');
+
+        $this->freezeUtc(self::SATURDAY . ' 06:40:00'); // 11:40 local
+        $this->postJson('/api/v1/hr/attendance/check-in')->assertStatus(201);
+
+        $this->freezeUtc(self::SATURDAY . ' 16:00:00'); // 21:00 local
+        $this->postJson('/api/v1/hr/attendance/check-out')
+            ->assertOk()
+            ->assertJsonPath('data.status', 'present')
+            ->assertJsonPath('data.is_early_checkout', false)
+            ->assertJsonPath('data.check_out_overtime_minutes', 20);
+
+        $record = AttendanceRecord::withoutGlobalScopes()->where('user_id', $user->id)->first();
+        $this->assertTrue($record->met_required_hours);
     }
 
     // ── Edge 12: windows enforced in the org timezone ──────────────────────

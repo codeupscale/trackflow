@@ -1621,8 +1621,16 @@ class CheckInService
     }
 
     /**
-     * Resolve the attendance status for a just-checked-in employee. Reuses the
-     * AttendanceService priority (Holiday > On Leave > Weekend); otherwise 'present'.
+     * Resolve the attendance status for a just-checked-in employee:
+     * Holiday > On Leave > 'present'.
+     *
+     * A weekend is deliberately NOT in that list. Someone who checks in on a
+     * Saturday — by hand, or by starting the desktop timer — WORKED that day, and
+     * labelling the row "Weekend" hid the work on every attendance screen (the
+     * worked_on_off_day flag only ever surfaced on the employee's own check-in
+     * card). The flag is still set by the callers, so "worked on a day off"
+     * remains visible to anyone who needs it. Holiday and leave keep priority:
+     * those are owner decisions with their own reporting, unchanged here.
      */
     private function checkedInStatus(User $user, string $date): string
     {
@@ -1632,11 +1640,6 @@ class CheckInService
 
         if ($this->attendanceService->isOnApprovedLeave($user, $date)) {
             return 'on_leave';
-        }
-
-        $dayOfWeek = strtolower(Carbon::parse($date)->format('l'));
-        if (in_array($dayOfWeek, ['saturday', 'sunday'], true)) {
-            return 'weekend';
         }
 
         return 'present';
