@@ -194,8 +194,9 @@ jobs:
             echo "==> Waiting for postgres (up to 60s)..."
             timeout 60 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-postgres-1 2>/dev/null | grep -q healthy; do sleep 2; done' \
               || { echo "FATAL: postgres not healthy after 60s"; docker compose logs postgres --tail 20; exit 1; }
+            # Redis is resolved via its compose service — its container name differs per host.
             echo "==> Waiting for redis (up to 30s)..."
-            timeout 30 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-redis-1 2>/dev/null | grep -q healthy; do sleep 2; done' \
+            timeout 30 bash -c 'until docker inspect --format="{{.State.Health.Status}}" "$(docker compose ps -q redis)" 2>/dev/null | grep -q healthy; do sleep 2; done' \
               || { echo "FATAL: redis not healthy after 30s"; docker compose logs redis --tail 20; exit 1; }
             echo "==> Shared infrastructure is healthy"
 
@@ -310,7 +311,7 @@ jobs:
 
               docker compose up -d postgres redis
               timeout 30 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-postgres-1 2>/dev/null | grep -q healthy; do sleep 2; done' || true
-              timeout 15 bash -c 'until docker inspect --format="{{.State.Health.Status}}" infra-redis-1 2>/dev/null | grep -q healthy; do sleep 2; done' || true
+              timeout 15 bash -c 'until docker inspect --format="{{.State.Health.Status}}" "$(docker compose ps -q redis)" 2>/dev/null | grep -q healthy; do sleep 2; done' || true
 
               if [ "${DEPLOY_API}" = "true" ] && [ -n "${API_OLD_DIGEST}" ]; then
                 echo "==> Rolling back dev API to: ${API_OLD_DIGEST}"
