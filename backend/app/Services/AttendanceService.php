@@ -187,6 +187,16 @@ class AttendanceService
                     $status = 'present';
                 }
 
+                // A weekend / shift day-off with a CHECK-IN (manual, or auto from the
+                // desktop timer) is 'present' — otherwise this job overwrites the
+                // 'present' the check-in wrote, every night. The check-in is the only
+                // signal: tracked hours with no check-in leave the day as 'weekend'
+                // (owner rule, 2026-10-05). Holiday and leave are untouched
+                // (determineStatus returns those before 'weekend').
+                if ($status === 'weekend' && $existingRecord?->check_in_at !== null) {
+                    $status = 'present';
+                }
+
                 AttendanceRecord::withoutGlobalScopes()->updateOrCreate(
                     [
                         'organization_id' => $orgId,

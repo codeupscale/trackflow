@@ -58,7 +58,7 @@ interface AssignRoleInput {
 
 // ── Queries ──────────────────────────────────────────────────────────────
 
-export function useRoles() {
+export function useRoles(enabled = true) {
   return useQuery<Role[]>({
     queryKey: ['roles'],
     queryFn: async () => {
@@ -66,6 +66,7 @@ export function useRoles() {
       return res.data.data;
     },
     staleTime: 60_000,
+    enabled,
   });
 }
 

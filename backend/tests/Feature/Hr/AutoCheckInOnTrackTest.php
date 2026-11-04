@@ -11,6 +11,9 @@ use App\Models\Project;
 use App\Models\TimeEntry;
 use App\Services\CheckInService;
 use Carbon\Carbon;
+use Illuminate\Broadcasting\BroadcastException;
+use Illuminate\Contracts\Broadcasting\Broadcaster;
+use Illuminate\Support\Facades\Broadcast;
 use Tests\TestCase;
 
 /**
@@ -301,6 +304,62 @@ class AutoCheckInOnTrackTest extends TestCase
         $record = AttendanceRecord::withoutGlobalScopes()->where('user_id', $user->id)->first();
         $this->assertNotNull($record);
         $this->assertTrue((bool) ($record->check_in_flags['auto_check_in'] ?? false));
+        $this->assertEquals(1, CheckInSession::withoutGlobalScopes()->where('user_id', $user->id)->count());
+    }
+
+    public function test_weekend_timer_start_checks_in_as_present_not_weekend(): void
+    {
+        $org = $this->orgWithFeature();
+        $user = $this->createUser($org, 'employee');
+
+        // Saturday 2026-03-14, 12:00 local (07:00 UTC) — the reported case: an
+        // employee starts the desktop timer on a weekend and the row said "Weekend".
+        $record = $this->service()->autoCheckInFromTracking(
+            $user,
+            Carbon::parse('2026-03-14 07:00:00', 'UTC')
+        );
+
+        $this->assertNotNull($record);
+        $this->assertEquals('present', $record->status);
+        $this->assertTrue((bool) ($record->check_in_flags['auto_check_in'] ?? false));
+        $this->assertTrue((bool) ($record->check_in_flags['worked_on_off_day'] ?? false));
+    }
+
+    public function test_reverb_outage_does_not_skip_auto_check_in(): void
+    {
+        // Laravel broadcasts an event BEFORE running its listeners. TimerStarted
+        // broadcasts synchronously, so a broadcaster that throws used to abort the
+        // dispatch and AutoCheckInOnTimerStart never ran — tracked time stored, no
+        // check-in, nothing on screen. Go through the REAL dispatcher to prove it.
+        Broadcast::extend('failing', fn () => new class implements Broadcaster
+        {
+            public function auth($request) {}
+
+            public function validAuthenticationResponse($request, $result) {}
+
+            public function broadcast(array $channels, $event, array $payload = [])
+            {
+                throw new BroadcastException('Reverb unreachable');
+            }
+        });
+        config([
+            'broadcasting.default' => 'failing',
+            'broadcasting.connections.failing' => ['driver' => 'failing'],
+            'queue.default' => 'sync', // run the queued listener inline
+        ]);
+
+        $org = $this->orgWithFeature();
+        $user = $this->createUser($org, 'employee');
+        $entry = TimeEntry::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $user->id,
+            'type' => 'tracked',
+            'started_at' => Carbon::parse('2026-03-16 06:40:00', 'UTC'),
+            'ended_at' => null,
+        ]);
+
+        event(new TimerStarted($entry));
+
         $this->assertEquals(1, CheckInSession::withoutGlobalScopes()->where('user_id', $user->id)->count());
     }
 }

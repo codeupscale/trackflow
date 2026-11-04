@@ -142,6 +142,49 @@ class AttendanceServiceTest extends TestCase
         $this->assertEquals('on_leave', $record->status);
     }
 
+    public function test_nightly_job_keeps_a_weekend_check_in_as_present(): void
+    {
+        // The check-in wrote 'present'; the nightly job used to overwrite it with
+        // 'weekend' every night, so the worked Saturday disappeared again.
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $date = '2026-03-21'; // Saturday
+
+        AttendanceRecord::withoutGlobalScopes()->create([
+            'organization_id' => $org->id,
+            'user_id' => $user->id,
+            'date' => $date,
+            'status' => 'present',
+            'check_in_at' => Carbon::parse("{$date} 07:00:00", 'UTC'),
+        ]);
+
+        $this->service->generateDailyAttendance($org->id, $date);
+
+        $this->assertEquals('present', $this->findAttendanceRecord($org->id, $user->id, $date)->status);
+    }
+
+    public function test_nightly_job_keeps_weekend_without_a_check_in_even_with_tracked_hours(): void
+    {
+        // Owner rule (2026-10-05): on a weekend the CHECK-IN decides. Tracked time
+        // alone — e.g. a timer started before the auto check-in time — stays 'weekend'.
+        $org = $this->createOrganization();
+        $user = $this->createUser($org, 'employee');
+        $date = '2026-03-21'; // Saturday
+        $start = Carbon::parse($date)->setTime(7, 0, 0);
+
+        TimeEntry::factory()->create([
+            'organization_id' => $org->id,
+            'user_id' => $user->id,
+            'started_at' => $start,
+            'ended_at' => $start->copy()->addHours(6),
+            'duration_seconds' => 6 * 3600,
+        ]);
+
+        $this->service->generateDailyAttendance($org->id, $date);
+
+        $this->assertEquals('weekend', $this->findAttendanceRecord($org->id, $user->id, $date)->status);
+    }
+
     public function test_generate_daily_attendance_calculates_total_hours_from_time_entries(): void
     {
         $org = $this->createOrganization();
