@@ -145,8 +145,12 @@ services:
     # Local S3. LOCAL_DEV.md has told developers to start `minio` for a while, but no
     # compose file ever defined it — so local uploads have been going to the real
     # codeupscale-trackflow-media bucket with the live AWS keys from the root .env.
+    # minio/minio and minio/mc are no longer published (Docker Hub denies the pull,
+    # quay.io has no tag). pgsty/* are community-maintained builds of the same
+    # binaries — same `minio server` command, and they ship /bin/sh + mc, which the
+    # healthcheck and minio-init below depend on.
     minio:
-        image: 'minio/minio:latest'
+        image: 'pgsty/minio:latest'
         restart: unless-stopped
         command: server /data --console-address ":9001"
         ports:
@@ -167,7 +171,7 @@ services:
 
     # Runs once, creates the bucket, exits. The app services wait for it to succeed.
     minio-init:
-        image: 'minio/mc:latest'
+        image: 'pgsty/mc:latest'
         depends_on:
             minio:
                 condition: service_healthy
