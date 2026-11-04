@@ -12,6 +12,8 @@ import { useEmployee, useUpdateEmployeeProfile } from "@/hooks/hr/use-employees"
 import { useEmployeeDocuments, useUploadDocument, useVerifyDocument, useDeleteDocument } from "@/hooks/hr/use-employee-documents";
 import { useEmployeeNotes, useCreateNote, useDeleteNote } from "@/hooks/hr/use-employee-notes";
 import { useLeaveRequests } from "@/hooks/hr/use-leave-requests";
+import { useAssignRole, useRoles } from "@/hooks/use-roles";
+import { useQueryClient } from "@tanstack/react-query";
 import { DepartmentSelect } from "@/components/hr/DepartmentSelect";
 import { ShiftSelect } from "@/components/hr/ShiftSelect";
 
@@ -32,6 +34,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -275,6 +278,25 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
   const { data: leaveData, isLoading: leaveLoading } = useLeaveRequests({ user_id: employee?.user_id });
   const leaveRequests = leaveData?.data ?? [];
 
+  // ── Role ──
+  // Role is not part of the profile: it is saved through PUT /users/{id}/role,
+  // the same endpoint the old Team page used, which keeps users.role, the
+  // user_roles pivot and the permission cache in step. The backend refuses to
+  // assign a role at or above the actor's own priority and refuses to touch an
+  // owner, so the list below only offers what would be accepted.
+  const queryClient = useQueryClient();
+  const canChangeRole = hasPermission("team.change_role");
+  const { data: orgRoles } = useRoles(canChangeRole && open);
+  const assignRoleMutation = useAssignRole();
+  const currentRole = orgRoles?.find((r) => r.name === employee?.role);
+  const actorPriority = orgRoles?.find((r) => r.name === user?.role)?.priority ?? 0;
+  const assignableRoles = (orgRoles ?? [])
+    .filter((r) => r.priority < actorPriority)
+    .sort((a, b) => b.priority - a.priority);
+  const showRoleField =
+    canChangeRole && !!employee && employee.role !== "owner" && !isSelf && assignableRoles.length > 0;
+  const [roleId, setRoleId] = useState("");
+
   // ── Edit form ──
   const updateMutation = useUpdateEmployeeProfile();
   const form = useForm<EmployeeProfileInput>({
@@ -319,9 +341,22 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
           current_address: data.current_address,
           permanent_address: data.permanent_address,
         };
+    // The role is changed only after the profile saves, so a profile validation
+    // error never leaves the person with a new role and an unsaved form.
+    const roleChanged = showRoleField && roleId !== "" && roleId !== currentRole?.id;
     updateMutation.mutate(
       { id: employee.user_id ?? employee.id, data: payload },
-      { onSuccess: () => setEditing(false) },
+      {
+        onSuccess: () => {
+          if (roleChanged) {
+            assignRoleMutation.mutate(
+              { userId: employee.user_id, role_id: roleId },
+              { onSuccess: () => queryClient.invalidateQueries({ queryKey: ["employees"] }) },
+            );
+          }
+          setEditing(false);
+        },
+      },
     );
   };
 
@@ -502,6 +537,18 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
                                     <FormMessage />
                                   </FormItem>
                                 )} />
+                                {/* Not a FormField: role is saved through its own endpoint, not the profile schema. */}
+                                {showRoleField && (
+                                  <div className="space-y-2">
+                                    <Label className="text-xs">Role</Label>
+                                    <Select value={roleId} onValueChange={(v) => setRoleId(v ?? "")}>
+                                      <SelectTrigger className="w-full data-[size=default]:h-10 rounded-xl"><span data-slot="select-value" className="flex flex-1 text-left">{assignableRoles.find((r) => r.id === roleId)?.display_name ?? currentRole?.display_name ?? <span className="text-muted-foreground">Select role</span>}</span></SelectTrigger>
+                                      <SelectContent><SelectGroup>
+                                        {assignableRoles.map((r) => <SelectItem key={r.id} value={r.id}>{r.display_name}</SelectItem>)}
+                                      </SelectGroup></SelectContent>
+                                    </Select>
+                                  </div>
+                                )}
                                 <FormField control={form.control} name="employment_status" render={({ field }) => (
                                   <FormItem>
                                     <FormLabel className="text-xs">Status</FormLabel>
@@ -1022,8 +1069,8 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
                           <Button type="button" variant="outline" size="sm" onClick={() => { setEditing(false); form.reset(getDefaults(employee)); }} disabled={updateMutation.isPending}>
                             Cancel
                           </Button>
-                          <Button type="submit" size="sm" disabled={updateMutation.isPending}>
-                            {updateMutation.isPending && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+                          <Button type="submit" size="sm" disabled={updateMutation.isPending || assignRoleMutation.isPending}>
+                            {(updateMutation.isPending || assignRoleMutation.isPending) && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
                             Save Changes
                           </Button>
                         </div>
@@ -1032,7 +1079,7 @@ export function EmployeeDetailModal({ employeeId, open, onOpenChange }: Employee
                       <>
                         <Separator />
                         <div className="flex items-center justify-end px-6 py-3">
-                          <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => { if (employee) form.reset(getDefaults(employee)); setEditing(true); }}>
+                          <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => { if (employee) form.reset(getDefaults(employee)); setRoleId(currentRole?.id ?? ""); setEditing(true); }}>
                             <Pencil className="h-3.5 w-3.5 mr-1.5" />
                             Edit
                           </Button>
